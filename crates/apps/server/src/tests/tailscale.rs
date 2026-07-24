@@ -211,5 +211,6 @@ fn config(
             tags: vec!["tag:maestro-gateway".to_owned()],
             cross_cluster_dns: Vec::new(),
         }),
+        cloudflare: None,
     })
 }

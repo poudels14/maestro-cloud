@@ -36,8 +36,9 @@ pub use command::{
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use config::{
-    MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts,
-    MaskedCrossClusterDnsRoute, MaskedTailscaleConfig,
+    MaskedCloudflareConfig, MaskedCloudflareTunnelConfig, MaskedClusterConfig,
+    MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedCrossClusterDnsRoute,
+    MaskedTailscaleConfig,
 };
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{

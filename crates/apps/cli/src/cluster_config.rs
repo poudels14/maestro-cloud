@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use cluster::{
-    ClusterConfig, ClusterPorts, ClusterPreflightError, CrossClusterDnsRoute,
+    CloudflareTunnelConfig, CloudflareTunnelConfigError, ClusterConfig, ClusterPorts,
+    ClusterPreflightError, CrossClusterDnsRoute, DEFAULT_CLOUDFLARE_TUNNEL_REPLICAS,
     DEFAULT_WIREGUARD_PORT, Ipv4Cidr, NodeDefinition, NodeEndpoint, TailscaleConfigError,
     TailscaleGatewayConfig,
 };
@@ -33,7 +34,8 @@ pub(crate) async fn decode_cluster(
     let (document, ignored_fields): (ClusterDocument, _) =
         decode_document(&value, &format!("cluster config `{source}`"))?;
     let tailscale = convert_tailscale(source, document.tailscale, reader).await?;
-    let cluster = convert_cluster(document.cluster, tailscale)?;
+    let cloudflare = convert_cloudflare(source, document.cloudflare, reader).await?;
+    let cluster = convert_cluster(document.cluster, tailscale, cloudflare)?;
     let node_id = select_node(document.node, &cluster.nodes)?;
     cluster.preflight().map_err(preflight_error)?;
     Ok(LoadedClusterConfig {
@@ -46,6 +48,7 @@ pub(crate) async fn decode_cluster(
 fn convert_cluster(
     input: ClusterInput,
     tailscale: Option<TailscaleGatewayConfig>,
+    cloudflare: Option<CloudflareTunnelConfig>,
 ) -> Result<ClusterConfig, CliError> {
     let name = required("cluster.name", input.name)?;
     let cluster_id = input.cluster_id.unwrap_or_else(|| name.clone());
@@ -96,6 +99,7 @@ fn convert_cluster(
         ports,
         join_secret: SecretValue::new(join_secret),
         tailscale,
+        cloudflare,
     })
 }
 
@@ -167,6 +171,28 @@ async fn convert_tailscale(
         replicas: input.replicas,
         tags: input.tags,
         cross_cluster_dns,
+    }))
+}
+
+async fn convert_cloudflare(
+    config_source: &str,
+    input: Option<CloudflareInput>,
+    reader: &impl ConfigSourceReader,
+) -> Result<Option<CloudflareTunnelConfig>, CliError> {
+    let Some(input) = input else {
+        return Ok(None);
+    };
+    let token = if input.tunnel.token.starts_with("aws-secret://")
+        || input.tunnel.token.starts_with("file://")
+    {
+        let source = resolve_relative_source(config_source, &input.tunnel.token)?;
+        reader.read(&source).await?
+    } else {
+        input.tunnel.token
+    };
+    Ok(Some(CloudflareTunnelConfig {
+        token: SecretValue::new(required("cloudflare.tunnel.token", token)?),
+        replicas: input.tunnel.replicas,
     }))
 }
 
@@ -322,6 +348,14 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
                 "tailscale.cross-cluster-dns[{route_index}].nameservers[{nameserver_index}]"
             ),
         },
+        ClusterPreflightError::InvalidCloudflare(error) => match error {
+            CloudflareTunnelConfigError::InvalidToken
+            | CloudflareTunnelConfigError::TokenTooLong => "cloudflare.tunnel.token".to_string(),
+            CloudflareTunnelConfigError::ZeroReplicas
+            | CloudflareTunnelConfigError::TooManyReplicas { .. } => {
+                "cloudflare.tunnel.replicas".to_string()
+            }
+        },
     };
     invalid(&path, detail)
 }
@@ -348,6 +382,8 @@ struct ClusterDocument {
     node: Option<String>,
     #[serde(default)]
     tailscale: Option<TailscaleInput>,
+    #[serde(default)]
+    cloudflare: Option<CloudflareInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,6 +398,24 @@ struct TailscaleInput {
     tags: Vec<String>,
     #[serde(default)]
     cross_cluster_dns: Vec<CrossClusterDnsInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct CloudflareInput {
+    tunnel: CloudflareTunnelInput,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct CloudflareTunnelInput {
+    token: String,
+    #[serde(default = "default_cloudflare_tunnel_replicas")]
+    replicas: u32,
+}
+
+const fn default_cloudflare_tunnel_replicas() -> u32 {
+    DEFAULT_CLOUDFLARE_TUNNEL_REPLICAS
 }
 
 #[derive(Debug, Deserialize)]

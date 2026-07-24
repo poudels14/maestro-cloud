@@ -7,7 +7,8 @@ use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ClusterPorts, ClusterPortsError, Ipv4Cidr, TailscaleConfigError, TailscaleGatewayConfig,
+    CloudflareTunnelConfig, CloudflareTunnelConfigError, ClusterPorts, ClusterPortsError, Ipv4Cidr,
+    TailscaleConfigError, TailscaleGatewayConfig,
 };
 
 /// WireGuard MTU applied consistently to the mesh and workload interfaces.
@@ -63,6 +64,9 @@ pub struct ClusterConfig {
     /// Optional managed Tailscale subnet-router fleet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailscale: Option<TailscaleGatewayConfig>,
+    /// Optional remotely managed Cloudflare Tunnel connector fleet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloudflare: Option<CloudflareTunnelConfig>,
 }
 
 /// Stable facts derived by successful cluster preflight.
@@ -214,4 +218,7 @@ pub enum ClusterPreflightError {
     /// Optional Tailscale gateway settings are invalid.
     #[error(transparent)]
     InvalidTailscale(#[from] TailscaleConfigError),
+    /// Cloudflare connector credentials and replica policy must be bounded.
+    #[error("invalid Cloudflare tunnel configuration: {0}")]
+    InvalidCloudflare(#[from] CloudflareTunnelConfigError),
 }

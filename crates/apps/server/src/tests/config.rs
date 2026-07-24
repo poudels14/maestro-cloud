@@ -44,6 +44,7 @@ async fn config_view_is_explicitly_configured_and_secret_free()
             wireguard: 51_820,
         },
         tailscale: None,
+        cloudflare: None,
     };
     let server = ApiServer::new(
         store,

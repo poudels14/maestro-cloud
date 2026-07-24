@@ -1938,6 +1938,19 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** @description Secret-free view of the remotely managed Cloudflare Tunnel connector fleet. */
+        MaskedCloudflareConfig: {
+            /** @description Remotely managed tunnel connector settings. */
+            tunnel: components["schemas"]["MaskedCloudflareTunnelConfig"];
+        };
+        /** @description Secret-free view of one Cloudflare Tunnel connector fleet. */
+        MaskedCloudflareTunnelConfig: {
+            /**
+             * Format: uint32
+             * @description Desired number of highly available connector workloads.
+             */
+            replicas: number;
+        };
         /**
          * @description Secret-free cluster configuration returned to authenticated operators.
          *
@@ -1945,6 +1958,8 @@ export interface components {
          *     configuration so adding a secret-bearing daemon field cannot expose it.
          */
         MaskedClusterConfig: {
+            /** @description Optional Cloudflare Tunnel settings with the connector token omitted. */
+            cloudflare?: components["schemas"]["MaskedCloudflareConfig"] | (null);
             /** @description Fixed private address pool for tunnels and workload networks. */
             clusterCidr: string;
             /** @description Stable cluster identity. */

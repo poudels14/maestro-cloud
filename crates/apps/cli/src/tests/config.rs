@@ -257,6 +257,60 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_rout
 }
 
 #[tokio::test]
+async fn cloudflare_config_resolves_the_tunnel_token_and_validates_replicas()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24").replace(
+        "\n            node: \"node-1\"",
+        r#"
+            cloudflare: {
+                tunnel: {
+                    token: "aws-secret://cloudflare-tunnel-token"
+                }
+            },
+            node: "node-1""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([
+            (source.to_owned(), document),
+            (
+                "aws-secret://cloudflare-tunnel-token".to_owned(),
+                "test-cloudflare-tunnel-token\n".to_owned(),
+            ),
+        ]),
+    };
+
+    let loaded = load_cluster(source, &reader).await?;
+    let cloudflare = loaded
+        .cluster
+        .cloudflare
+        .ok_or("Cloudflare config missing")?;
+    assert_eq!(cloudflare.token.expose(), "test-cloudflare-tunnel-token");
+    assert_eq!(cloudflare.replicas, 2);
+
+    let invalid_source = "file:///config/invalid-cloudflare.jsonc";
+    let invalid = cluster_document("172.22.1.0/24").replace(
+        "\n            node: \"node-1\"",
+        r#"
+            cloudflare: {
+                tunnel: {
+                    token: "test-token",
+                    replicas: 0
+                }
+            },
+            node: "node-1""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(invalid_source.to_owned(), invalid)]),
+    };
+    let error = load_cluster(invalid_source, &reader)
+        .await
+        .expect_err("zero Cloudflare replicas must fail");
+    assert!(error.to_string().contains("cloudflare.tunnel.replicas:"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn cluster_config_rejects_removed_camel_case_aliases()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.jsonc";

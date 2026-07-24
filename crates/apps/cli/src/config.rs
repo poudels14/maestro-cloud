@@ -183,6 +183,12 @@ const CLUSTER_TEMPLATE: &str = r#"{
     "control-allow-cidrs": ["10.20.0.0/24"],
     "join-secret": "__JOIN_SECRET__"
   },
+  // "cloudflare": {
+  //   "tunnel": {
+  //     "token": "aws-secret://maestro/cloudflare-tunnel-token",
+  //     "replicas": 2
+  //   }
+  // },
   "node": "node-1"
 }
 "#;

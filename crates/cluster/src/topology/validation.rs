@@ -110,6 +110,9 @@ impl ClusterConfig {
                 .collect::<Vec<_>>();
             tailscale.validate(&self.cluster_id, self.cluster_cidr, &workload_subnets)?;
         }
+        if let Some(cloudflare) = &self.cloudflare {
+            cloudflare.validate()?;
+        }
         control_plane_nodes.sort();
 
         Ok(ValidatedTopology {

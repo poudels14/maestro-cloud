@@ -7,6 +7,7 @@
 mod admission;
 mod admission_coordinator;
 mod certificates;
+mod cloudflare;
 mod embedded_etcd;
 mod embedded_etcd_files;
 mod embedded_etcd_membership;
@@ -32,6 +33,10 @@ pub use admission_coordinator::{
 pub use certificates::{
     CertificateError, CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority,
     NodeCertificateBundle, certificate_fingerprint,
+};
+pub use cloudflare::{
+    CloudflareTunnelConfig, CloudflareTunnelConfigError, DEFAULT_CLOUDFLARE_TUNNEL_REPLICAS,
+    MAX_CLOUDFLARE_TUNNEL_REPLICAS,
 };
 pub use embedded_etcd::{EmbeddedEtcdProvider, EmbeddedEtcdSettings};
 pub use embedded_etcd_restore::initialize_restored_etcd_member;

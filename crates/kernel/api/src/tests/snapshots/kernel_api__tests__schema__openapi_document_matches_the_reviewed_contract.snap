@@ -1,6 +1,5 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
-assertion_line: 33
 expression: openapi_document()
 ---
 {
@@ -1612,9 +1611,55 @@ expression: openapi_document()
         ],
         "type": "object"
       },
+      "MaskedCloudflareConfig": {
+        "description": "Secret-free view of the remotely managed Cloudflare Tunnel connector fleet.",
+        "properties": {
+          "tunnel": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MaskedCloudflareTunnelConfig"
+              }
+            ],
+            "description": "Remotely managed tunnel connector settings."
+          }
+        },
+        "required": [
+          "tunnel"
+        ],
+        "type": "object"
+      },
+      "MaskedCloudflareTunnelConfig": {
+        "description": "Secret-free view of one Cloudflare Tunnel connector fleet.",
+        "properties": {
+          "replicas": {
+            "description": "Desired number of highly available connector workloads.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "replicas"
+        ],
+        "type": "object"
+      },
       "MaskedClusterConfig": {
         "description": "Secret-free cluster configuration returned to authenticated operators.\n\nThis is deliberately a separate wire contract from the daemon's parsed\nconfiguration so adding a secret-bearing daemon field cannot expose it.",
         "properties": {
+          "cloudflare": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaskedCloudflareConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional Cloudflare Tunnel settings with the connector token omitted."
+          },
           "clusterCidr": {
             "description": "Fixed private address pool for tunnels and workload networks.",
             "type": "string"

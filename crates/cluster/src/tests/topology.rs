@@ -4,9 +4,9 @@ use std::net::Ipv4Addr;
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
 use crate::{
-    ClusterConfig, ClusterPorts, ClusterPreflightError, CrossClusterDnsRoute,
-    DEFAULT_WIREGUARD_PORT, Ipv4Cidr, NodeDefinition, NodeEndpoint, TailscaleAuthKeyRecord,
-    TailscaleConfigError, TailscaleGatewayConfig,
+    CloudflareTunnelConfig, CloudflareTunnelConfigError, ClusterConfig, ClusterPorts,
+    ClusterPreflightError, CrossClusterDnsRoute, DEFAULT_WIREGUARD_PORT, Ipv4Cidr, NodeDefinition,
+    NodeEndpoint, TailscaleAuthKeyRecord, TailscaleConfigError, TailscaleGatewayConfig,
 };
 
 #[test]
@@ -213,6 +213,43 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
     Ok(())
 }
 
+#[test]
+fn validates_cloudflare_tunnel_token_and_replica_bounds() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut config = valid_config()?;
+    config.cloudflare = Some(CloudflareTunnelConfig {
+        token: SecretValue::new("test-cloudflare-tunnel-token"),
+        replicas: 2,
+    });
+    config.preflight()?;
+
+    config
+        .cloudflare
+        .as_mut()
+        .ok_or("Cloudflare config missing")?
+        .replicas = 0;
+    assert_eq!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidCloudflare(
+            CloudflareTunnelConfigError::ZeroReplicas
+        ))
+    );
+
+    let cloudflare = config
+        .cloudflare
+        .as_mut()
+        .ok_or("Cloudflare config missing")?;
+    cloudflare.replicas = 2;
+    cloudflare.token = SecretValue::new(" ");
+    assert_eq!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidCloudflare(
+            CloudflareTunnelConfigError::InvalidToken
+        ))
+    );
+    Ok(())
+}
+
 fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>> {
     let nodes = [
         (
@@ -262,5 +299,6 @@ fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>> {
         ports: ClusterPorts::new(3_001, 23_79, 23_80, DEFAULT_WIREGUARD_PORT)?,
         join_secret: SecretValue::new("a-test-join-secret-with-at-least-32-characters"),
         tailscale: None,
+        cloudflare: None,
     })
 }

@@ -430,6 +430,7 @@ impl RealProcessCluster {
             control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
             ports: self.cluster.ports,
             tailscale: self.cluster.tailscale.clone(),
+            cloudflare: self.cluster.cloudflare.clone(),
             certificates,
             operator_jwt_secret: SecretValue::new(
                 "real-cluster-operator-secret-with-32-characters",
@@ -606,6 +607,7 @@ fn topology(
         )?,
         join_secret: SecretValue::new("real-process-join-secret-with-at-least-32-characters"),
         tailscale: None,
+        cloudflare: None,
     })
 }
 

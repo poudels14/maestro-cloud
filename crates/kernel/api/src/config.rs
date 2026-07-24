@@ -31,6 +31,9 @@ pub struct MaskedClusterConfig {
     /// Optional Tailscale gateway settings with the credential omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailscale: Option<MaskedTailscaleConfig>,
+    /// Optional Cloudflare Tunnel settings with the connector token omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloudflare: Option<MaskedCloudflareConfig>,
 }
 
 /// Secret-free topology for one configured cluster member.
@@ -79,6 +82,22 @@ pub struct MaskedTailscaleConfig {
     pub tags: Vec<String>,
     /// Explicit remote cluster suffixes forwarded through the managed gateways.
     pub cross_cluster_dns: Vec<MaskedCrossClusterDnsRoute>,
+}
+
+/// Secret-free view of the remotely managed Cloudflare Tunnel connector fleet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskedCloudflareConfig {
+    /// Remotely managed tunnel connector settings.
+    pub tunnel: MaskedCloudflareTunnelConfig,
+}
+
+/// Secret-free view of one Cloudflare Tunnel connector fleet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskedCloudflareTunnelConfig {
+    /// Desired number of highly available connector workloads.
+    pub replicas: u32,
 }
 
 /// Secret-free view of one scoped remote DNS route.

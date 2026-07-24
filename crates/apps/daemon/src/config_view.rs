@@ -1,7 +1,8 @@
 use cluster::ClusterConfig;
 use kernel_api::{
-    MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts,
-    MaskedCrossClusterDnsRoute, MaskedTailscaleConfig, NodeId,
+    MaskedCloudflareConfig, MaskedCloudflareTunnelConfig, MaskedClusterConfig,
+    MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedCrossClusterDnsRoute,
+    MaskedTailscaleConfig, NodeId,
 };
 
 pub(crate) fn masked_cluster_config(
@@ -62,5 +63,13 @@ pub(crate) fn masked_cluster_config(
                     .collect(),
             }
         }),
+        cloudflare: cluster
+            .cloudflare
+            .as_ref()
+            .map(|cloudflare| MaskedCloudflareConfig {
+                tunnel: MaskedCloudflareTunnelConfig {
+                    replicas: cloudflare.replicas,
+                },
+            }),
     }
 }

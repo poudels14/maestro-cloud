@@ -80,5 +80,6 @@ fn cluster_with_nodes(
         ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,
         join_secret: SecretValue::new("daemon-test-join-secret-with-32-characters"),
         tailscale: None,
+        cloudflare: None,
     })
 }

@@ -73,6 +73,7 @@ impl DaemonLaunchDocument {
             ports: payload.ports,
             join_secret,
             tailscale: payload.tailscale,
+            cloudflare: payload.cloudflare,
         };
         let role = cluster
             .nodes

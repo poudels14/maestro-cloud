@@ -109,6 +109,7 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
         control_allow_cidrs: loaded.cluster.control_allow_cidrs.clone(),
         ports: loaded.cluster.ports,
         tailscale: loaded.cluster.tailscale.clone(),
+        cloudflare: loaded.cluster.cloudflare.clone(),
         certificates: authority.issue_node_certificate(
             &loaded.node_id,
             &node.hostname,
@@ -250,6 +251,7 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
         control_allow_cidrs: loaded.cluster.control_allow_cidrs.clone(),
         ports: loaded.cluster.ports,
         tailscale: loaded.cluster.tailscale.clone(),
+        cloudflare: loaded.cluster.cloudflare.clone(),
         certificates: authority.issue_node_certificate(
             &loaded.node_id,
             &node.hostname,
@@ -322,6 +324,7 @@ fn unusable_payload(
         control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,
         tailscale: config.tailscale.clone(),
+        cloudflare: config.cloudflare.clone(),
         certificates: authority.issue_node_certificate(
             &node_id,
             &node.hostname,

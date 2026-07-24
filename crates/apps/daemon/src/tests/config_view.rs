@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use cluster::{
-    ClusterConfig, ClusterPorts, CrossClusterDnsRoute, Ipv4Cidr, NodeDefinition, NodeEndpoint,
-    TailscaleGatewayConfig,
+    CloudflareTunnelConfig, ClusterConfig, ClusterPorts, CrossClusterDnsRoute, Ipv4Cidr,
+    NodeDefinition, NodeEndpoint, TailscaleGatewayConfig,
 };
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
@@ -14,6 +14,7 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
     let node_id = NodeId::new("node-a")?;
     let secret = "join-secret-that-must-never-cross-the-api";
     let tailscale_secret = "tskey-auth-secret-that-must-never-cross-the-api";
+    let cloudflare_secret = "cloudflare-tunnel-secret-that-must-never-cross-the-api";
     let cluster = ClusterConfig {
         cluster_id: ClusterId::new("config-view-test")?,
         name: "config-view-test".to_string(),
@@ -45,16 +46,22 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
                 nameservers: vec![Ipv4Addr::new(172, 23, 1, 1)],
             }],
         }),
+        cloudflare: Some(CloudflareTunnelConfig {
+            token: SecretValue::new(cloudflare_secret),
+            replicas: 2,
+        }),
     };
 
     let encoded = serde_json::to_string(&masked_cluster_config(&cluster, &node_id))?;
     assert!(!encoded.contains(secret));
     assert!(!encoded.contains(tailscale_secret));
+    assert!(!encoded.contains(cloudflare_secret));
     assert!(encoded.contains("node-a.internal"));
     assert!(encoded.contains("\"advertiseRoutes\":[\"172.22.0.0/16\"]"));
     assert!(encoded.contains("\"dnsNameservers\":[\"172.22.1.1\"]"));
     assert!(encoded.contains(
         "\"crossClusterDns\":[{\"clusterId\":\"remote\",\"nameservers\":[\"172.23.1.1\"]}]"
     ));
+    assert!(encoded.contains("\"cloudflare\":{\"tunnel\":{\"replicas\":2}}"));
     Ok(())
 }
