@@ -7,8 +7,11 @@ use kernel_api::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::repository::service_repository;
 use crate::{PullRequest, PullRequestReadiness};
+
+mod input;
+
+use input::{PreviewBase, existing_previews, preview_bases, repository_snapshots};
 
 /// One successfully fetched repository snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,13 +109,6 @@ pub enum PreviewSourcePlanError {
 }
 
 #[derive(Clone)]
-struct PreviewBase<'a> {
-    service: &'a Service,
-    policy: &'a PreviewPolicy,
-    repository: String,
-}
-
-#[derive(Clone)]
 struct Candidate<'a> {
     base: PreviewBase<'a>,
     pull_request: &'a PullRequest,
@@ -169,73 +165,6 @@ pub fn plan_preview_sources(
         }
     }
     Ok(plan)
-}
-
-fn preview_bases(
-    services: &[Service],
-) -> (
-    BTreeMap<ServiceId, PreviewBase<'_>>,
-    Vec<PreviewSourceDiagnostic>,
-) {
-    let mut bases = BTreeMap::new();
-    let mut diagnostics = Vec::new();
-    for service in services {
-        let Some(policy) = service.spec.preview.as_ref() else {
-            continue;
-        };
-        if service.meta.deletion_timestamp.is_some() {
-            continue;
-        };
-        match service_repository(service) {
-            Ok(repository) => {
-                bases.insert(
-                    service.meta.id.clone(),
-                    PreviewBase {
-                        service,
-                        policy,
-                        repository: repository.full_name,
-                    },
-                );
-            }
-            Err(message) => diagnostics.push(PreviewSourceDiagnostic {
-                service_id: service.meta.id.clone(),
-                message,
-            }),
-        }
-    }
-    (bases, diagnostics)
-}
-
-fn repository_snapshots(
-    repositories: &[RepositoryPullRequests],
-) -> Result<BTreeMap<String, &RepositoryPullRequests>, PreviewSourcePlanError> {
-    let mut snapshots = BTreeMap::new();
-    for snapshot in repositories {
-        let repository = snapshot.repository.to_ascii_lowercase();
-        if snapshots.insert(repository.clone(), snapshot).is_some() {
-            return Err(PreviewSourcePlanError::DuplicateRepository { repository });
-        }
-    }
-    Ok(snapshots)
-}
-
-fn existing_previews(
-    previews: &[Preview],
-) -> Result<BTreeMap<(ServiceId, u64), &Preview>, PreviewSourcePlanError> {
-    let mut existing = BTreeMap::new();
-    for preview in previews {
-        let key = (
-            preview.spec.base_service_id.clone(),
-            preview.spec.pull_request_number,
-        );
-        if existing.insert(key.clone(), preview).is_some() {
-            return Err(PreviewSourcePlanError::DuplicatePreview {
-                service_id: key.0,
-                pull_request_number: key.1,
-            });
-        }
-    }
-    Ok(existing)
 }
 
 fn reconcile_existing(
