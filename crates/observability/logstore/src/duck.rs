@@ -5,13 +5,11 @@ use std::thread::JoinHandle;
 use async_trait::async_trait;
 use kernel_api::Timestamp;
 use logs::{
-    DeadLetterStore, DeadLetterStoreError, IngestLogEntry, IngressTrafficBreakdown,
-    IngressTrafficQuery, LogAppendReport, LogDeliveryStore, LogDeliveryStoreError,
-    LogHistogramBucket, LogHistogramQuery, LogQueryStoreError, LogReadQuery, LogSequence,
-    LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore, LogStoreError,
-    LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, ServiceTrafficQuery, SinkDeadLetter,
-    SinkDeadLetterStats, StatsMetricAppendReport, StatsMetricPoint, StatsMetricQuery,
-    StatsMetricStore, StatsMetricStoreError, TrafficMetricPoint, TrafficQueryError,
+    DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
+    LogDeliveryStoreError, LogSequence, LogSinkId, LogSpoolStats, LogStatsStore,
+    LogStatsStoreError, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
+    SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats, StatsMetricAppendReport,
+    StatsMetricPoint, StatsMetricQuery, StatsMetricStore, StatsMetricStoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -25,100 +23,9 @@ use crate::{
     LogRetentionReport, LogRolloverReport,
 };
 
-pub(crate) enum Command {
-    Append {
-        entries: Vec<IngestLogEntry>,
-        response: oneshot::Sender<Result<LogAppendReport, LogStoreError>>,
-    },
-    ReadAfter {
-        cursor: Option<LogSequence>,
-        limit: usize,
-        response: oneshot::Sender<Result<Vec<SequencedLogEntry>, LogDeliveryStoreError>>,
-    },
-    LoadCursor {
-        sink_id: LogSinkId,
-        response: oneshot::Sender<Result<Option<LogSequence>, LogDeliveryStoreError>>,
-    },
-    CommitCursor {
-        sink_id: LogSinkId,
-        sequence: LogSequence,
-        response: oneshot::Sender<Result<(), LogDeliveryStoreError>>,
-    },
-    RecordDeadLetter {
-        dead_letter: SinkDeadLetter,
-        response: oneshot::Sender<Result<(), DeadLetterStoreError>>,
-    },
-    ListDeadLetters {
-        sink_id: LogSinkId,
-        after: Option<LogSequence>,
-        limit: usize,
-        response: oneshot::Sender<Result<Vec<SinkDeadLetter>, DeadLetterStoreError>>,
-    },
-    DeadLetterStats {
-        sink_id: LogSinkId,
-        response: oneshot::Sender<Result<SinkDeadLetterStats, DeadLetterStoreError>>,
-    },
-    PurgeDeadLetters {
-        sink_id: LogSinkId,
-        through: Option<LogSequence>,
-        response: oneshot::Sender<Result<u64, DeadLetterStoreError>>,
-    },
-    StatsSnapshot {
-        sink_ids: Vec<LogSinkId>,
-        response: oneshot::Sender<Result<LogSpoolStats, LogStatsStoreError>>,
-    },
-    Rollover {
-        before: Timestamp,
-        response: oneshot::Sender<Result<LogRolloverReport, LogArchiveError>>,
-    },
-    PendingBackups {
-        response: oneshot::Sender<Result<Vec<PendingLogBackupPartition>, LogBackupError>>,
-    },
-    MarkBackedUp {
-        partition: PendingLogBackupPartition,
-        updated_at: Timestamp,
-        response: oneshot::Sender<Result<(), LogBackupError>>,
-    },
-    LoadBackupStats {
-        response: oneshot::Sender<Result<Option<logs::BackupStatsSnapshot>, LogBackupError>>,
-    },
-    SaveBackupStats {
-        stats: logs::BackupStatsSnapshot,
-        updated_at: Timestamp,
-        response: oneshot::Sender<Result<(), LogBackupError>>,
-    },
-    PruneBackedUp {
-        cutoff: chrono::NaiveDate,
-        response: oneshot::Sender<Result<LogRetentionReport, LogRetentionError>>,
-    },
-    QueryLogs {
-        query: LogReadQuery,
-        response: oneshot::Sender<Result<Vec<SequencedLogEntry>, LogQueryStoreError>>,
-    },
-    QueryHistogram {
-        query: LogHistogramQuery,
-        response: oneshot::Sender<Result<Vec<LogHistogramBucket>, LogQueryStoreError>>,
-    },
-    AppendStatsMetrics {
-        points: Vec<StatsMetricPoint>,
-        response: oneshot::Sender<Result<StatsMetricAppendReport, StatsMetricStoreError>>,
-    },
-    QueryStatsMetrics {
-        query: StatsMetricQuery,
-        response: oneshot::Sender<Result<Vec<StatsMetricPoint>, StatsMetricStoreError>>,
-    },
-    QueryIngressTraffic {
-        query: IngressTrafficQuery,
-        response: oneshot::Sender<Result<IngressTrafficBreakdown, TrafficQueryError>>,
-    },
-    QueryServiceTraffic {
-        query: ServiceTrafficQuery,
-        response: oneshot::Sender<Result<Vec<TrafficMetricPoint>, TrafficQueryError>>,
-    },
-    Shutdown {
-        response: oneshot::Sender<()>,
-    },
-}
+mod command;
+
+pub(crate) use command::Command;
 
 /// Async append handle applying bounded backpressure to one DuckDB owner thread.
 pub struct DuckLogStore {
