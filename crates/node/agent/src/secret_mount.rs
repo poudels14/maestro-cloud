@@ -1,25 +1,36 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Weak};
 
 use kernel_api::{SecretMountSpec, WorkloadId};
 use runtime::{MountAccess, MountSource, WorkloadMount};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 use zeroize::{Zeroize, Zeroizing};
 
 const DIRECTORY_MODE: u32 = 0o700;
 const SECRET_MODE: u32 = 0o600;
 const SECRET_FILE: &str = "secrets.env";
 
-#[derive(Clone)]
 pub(crate) struct SecretMountManager {
     root: PathBuf,
+    files: Arc<dyn SecretMountFileSystem>,
+    cleanup_gate: RwLock<()>,
+    operation_gates: Mutex<BTreeMap<WorkloadId, Weak<Semaphore>>>,
 }
 
 impl SecretMountManager {
     pub(crate) fn new(root: PathBuf) -> Result<Self, SecretMountError> {
+        Self::with_file_system(root, Arc::new(HostSecretMountFileSystem))
+    }
+
+    pub(crate) fn with_file_system(
+        root: PathBuf,
+        files: Arc<dyn SecretMountFileSystem>,
+    ) -> Result<Self, SecretMountError> {
         if !root.is_absolute()
             || root.parent().is_none()
             || root
@@ -28,7 +39,12 @@ impl SecretMountManager {
         {
             return Err(SecretMountError::InvalidRoot { path: root });
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            files,
+            cleanup_gate: RwLock::new(()),
+            operation_gates: Mutex::new(BTreeMap::new()),
+        })
     }
 
     pub(crate) async fn materialize(
@@ -36,17 +52,23 @@ impl SecretMountManager {
         workload_id: &WorkloadId,
         spec: &SecretMountSpec,
     ) -> Result<WorkloadMount, SecretMountError> {
+        let _cleanup = self.cleanup_gate.read().await;
+        let _operation = self.operation(workload_id).await?;
+        let files = self.files.clone();
         let root = self.root.clone();
         let workload_id = workload_id.clone();
         let spec = spec.clone();
-        tokio::task::spawn_blocking(move || materialize(&root, &workload_id, &spec))
+        tokio::task::spawn_blocking(move || files.materialize(&root, &workload_id, &spec))
             .await
             .map_err(task_error)?
     }
 
     pub(crate) async fn cleanup(&self, workload_id: &WorkloadId) -> Result<(), SecretMountError> {
+        let _cleanup = self.cleanup_gate.read().await;
+        let _operation = self.operation(workload_id).await?;
+        let files = self.files.clone();
         let directory = self.root.join(workload_id.as_str());
-        tokio::task::spawn_blocking(move || cleanup_directory(&directory))
+        tokio::task::spawn_blocking(move || files.cleanup(&directory))
             .await
             .map_err(task_error)?
     }
@@ -55,15 +77,82 @@ impl SecretMountManager {
         &self,
         active_workloads: &BTreeSet<String>,
     ) -> Result<usize, SecretMountError> {
+        let _cleanup = self.cleanup_gate.write().await;
+        let files = self.files.clone();
         let root = self.root.clone();
         let active_workloads = active_workloads.clone();
-        tokio::task::spawn_blocking(move || cleanup_stale(&root, &active_workloads))
+        tokio::task::spawn_blocking(move || files.cleanup_stale(&root, &active_workloads))
             .await
             .map_err(task_error)?
     }
+
+    async fn operation(
+        &self,
+        workload_id: &WorkloadId,
+    ) -> Result<OwnedSemaphorePermit, SecretMountError> {
+        let gate = {
+            let mut gates = self.operation_gates.lock().await;
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(workload_id).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(Semaphore::new(1));
+                    gates.insert(workload_id.clone(), Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        gate.acquire_owned()
+            .await
+            .map_err(|error| SecretMountError::Task {
+                message: format!("secret mount operation gate closed unexpectedly: {error}"),
+            })
+    }
 }
 
-fn materialize(
+pub(crate) trait SecretMountFileSystem: Send + Sync {
+    fn materialize(
+        &self,
+        root: &Path,
+        workload_id: &WorkloadId,
+        spec: &SecretMountSpec,
+    ) -> Result<WorkloadMount, SecretMountError>;
+
+    fn cleanup(&self, directory: &Path) -> Result<(), SecretMountError>;
+
+    fn cleanup_stale(
+        &self,
+        root: &Path,
+        active_workloads: &BTreeSet<String>,
+    ) -> Result<usize, SecretMountError>;
+}
+
+struct HostSecretMountFileSystem;
+
+impl SecretMountFileSystem for HostSecretMountFileSystem {
+    fn materialize(
+        &self,
+        root: &Path,
+        workload_id: &WorkloadId,
+        spec: &SecretMountSpec,
+    ) -> Result<WorkloadMount, SecretMountError> {
+        materialize(root, workload_id, spec)
+    }
+
+    fn cleanup(&self, directory: &Path) -> Result<(), SecretMountError> {
+        cleanup_directory(directory)
+    }
+
+    fn cleanup_stale(
+        &self,
+        root: &Path,
+        active_workloads: &BTreeSet<String>,
+    ) -> Result<usize, SecretMountError> {
+        cleanup_stale(root, active_workloads)
+    }
+}
+
+pub(crate) fn materialize(
     root: &Path,
     workload_id: &WorkloadId,
     spec: &SecretMountSpec,
@@ -186,7 +275,10 @@ fn ensure_existing_content(
         .map_err(|source| io_error("protect secret", path, source))
 }
 
-fn cleanup_stale(root: &Path, active: &BTreeSet<String>) -> Result<usize, SecretMountError> {
+pub(crate) fn cleanup_stale(
+    root: &Path,
+    active: &BTreeSet<String>,
+) -> Result<usize, SecretMountError> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -210,7 +302,7 @@ fn cleanup_stale(root: &Path, active: &BTreeSet<String>) -> Result<usize, Secret
     Ok(cleaned)
 }
 
-fn cleanup_directory(directory: &Path) -> Result<(), SecretMountError> {
+pub(crate) fn cleanup_directory(directory: &Path) -> Result<(), SecretMountError> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

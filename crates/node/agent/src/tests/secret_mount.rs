@@ -1,11 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use kernel_api::{SecretMountSpec, SecretValue, WorkloadId};
-use runtime::{MountAccess, MountSource};
+use runtime::{MountAccess, MountSource, WorkloadMount};
+use tokio::sync::oneshot;
 
-use crate::secret_mount::{SecretMountError, SecretMountManager};
+use crate::secret_mount::{
+    SecretMountError, SecretMountFileSystem, SecretMountManager, cleanup_directory, cleanup_stale,
+    materialize,
+};
 
 #[tokio::test]
 async fn secret_mount_is_private_idempotent_and_zeroized_on_cleanup()
@@ -107,4 +113,155 @@ async fn secret_mount_rejects_unsafe_targets_and_keys() -> Result<(), Box<dyn st
         Err(SecretMountError::InvalidKey { .. })
     ));
     Ok(())
+}
+
+#[tokio::test]
+async fn slow_materialization_does_not_block_an_unrelated_workload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("secrets");
+    let blocked_workload = WorkloadId::new("workload-1")?;
+    let unrelated_workload = WorkloadId::new("workload-2")?;
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let files = Arc::new(BlockingSecretMountFileSystem {
+        blocked_workload: blocked_workload.clone(),
+        started_sender,
+        release_receiver: Mutex::new(Some(release_receiver)),
+        cleanup_started_sender: Mutex::new(None),
+    });
+    let manager = Arc::new(SecretMountManager::with_file_system(root, files)?);
+    let spec = secret_spec("value");
+
+    let blocked_manager = manager.clone();
+    let blocked_spec = spec.clone();
+    let blocked = tokio::spawn(async move {
+        blocked_manager
+            .materialize(&blocked_workload, &blocked_spec)
+            .await
+    });
+    tokio::task::spawn_blocking(move || started_receiver.recv()).await??;
+
+    let unrelated = tokio::time::timeout(
+        Duration::from_secs(2),
+        manager.materialize(&unrelated_workload, &spec),
+    )
+    .await;
+    release_sender.send(())?;
+    blocked.await??;
+    unrelated.map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "unrelated secret materialization waited for another workload",
+        )
+    })??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_waits_for_same_workload_materialization() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("secrets");
+    let blocked_workload = WorkloadId::new("workload-1")?;
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let (cleanup_started_sender, mut cleanup_started_receiver) = oneshot::channel();
+    let files = Arc::new(BlockingSecretMountFileSystem {
+        blocked_workload: blocked_workload.clone(),
+        started_sender,
+        release_receiver: Mutex::new(Some(release_receiver)),
+        cleanup_started_sender: Mutex::new(Some(cleanup_started_sender)),
+    });
+    let manager = Arc::new(SecretMountManager::with_file_system(root.clone(), files)?);
+
+    let blocked_manager = manager.clone();
+    let materialized_workload = blocked_workload.clone();
+    let blocked = tokio::spawn(async move {
+        blocked_manager
+            .materialize(&materialized_workload, &secret_spec("value"))
+            .await
+    });
+    tokio::task::spawn_blocking(move || started_receiver.recv()).await??;
+
+    let cleanup_manager = manager.clone();
+    let cleanup = tokio::spawn(async move { cleanup_manager.cleanup(&blocked_workload).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut cleanup_started_receiver)
+            .await
+            .is_err(),
+        "cleanup entered the filesystem while materialization was active"
+    );
+
+    release_sender.send(())?;
+    blocked.await??;
+    tokio::time::timeout(Duration::from_secs(2), &mut cleanup_started_receiver).await??;
+    cleanup.await??;
+    assert!(!root.join("workload-1").exists());
+    Ok(())
+}
+
+struct BlockingSecretMountFileSystem {
+    blocked_workload: WorkloadId,
+    started_sender: mpsc::SyncSender<()>,
+    release_receiver: Mutex<Option<mpsc::Receiver<()>>>,
+    cleanup_started_sender: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl SecretMountFileSystem for BlockingSecretMountFileSystem {
+    fn materialize(
+        &self,
+        root: &std::path::Path,
+        workload_id: &WorkloadId,
+        spec: &SecretMountSpec,
+    ) -> Result<WorkloadMount, SecretMountError> {
+        if workload_id == &self.blocked_workload {
+            self.started_sender
+                .send(())
+                .map_err(|error| task_failure(error.to_string()))?;
+            self.release_receiver
+                .lock()
+                .map_err(|error| task_failure(error.to_string()))?
+                .take()
+                .ok_or_else(|| task_failure("release receiver was already consumed"))?
+                .recv()
+                .map_err(|error| task_failure(error.to_string()))?;
+        }
+        materialize(root, workload_id, spec)
+    }
+
+    fn cleanup(&self, directory: &std::path::Path) -> Result<(), SecretMountError> {
+        if let Some(sender) = self
+            .cleanup_started_sender
+            .lock()
+            .map_err(|error| task_failure(error.to_string()))?
+            .take()
+        {
+            sender
+                .send(())
+                .map_err(|()| task_failure("cleanup observer was dropped"))?;
+        }
+        cleanup_directory(directory)
+    }
+
+    fn cleanup_stale(
+        &self,
+        root: &std::path::Path,
+        active_workloads: &BTreeSet<String>,
+    ) -> Result<usize, SecretMountError> {
+        cleanup_stale(root, active_workloads)
+    }
+}
+
+fn secret_spec(value: &str) -> SecretMountSpec {
+    SecretMountSpec {
+        mount_path: "/run/secrets/maestro.env".to_owned(),
+        items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new(value))]),
+    }
+}
+
+fn task_failure(message: impl Into<String>) -> SecretMountError {
+    SecretMountError::Task {
+        message: message.into(),
+    }
 }
