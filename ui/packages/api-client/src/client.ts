@@ -5,6 +5,9 @@ import type { ApiRequestOptions } from "./transport";
 export type IngressTrafficQuery = NonNullable<
   operations["getIngressTraffic"]["parameters"]["query"]
 >;
+export type PlacementHistoryQuery = NonNullable<
+  operations["listPlacementHistory"]["parameters"]["query"]
+>;
 export type ClusterMetricQuery = NonNullable<
   operations["listClusterMetrics"]["parameters"]["query"]
 >;
@@ -17,6 +20,9 @@ export type ServiceMetricQuery = NonNullable<
 >;
 export type ServiceTrafficQuery = NonNullable<
   operations["getServiceTraffic"]["parameters"]["query"]
+>;
+export type ServiceTrafficBreakdownQuery = NonNullable<
+  operations["getServiceTrafficBreakdown"]["parameters"]["query"]
 >;
 export type ContainerMetricQuery = NonNullable<
   operations["listContainerMetrics"]["parameters"]["query"]
@@ -32,6 +38,19 @@ export interface MaestroApiClient {
   getClusterConfig(options?: ApiRequestOptions): Promise<ApiSchemas["MaskedClusterConfig"]>;
   getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
   getClusterStats(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterStatsResponse"]>;
+  listClusterNodeStats(options?: ApiRequestOptions): Promise<ApiSchemas["NodeStatsMap"]>;
+  listPlacementHistory(
+    query?: PlacementHistoryQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["PlacementHistory"][]>;
+  getTailscaleAuthKeyStatus(
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["TailscaleAuthKeyStatus"]>;
+  rotateTailscaleAuthKey(
+    request: ApiSchemas["TailscaleAuthKeyRotationRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["TailscaleAuthKeyRotationResponse"]>;
   listLocalDisks(options?: ApiRequestOptions): Promise<ApiSchemas["DiskInfo"][]>;
   listNodeDisks(options?: ApiRequestOptions): Promise<ApiSchemas["NodeDiskMap"]>;
   listNodeMetrics(
@@ -145,6 +164,11 @@ export interface MaestroApiClient {
   ): Promise<ApiSchemas["WebhookTestResponse"]>;
   listServices(options?: ApiRequestOptions): Promise<ApiSchemas["Service"][]>;
   getService(serviceId: string, options?: ApiRequestOptions): Promise<ApiSchemas["Service"]>;
+  diffService(
+    serviceId: string,
+    request: ApiSchemas["ServiceDiffRequest"],
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceDiffResponse"]>;
   listDeployments(
     serviceId: string,
     options?: ApiRequestOptions
@@ -251,6 +275,11 @@ export interface MaestroApiClient {
     query?: ServiceTrafficQuery,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["TrafficMetricPoint"][]>;
+  getServiceTrafficBreakdown(
+    serviceId: string,
+    query?: ServiceTrafficBreakdownQuery,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["IngressTrafficBreakdown"]>;
   listContainerMetrics(
     serviceId: string,
     query?: ContainerMetricQuery,
@@ -285,6 +314,17 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["ServiceCommandResponse"]>;
+  applyServiceRollout(
+    serviceId: string,
+    request: ApiSchemas["ServiceRolloutRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceRolloutResponse"]>;
+  diffServiceRollout(
+    serviceId: string,
+    request: ApiSchemas["ServiceRolloutDiffRequest"],
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["ServiceRolloutDiffResponse"]>;
   freezeService(
     serviceId: string,
     request: ApiSchemas["CommandRequest"],

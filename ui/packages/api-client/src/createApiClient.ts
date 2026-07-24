@@ -75,6 +75,12 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
     getClusterConfig: (options) => get("/api/config", options),
     getClusterInfo: (options) => get("/api/cluster", options),
     getClusterStats: (options) => get("/api/cluster/stats", options),
+    listClusterNodeStats: (options) => get("/api/cluster/stats/nodes", options),
+    listPlacementHistory: (query, options) =>
+      get(withQuery("/api/cluster/placements", query), options),
+    getTailscaleAuthKeyStatus: (options) => get("/api/cluster/tailscale/auth-key", options),
+    rotateTailscaleAuthKey: (request, idempotencyKey, options) =>
+      mutate("PUT", "/api/cluster/tailscale/auth-key", request, idempotencyKey, options),
     listLocalDisks: (options) => get("/api/disks", options),
     listNodeDisks: (options) => get("/api/disks/nodes", options),
     listNodeMetrics: (query, options) => get(withQuery("/api/metrics/node", query), options),
@@ -192,6 +198,8 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
     listServices: (options) => get("/api/services", options),
     getService: (serviceId, options) =>
       get(`/api/services/${encodeURIComponent(serviceId)}`, options),
+    diffService: (serviceId, request, options) =>
+      submit("POST", `/api/services/${encodeURIComponent(serviceId)}/diff`, request, options),
     listDeployments: (serviceId, options) =>
       get(`/api/services/${encodeURIComponent(serviceId)}/deployments`, options),
     getDeployment: (serviceId, deploymentId, options) =>
@@ -281,6 +289,11 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
       get(withQuery(`/api/services/${encodeURIComponent(serviceId)}/metrics`, query), options),
     getServiceTraffic: (serviceId, query, options) =>
       get(withQuery(`/api/services/${encodeURIComponent(serviceId)}/traffic`, query), options),
+    getServiceTrafficBreakdown: (serviceId, query, options) =>
+      get(
+        withQuery(`/api/services/${encodeURIComponent(serviceId)}/traffic/breakdown`, query),
+        options
+      ),
     listContainerMetrics: (serviceId, query, options) =>
       get(
         withQuery(`/api/services/${encodeURIComponent(serviceId)}/metrics/containers`, query),
@@ -306,6 +319,21 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
         `/api/services/${encodeURIComponent(serviceId)}/redeploy`,
         request,
         idempotencyKey,
+        options
+      ),
+    applyServiceRollout: (serviceId, request, idempotencyKey, options) =>
+      mutate(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/rollout`,
+        request,
+        idempotencyKey,
+        options
+      ),
+    diffServiceRollout: (serviceId, request, options) =>
+      submit(
+        "POST",
+        `/api/services/${encodeURIComponent(serviceId)}/rollout/diff`,
+        request,
         options
       ),
     freezeService: (serviceId, request, idempotencyKey, options) =>
