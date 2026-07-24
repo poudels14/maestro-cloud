@@ -8,6 +8,8 @@ mod error;
 mod model;
 mod nixos;
 mod plan;
+mod plan_phases;
+mod plan_support;
 mod reboot;
 mod reconciler;
 mod snapshot;
