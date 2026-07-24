@@ -13,44 +13,15 @@ use kernel_controller::{
 };
 use kernel_store::{Clock, Keyspace, StorePrefix};
 
+use crate::error::PreviewError;
 use crate::resource::{desired_route, desired_service, route_id};
+use crate::settings::PreviewSettings;
 use crate::snapshot::PreviewSnapshot;
 use crate::writer::{PreviewWriteOutcome, PreviewWriter};
 
 const CONFLICT_RETRY: Duration = Duration::from_millis(100);
 const CLEANUP_RETRY: Duration = Duration::from_secs(1);
 const READY_CONDITION: &str = "Ready";
-
-/// Static derivation settings shared by all previews in one cluster.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreviewSettings {
-    preview_domain: String,
-}
-
-impl PreviewSettings {
-    /// Validates a preview DNS suffix.
-    pub fn new(preview_domain: impl Into<String>) -> Result<Self, PreviewError> {
-        let preview_domain = preview_domain.into();
-        let normalized = preview_domain.trim().trim_end_matches('.');
-        if normalized.is_empty()
-            || normalized.split('.').any(|label| {
-                label.is_empty()
-                    || label.starts_with('-')
-                    || label.ends_with('-')
-                    || !label
-                        .chars()
-                        .all(|character| character.is_ascii_alphanumeric() || character == '-')
-            })
-        {
-            return Err(PreviewError::InvalidSettings {
-                message: format!("preview domain `{preview_domain}` is not a DNS suffix"),
-            });
-        }
-        Ok(Self {
-            preview_domain: normalized.to_ascii_lowercase(),
-        })
-    }
-}
 
 /// Reconciles Preview resources into isolated Services and ingress routes.
 pub struct PreviewReconciler {
@@ -478,37 +449,4 @@ fn classify(error: PreviewError) -> ReconcileError {
             message: error.to_string(),
         },
     }
-}
-
-/// Preview settings, resource, serialization, and store failures.
-#[derive(Debug, thiserror::Error)]
-pub enum PreviewError {
-    /// A static or derived resource identifier was invalid.
-    #[error(transparent)]
-    InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
-    /// Static preview configuration was invalid.
-    #[error("invalid preview settings: {message}")]
-    InvalidSettings { message: String },
-    /// A base or preview resource could not produce safe derived state.
-    #[error("invalid preview definition: {message}")]
-    InvalidDefinition { message: String },
-    /// A relevant stored resource could not be decoded.
-    #[error("malformed {kind} resource at `{key}`: {message}")]
-    MalformedResource {
-        kind: &'static str,
-        key: String,
-        message: String,
-    },
-    /// One typed identity occurred more than once in a snapshot.
-    #[error("{kind} `{resource_id}` occurs more than once in one snapshot")]
-    DuplicateResource {
-        kind: &'static str,
-        resource_id: String,
-    },
-    /// A desired resource could not be serialized for a fenced transaction.
-    #[error("failed to serialize preview resource: {message}")]
-    Serialize { message: String },
-    /// The leadership fence or backing store rejected an operation.
-    #[error(transparent)]
-    Controller(#[from] kernel_controller::ControllerError),
 }

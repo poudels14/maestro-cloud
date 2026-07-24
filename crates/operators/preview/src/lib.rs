@@ -4,11 +4,13 @@
 //! writes only fenced derived resources. GitHub transport and daemon
 //! composition remain outside the derivation core.
 
+mod error;
 mod github;
 mod github_client;
 mod reconciler;
 mod repository;
 mod resource;
+mod settings;
 mod snapshot;
 mod source_plan;
 mod source_reconciler;
@@ -16,9 +18,11 @@ mod source_snapshot;
 mod source_writer;
 mod writer;
 
+pub use error::PreviewError;
 pub use github::{PullRequest, PullRequestApi, PullRequestApiError, PullRequestReadiness};
 pub use github_client::{GithubClientError, GithubPullRequestClient};
-pub use reconciler::{PreviewError, PreviewReconciler, PreviewSettings};
+pub use reconciler::PreviewReconciler;
+pub use settings::PreviewSettings;
 pub use source_plan::{
     PreviewFeedback, PreviewFeedbackKind, PreviewSourceDiagnostic, PreviewSourcePlan,
     PreviewSourcePlanError, RepositoryPullRequests, plan_preview_sources,
