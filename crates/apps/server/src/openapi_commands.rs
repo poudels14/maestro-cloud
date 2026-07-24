@@ -396,7 +396,7 @@ pub(crate) fn firewall_dry_run_path() -> Value {
     json!({
         "post": {
             "operationId": "dryRunFirewallPolicy",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [{
                 "name": "policyId",
                 "in": "path",
@@ -477,7 +477,7 @@ pub(crate) fn command_operation(
     }));
     json!({
         "operationId": operation_id,
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"browserSession": []}],
         "parameters": parameters,
         "requestBody": {
             "required": true,

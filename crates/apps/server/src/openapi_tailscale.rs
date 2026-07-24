@@ -4,7 +4,7 @@ pub(crate) fn path() -> Value {
     json!({
         "get": {
             "operationId": "getTailscaleAuthKeyStatus",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Secret-free live override status",
@@ -18,7 +18,7 @@ pub(crate) fn path() -> Value {
         },
         "put": {
             "operationId": "rotateTailscaleAuthKey",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [{
                 "name": "Idempotency-Key",
                 "in": "header",

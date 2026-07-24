@@ -35,6 +35,8 @@ export type SystemLogHistogramQuery = NonNullable<
 >;
 
 export interface MaestroApiClient {
+  createBrowserSession(operatorToken: string, options?: ApiRequestOptions): Promise<void>;
+  deleteBrowserSession(options?: ApiRequestOptions): Promise<void>;
   getClusterConfig(options?: ApiRequestOptions): Promise<ApiSchemas["MaskedClusterConfig"]>;
   getClusterInfo(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterInfo"]>;
   getClusterStats(options?: ApiRequestOptions): Promise<ApiSchemas["ClusterStatsResponse"]>;

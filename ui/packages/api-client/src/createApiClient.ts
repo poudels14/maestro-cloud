@@ -18,6 +18,25 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
     return transport.request(request);
   }
 
+  function send(
+    method: "DELETE" | "POST",
+    path: string,
+    options?: ApiRequestOptions
+  ): Promise<void> {
+    const request: TransportRequest<void> = {
+      method,
+      path,
+      decode: async () => undefined
+    };
+    if (options?.headers !== undefined) {
+      request.headers = options.headers;
+    }
+    if (options?.signal !== undefined) {
+      request.signal = options.signal;
+    }
+    return transport.request(request);
+  }
+
   function mutate<Response, Body>(
     method: "DELETE" | "POST" | "PUT",
     path: string,
@@ -72,6 +91,15 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
   }
 
   return {
+    createBrowserSession: (operatorToken, options) =>
+      send("POST", "/api/auth/session", {
+        ...options,
+        headers: {
+          ...options?.headers,
+          Authorization: `Bearer ${operatorToken}`
+        }
+      }),
+    deleteBrowserSession: (options) => send("DELETE", "/api/auth/session", options),
     getClusterConfig: (options) => get("/api/config", options),
     getClusterInfo: (options) => get("/api/cluster", options),
     getClusterStats: (options) => get("/api/cluster/stats", options),

@@ -194,7 +194,7 @@ fn stats_metric_operation() -> Value {
     json!({
         "get": {
             "operationId": "listOperationalStatsMetrics",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [
                 query_parameter("name", json!({"type": "string", "minLength": 1, "maxLength": 256})),
                 query_parameter("from", json!({"type": "integer", "format": "int64"})),
@@ -220,7 +220,7 @@ fn operation(operation_id: &str, schema: Value) -> Value {
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Live controller and observability health",

@@ -7784,9 +7784,15 @@
     "securitySchemes": {
       "bearerAuth": {
         "bearerFormat": "JWT",
-        "description": "HS256 token with a non-empty subject and the operator scope",
+        "description": "HS256 token with a non-empty subject and the operator scope; used to create browser sessions and by non-browser clients",
         "scheme": "bearer",
         "type": "http"
+      },
+      "browserSession": {
+        "description": "Short-lived Secure, HttpOnly, SameSite=Strict operator session",
+        "in": "cookie",
+        "name": "__Host-maestro-session",
+        "type": "apiKey"
       }
     }
   },
@@ -7854,6 +7860,41 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
+          }
+        ]
+      }
+    },
+    "/api/auth/session": {
+      "delete": {
+        "operationId": "deleteBrowserSession",
+        "responses": {
+          "204": {
+            "description": "Browser session cookie cleared"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createBrowserSession",
+        "responses": {
+          "204": {
+            "description": "Secure browser session created"
+          },
+          "401": {
+            "description": "Bearer credential is missing or invalid"
+          },
+          "403": {
+            "description": "Bearer credential lacks operator scope"
+          },
+          "503": {
+            "description": "Operator authentication is disabled on loopback"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
           }
         ]
       }
@@ -7876,6 +7917,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -7904,6 +7948,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -7946,6 +7993,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8010,6 +8060,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8045,6 +8098,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8109,6 +8165,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8144,6 +8203,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8169,6 +8231,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8204,6 +8269,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8229,6 +8297,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8294,6 +8365,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -8327,6 +8401,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8389,6 +8466,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8451,6 +8531,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8504,6 +8587,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8529,6 +8615,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8554,6 +8643,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8582,6 +8674,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -8634,6 +8729,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8659,6 +8757,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8684,6 +8785,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -8736,6 +8840,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8798,6 +8905,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -8831,6 +8941,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8853,6 +8966,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8881,6 +8997,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8906,6 +9025,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8931,6 +9053,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -8993,6 +9118,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -9026,6 +9154,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -9086,6 +9217,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9140,6 +9274,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9165,6 +9302,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -9204,6 +9344,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9273,6 +9416,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9301,6 +9447,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9370,6 +9519,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9454,6 +9606,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9543,6 +9698,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9617,6 +9775,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9681,6 +9842,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9752,6 +9916,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9777,6 +9944,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9812,6 +9982,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9837,6 +10010,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -9899,6 +10075,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -9932,6 +10111,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -9989,6 +10171,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10024,6 +10209,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10067,6 +10255,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10167,6 +10358,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10272,6 +10466,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10307,6 +10504,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10350,6 +10550,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10393,6 +10596,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10444,6 +10650,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10514,6 +10723,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10614,6 +10826,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10719,6 +10934,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10789,6 +11007,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10832,6 +11053,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10883,6 +11107,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -10953,6 +11180,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11001,6 +11231,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11063,6 +11296,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11155,6 +11391,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11252,6 +11491,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11334,6 +11576,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11406,6 +11651,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11468,6 +11716,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11530,6 +11781,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11589,6 +11843,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11640,6 +11897,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11675,6 +11935,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11718,6 +11981,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11798,6 +12064,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11833,6 +12102,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11876,6 +12148,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -11953,6 +12228,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -12015,6 +12293,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -12109,6 +12390,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -12208,6 +12492,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -12233,6 +12520,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -12295,6 +12585,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -12328,6 +12621,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       },
@@ -12388,6 +12684,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }
@@ -12456,6 +12755,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "browserSession": []
           }
         ]
       }

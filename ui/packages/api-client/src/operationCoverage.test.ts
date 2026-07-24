@@ -45,13 +45,18 @@ test("new operator operations preserve paths, queries, bodies, and idempotency",
         method: request.method,
         path: request.path,
         body: request.body,
-        idempotencyKey: request.headers?.["Idempotency-Key"]
+        idempotencyKey: request.headers?.["Idempotency-Key"],
+        ...(request.headers?.Authorization === undefined
+          ? {}
+          : { authorization: request.headers.Authorization })
       });
       return {} as Response;
     }
   };
   const client = createApiClient(transport);
 
+  await client.createBrowserSession("operator-token");
+  await client.deleteBrowserSession();
   await client.listClusterNodeStats();
   await client.listPlacementHistory({
     serviceId: "service/a",
@@ -78,6 +83,15 @@ test("new operator operations preserve paths, queries, bodies, and idempotency",
   });
 
   assert.deepEqual(requests, [
+    {
+      ...mutation("POST", "/api/auth/session"),
+      body: undefined,
+      authorization: "Bearer operator-token"
+    },
+    {
+      ...mutation("DELETE", "/api/auth/session"),
+      body: undefined
+    },
     get("/api/cluster/stats/nodes"),
     get("/api/cluster/placements?serviceId=service%2Fa&deploymentId=deployment%2Fb&replicaIndex=2"),
     get("/api/cluster/tailscale/auth-key"),
@@ -102,6 +116,7 @@ interface CapturedRequest {
   path: string;
   body: unknown;
   idempotencyKey: string | undefined;
+  authorization?: string;
 }
 
 function get(path: string): CapturedRequest {

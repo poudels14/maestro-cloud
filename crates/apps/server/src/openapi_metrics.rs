@@ -120,7 +120,7 @@ fn metric_operation(
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": parameters,
             "responses": {
                 "200": {
@@ -149,7 +149,7 @@ fn disk_operation(operation_id: &str, scope: DiskScope) -> Value {
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Latest complete disk inventory",

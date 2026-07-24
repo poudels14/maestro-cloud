@@ -230,7 +230,7 @@ fn operation(
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": parameters,
             "responses": {
                 "200": {

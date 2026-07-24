@@ -119,7 +119,7 @@ fn ingress_routes_operation() -> Value {
     json!({
         "get": {
             "operationId": "listActiveIngressRoutes",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Logical routes receiving public ingress traffic",
@@ -138,7 +138,7 @@ fn blocked_ips_operation() -> Value {
     json!({
         "get": {
             "operationId": "getIngressBlocklist",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Canonical cluster ingress blocklist",
@@ -151,7 +151,7 @@ fn blocked_ips_operation() -> Value {
         },
         "patch": {
             "operationId": "setBlockedIngressIp",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "requestBody": {
                 "required": true,
                 "content": {"application/json": {"schema": {
@@ -181,7 +181,7 @@ fn breakdown_operation(operation_id: &str, scope: TrafficScope) -> Value {
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": parameters,
             "responses": {
                 "200": {
@@ -204,7 +204,7 @@ fn service_traffic_operation() -> Value {
     json!({
         "get": {
             "operationId": "getServiceTraffic",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": parameters,
             "responses": {
                 "200": {

@@ -172,7 +172,7 @@ fn admissions_operation() -> Value {
     json!({
         "get": {
             "operationId": "listClusterAdmissions",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Secret-free join approval list",
@@ -186,7 +186,7 @@ fn admissions_operation() -> Value {
         },
         "post": {
             "operationId": "approveClusterAdmission",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "requestBody": {
                 "required": true,
                 "content": {"application/json": {"schema": {

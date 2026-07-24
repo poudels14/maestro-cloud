@@ -10,6 +10,7 @@ use crate::openapi_commands::{
 pub fn openapi_document() -> Value {
     let mut document = kernel_api::openapi_document();
     let mut paths = Map::from_iter([
+        ("/api/auth/session".to_string(), browser_session_operation()),
         (
             "/api/cluster".to_string(),
             singleton_operation("getClusterInfo", "ClusterInfo"),
@@ -276,7 +277,13 @@ pub fn openapi_document() -> Value {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "HS256 token with a non-empty subject and the operator scope"
+            "description": "HS256 token with a non-empty subject and the operator scope; used to create browser sessions and by non-browser clients"
+        },
+        "browserSession": {
+            "type": "apiKey",
+            "in": "cookie",
+            "name": "__Host-maestro-session",
+            "description": "Short-lived Secure, HttpOnly, SameSite=Strict operator session"
         }
     });
     if let Some(root) = document.as_object_mut() {
@@ -297,11 +304,32 @@ pub fn openapi_document() -> Value {
     document
 }
 
+fn browser_session_operation() -> Value {
+    json!({
+        "post": {
+            "operationId": "createBrowserSession",
+            "security": [{"bearerAuth": []}],
+            "responses": {
+                "204": {"description": "Secure browser session created"},
+                "401": {"description": "Bearer credential is missing or invalid"},
+                "403": {"description": "Bearer credential lacks operator scope"},
+                "503": {"description": "Operator authentication is disabled on loopback"}
+            }
+        },
+        "delete": {
+            "operationId": "deleteBrowserSession",
+            "responses": {
+                "204": {"description": "Browser session cookie cleared"}
+            }
+        }
+    })
+}
+
 fn artifact_archive_operation() -> Value {
     json!({
         "put": {
             "operationId": "uploadArtifactArchive",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [{
                 "name": "archiveId",
                 "in": "path",
@@ -341,7 +369,7 @@ fn singleton_operation(operation_id: &str, schema: &str) -> Value {
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Resource summary",
@@ -406,7 +434,7 @@ fn service_operation() -> Value {
 fn put_service_operation() -> Value {
     json!({
         "operationId": "putService",
-        "security": [{"bearerAuth": []}],
+        "security": [{"bearerAuth": []}, {"browserSession": []}],
         "parameters": [
             {
                 "name": "serviceId",
@@ -449,7 +477,7 @@ fn service_diff_operation() -> Value {
     json!({
         "post": {
             "operationId": "diffService",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [{
                 "name": "serviceId",
                 "in": "path",
@@ -484,7 +512,7 @@ fn service_rollout_operation() -> Value {
     json!({
         "post": {
             "operationId": "applyServiceRollout",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [
                 {
                     "name": "serviceId",
@@ -528,7 +556,7 @@ fn service_rollout_diff_operation() -> Value {
     json!({
         "post": {
             "operationId": "diffServiceRollout",
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [{
                 "name": "serviceId",
                 "in": "path",
@@ -564,7 +592,7 @@ fn list_operation(operation_id: &str, schema: &str) -> Value {
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "responses": {
                 "200": {
                     "description": "Ordered resource list",
@@ -616,7 +644,7 @@ pub(crate) fn get_operation(operation_id: &str, parameter: &str, schema: &str) -
     json!({
         "get": {
             "operationId": operation_id,
-            "security": [{"bearerAuth": []}],
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
             "parameters": [{
                 "name": parameter,
                 "in": "path",

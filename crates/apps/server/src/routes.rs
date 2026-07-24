@@ -20,6 +20,7 @@ mod service_diff;
 mod service_rollout_validation;
 mod service_rollouts;
 mod services;
+mod session;
 mod stats;
 mod system;
 mod tailscale;
@@ -69,10 +70,11 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(stats::node_router())
         .merge(exec::node_router())
         .merge(traffic::node_router())
-        .route_layer(middleware::from_fn_with_state(auth, require_node));
+        .route_layer(middleware::from_fn_with_state(auth.clone(), require_node));
     Router::new()
         .merge(system::router())
         .merge(cluster_admission::public_router())
+        .merge(session::router(auth.clone()))
         .merge(protected)
         .merge(node)
         .with_state(state)

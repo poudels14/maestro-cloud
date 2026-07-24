@@ -44,6 +44,7 @@ mod observations;
 mod service_commands;
 mod service_rollouts;
 mod services;
+mod session;
 mod stats;
 mod system_resources;
 mod tailscale;
@@ -236,6 +237,16 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
             .is_some()
     );
     assert!(document.pointer("/paths/~1api~1config/get").is_some());
+    assert!(
+        document
+            .pointer("/paths/~1api~1auth~1session/post")
+            .is_some()
+    );
+    assert!(
+        document
+            .pointer("/paths/~1api~1auth~1session/delete")
+            .is_some()
+    );
     assert!(document.pointer("/paths/~1api~1cluster~1ca/post").is_some());
     assert!(
         document
@@ -451,6 +462,14 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert_eq!(
         document.pointer("/components/securitySchemes/bearerAuth/scheme"),
         Some(&Value::String("bearer".to_string()))
+    );
+    assert_eq!(
+        document.pointer("/components/securitySchemes/browserSession/name"),
+        Some(&Value::String("__Host-maestro-session".to_string()))
+    );
+    assert_eq!(
+        document.pointer("/paths/~1api~1services/get/security/1/browserSession"),
+        Some(&serde_json::json!([]))
     );
 }
 
