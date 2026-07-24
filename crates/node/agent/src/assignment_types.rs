@@ -9,6 +9,17 @@ use runtime::{HostPortPublication, NetworkSpec, WorkloadHandle};
 
 use crate::StatusClock;
 
+/// How the node resolves service names for container workloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkloadDns {
+    /// Workloads do not receive an authoritative resolver.
+    Disabled,
+    /// Every workload uses one host-side resolver address.
+    Static(IpAddr),
+    /// A runtime-managed system Service supplies a delegated-network address.
+    DelegatedService(ServiceId),
+}
+
 /// Node-scoped assignment reconciliation settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssignmentAgentSettings {
@@ -18,8 +29,8 @@ pub struct AssignmentAgentSettings {
     pub node_id: NodeId,
     /// Node-local runtime bridge and exact host-owned IPAM range.
     pub network: NetworkSpec,
-    /// Resolver address injected into workloads, when the network exposes one.
-    pub dns_server: Option<IpAddr>,
+    /// Resolver source selected for this node's networking backend.
+    pub dns: WorkloadDns,
     /// Host ports granted only to daemon-owned system service identities.
     pub system_host_ports: BTreeMap<ServiceId, Vec<HostPortPublication>>,
     /// Graceful workload shutdown deadline before forced termination.

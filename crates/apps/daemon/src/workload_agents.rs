@@ -9,12 +9,14 @@ use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
     HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, NodeApiServices,
     NodeRegistryAgent, NodeRegistrySettings, RuntimeLogAgent, RuntimeLogAgentSettings,
-    StoreNodeControlHandler, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
+    StoreNodeControlHandler, WORKLOAD_BRIDGE_NAME, WorkloadDns, WorkloadStatsAgent,
+    WorkloadStatsSettings,
 };
 use runtime::{NetworkAddressing, NetworkCidr, NetworkSpec};
 use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
 
 use crate::control_plane::{DaemonRoleFactory, HostTelemetryDependencies, role_error};
+use crate::dns_resources::DNS_RESOLVER_SERVICE_ID;
 use crate::{DaemonPlan, RoleError, RoleSpec};
 
 pub(crate) fn build_node_registry_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
@@ -99,7 +101,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             cluster_id: plan.cluster().cluster_id.clone(),
             node_id: spec.node_id.clone(),
             network: network.spec,
-            dns_server: network.dns_server,
+            dns: network.dns,
             system_host_ports: factory.system_host_ports.clone(),
             stop_timeout: factory.settings.workload_stop_timeout,
             resync_interval: factory.settings.assignment_resync_interval,
@@ -139,7 +141,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
 
 struct AssignmentNetwork {
     spec: NetworkSpec,
-    dns_server: Option<IpAddr>,
+    dns: WorkloadDns,
 }
 
 fn assignment_network(
@@ -164,17 +166,21 @@ fn assignment_network(
                     },
                     mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
                 },
-                dns_server: Some(IpAddr::V4(gateway)),
+                dns: WorkloadDns::Static(IpAddr::V4(gateway)),
             })
         }
-        WorkloadNetworkMode::RuntimeDelegated => Ok(AssignmentNetwork {
-            spec: NetworkSpec {
-                name: WORKLOAD_BRIDGE_NAME.to_owned(),
-                addressing: NetworkAddressing::Delegated,
-                mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
-            },
-            dns_server: None,
-        }),
+        WorkloadNetworkMode::RuntimeDelegated => {
+            let service_id = kernel_api::ServiceId::new(DNS_RESOLVER_SERVICE_ID)
+                .map_err(|error| role_error("build delegated DNS service identity", error))?;
+            Ok(AssignmentNetwork {
+                spec: NetworkSpec {
+                    name: WORKLOAD_BRIDGE_NAME.to_owned(),
+                    addressing: NetworkAddressing::Delegated,
+                    mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
+                },
+                dns: WorkloadDns::DelegatedService(service_id),
+            })
+        }
     }
 }
 

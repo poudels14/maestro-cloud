@@ -1,29 +1,27 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, Deployment, ReplicaState, ResourceKind, ResourceName,
 };
-use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store, WatchCursor};
+use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
     AddressRequest, ArtifactDigest, NetworkHandle, NetworkProvider, RuntimeError, ShutdownRequest,
     WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 
+#[path = "assignment_reconcile.rs"]
+mod reconcile;
 mod watch;
 
 use crate::ArtifactReplicationAgent;
 use crate::StatusClock;
 use crate::assignment_error::AssignmentAgentError;
 #[cfg(unix)]
-use crate::assignment_node_api::{active_node_api_workloads, mount_node_api};
+use crate::assignment_node_api::mount_node_api;
 #[cfg(not(unix))]
 use crate::assignment_plan::node_api_user;
 use crate::assignment_plan::{workload_id, workload_spec};
-use crate::assignment_replica::ensure_replica;
-use crate::assignment_resource::{
-    decode_assignment, decode_assignments, decode_deployments, decode_replicas,
-};
+use crate::assignment_resource::decode_assignment;
 use crate::assignment_restart::{
     RestartReservation, finish_pending_restart, reserve_restart, restart_failure,
 };
@@ -31,7 +29,7 @@ use crate::assignment_status::{
     AssignmentOutcome, ConvergeFailure, desired_status, runtime_status_message,
 };
 use crate::assignment_types::{
-    AssignmentAgentSettings, AssignmentReconcileReport, ConvergedAssignment, earliest,
+    AssignmentAgentSettings, AssignmentReconcileReport, ConvergedAssignment,
 };
 use crate::secret_mount::SecretMountManager;
 use crate::system_host_ports::validate_system_host_ports;
@@ -115,148 +113,13 @@ impl AssignmentAgent {
         Ok(report)
     }
 
-    async fn reconcile_with_cursor(
-        &self,
-    ) -> Result<(AssignmentReconcileReport, WatchCursor), AssignmentAgentError> {
-        let assignment_snapshot = self
-            .store
-            .list(&self.keyspace.resource_kind(&self.assignment_kind))
-            .await?;
-        let deployment_snapshot = self
-            .store
-            .list(&self.keyspace.resource_kind(&self.deployment_kind))
-            .await?;
-        let replica_snapshot = self
-            .store
-            .list(&self.keyspace.resource_kind(&self.replica_kind))
-            .await?;
-        let (assignments, malformed_assignments) = decode_assignments(&assignment_snapshot.values);
-        let (deployments, malformed_deployments) = decode_deployments(&deployment_snapshot.values);
-        let (replicas, malformed_replicas) = decode_replicas(&replica_snapshot.values);
-        let local = assignments
-            .into_iter()
-            .filter(|assignment| assignment.spec.node_id == self.settings.node_id)
-            .collect::<Vec<_>>();
-        let active = local
-            .iter()
-            .filter(|assignment| assignment.meta.deletion_timestamp.is_none())
-            .collect::<Vec<_>>();
-        let network = self.network.ensure_network(&self.settings.network).await?;
-        let mut report = AssignmentReconcileReport {
-            desired: active.len(),
-            malformed_resources: malformed_assignments
-                .saturating_add(malformed_deployments)
-                .saturating_add(malformed_replicas),
-            ..Default::default()
-        };
-        for assignment in &active {
-            let outcome = match deployments.get(&assignment.spec.deployment_id) {
-                Some(deployment) => {
-                    let replica = match replicas.get(&assignment.meta.id) {
-                        Some(replica) => Some(replica.clone()),
-                        None if malformed_replicas == 0 => {
-                            let ensured = ensure_replica(
-                                self.store.as_ref(),
-                                &self.keyspace,
-                                &self.assignment_kind,
-                                &self.replica_kind,
-                                assignment,
-                            )
-                            .await?;
-                            if ensured.created {
-                                report.replica_states_created =
-                                    report.replica_states_created.saturating_add(1);
-                            }
-                            Some(ensured.replica)
-                        }
-                        None => None,
-                    };
-                    self.converge_assignment(assignment, deployment, replica.as_ref(), &network)
-                        .await
-                }
-                None => Err(ConvergeFailure::pending(
-                    "DeploymentMissing",
-                    format!(
-                        "deployment `{}` is not present in the observed snapshot",
-                        assignment.spec.deployment_id
-                    ),
-                )),
-            };
-            match outcome {
-                Ok(converged) => {
-                    self.update_status(
-                        assignment,
-                        AssignmentOutcome::Running {
-                            handle: &converged.handle,
-                            workload_address: converged.workload_address,
-                        },
-                    )
-                    .await?;
-                    report.running = report.running.saturating_add(1);
-                    if converged.restarted {
-                        report.restarted = report.restarted.saturating_add(1);
-                    }
-                }
-                Err(failure) => {
-                    report.requeue_at = earliest(report.requeue_at, failure.retry_at());
-                    self.update_status(assignment, AssignmentOutcome::Unresolved(&failure))
-                        .await?;
-                    report.unresolved = report.unresolved.saturating_add(1);
-                }
-            }
-        }
-
-        if malformed_assignments == 0 {
-            let active_ids = active
-                .iter()
-                .map(|assignment| assignment.meta.id.clone())
-                .collect::<BTreeSet<_>>();
-            let observed = self
-                .runtime
-                .list(&self.settings.cluster_id, &self.settings.node_id)
-                .await?;
-            for workload in observed {
-                if !active_ids.contains(&workload.metadata.assignment_id) {
-                    self.remove_workload(&workload.handle).await?;
-                    report.garbage_collected = report.garbage_collected.saturating_add(1);
-                }
-            }
-            let active_workloads = active
-                .iter()
-                .map(|assignment| assignment.meta.id.to_string())
-                .collect::<BTreeSet<_>>();
-            report.secret_mounts_collected = self.secrets.cleanup_stale(&active_workloads).await?;
-            #[cfg(unix)]
-            {
-                let active_node_api_workloads = active_node_api_workloads(&active, &deployments);
-                report.node_api_mounts_collected = self
-                    .node_api
-                    .cleanup_stale(&active_node_api_workloads)
-                    .await?;
-            }
-        }
-        for assignment in local
-            .iter()
-            .filter(|assignment| assignment.meta.deletion_timestamp.is_some())
-        {
-            self.update_status(assignment, AssignmentOutcome::Stopped)
-                .await?;
-        }
-        Ok((
-            report,
-            std::cmp::min(
-                std::cmp::min(assignment_snapshot.cursor, deployment_snapshot.cursor),
-                replica_snapshot.cursor,
-            ),
-        ))
-    }
-
     async fn converge_assignment(
         &self,
         assignment: &Assignment,
         deployment: &Deployment,
         replica: Option<&ReplicaState>,
         network: &NetworkHandle,
+        dns_server: Option<std::net::IpAddr>,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
         if matches!(
             deployment.spec.service.artifact,
@@ -300,7 +163,7 @@ impl AssignmentAgent {
             &self.settings.cluster_id,
             assignment,
             deployment,
-            self.settings.dns_server,
+            dns_server,
             additional_mounts,
             self.settings
                 .system_host_ports

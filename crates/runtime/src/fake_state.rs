@@ -4,7 +4,7 @@ use kernel_api::{ClusterId, NodeId, WorkloadId};
 
 use crate::{
     FakeRuntimeCall, FakeRuntimeOperation, LogFrame, RuntimeError, RuntimeEvent, WorkloadHandle,
-    WorkloadMetadata, WorkloadStatus,
+    WorkloadMetadata, WorkloadSpec, WorkloadStatus,
 };
 
 #[derive(Default)]
@@ -25,6 +25,7 @@ impl FakeState {
 
 pub(crate) struct FakeWorkload {
     pub(crate) fingerprint: Vec<u8>,
+    pub(crate) spec: WorkloadSpec,
     pub(crate) handle: WorkloadHandle,
     pub(crate) metadata: WorkloadMetadata,
     pub(crate) status: WorkloadStatus,

@@ -24,8 +24,9 @@ use runtime::{
 };
 use tokio::sync::{Notify, watch};
 
-use crate::{AssignmentAgent, AssignmentAgentSettings, NodeApiServices, StatusClock};
+use crate::{AssignmentAgent, AssignmentAgentSettings, NodeApiServices, StatusClock, WorkloadDns};
 
+mod dns;
 #[cfg(unix)]
 mod node_api;
 
@@ -608,7 +609,7 @@ impl World {
                 cluster_id: cluster_id(),
                 node_id: node_id("node-1"),
                 network: network_spec,
-                dns_server,
+                dns: dns_server.map_or(WorkloadDns::Disabled, WorkloadDns::Static),
                 system_host_ports: Default::default(),
                 stop_timeout: Duration::from_secs(5),
                 resync_interval: Duration::from_secs(30),

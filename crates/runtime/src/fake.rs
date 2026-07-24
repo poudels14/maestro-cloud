@@ -127,6 +127,18 @@ impl FakeRuntime {
         Ok(self.lock()?.calls.clone())
     }
 
+    /// Returns the immutable creation specification retained for one managed workload.
+    pub fn workload_spec(
+        &self,
+        workload_id: &WorkloadId,
+    ) -> Result<Option<WorkloadSpec>, RuntimeError> {
+        Ok(self
+            .lock()?
+            .workloads
+            .get(workload_id)
+            .map(|workload| workload.spec.clone()))
+    }
+
     /// Appends deterministic runtime-native log bytes for a managed workload.
     pub fn append_log(
         &self,
@@ -254,6 +266,7 @@ impl WorkloadRuntime for FakeRuntime {
         )?;
         let record = FakeWorkload {
             fingerprint,
+            spec: spec.clone(),
             handle: handle.clone(),
             metadata: spec.configuration().metadata.clone(),
             status: WorkloadStatus {

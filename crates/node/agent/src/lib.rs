@@ -82,7 +82,7 @@ pub use artifact_replication::{
 };
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
-pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport};
+pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport, WorkloadDns};
 pub use cgroup_stats::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
     CgroupStats, CgroupStatsError, CgroupStatsReader, CgroupV2StatsReader,
