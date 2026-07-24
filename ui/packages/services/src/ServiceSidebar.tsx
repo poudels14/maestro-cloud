@@ -11,6 +11,7 @@ function ServiceSidebar(props: {
   onSelect: (service: Service) => void;
   onBack: () => void;
   topSection?: JSX.Element;
+  footer?: JSX.Element;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
@@ -71,6 +72,7 @@ function ServiceSidebar(props: {
             </SidebarSection>
           </Show>
         </div>
+        {props.footer}
       </aside>
     </>
   );

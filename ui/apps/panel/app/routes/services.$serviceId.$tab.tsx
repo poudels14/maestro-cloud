@@ -11,6 +11,7 @@ import {
   type Service
 } from "@maestro/services";
 import { NodeNavSection } from "../components/home/NodeNavSection";
+import { SessionControls } from "../components/SessionControls";
 import { showErrorToast } from "../components/AppToasts";
 import { ingressApi, logsApi, metricsApi, servicesApi } from "../features";
 
@@ -69,6 +70,7 @@ function ServiceDetailPage() {
         onSelect={navigateService}
         onBack={() => navigate({ to: "/" })}
         topSection={<NodeNavSection onNavigate={() => setDrawerOpen(false)} />}
+        footer={<SessionControls />}
         mobileOpen={drawerOpen()}
         onCloseMobile={() => setDrawerOpen(false)}
       />

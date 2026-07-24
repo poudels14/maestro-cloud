@@ -29,6 +29,10 @@ in
       "$bundle_root/share/doc/maestro/nixos-rewrite.md"
     install -m644 ${rewritePackage}/share/doc/maestro/tailscale.md \
       "$bundle_root/share/doc/maestro/tailscale.md"
+    mkdir -p "$bundle_root/share/maestro-panel"
+    cp -a ${rewritePackage}/share/maestro-panel/. \
+      "$bundle_root/share/maestro-panel/"
+    test -f "$bundle_root/share/maestro-panel/index.html"
     strip --strip-all "$bundle_root"/bin/*
     test "$("$bundle_root/bin/maestro" --version)" = "maestro ${version}"
     test "$("$bundle_root/bin/maestro-daemon" --version)" = "daemon ${version}"

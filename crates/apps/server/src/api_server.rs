@@ -59,7 +59,11 @@ impl ApiServer {
             exec_relays: Arc::new(Semaphore::new(8)),
             webhook_backend: None,
         };
-        let router = crate::routes::router(state.clone(), auth_policy(&settings));
+        let router = crate::routes::router(
+            state.clone(),
+            auth_policy(&settings),
+            settings.panel_directory.as_deref(),
+        );
         Ok(Self {
             settings,
             state,
@@ -237,7 +241,11 @@ impl ApiServer {
     }
 
     fn rebuild_router(&mut self) {
-        self.router = crate::routes::router(self.state.clone(), auth_policy(&self.settings));
+        self.router = crate::routes::router(
+            self.state.clone(),
+            auth_policy(&self.settings),
+            self.settings.panel_directory.as_deref(),
+        );
     }
 }
 

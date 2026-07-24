@@ -16,6 +16,7 @@ import {
 import { clusterApi } from "../features";
 import { ClientOnly } from "../components/ClientOnly";
 import { AppToasts } from "../components/AppToasts";
+import { SessionGate } from "../components/SessionGate";
 import "../app.css";
 
 export const Route = createRootRoute({
@@ -54,12 +55,14 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <RootDocument>
-        <ClientOnly>
-          <AppToasts />
-          <MaintenanceBanner />
-          <SchedulingBanner />
-        </ClientOnly>
-        <Outlet />
+        <SessionGate>
+          <ClientOnly>
+            <AppToasts />
+            <MaintenanceBanner />
+            <SchedulingBanner />
+          </ClientOnly>
+          <Outlet />
+        </SessionGate>
       </RootDocument>
     </QueryClientProvider>
   );

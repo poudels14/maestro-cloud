@@ -3,9 +3,10 @@
 The flake exposes the rewrite without replacing the production legacy package
 or module before cutover:
 
-- `packages.<system>.rewrite` installs `maestro`, `maestro-daemon`, and
-  `maestro-migrate`.
-- `packages.<system>.rewrite-panel` contains the production panel output.
+- `packages.<system>.rewrite` installs `maestro`, `maestro-daemon`,
+  `maestro-migrate`, and the static panel served by the daemon.
+- `packages.<system>.rewrite-panel` exposes the same static panel separately
+  for packaging inspection.
 - `apps.<system>.rewrite`, `daemon`, and `migrate` run those binaries.
 - `nixosModules.rewrite` defines `services.maestro-rewrite`.
 
@@ -102,34 +103,27 @@ tar -xzf result/*.tar.gz
 ```
 
 The archive contains standalone `maestro`, `maestro-daemon`, and
-`maestro-migrate` executables plus the cutover, multi-node, NixOS, and
-Tailscale runbooks. The daemon still requires the host runtime, network
-privileges, and external tools described by the NixOS module; the static bundle
-does not turn the daemon into an isolated container deployment.
+`maestro-migrate` executables, the static panel, and the cutover, multi-node,
+NixOS, and Tailscale runbooks. The daemon serves the panel from its HTTPS API
+origin and exchanges operator tokens for HttpOnly session cookies. The daemon
+still requires the host runtime, network privileges, and external tools
+described by the NixOS module; the static bundle does not turn the daemon into
+an isolated container deployment.
 
-Release builds also publish minimal, deterministic admin and daemon image
-archives for each Linux architecture. Build and verify them locally with:
+Release builds also publish a minimal, deterministic daemon image archive for
+each Linux architecture. Build and verify it locally with:
 
 ```sh
-nix build .#rewrite-admin-image-bundle --out-link result-admin-image
 nix build .#rewrite-daemon-image-bundle --out-link result-daemon-image
-(cd result-admin-image && sha256sum --check *.sha256)
 (cd result-daemon-image && sha256sum --check *.sha256)
-gzip -dc result-admin-image/*.docker.tar.gz | docker load
 gzip -dc result-daemon-image/*.docker.tar.gz | docker load
 version=$(nix eval --raw .#rewrite-static.version)
-docker image inspect "maestro-admin:$version" >/dev/null
 docker run --rm "maestro-daemon:$version" --help
 ```
 
-The admin image runs as UID/GID 65532, contains the prebuilt panel and its Node
-runtime, and has no shell. Supply its controller endpoint and authentication
-material at runtime; the final browser-session contract remains a production
-cutover decision.
-
-The daemon image contains the static daemon and no shell. It is a packaging
-artifact, not a replacement for the host integration in
-`services.maestro-rewrite`: a real daemon still needs host networking,
+The daemon image contains the static daemon and panel, with no Node runtime or
+shell. It is a packaging artifact, not a replacement for the host integration
+in `services.maestro-rewrite`: a real daemon still needs host networking,
 containerd, privileged network access, the launch document, and the external
 adapter binaries selected by that document. Prefer the NixOS module for
 production and use the image only where those dependencies are explicitly

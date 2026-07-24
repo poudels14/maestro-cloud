@@ -3,7 +3,6 @@
   rewriteVersion,
 }: let
   buildNodejs = pkgs.nodejs_22;
-  nodejs = pkgs.nodejs-slim_22;
   pnpm = pkgs.pnpm_10.override {nodejs = buildNodejs;};
   panelVersion =
     (builtins.fromJSON (builtins.readFile ../ui/apps/panel/package.json)).version;
@@ -33,7 +32,7 @@ in
       inherit (finalAttrs) pname src version;
       inherit pnpm;
       fetcherVersion = 3;
-      hash = "sha256-sFTdaO/d4j9PGBwAkz+in4wwIESxqRoj/fTshUBSJgI=";
+      hash = "sha256-2qdAV5l/9xS+r+73kwjHAxPodMTFEaMV+dleMRXSb74=";
     };
 
     nativeBuildInputs = [
@@ -45,7 +44,6 @@ in
     buildPhase = ''
       runHook preBuild
 
-      export NITRO_PRESET=node-server
       export NODE_ENV=production
       pnpm --dir ui build
 
@@ -56,19 +54,15 @@ in
       runHook preInstall
 
       mkdir -p "$out/share/maestro-panel"
-      cp -a ui/apps/panel/.output/. "$out/share/maestro-panel/"
-      test -f "$out/share/maestro-panel/server/index.mjs"
-      test -f "$out/share/maestro-panel/nitro.json"
+      cp -a ui/apps/panel/dist/client/. "$out/share/maestro-panel/"
+      test -f "$out/share/maestro-panel/index.html"
+      test -d "$out/share/maestro-panel/assets"
 
       runHook postInstall
     '';
 
-    passthru = {
-      inherit nodejs;
-    };
-
     meta = {
-      description = "Production output for the rewritten Maestro panel";
+      description = "Static production assets for the rewritten Maestro panel";
       platforms = pkgs.lib.platforms.all;
     };
   })

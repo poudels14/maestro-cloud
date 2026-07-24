@@ -5,6 +5,7 @@ use cluster::StoreJoinTicket;
 use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
+use crate::launch::panel_directory;
 use crate::{
     DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
     LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig, StoreLaunchMode,
@@ -144,6 +145,18 @@ fn launch_validation_requires_a_strong_redacted_operator_key()
 
     launch.operator_jwt_secret = SecretValue::new("too-short");
     assert!(launch.validate().is_err());
+    Ok(())
+}
+
+#[test]
+fn packaged_panel_is_discovered_only_when_the_spa_shell_exists()
+-> Result<(), Box<dyn std::error::Error>> {
+    let package = tempfile::tempdir()?;
+    assert_eq!(panel_directory(package.path()), None);
+    let directory = package.path().join("share").join("maestro-panel");
+    std::fs::create_dir_all(&directory)?;
+    std::fs::write(directory.join("index.html"), "<main>Maestro</main>")?;
+    assert_eq!(panel_directory(package.path()), Some(directory));
     Ok(())
 }
 

@@ -24,6 +24,7 @@ mod openapi_metrics;
 mod openapi_stats;
 mod openapi_tailscale;
 mod openapi_traffic;
+mod panel;
 mod resource;
 mod routes;
 mod settings;

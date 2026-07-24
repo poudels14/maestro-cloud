@@ -262,10 +262,10 @@ pnpm --dir ui typecheck
 pnpm --dir ui build
 ```
 
-The release flake exposes the prebuilt panel as `.#rewrite-panel` and a minimal
-admin image as `.#rewrite-admin-image-bundle`. The final browser-session
-authentication contract remains an explicit cutover decision; packaging does
-not silently choose it.
+The release flake exposes the static panel as `.#rewrite-panel` and includes it
+in the rewrite package and daemon image. The daemon serves it from the API
+origin. Operators exchange an existing bearer token for a short-lived Secure,
+HttpOnly, SameSite=Strict browser cookie; the panel never stores the token.
 
 ## Migration and cutover
 
@@ -278,25 +278,19 @@ Follow [Rewrite cutover and rollback](docs/cutover.md) for the exact rehearsal,
 apply, verification, rollback, and evidence-retention procedure. Production
 cutover is not approved merely because the package builds.
 
-Three policy choices still require operator sign-off:
-
-1. preserve no-restart cutover with a temporary legacy Docker/Bollard adoption
-   adapter, pre-migrate workloads to containerd with planned restarts, or
-   accept restart-at-cutover;
-2. use one-time operator-secret exchange for a short-lived secure panel cookie,
-   adopt OIDC/PKCE, or retain a Nitro BFF; and
-3. omit or build a separate legacy pre-cluster state converter.
+The cutover keeps the one-way data migration and does not preserve legacy API
+or runtime compatibility after migration. The exact workload transition
+window still requires operator sign-off before the production rehearsal.
 
 ## Release artifacts
 
 The flake publishes deterministic native packages, static-musl bundles, a
-NixOS module, and minimal daemon/admin image archives. Build the current
-architecture's bundles with:
+NixOS module, and a minimal daemon image containing the panel. Build the
+current architecture's bundles with:
 
 ```sh
 nix build .#rewrite-static-bundle
 nix build .#rewrite-daemon-image-bundle
-nix build .#rewrite-admin-image-bundle
 ```
 
 See [Rewrite NixOS deployment](docs/nixos-rewrite.md) for checksums, archive

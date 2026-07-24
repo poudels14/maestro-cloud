@@ -9,6 +9,7 @@ import { clusterInfoQuery } from "@maestro/cluster";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
+import { SessionControls } from "../SessionControls";
 import { clusterApi, panelFeatureRegistry, servicesApi } from "../../features";
 
 function HomeShell(props: { path: HomePath }) {
@@ -43,6 +44,7 @@ function HomeShell(props: { path: HomePath }) {
           navigate({ to: "/" });
         }}
         topSection={<NodeNavSection active={props.path} onNavigate={() => setDrawerOpen(false)} />}
+        footer={<SessionControls />}
         mobileOpen={drawerOpen()}
         onCloseMobile={() => setDrawerOpen(false)}
       />

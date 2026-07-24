@@ -41,6 +41,7 @@ mod network_observations;
 mod node_artifacts;
 mod node_commands;
 mod observations;
+mod panel;
 mod service_commands;
 mod service_rollouts;
 mod services;

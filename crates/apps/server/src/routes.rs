@@ -29,12 +29,14 @@ mod upgrades;
 mod webhook_commands;
 mod write_plan;
 
+use std::path::Path;
+
 use axum::{Router, middleware};
 
 use crate::AppState;
 use crate::auth::{AuthPolicy, require_node, require_operator};
 
-pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
+pub(crate) fn router(state: AppState, auth: AuthPolicy, panel_directory: Option<&Path>) -> Router {
     let protected = Router::new()
         .merge(automation::router())
         .merge(artifact_archives::router())
@@ -71,11 +73,12 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy) -> Router {
         .merge(exec::node_router())
         .merge(traffic::node_router())
         .route_layer(middleware::from_fn_with_state(auth.clone(), require_node));
-    Router::new()
+    let router = Router::new()
         .merge(system::router())
         .merge(cluster_admission::public_router())
         .merge(session::router(auth.clone()))
         .merge(protected)
         .merge(node)
-        .with_state(state)
+        .with_state(state);
+    crate::panel::serve(router, panel_directory)
 }

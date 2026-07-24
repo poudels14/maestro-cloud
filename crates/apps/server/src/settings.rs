@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use kernel_api::SecretValue;
 
@@ -40,6 +41,8 @@ pub struct ServerSettings {
     pub cluster_trust_root_pem: Option<String>,
     /// Node identity presented only by internal mutual-TLS clients.
     pub cluster_client_identity: Option<TlsIdentity>,
+    /// Optional static panel directory served from the API origin.
+    pub panel_directory: Option<PathBuf>,
 }
 
 impl ServerSettings {
@@ -51,6 +54,7 @@ impl ServerSettings {
             tls_identity: None,
             cluster_trust_root_pem: None,
             cluster_client_identity: None,
+            panel_directory: None,
         }
     }
 
@@ -69,6 +73,12 @@ impl ServerSettings {
     /// Configures the node certificate presented to cluster peers.
     pub fn with_cluster_client_identity(mut self, identity: TlsIdentity) -> Self {
         self.cluster_client_identity = Some(identity);
+        self
+    }
+
+    /// Serves a packaged static panel from the API origin.
+    pub fn with_panel_directory(mut self, directory: PathBuf) -> Self {
+        self.panel_directory = Some(directory);
         self
     }
 
@@ -98,6 +108,17 @@ impl ServerSettings {
         {
             return Err(ServerSettingsError::EmptyClusterTrustRoot);
         }
+        if let Some(directory) = &self.panel_directory {
+            if !directory.is_absolute() {
+                return Err(ServerSettingsError::RelativePanelDirectory {
+                    directory: directory.clone(),
+                });
+            }
+            let index = directory.join("index.html");
+            if !index.is_file() {
+                return Err(ServerSettingsError::MissingPanelIndex { index });
+            }
+        }
         Ok(self)
     }
 
@@ -125,4 +146,10 @@ pub enum ServerSettingsError {
     /// A present trust root must contain certificate material.
     #[error("cluster trust root cannot be empty")]
     EmptyClusterTrustRoot,
+    /// Static assets need an unambiguous deployment root.
+    #[error("panel directory `{}` must be absolute", directory.display())]
+    RelativePanelDirectory { directory: PathBuf },
+    /// A configured SPA must include its shell.
+    #[error("panel index `{}` does not exist or is not a file", index.display())]
+    MissingPanelIndex { index: PathBuf },
 }

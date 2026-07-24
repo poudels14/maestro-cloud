@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
-#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -371,7 +369,7 @@ fn api_settings(
         security.identity.certificate_pem.clone(),
         security.identity.private_key_pem.clone(),
     );
-    ServerSettings::new(
+    let settings = ServerSettings::new(
         SocketAddr::new(
             IpAddr::V4(node.endpoint.host_address),
             node.endpoint.api_port,
@@ -380,7 +378,22 @@ fn api_settings(
     )
     .with_tls_identity(identity.clone())
     .with_cluster_trust_root(security.trust_root_pem.clone())
-    .with_cluster_client_identity(identity)
+    .with_cluster_client_identity(identity);
+    match packaged_panel_directory() {
+        Some(directory) => settings.with_panel_directory(directory),
+        None => settings,
+    }
+}
+
+fn packaged_panel_directory() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let package_root = executable.parent()?.parent()?;
+    panel_directory(package_root)
+}
+
+pub(crate) fn panel_directory(package_root: &Path) -> Option<PathBuf> {
+    let directory = package_root.join("share").join("maestro-panel");
+    directory.join("index.html").is_file().then_some(directory)
 }
 
 async fn open_observability_stores(

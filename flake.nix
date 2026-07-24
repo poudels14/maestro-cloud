@@ -19,6 +19,8 @@
       };
     rustToolchainFor = pkgs: pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
     maestroVersion = (builtins.fromTOML (builtins.readFile ./controller/Cargo.toml)).package.version;
+    rewriteVersion =
+      (builtins.fromTOML (builtins.readFile ./crates/apps/cli/Cargo.toml)).package.version;
   in {
     packages = forAllSystems (
       system: let
@@ -28,12 +30,13 @@
           cargo = rustToolchain;
           rustc = rustToolchain;
         };
-        rewritePackage = import ./nix/rewrite-package.nix {
-          inherit pkgs rustToolchain;
-        };
         rewritePanel = import ./nix/rewrite-panel.nix {
           inherit pkgs;
-          rewriteVersion = rewritePackage.version;
+          inherit rewriteVersion;
+        };
+        rewritePackage = import ./nix/rewrite-package.nix {
+          inherit pkgs rustToolchain;
+          panel = rewritePanel;
         };
       in {
         default = rustPlatform.buildRustPackage {
@@ -69,23 +72,14 @@
         staticTarget = muslPkgs.stdenv.hostPlatform.rust.rustcTarget;
         staticRewrite = import ./nix/rewrite-package.nix {
           inherit muslPkgs pkgs;
+          panel = rewritePanel;
           rustToolchain = (rustToolchainFor pkgs).override {
             targets = [staticTarget];
           };
         };
         rewriteDaemonImage = import ./nix/rewrite-daemon-image.nix {
           inherit pkgs;
-          rewriteBinaries = staticRewrite.passthru.binaries;
-        };
-        rewriteNodeRuntime = import ./nix/rewrite-node-runtime.nix {
-          inherit pkgs;
-          nodejs = rewritePanel.nodejs;
-        };
-        rewriteAdminImage = import ./nix/rewrite-admin-image.nix {
-          inherit pkgs;
-          nodeRuntime = rewriteNodeRuntime;
-          panel = rewritePanel;
-          version = staticRewrite.version;
+          rewritePackage = staticRewrite;
         };
         imageArchitecture =
           {
@@ -104,13 +98,6 @@
           daemonImage = rewriteDaemonImage;
           inherit imageArchitecture pkgs;
           rewritePackage = staticRewrite;
-        };
-        rewrite-admin-image = rewriteAdminImage;
-        rewrite-admin-image-bundle = import ./nix/rewrite-admin-image-bundle.nix {
-          adminImage = rewriteAdminImage;
-          inherit imageArchitecture pkgs;
-          nodeRuntime = rewriteNodeRuntime;
-          version = staticRewrite.version;
         };
       })
     );
@@ -136,8 +123,6 @@
           rewrite = rewritePackage;
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          rewrite-admin-image-bundle =
-            self.packages.${system}.rewrite-admin-image-bundle;
           rewrite-daemon-image-bundle =
             self.packages.${system}.rewrite-daemon-image-bundle;
           rewrite-module = import ./nix/rewrite-module-check.nix {

@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/solid-start/plugin/vite";
-import { nitro } from "nitro/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteSolid from "vite-plugin-solid";
 
@@ -15,14 +14,13 @@ export default defineConfig({
       router: {
         routeFileIgnorePrefix: "-"
       },
-      prerender: {
-        enabled: false
-      },
       spa: {
-        enabled: false
+        enabled: true,
+        prerender: {
+          outputPath: "/index"
+        }
       }
     }),
-    nitro({ serverDir: "server", features: { websocket: true } }),
     viteSolid({
       ssr: true,
       hot: false

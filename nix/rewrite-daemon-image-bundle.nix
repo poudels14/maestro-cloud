@@ -43,6 +43,7 @@ in
           tar -xf "$image_root/$layer" -C "$filesystem_root"
         done
     test -x "$filesystem_root/bin/maestro-daemon"
+    test -f "$filesystem_root/share/maestro-panel/index.html"
     test ! -e "$filesystem_root/bin/sh"
     "$filesystem_root/bin/maestro-daemon" --help >/dev/null
     test "$("$filesystem_root/bin/maestro-daemon" --version)" = "daemon ${version}"

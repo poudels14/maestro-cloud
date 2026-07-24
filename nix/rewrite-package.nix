@@ -1,5 +1,6 @@
 {
   muslPkgs ? null,
+  panel ? null,
   pkgs,
   rustToolchain,
 }: let
@@ -114,4 +115,9 @@ in
     install -m644 ${../docs/multi-node.md} "$out/share/doc/maestro/multi-node.md"
     install -m644 ${../docs/nixos-rewrite.md} "$out/share/doc/maestro/nixos-rewrite.md"
     install -m644 ${../docs/tailscale.md} "$out/share/doc/maestro/tailscale.md"
+    ${pkgs.lib.optionalString (panel != null) ''
+      mkdir -p "$out/share/maestro-panel"
+      cp -a ${panel}/share/maestro-panel/. "$out/share/maestro-panel/"
+      test -f "$out/share/maestro-panel/index.html"
+    ''}
   ''
