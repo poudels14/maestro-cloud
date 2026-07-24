@@ -20,8 +20,10 @@ mod assignment_status;
 mod assignment_types;
 mod cgroup_stats;
 mod dns;
+mod dns_plugin;
 mod dns_resource;
 mod dns_server;
+mod dns_socks;
 mod exec;
 mod firewall;
 mod health;
@@ -89,7 +91,10 @@ pub use cgroup_stats::{
 };
 pub use dns::{
     AuthoritativeDnsResolver, DnsAnswer, DnsLookup, DnsQueryType, DnsResolverError,
-    DnsResponseCode, DnsZoneSummary, MAESTRO_DNS_ZONE,
+    DnsResponseCode, DnsZoneReader, DnsZoneSummary, MAESTRO_DNS_ZONE,
+};
+pub use dns_plugin::{
+    DnsResolverPlugin, DnsResolverPluginError, TailscaleDnsResolverPlugin, TailscaleDnsRoute,
 };
 pub use dns_resource::{DnsReconcileReport, DnsResourceAgent, DnsResourceError};
 pub use dns_server::{

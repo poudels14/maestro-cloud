@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use hickory_server::proto::rr::{LowerName, Name};
 use kernel_api::{DnsRecord, DnsRecordValue};
 use serde::Serialize;
 use tokio::sync::RwLock;
+
+use crate::{DnsResolverPlugin, DnsResolverPluginError};
 
 /// Authoritative zone served by every Linux node resolver.
 pub const MAESTRO_DNS_ZONE: &str = "maestro.internal.";
@@ -79,6 +81,7 @@ pub struct DnsZoneSummary {
 #[derive(Clone)]
 pub struct AuthoritativeDnsResolver {
     zone: Arc<RwLock<Arc<CompiledZone>>>,
+    plugin: Option<Arc<dyn DnsResolverPlugin>>,
 }
 
 impl AuthoritativeDnsResolver {
@@ -86,7 +89,21 @@ impl AuthoritativeDnsResolver {
     pub fn new() -> Result<Self, DnsResolverError> {
         Ok(Self {
             zone: Arc::new(RwLock::new(Arc::new(CompiledZone::empty()?))),
+            plugin: None,
         })
+    }
+
+    /// Returns a non-owning view used by plugins to discover local service endpoints.
+    pub fn zone_reader(&self) -> DnsZoneReader {
+        DnsZoneReader {
+            zone: Arc::downgrade(&self.zone),
+        }
+    }
+
+    /// Attaches one optional lookup path for names absent from the local zone snapshot.
+    pub fn with_plugin(mut self, plugin: Arc<dyn DnsResolverPlugin>) -> Self {
+        self.plugin = Some(plugin);
+        self
     }
 
     /// Validates a complete resource snapshot and replaces the live zone atomically.
@@ -111,8 +128,47 @@ impl AuthoritativeDnsResolver {
                 name: name.to_owned(),
                 message,
             })?;
-        let zone = self.zone.read().await.clone();
-        Ok(zone.lookup(&LowerName::new(&name), query_type))
+        let name = LowerName::new(&name);
+        let local = self.zone.read().await.clone().lookup(&name, query_type);
+        if local.response_code != DnsResponseCode::NameError {
+            return Ok(local);
+        }
+        let Some(plugin) = &self.plugin else {
+            return Ok(local);
+        };
+        plugin
+            .lookup(&name.to_string(), query_type)
+            .await
+            .map(|lookup| lookup.unwrap_or(local))
+            .map_err(DnsResolverError::Plugin)
+    }
+}
+
+/// Non-owning authoritative snapshot view available to resolver plugins.
+#[derive(Clone)]
+pub struct DnsZoneReader {
+    zone: Weak<RwLock<Arc<CompiledZone>>>,
+}
+
+impl DnsZoneReader {
+    /// Reads only the current local zone and never invokes another plugin.
+    pub async fn lookup(
+        &self,
+        name: &str,
+        query_type: DnsQueryType,
+    ) -> Result<DnsLookup, DnsResolverPluginError> {
+        let name = parse_fully_qualified(name).map_err(|message| {
+            DnsResolverPluginError::new(format!("invalid local name: {message}"))
+        })?;
+        let zone = self
+            .zone
+            .upgrade()
+            .ok_or_else(|| DnsResolverPluginError::new("authoritative zone is unavailable"))?;
+        Ok(zone
+            .read()
+            .await
+            .clone()
+            .lookup(&LowerName::new(&name), query_type))
     }
 }
 
@@ -484,4 +540,7 @@ pub enum DnsResolverError {
     /// A single DNS TXT character string exceeded its wire limit.
     #[error("DnsRecord `{resource_id}` TXT value is {bytes} bytes; maximum is {MAX_TXT_BYTES}")]
     TextTooLong { resource_id: String, bytes: usize },
+    /// An optional resolver plugin failed while handling a routed query.
+    #[error("DNS resolver plugin failed: {0}")]
+    Plugin(#[from] DnsResolverPluginError),
 }
