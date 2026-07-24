@@ -18,7 +18,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Bounded selection and streaming behavior for node-local forensic logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalLogOptions {
-    /// Legacy source spelling: a system component or service/deployment/workload.
+    /// A system component or exact service/deployment/workload identity.
     pub source: Option<String>,
     /// Number of newest matching records to print initially.
     pub tail: usize,
@@ -205,7 +205,7 @@ pub enum LocalLogError {
     /// The protected launch document is inconsistent with its topology.
     #[error("local node `{node_id}` is absent from the launch topology")]
     MissingNode { node_id: NodeId },
-    /// The compatibility source spelling is malformed.
+    /// The requested source identity is malformed.
     #[error("invalid local log source `{value}`: {detail}")]
     InvalidSource { value: String, detail: String },
     /// A bounded query could not be constructed.

@@ -23,6 +23,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
+    assert!(Cli::try_parse_from(["maestro", "cluster", "upgrade", "system", "--yes"]).is_err());
     assert!(
         Cli::try_parse_from([
             "maestro",
@@ -53,19 +54,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/run/current-system/sw/bin/etcd",
             "--output",
             "/var/lib/maestro/launch.json",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "maestro",
-            "cluster",
-            "join",
-            "--prepare",
-            "--config",
-            "maestro.jsonc",
-            "--data-dir",
-            "/var/lib/maestro",
         ])
         .is_ok()
     );
@@ -230,7 +218,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "maestro",
             "cluster",
             "upgrade",
-            "system",
             "--target-version",
             "2.0.0",
             "--batch",
@@ -243,17 +230,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(
-        Cli::try_parse_from([
-            "maestro",
-            "cluster",
-            "upgrade",
-            "system",
-            "--batch=all",
-            "-y",
-        ])
-        .is_ok()
-    );
+    assert!(Cli::try_parse_from(["maestro", "cluster", "upgrade", "--batch=all", "-y",]).is_ok());
     assert!(
         Cli::try_parse_from([
             "maestro",
@@ -354,38 +331,6 @@ async fn config_init_prompts_without_loading_an_api_context()
 }
 
 #[tokio::test]
-async fn legacy_join_prepare_dispatches_without_an_api_context()
--> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::tempdir()?;
-    let config = directory.path().join("maestro.jsonc");
-    let data_directory = directory.path().join("data");
-    std::fs::write(
-        &config,
-        super::cluster_formation::cluster_document()
-            .replace("node: \"node-1\"", "node: \"node-2\""),
-    )?;
-    let cli = Cli::try_parse_from([
-        "maestro",
-        "cluster",
-        "join",
-        "--prepare",
-        "--config",
-        config.to_str().ok_or("non-UTF-8 config path")?,
-        "--data-dir",
-        data_directory.to_str().ok_or("non-UTF-8 data directory")?,
-    ])?;
-    let mut output = Vec::new();
-
-    run(cli, &mut std::io::Cursor::new(Vec::new()), &mut output).await?;
-
-    assert!(data_directory.join("security/join.key").exists());
-    assert!(
-        String::from_utf8(output)?.contains("Approve with: maestro cluster approve-node node-2")
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn restart_confirmation_can_abort_before_loading_an_api_context()
 -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::try_parse_from(["maestro", "cluster", "restart", "node-a"])?;
@@ -407,7 +352,6 @@ async fn upgrade_confirmation_warns_and_aborts_before_loading_an_api_context()
         "maestro",
         "cluster",
         "upgrade",
-        "system",
         "--target-version",
         "2.0.0",
         "--batch=all",

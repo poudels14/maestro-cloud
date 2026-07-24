@@ -6,7 +6,7 @@ use clap::ValueEnum;
 use crate::CliError;
 use crate::cluster_config::decode_cluster;
 use crate::config_source::{ConfigSourceReader, load_merged};
-use crate::service_config::{decode_services, decode_uploaded_service};
+use crate::service_config::decode_services;
 
 const CLUSTER_CONFIG_PATH: &str = "maestro.jsonc";
 const SERVICES_CONFIG_PATH: &str = "maestro.services.jsonc";
@@ -105,7 +105,6 @@ pub(crate) async fn validate(
     })?;
     let has_cluster = object.contains_key("cluster");
     let has_services = object.contains_key("services");
-    let has_uploaded_service = object.contains_key("id");
     match (has_cluster, has_services) {
         (true, false) => {
             let loaded = decode_cluster(source, merged, reader).await?;
@@ -130,26 +129,8 @@ pub(crate) async fn validate(
         (true, true) => Err(CliError::invalid_input(format!(
             "config `{source}` is ambiguous: both `cluster` and `services` are present"
         ))),
-        (false, false) if has_uploaded_service => {
-            let loaded = decode_uploaded_service(
-                source,
-                merged,
-                None,
-                kernel_api::ArtifactArchiveId::from_sha256([0; 32]),
-                reader,
-            )
-            .await?;
-            writeln!(
-                output,
-                "[maestro]: {source} is a valid uploaded-service config for `{}`",
-                loaded.service_id
-            )
-            .map_err(output_error)?;
-            write_ignored(&loaded.ignored_fields, output)
-        }
         (false, false) => Err(CliError::invalid_input(format!(
-            "unrecognized config `{source}`: expected a top-level `cluster`, `services`, or \
-             uploaded-service `id` field"
+            "unrecognized config `{source}`: expected a top-level `cluster` or `services` field"
         ))),
     }
 }

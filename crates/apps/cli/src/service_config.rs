@@ -152,15 +152,9 @@ pub(crate) async fn decode_uploaded_service(
     archive_id: kernel_api::ArtifactArchiveId,
     reader: &impl ConfigSourceReader,
 ) -> Result<LoadedUploadedService, CliError> {
-    let (mut services, ignored_fields) = if merged.get("services").is_some() {
-        let (document, ignored_fields): (ServicesDocument, _) =
-            decode_document(&merged, &format!("services config `{source}`"))?;
-        (document.services, ignored_fields)
-    } else {
-        let (document, ignored_fields): (LegacyUploadedServiceDocument, _) =
-            decode_document(&merged, &format!("uploaded service config `{source}`"))?;
-        (BTreeMap::from([document.into_entry()]), ignored_fields)
-    };
+    let (document, ignored_fields): (ServicesDocument, _) =
+        decode_document(&merged, &format!("services config `{source}`"))?;
+    let mut services = document.services;
     let service_id = match service_id {
         Some(service_id) => service_id,
         None if services.len() == 1 => {
@@ -219,40 +213,6 @@ struct ServicesDocument {
     #[serde(rename = "$schema", default)]
     _schema: Option<String>,
     services: BTreeMap<String, ServiceTemplate>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyUploadedServiceDocument {
-    #[serde(rename = "$schema", default)]
-    _schema: Option<String>,
-    id: String,
-    name: String,
-    #[serde(default)]
-    build: Option<BuildConfig>,
-    #[serde(default)]
-    image: Option<String>,
-    deploy: DeployConfig,
-    #[serde(default)]
-    ingress: Option<IngressConfig>,
-    #[serde(default)]
-    preview: Option<PreviewConfig>,
-}
-
-impl LegacyUploadedServiceDocument {
-    fn into_entry(self) -> (String, ServiceTemplate) {
-        (
-            self.id,
-            ServiceTemplate {
-                name: self.name,
-                build: self.build,
-                image: self.image,
-                deploy: self.deploy,
-                ingress: self.ingress,
-                preview: self.preview,
-            },
-        )
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

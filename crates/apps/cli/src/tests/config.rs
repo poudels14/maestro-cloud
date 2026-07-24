@@ -171,7 +171,7 @@ async fn validate_reports_nested_paths_for_cluster_and_service_type_errors()
 }
 
 #[tokio::test]
-async fn validate_recognizes_the_legacy_uploaded_service_shape()
+async fn validate_rejects_a_service_without_the_services_envelope()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.services.jsonc";
     let reader = MemoryReader {
@@ -190,11 +190,15 @@ async fn validate_recognizes_the_legacy_uploaded_service_shape()
     };
     let mut output = Vec::new();
 
-    validate(source, &mut output, &reader).await?;
-
-    let output = String::from_utf8(output)?;
-    assert!(output.contains("is a valid uploaded-service config for `my-service`"));
-    assert!(output.contains("  - futureRoot"));
+    let error = validate(source, &mut output, &reader)
+        .await
+        .expect_err("single-service compatibility document must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("expected a top-level `cluster` or `services` field")
+    );
+    assert!(output.is_empty());
     Ok(())
 }
 
@@ -206,8 +210,8 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_rout
         "\n            node: \"node-1\"",
         r#"
             tailscale: {
-                authKey: "aws-secret://tailscale-auth",
-                advertiseRoutes: null,
+                "auth-key": "aws-secret://tailscale-auth",
+                "advertise-routes": null,
                 replicas: 1
             },
             node: "node-1""#,
@@ -236,12 +240,30 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_rout
     Ok(())
 }
 
+#[tokio::test]
+async fn cluster_config_rejects_removed_camel_case_aliases()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24")
+        .replace("\"cluster-cidr\"", "clusterCidr")
+        .replace("\"join-secret\"", "joinSecret");
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(source.to_owned(), document)]),
+    };
+
+    let error = load_cluster(source, &reader)
+        .await
+        .expect_err("camelCase cluster aliases must be rejected");
+    assert!(error.to_string().contains("missing field `cluster-cidr`"));
+    Ok(())
+}
+
 fn cluster_document(subnet: &str) -> String {
     format!(
         r#"{{
             cluster: {{
                 name: "test-cluster",
-                clusterCidr: "172.22.0.0/16",
+                "cluster-cidr": "172.22.0.0/16",
                 nodes: {{
                     "node-1": {{
                         endpoint: "10.20.0.11",
@@ -249,8 +271,8 @@ fn cluster_document(subnet: &str) -> String {
                         role: "master"
                     }}
                 }},
-                controlAllowCidrs: ["10.20.0.0/24"],
-                joinSecret: "a-test-join-secret-with-at-least-32-characters"
+                "control-allow-cidrs": ["10.20.0.0/24"],
+                "join-secret": "a-test-join-secret-with-at-least-32-characters"
             }},
             node: "node-1"
         }}"#

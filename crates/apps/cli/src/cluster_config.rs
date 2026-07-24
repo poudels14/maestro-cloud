@@ -305,9 +305,8 @@ struct ClusterDocument {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct TailscaleInput {
-    #[serde(alias = "authKey")]
     auth_key: String,
-    #[serde(default, alias = "advertiseRoutes")]
+    #[serde(default)]
     advertise_routes: Option<Vec<String>>,
     #[serde(default = "default_tailscale_replicas")]
     replicas: u32,
@@ -326,22 +325,21 @@ fn default_tailscale_tags() -> Vec<String> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct ClusterInput {
-    #[serde(default, alias = "clusterId")]
+    #[serde(default)]
     cluster_id: Option<String>,
     name: String,
-    #[serde(alias = "clusterCidr")]
     cluster_cidr: String,
-    #[serde(default = "default_node_limit", alias = "nodeLimit")]
+    #[serde(default = "default_node_limit")]
     node_limit: u32,
-    #[serde(default = "default_node_prefix", alias = "nodePrefix")]
+    #[serde(default = "default_node_prefix")]
     node_prefix: u8,
     #[serde(default)]
     nodes: BTreeMap<String, NodeInput>,
-    #[serde(default, alias = "controlAllowCidrs")]
+    #[serde(default)]
     control_allow_cidrs: Vec<String>,
     #[serde(default)]
     ports: PortsInput,
-    #[serde(default, alias = "joinSecret")]
+    #[serde(default)]
     join_secret: Option<String>,
 }
 
@@ -357,7 +355,6 @@ const fn default_node_prefix() -> u8 {
 #[serde(rename_all = "kebab-case")]
 struct NodeInput {
     endpoint: String,
-    #[serde(alias = "workloadSubnet")]
     subnet: String,
     #[serde(default)]
     hostname: Option<String>,
@@ -371,7 +368,6 @@ enum NodeRoleInput {
     Master,
     #[default]
     Hybrid,
-    #[serde(alias = "controlPlane", alias = "voter")]
     ControlPlane,
     Worker,
 }
@@ -392,9 +388,9 @@ impl From<NodeRoleInput> for NodeRole {
 struct PortsInput {
     #[serde(default = "default_gateway")]
     gateway: u16,
-    #[serde(default = "default_store_client", alias = "storeClient")]
+    #[serde(default = "default_store_client")]
     store_client: u16,
-    #[serde(default = "default_store_peer", alias = "storePeer")]
+    #[serde(default = "default_store_peer")]
     store_peer: u16,
     #[serde(default = "default_wireguard")]
     wireguard: u16,

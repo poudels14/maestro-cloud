@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    ArtifactArchiveId, ArtifactTemplate, BuildSource, ExecPolicy, FirewallDirection,
-    FirewallSubject, FirewallVerdict, SecretValue, ServiceId, TransportProtocol, VolumeSource,
+    ArtifactArchiveId, ArtifactTemplate, ExecPolicy, FirewallDirection, FirewallSubject,
+    FirewallVerdict, SecretValue, ServiceId, TransportProtocol, VolumeSource,
 };
 
 use crate::CliError;
@@ -128,7 +128,7 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
 }
 
 #[tokio::test]
-async fn legacy_single_manifest_maps_to_an_uploaded_service()
+async fn uploaded_service_requires_the_services_document_envelope()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.services.jsonc";
     let reader = MemoryReader {
@@ -145,19 +145,10 @@ async fn legacy_single_manifest_maps_to_an_uploaded_service()
         )]),
     };
     let archive_id = ArtifactArchiveId::from_sha256([7; 32]);
-    let loaded = load_uploaded_service(source, None, archive_id.clone(), &reader).await?;
-
-    assert_eq!(loaded.service_id, ServiceId::new("my-service")?);
-    assert!(loaded.ignored_fields.is_empty());
-    assert!(matches!(
-        loaded.desired.spec.artifact,
-        ArtifactTemplate::Build { ref template }
-            if matches!(
-                template.source,
-                BuildSource::Tarball { archive_id: ref selected } if selected == &archive_id
-            )
-    ));
-    assert_eq!(loaded.desired.spec.replicas, 1);
+    let error = load_uploaded_service(source, None, archive_id, &reader)
+        .await
+        .expect_err("single-service compatibility document must be rejected");
+    assert!(error.to_string().contains("missing field `services`"));
     Ok(())
 }
 

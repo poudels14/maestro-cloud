@@ -209,7 +209,7 @@ pub(super) fn cluster_document() -> String {
     r#"{
             cluster: {
                 name: "test-cluster",
-                clusterCidr: "172.22.0.0/16",
+                "cluster-cidr": "172.22.0.0/16",
                 nodes: {
                     "node-1": {
                         hostname: "node-1.internal",
@@ -224,8 +224,8 @@ pub(super) fn cluster_document() -> String {
                         role: "worker"
                     }
                 },
-                controlAllowCidrs: ["10.20.0.0/24"],
-                joinSecret: "a-test-join-secret-with-at-least-32-characters"
+                "control-allow-cidrs": ["10.20.0.0/24"],
+                "join-secret": "a-test-join-secret-with-at-least-32-characters"
             },
             node: "node-1"
         }"#

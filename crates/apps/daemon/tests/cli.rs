@@ -29,17 +29,17 @@ fn daemon_reports_its_package_version() -> TestResult {
 }
 
 #[test]
-fn explicit_and_legacy_start_forms_select_the_same_config() -> TestResult {
+fn start_requires_its_explicit_subcommand() -> TestResult {
     let directory = tempfile::tempdir()?;
     let config = directory.path().join("missing-launch.json");
     let explicit = daemon_command().args(["start"]).arg(&config).output()?;
-    let legacy = daemon_command().arg(&config).output()?;
+    let positional = daemon_command().arg(&config).output()?;
 
     assert_eq!(explicit.status.code(), Some(1));
-    assert_eq!(legacy.status.code(), Some(1));
     assert!(explicit.stdout.is_empty());
-    assert_eq!(explicit.stdout, legacy.stdout);
-    assert_eq!(explicit.stderr, legacy.stderr);
+    assert_eq!(positional.status.code(), Some(2));
+    assert!(positional.stdout.is_empty());
+    assert!(String::from_utf8(positional.stderr)?.contains("unrecognized subcommand"));
     Ok(())
 }
 

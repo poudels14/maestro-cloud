@@ -36,8 +36,8 @@ impl NodeLogQueryStore for FixedQueries {
 }
 
 #[test]
-fn source_target_preserves_system_and_workload_compatibility_shapes()
--> Result<(), Box<dyn std::error::Error>> {
+fn source_target_accepts_system_and_exact_workload_shapes() -> Result<(), Box<dyn std::error::Error>>
+{
     let all = local_log_target(None)?;
     assert_eq!(all.scope, LogQueryScope::All);
     assert!(all.search.is_none());

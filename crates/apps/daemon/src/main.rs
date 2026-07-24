@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -75,8 +74,7 @@ enum DeadLetterCommand {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let arguments = normalize_arguments(std::env::args_os().collect());
-    let cli = match Cli::try_parse_from(arguments) {
+    let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
@@ -193,20 +191,6 @@ async fn write_admin_output(
         }
     }
     Ok(())
-}
-
-fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
-    let first = arguments.get(1).and_then(|argument| argument.to_str());
-    let is_native_command = first.is_some_and(|argument| {
-        matches!(
-            argument,
-            "start" | "logs" | "dead-letters" | "help" | "-h" | "--help" | "-V" | "--version"
-        ) || argument.starts_with('-')
-    });
-    if first.is_some() && !is_native_command {
-        arguments.insert(1, OsString::from("start"));
-    }
-    arguments
 }
 
 async fn shutdown_signal() -> std::io::Result<()> {
