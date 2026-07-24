@@ -1,3 +1,4 @@
+mod agent_api;
 mod build_backend;
 mod config_view;
 mod control_plane;

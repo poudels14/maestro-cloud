@@ -51,6 +51,7 @@ workspace = true
 
 [dev-dependencies]
 clustertest = { version = "0.1.0", path = "../../clustertest" }
+jsonwebtoken.workspace = true
 logs = { version = "0.1.0", path = "../../observability/logs", features = ["test-util"] }
 metrics = { version = "0.1.0", path = "../../observability/metrics", features = ["test-util"] }
 reqwest.workspace = true
@@ -59,3 +60,4 @@ runtime = { version = "0.1.0", path = "../../runtime", default-features = false,
 tempfile = "=3.27.0"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt", "time"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake"] }

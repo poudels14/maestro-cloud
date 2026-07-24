@@ -63,16 +63,12 @@ pub(crate) async fn bind_agent_api<MeshBackendType, FirewallBackendType, BridgeB
         stats_metric_queries.clone(),
     )?) as Arc<dyn server::NodeStatsQueryStore>;
     let cluster_stats_nodes = cluster_log_nodes.clone();
-    let exec_sessions = if spec.workload_enabled {
-        Some(Arc::new(cluster_query_clients::exec_sessions(
-            factory,
-            plan,
-            spec,
-            store.clone(),
-        )?) as Arc<dyn server::ClusterExecSessions>)
-    } else {
-        None
-    };
+    let exec_sessions = Arc::new(cluster_query_clients::exec_sessions(
+        factory,
+        plan,
+        spec,
+        store.clone(),
+    )?) as Arc<dyn server::ClusterExecSessions>;
     let admission = match (&factory.admission, &factory.agent_store) {
         (Some(dependencies), AgentStore::Managed { provider, .. }) => Some(
             dependencies
@@ -117,10 +113,7 @@ pub(crate) async fn bind_agent_api<MeshBackendType, FirewallBackendType, BridgeB
             cluster_stats_nodes,
             cluster_stats_queries,
         );
-    let server = match exec_sessions {
-        Some(sessions) => server.with_exec_sessions(sessions),
-        None => server,
-    };
+    let server = server.with_exec_sessions(exec_sessions);
     let server = match admission {
         Some(coordinator) => server.with_admission_coordinator(coordinator),
         None => server,

@@ -1869,6 +1869,7 @@ dependencies = [
  "dns",
  "firewall",
  "ingress",
+ "jsonwebtoken",
  "kernel-api",
  "kernel-controller",
  "kernel-store",
@@ -1890,6 +1891,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "upgrade",
  "webhook",
 ]

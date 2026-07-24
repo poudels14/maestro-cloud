@@ -21,6 +21,7 @@ use crate::{AuthoritativeDnsResolver, DnsAnswer, DnsLookup, DnsQueryType, DnsRes
 const TCP_TIMEOUT: Duration = Duration::from_secs(10);
 const TCP_RESPONSE_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_EDNS_PAYLOAD_BYTES: u16 = 4096;
+const EPHEMERAL_BIND_ATTEMPTS: usize = 32;
 
 /// Stable port exposed only on each node's workload bridge.
 pub const AUTHORITATIVE_DNS_PORT: u16 = 53;
@@ -113,21 +114,46 @@ impl BoundDnsServer {
         bind_address: SocketAddr,
         resolver: AuthoritativeDnsResolver,
     ) -> Result<Self, DnsServerError> {
+        if bind_address.port() == 0 {
+            return Self::bind_ephemeral(bind_address, resolver).await;
+        }
         let udp = UdpSocket::bind(bind_address)
             .await
             .map_err(|source| bind_error("UDP", bind_address, source))?;
-        let tcp_bind_address = if bind_address.port() == 0 {
-            udp.local_addr().map_err(|source| DnsServerError::Io {
-                operation: "inspect UDP listener",
-                source,
-            })?
-        } else {
-            bind_address
-        };
-        let tcp = TcpListener::bind(tcp_bind_address)
+        let tcp = TcpListener::bind(bind_address)
             .await
-            .map_err(|source| bind_error("TCP", tcp_bind_address, source))?;
+            .map_err(|source| bind_error("TCP", bind_address, source))?;
         Self::from_sockets(udp, tcp, resolver)
+    }
+
+    async fn bind_ephemeral(
+        bind_address: SocketAddr,
+        resolver: AuthoritativeDnsResolver,
+    ) -> Result<Self, DnsServerError> {
+        let mut last_address = bind_address;
+        for _ in 0..EPHEMERAL_BIND_ATTEMPTS {
+            let tcp = TcpListener::bind(bind_address)
+                .await
+                .map_err(|source| bind_error("TCP", bind_address, source))?;
+            let shared_address = tcp.local_addr().map_err(|source| DnsServerError::Io {
+                operation: "inspect TCP listener",
+                source,
+            })?;
+            last_address = shared_address;
+            match UdpSocket::bind(shared_address).await {
+                Ok(udp) => return Self::from_sockets(udp, tcp, resolver),
+                Err(source) if source.kind() == std::io::ErrorKind::AddrInUse => {}
+                Err(source) => return Err(bind_error("UDP", shared_address, source)),
+            }
+        }
+        Err(bind_error(
+            "UDP",
+            last_address,
+            std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "no shared ephemeral UDP/TCP port was available",
+            ),
+        ))
     }
 
     /// Returns the shared UDP/TCP listener address.
