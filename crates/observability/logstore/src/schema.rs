@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Config, Connection, OptionalExt, params};
 use logs::{IngestLogEntry, LogAppendReport, LogProducer, LogStoreError};
 
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -26,24 +26,31 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v5(&mut connection)?,
+        (0, _) => initialize_v6(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
         (1, 1) => {
             migrate_v1_to_v2(&mut connection)?;
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
+            crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
         }
         (1, 2) => {
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
+            crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
         }
         (1, 3) => {
             migrate_v3_to_v4(&mut connection)?;
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
+            crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
         }
-        (1, 4) => crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?,
+        (1, 4) => {
+            crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
+            crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
+        }
+        (1, 5) => crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?,
         (1, version) => {
             return Err(format!(
                 "database schema version {version} is not supported by version {CURRENT_SCHEMA_VERSION}"
@@ -141,7 +148,7 @@ pub(crate) fn append(
     Ok(report)
 }
 
-fn initialize_v5(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v6(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -202,7 +209,19 @@ fn initialize_v5(connection: &mut Connection) -> Result<(), String> {
              );
              CREATE INDEX stats_metrics_name_ts
                  ON stats_metrics(name, ts, labels_json);
-             INSERT INTO schema_version (version) VALUES (5);",
+             CREATE TABLE otlp_envelopes (
+                 node_id VARCHAR NOT NULL,
+                 workload_id VARCHAR NOT NULL,
+                 signal VARCHAR NOT NULL CHECK (signal IN ('metrics', 'traces')),
+                 digest BLOB NOT NULL,
+                 observed_at_ms BIGINT NOT NULL,
+                 metadata_json VARCHAR NOT NULL,
+                 payload BLOB NOT NULL,
+                 PRIMARY KEY (node_id, workload_id, signal, digest)
+             );
+             CREATE INDEX otlp_envelopes_observed
+                 ON otlp_envelopes(observed_at_ms, signal);
+             INSERT INTO schema_version (version) VALUES (6);",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())

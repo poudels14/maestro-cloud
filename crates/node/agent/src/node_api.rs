@@ -108,6 +108,18 @@ impl NodeApiServices {
         self.control = control;
         self
     }
+
+    /// Attaches the durable OTLP metric receiver used by telemetry-enabled workloads.
+    pub fn with_metric_ingest(mut self, metrics: Arc<dyn NodeMetricHandler>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// Attaches the durable OTLP trace receiver used by telemetry-enabled workloads.
+    pub fn with_trace_ingest(mut self, traces: Arc<dyn NodeTraceHandler>) -> Self {
+        self.traces = traces;
+        self
+    }
 }
 
 #[derive(Debug)]

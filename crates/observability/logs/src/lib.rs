@@ -23,6 +23,9 @@ mod model;
 mod operational_metrics;
 #[cfg(unix)]
 mod otlp;
+mod otlp_envelope;
+#[cfg(unix)]
+mod otlp_signal;
 mod parser;
 #[cfg(unix)]
 mod pipeline;
@@ -81,6 +84,13 @@ pub use operational_metrics::{
 };
 #[cfg(unix)]
 pub use otlp::OtlpLogHandler;
+pub use otlp_envelope::{
+    MAXIMUM_OTLP_ENVELOPE_BYTES, OtlpEnvelope, OtlpEnvelopeAppendReport, OtlpEnvelopeDigest,
+    OtlpEnvelopeId, OtlpEnvelopeStore, OtlpEnvelopeStoreError, OtlpEnvelopeValidationError,
+    OtlpSignal,
+};
+#[cfg(unix)]
+pub use otlp_signal::OtlpSignalHandler;
 pub use parser::{
     DatePrefixedLogParser, JsonLogParser, LogParser, LogrusLogParser, ParsedLog,
     PlainTextLogParser, Rfc3339PrefixedLogParser, standard_parsers,

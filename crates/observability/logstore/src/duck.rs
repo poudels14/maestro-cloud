@@ -8,8 +8,9 @@ use logs::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
     LogDeliveryStoreError, LogSequence, LogSinkId, LogSpoolStats, LogStatsStore,
     LogStatsStoreError, LogStore, LogStoreError, LogStoreRuntime, LogStoreRuntimeError,
-    SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats, StatsMetricAppendReport,
-    StatsMetricPoint, StatsMetricQuery, StatsMetricStore, StatsMetricStoreError,
+    OtlpEnvelopeStore, SequencedLogEntry, SinkDeadLetter, SinkDeadLetterStats,
+    StatsMetricAppendReport, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
+    StatsMetricStoreError,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -449,6 +450,10 @@ impl LogStoreRuntime for DuckLogStoreRuntime {
     }
 
     fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore> {
+        self.store.clone()
+    }
+
+    fn otlp_envelope_store(&self) -> Arc<dyn OtlpEnvelopeStore> {
         self.store.clone()
     }
 

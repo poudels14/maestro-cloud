@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{ClusterId, NodeId, Timestamp};
+use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
+use runtime::WorkloadMetadata;
 
 use crate::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogBody,
     LogDeliveryStore, LogDeliveryStoreError, LogOrigin, LogProducer, LogRecordId, LogSequence,
     LogSinkId, LogSinkIdError, LogStatsStore, LogStatsStoreError, LogStore, LogStoreError,
-    LogStream, OriginCursor, SequencedLogEntry, SinkDeadLetter, StatsMetricAppendReport,
+    LogStream, OriginCursor, OtlpEnvelope, OtlpEnvelopeAppendReport, OtlpEnvelopeStore,
+    OtlpEnvelopeStoreError, OtlpSignal, SequencedLogEntry, SinkDeadLetter, StatsMetricAppendReport,
     StatsMetricPoint, StatsMetricQuery, StatsMetricStore, StatsMetricStoreError,
 };
 
@@ -62,6 +64,62 @@ pub async fn check_log_store(store: &dyn LogStore) -> Result<(), LogStoreConform
         LogAppendReport {
             committed: 1,
             deduplicated: 1,
+        },
+    )
+}
+
+/// Runs replay, ownership-collision, and atomicity checks on a fresh OTLP spool.
+pub async fn check_otlp_envelope_store(
+    store: &dyn OtlpEnvelopeStore,
+) -> Result<(), OtlpEnvelopeConformanceError> {
+    let first = otlp_envelope(OtlpSignal::Metrics, "api", Timestamp(1), vec![1])?;
+    require_otlp_report(
+        "initial append",
+        store
+            .append_otlp_envelopes(std::slice::from_ref(&first))
+            .await?,
+        OtlpEnvelopeAppendReport {
+            committed: 1,
+            deduplicated: 0,
+        },
+    )?;
+    let mut replay = first.clone();
+    replay.observed_at = Timestamp(2);
+    require_otlp_report(
+        "exact replay",
+        store.append_otlp_envelopes(&[replay]).await?,
+        OtlpEnvelopeAppendReport {
+            committed: 0,
+            deduplicated: 1,
+        },
+    )?;
+
+    let mut collision = first;
+    collision.metadata.service_id = ServiceId::new("other")?;
+    if !matches!(
+        store
+            .append_otlp_envelopes(std::slice::from_ref(&collision))
+            .await,
+        Err(OtlpEnvelopeStoreError::Rejected { .. })
+    ) {
+        return Err(OtlpEnvelopeConformanceError::CollisionAccepted);
+    }
+
+    let second = otlp_envelope(OtlpSignal::Traces, "api", Timestamp(3), vec![2])?;
+    if !matches!(
+        store
+            .append_otlp_envelopes(&[second.clone(), collision])
+            .await,
+        Err(OtlpEnvelopeStoreError::Rejected { .. })
+    ) {
+        return Err(OtlpEnvelopeConformanceError::CollisionAccepted);
+    }
+    require_otlp_report(
+        "append after rejected batch",
+        store.append_otlp_envelopes(&[second]).await?,
+        OtlpEnvelopeAppendReport {
+            committed: 1,
+            deduplicated: 0,
         },
     )
 }
@@ -357,6 +415,44 @@ fn entry(
     })
 }
 
+fn otlp_envelope(
+    signal: OtlpSignal,
+    service_id: &str,
+    observed_at: Timestamp,
+    payload: Vec<u8>,
+) -> Result<OtlpEnvelope, OtlpEnvelopeConformanceError> {
+    Ok(OtlpEnvelope::new(
+        signal,
+        WorkloadMetadata {
+            cluster_id: ClusterId::new("conformance")?,
+            node_id: NodeId::new("node-1")?,
+            service_id: ServiceId::new(service_id)?,
+            deployment_id: DeploymentId::new("deployment-1")?,
+            assignment_id: AssignmentId::new("assignment-1")?,
+            workload_id: WorkloadId::new("workload-1")?,
+            labels: BTreeMap::new(),
+        },
+        observed_at,
+        payload,
+    )?)
+}
+
+fn require_otlp_report(
+    stage: &'static str,
+    actual: OtlpEnvelopeAppendReport,
+    expected: OtlpEnvelopeAppendReport,
+) -> Result<(), OtlpEnvelopeConformanceError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(OtlpEnvelopeConformanceError::UnexpectedReport {
+            stage,
+            expected,
+            actual,
+        })
+    }
+}
+
 /// A store violated behavior required by the normalized-log contract.
 #[derive(Debug, thiserror::Error)]
 pub enum LogStoreConformanceError {
@@ -451,6 +547,33 @@ pub enum LogStatsConformanceError {
     /// Statistics did not describe the durable fixture state.
     #[error("log stats store returned an unexpected snapshot")]
     UnexpectedStats,
+}
+
+/// An OTLP spool violated replay-safe durable append behavior.
+#[derive(Debug, thiserror::Error)]
+pub enum OtlpEnvelopeConformanceError {
+    /// OTLP storage failed valid conformance input.
+    #[error(transparent)]
+    Store(#[from] OtlpEnvelopeStoreError),
+    /// A fixture identifier unexpectedly failed validation.
+    #[error(transparent)]
+    InvalidIdentifier(#[from] kernel_api::InvalidIdentifier),
+    /// A fixture envelope unexpectedly failed validation.
+    #[error(transparent)]
+    InvalidEnvelope(#[from] crate::OtlpEnvelopeValidationError),
+    /// A replay identity was accepted with different authenticated ownership.
+    #[error("OTLP envelope store accepted an ownership collision")]
+    CollisionAccepted,
+    /// Append accounting did not describe the tested operation.
+    #[error("{stage} returned {actual:?}, expected {expected:?}")]
+    UnexpectedReport {
+        /// Conformance stage that produced the mismatch.
+        stage: &'static str,
+        /// Required accounting.
+        expected: OtlpEnvelopeAppendReport,
+        /// Store-provided accounting.
+        actual: OtlpEnvelopeAppendReport,
+    },
 }
 
 /// A store violated durable operational-history behavior.

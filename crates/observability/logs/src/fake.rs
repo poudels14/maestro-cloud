@@ -8,7 +8,8 @@ use crate::{
     DeadLetterStore, DeadLetterStoreError, IngestLogEntry, LogAppendReport, LogDeliveryStore,
     LogDeliveryStoreError, LogQueryStore, LogQueryStoreError, LogRecordId, LogSequence,
     LogSinkCursorStats, LogSinkId, LogSpoolStats, LogStatsStore, LogStatsStoreError, LogStore,
-    LogStoreError, LogStoreRuntime, LogStoreRuntimeError, SequencedLogEntry, SinkDeadLetter,
+    LogStoreError, LogStoreRuntime, LogStoreRuntimeError, OtlpEnvelope, OtlpEnvelopeAppendReport,
+    OtlpEnvelopeId, OtlpEnvelopeStore, OtlpEnvelopeStoreError, SequencedLogEntry, SinkDeadLetter,
     SinkDeadLetterSnapshot, SinkDeadLetterStats, StatsMetricPoint, StatsMetricStore,
     TrafficQueryStore,
 };
@@ -28,6 +29,7 @@ struct InMemoryLogState {
     cursors: BTreeMap<LogSinkId, LogSequence>,
     dead_letters: BTreeMap<(LogSinkId, LogSequence), SinkDeadLetter>,
     stats_metrics: BTreeMap<StatsMetricIdentity, StatsMetricPoint>,
+    otlp_envelopes: BTreeMap<OtlpEnvelopeId, OtlpEnvelope>,
 }
 
 impl InMemoryLogStore {
@@ -42,6 +44,15 @@ impl InMemoryLogStore {
             .entries
             .values()
             .map(|entry| entry.entry.clone())
+            .collect())
+    }
+
+    /// Returns all committed OTLP envelopes in stable replay-identity order.
+    pub fn otlp_envelopes(&self) -> Result<Vec<OtlpEnvelope>, OtlpEnvelopeStoreError> {
+        Ok(lock_state_for_otlp(&self.state)?
+            .otlp_envelopes
+            .values()
+            .cloned()
             .collect())
     }
 
@@ -109,6 +120,52 @@ impl LogStore for InMemoryLogStore {
         }
         Ok(LogAppendReport {
             committed: committed_count,
+            deduplicated,
+        })
+    }
+}
+
+#[async_trait]
+impl OtlpEnvelopeStore for InMemoryLogStore {
+    async fn append_otlp_envelopes(
+        &self,
+        envelopes: &[OtlpEnvelope],
+    ) -> Result<OtlpEnvelopeAppendReport, OtlpEnvelopeStoreError> {
+        let mut state = lock_state_for_otlp(&self.state)?;
+        let mut pending = BTreeMap::<OtlpEnvelopeId, OtlpEnvelope>::new();
+        let mut deduplicated = 0_usize;
+        for envelope in envelopes {
+            envelope
+                .validate()
+                .map_err(|error| OtlpEnvelopeStoreError::Rejected {
+                    message: error.to_string(),
+                })?;
+            let existing = pending
+                .get(&envelope.id)
+                .or_else(|| state.otlp_envelopes.get(&envelope.id));
+            match existing {
+                Some(existing)
+                    if existing.id == envelope.id
+                        && existing.metadata == envelope.metadata
+                        && existing.payload == envelope.payload =>
+                {
+                    deduplicated = deduplicated.saturating_add(1);
+                }
+                Some(_) => {
+                    return Err(OtlpEnvelopeStoreError::Rejected {
+                        message: "OTLP envelope identity was reused with different ownership"
+                            .to_owned(),
+                    });
+                }
+                None => {
+                    pending.insert(envelope.id.clone(), envelope.clone());
+                }
+            }
+        }
+        let committed = pending.len();
+        state.otlp_envelopes.extend(pending);
+        Ok(OtlpEnvelopeAppendReport {
+            committed,
             deduplicated,
         })
     }
@@ -368,6 +425,10 @@ impl LogStoreRuntime for InMemoryLogStoreRuntime {
         self.store.clone()
     }
 
+    fn otlp_envelope_store(&self) -> Arc<dyn OtlpEnvelopeStore> {
+        self.store.clone()
+    }
+
     fn traffic_query_store(&self) -> Arc<dyn TrafficQueryStore> {
         self.store.clone()
     }
@@ -401,4 +462,14 @@ fn lock_state_for_dead_letters(
     state.lock().map_err(|_| DeadLetterStoreError::Unavailable {
         message: "in-memory dead-letter lock was poisoned".to_owned(),
     })
+}
+
+fn lock_state_for_otlp(
+    state: &Mutex<InMemoryLogState>,
+) -> Result<MutexGuard<'_, InMemoryLogState>, OtlpEnvelopeStoreError> {
+    state
+        .lock()
+        .map_err(|_| OtlpEnvelopeStoreError::Unavailable {
+            message: "in-memory OTLP envelope lock was poisoned".to_owned(),
+        })
 }

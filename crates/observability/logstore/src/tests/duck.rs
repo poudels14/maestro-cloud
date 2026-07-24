@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{ClusterId, NodeId, Timestamp};
+use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use logs::{
     DeadLetterStore, IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer,
     LogRecordId, LogSequence, LogSinkId, LogStatsStore, LogStore, LogStream, OriginCursor,
-    SinkDeadLetter, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
+    OtlpEnvelope, OtlpEnvelopeStore, OtlpSignal, SinkDeadLetter, StatsMetricPoint,
+    StatsMetricQuery, StatsMetricStore,
 };
+use runtime::WorkloadMetadata;
 
 use crate::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
 
@@ -39,6 +41,7 @@ async fn duck_store_passes_shared_conformance_and_closes_cleanly()
     logs::conformance::check_log_delivery_store(runtime.store().as_ref(), &delivery_entries)
         .await?;
     logs::conformance::check_dead_letter_store(runtime.store().as_ref()).await?;
+    logs::conformance::check_otlp_envelope_store(runtime.store().as_ref()).await?;
     runtime.shutdown().await?;
     Ok(())
 }
@@ -143,6 +146,38 @@ async fn duck_store_replays_operational_metric_history_after_restart()
         restarted
             .store()
             .append_stats_metrics(&[point])
+            .await?
+            .deduplicated,
+        1
+    );
+    restarted.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn duck_store_replays_lossless_otlp_envelopes_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
+    let envelope = otlp_envelope(Timestamp(100))?;
+    let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
+    assert_eq!(
+        runtime
+            .store()
+            .append_otlp_envelopes(std::slice::from_ref(&envelope))
+            .await?
+            .committed,
+        1
+    );
+    runtime.shutdown().await?;
+
+    let restarted = DuckLogStoreRuntime::open(settings).await?;
+    let mut replay = envelope;
+    replay.observed_at = Timestamp(200);
+    assert_eq!(
+        restarted
+            .store()
+            .append_otlp_envelopes(&[replay])
             .await?
             .deduplicated,
         1
@@ -306,7 +341,7 @@ async fn duck_store_migrates_v1_rows_to_deterministic_delivery_sequences()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        5
+        6
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
@@ -385,7 +420,7 @@ async fn duck_store_migrates_v2_rows_into_an_independent_hot_query_tier()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        5
+        6
     );
     Ok(())
 }
@@ -417,7 +452,7 @@ async fn duck_store_migrates_v4_to_operational_metric_history()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        5
+        6
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM stats_metrics", [], |row| {
@@ -428,8 +463,61 @@ async fn duck_store_migrates_v4_to_operational_metric_history()
     Ok(())
 }
 
+#[tokio::test]
+async fn duck_store_migrates_v5_to_lossless_otlp_spooling() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("logs.duckdb");
+    let connection = duckdb::Connection::open(&path)?;
+    connection.execute_batch(
+        "CREATE TABLE schema_version (version BIGINT NOT NULL);
+         INSERT INTO schema_version VALUES (5);",
+    )?;
+    drop(connection);
+
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(path.clone(), 8)?).await?;
+    runtime
+        .store()
+        .append_otlp_envelopes(&[otlp_envelope(Timestamp(100))?])
+        .await?;
+    runtime.shutdown().await?;
+
+    let connection = duckdb::Connection::open(path)?;
+    assert_eq!(
+        connection.query_row("SELECT version FROM schema_version", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        6
+    );
+    assert_eq!(
+        connection.query_row("SELECT COUNT(*) FROM otlp_envelopes", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
+    );
+    Ok(())
+}
+
 fn entry() -> Result<IngestLogEntry, kernel_api::InvalidIdentifier> {
     entry_at(1)
+}
+
+fn otlp_envelope(observed_at: Timestamp) -> Result<OtlpEnvelope, Box<dyn std::error::Error>> {
+    OtlpEnvelope::new(
+        OtlpSignal::Metrics,
+        WorkloadMetadata {
+            cluster_id: ClusterId::new("cluster-1")?,
+            node_id: NodeId::new("node-1")?,
+            service_id: ServiceId::new("api")?,
+            deployment_id: DeploymentId::new("deployment-1")?,
+            assignment_id: AssignmentId::new("assignment-1")?,
+            workload_id: WorkloadId::new("workload-1")?,
+            labels: BTreeMap::new(),
+        },
+        observed_at,
+        vec![1, 2, 3],
+    )
+    .map_err(Into::into)
 }
 
 fn entry_at(index: u64) -> Result<IngestLogEntry, kernel_api::InvalidIdentifier> {

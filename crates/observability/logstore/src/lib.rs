@@ -20,6 +20,8 @@ mod log_retention;
 mod metric_delivery_schema;
 mod metric_duck;
 mod metric_schema;
+mod otlp_envelope_duck;
+mod otlp_envelope_schema;
 mod query_duck;
 mod schema;
 mod settings;

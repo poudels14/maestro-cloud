@@ -10,7 +10,9 @@ use crate::{
 #[tokio::test]
 async fn in_memory_store_passes_the_shared_conformance_battery()
 -> Result<(), Box<dyn std::error::Error>> {
-    crate::conformance::check_log_store(&InMemoryLogStore::new()).await?;
+    let store = InMemoryLogStore::new();
+    crate::conformance::check_log_store(&store).await?;
+    crate::conformance::check_otlp_envelope_store(&store).await?;
     Ok(())
 }
 

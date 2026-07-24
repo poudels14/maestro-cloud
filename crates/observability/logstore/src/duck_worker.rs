@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use logs::{DeadLetterStoreError, LogDeliveryStoreError, LogStatsStoreError};
+use logs::{
+    DeadLetterStoreError, LogDeliveryStoreError, LogStatsStoreError, OtlpEnvelopeStoreError,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::duck::Command;
@@ -35,6 +37,15 @@ pub(crate) fn run_worker(
         match command {
             Command::Append { entries, response } => {
                 let _ignored = response.send(schema::append(&mut connection, &entries));
+            }
+            Command::AppendOtlpEnvelopes {
+                envelopes,
+                response,
+            } => {
+                let _ignored = response.send(crate::otlp_envelope_schema::append(
+                    &mut connection,
+                    &envelopes,
+                ));
             }
             Command::ReadAfter {
                 cursor,
@@ -224,6 +235,12 @@ pub(crate) fn dead_worker_stopped(action: &'static str) -> DeadLetterStoreError 
 
 pub(crate) fn stats_worker_stopped(action: &'static str) -> LogStatsStoreError {
     LogStatsStoreError::Unavailable {
+        message: format!("DuckDB worker stopped before {action}"),
+    }
+}
+
+pub(crate) fn otlp_worker_stopped(action: &'static str) -> OtlpEnvelopeStoreError {
+    OtlpEnvelopeStoreError::Unavailable {
         message: format!("DuckDB worker stopped before {action}"),
     }
 }

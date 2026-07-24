@@ -7,6 +7,8 @@ mod filter;
 mod operational_metrics;
 #[cfg(unix)]
 mod otlp;
+#[cfg(unix)]
+mod otlp_signal;
 mod parser;
 #[cfg(unix)]
 mod pipeline;

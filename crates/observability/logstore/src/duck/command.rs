@@ -3,7 +3,8 @@ use logs::{
     DeadLetterStoreError, IngestLogEntry, IngressTrafficBreakdown, IngressTrafficQuery,
     LogAppendReport, LogDeliveryStoreError, LogHistogramBucket, LogHistogramQuery,
     LogQueryStoreError, LogReadQuery, LogSequence, LogSinkId, LogSpoolStats, LogStatsStoreError,
-    LogStoreError, SequencedLogEntry, ServiceTrafficQuery, SinkDeadLetter, SinkDeadLetterStats,
+    LogStoreError, OtlpEnvelope, OtlpEnvelopeAppendReport, OtlpEnvelopeStoreError,
+    SequencedLogEntry, ServiceTrafficQuery, SinkDeadLetter, SinkDeadLetterStats,
     StatsMetricAppendReport, StatsMetricPoint, StatsMetricQuery, StatsMetricStoreError,
     TrafficMetricPoint, TrafficQueryError,
 };
@@ -18,6 +19,10 @@ pub(crate) enum Command {
     Append {
         entries: Vec<IngestLogEntry>,
         response: oneshot::Sender<Result<LogAppendReport, LogStoreError>>,
+    },
+    AppendOtlpEnvelopes {
+        envelopes: Vec<OtlpEnvelope>,
+        response: oneshot::Sender<Result<OtlpEnvelopeAppendReport, OtlpEnvelopeStoreError>>,
     },
     ReadAfter {
         cursor: Option<LogSequence>,

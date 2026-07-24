@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use cluster::{StoreRuntime, StoreShutdown};
 use kernel_store::Clock;
 use logs::{
-    LogDeliveryStore, LogQueryStore, LogStatsStore, LogStore, LogStoreRuntime, StatsMetricStore,
-    TrafficQueryStore,
+    LogDeliveryStore, LogQueryStore, LogStatsStore, LogStore, LogStoreRuntime, OtlpEnvelopeStore,
+    StatsMetricStore, TrafficQueryStore,
 };
 use metrics::{
     HostMetricDeliveryStore, HostMetricQueryStore, HostMetricStore, MetricDeliveryStore,
@@ -54,6 +54,10 @@ impl AgentStartupRuntimes {
 
     pub(crate) fn stats_metric_store(&self) -> Arc<dyn StatsMetricStore> {
         self.logs.stats_metric_store()
+    }
+
+    pub(crate) fn otlp_envelope_store(&self) -> Arc<dyn OtlpEnvelopeStore> {
+        self.logs.otlp_envelope_store()
     }
 
     pub(crate) fn traffic_query_store(&self) -> Arc<dyn TrafficQueryStore> {

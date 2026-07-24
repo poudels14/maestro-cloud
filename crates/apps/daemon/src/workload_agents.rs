@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use kernel_api::NodeSpec;
 use kernel_store::Store;
-use logs::{LogStore, OtlpLogHandler, RuntimeLogPipeline};
+use logs::{LogStore, OtlpEnvelopeStore, OtlpLogHandler, OtlpSignalHandler, RuntimeLogPipeline};
 use metrics::{HostMetricPipeline, HostMetricStore, MetricStore, WorkloadMetricPipeline};
 use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
@@ -82,6 +82,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
     spec: &RoleSpec,
     store: Arc<dyn Store>,
     log_store: Arc<dyn LogStore>,
+    otlp_store: Arc<dyn OtlpEnvelopeStore>,
 ) -> Result<AssignmentAgent, RoleError> {
     let node = plan
         .cluster()
@@ -118,7 +119,12 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             node_api_root: factory.volatile_root.join("node-api"),
         },
         #[cfg(unix)]
-        Some(
+        Some({
+            let signals = Arc::new(OtlpSignalHandler::new(
+                plan.cluster().cluster_id.clone(),
+                otlp_store,
+                factory.status_clock.clone(),
+            ));
             NodeApiServices::with_log_ingest(Arc::new(OtlpLogHandler::new(
                 plan.cluster().cluster_id.clone(),
                 log_store,
@@ -128,8 +134,10 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
                 store.clone(),
                 &plan.cluster().cluster_id,
                 factory.status_clock.clone(),
-            ))),
-        ),
+            )))
+            .with_metric_ingest(signals.clone())
+            .with_trace_ingest(signals)
+        }),
         factory.monotonic_clock.clone(),
         factory.status_clock.clone(),
     )
