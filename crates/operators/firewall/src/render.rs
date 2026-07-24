@@ -91,6 +91,12 @@ fn render_node(
         ));
     }
     renderer.add_hook_chain("forward", "forward", -50, "accept", forward);
+    renderer.add_nat_hook_chain(
+        "postrouting",
+        "postrouting",
+        "srcnat",
+        vec!["ip saddr @local_workloads_v4 ip daddr != @all_workloads_v4 masquerade".to_owned()],
+    );
 
     let mut input_rules = vec!["ct state established,related accept".to_string()];
     input_rules.extend([
@@ -310,6 +316,18 @@ impl Renderer {
             ChainDefinition {
                 hook: Some(format!(
                     "type filter hook {hook} priority {priority}; policy {policy};"
+                )),
+                rules,
+            },
+        );
+    }
+
+    fn add_nat_hook_chain(&mut self, name: &str, hook: &str, priority: &str, rules: Vec<String>) {
+        self.chains.insert(
+            name.to_string(),
+            ChainDefinition {
+                hook: Some(format!(
+                    "type nat hook {hook} priority {priority}; policy accept;"
                 )),
                 rules,
             },

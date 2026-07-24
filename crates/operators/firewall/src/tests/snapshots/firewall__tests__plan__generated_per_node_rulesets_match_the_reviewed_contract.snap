@@ -3,7 +3,7 @@ source: crates/operators/firewall/src/tests/plan.rs
 expression: artifact
 ---
 node: node-1
-digest: 187fd8f77127bd089999e59d00239e817db98ff1060fc8e97ad4b4d3f77cb910
+digest: f234c5b7cd6f75cb587618e4657bf382ab027f97bcbed6cfc53a98519dcd303b
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -103,10 +103,15 @@ table inet maestro_firewall {
         reject
     }
 
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr @local_workloads_v4 ip daddr != @all_workloads_v4 masquerade
+    }
+
 }
 
 node: node-2
-digest: 1ff317de8e8bc7053f167b795e4133323835fc660b712ed26e53f3cbf6b6e804
+digest: 3d15bee265588ef91bc6ffc7e3afef5d7270d58de1a98d525a81695cb5e1cf08
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -197,6 +202,11 @@ table inet maestro_firewall {
         ip6 daddr @p_59f202aa5b13d550_r_1 tcp dport 8000-8080 accept
         ip6 daddr @p_59f202aa5b13d550_r_1 udp dport 8000-8080 accept
         reject
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr @local_workloads_v4 ip daddr != @all_workloads_v4 masquerade
     }
 
 }

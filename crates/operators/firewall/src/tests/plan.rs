@@ -111,6 +111,23 @@ fn system_dns_and_control_guards_precede_user_policy() {
 }
 
 #[test]
+fn local_workloads_are_masqueraded_only_when_leaving_cluster_subnets() {
+    let output = plan(World::standard().input()).unwrap();
+    for ruleset in output.rulesets {
+        assert!(
+            ruleset
+                .script
+                .contains("type nat hook postrouting priority srcnat; policy accept;")
+        );
+        assert!(
+            ruleset
+                .script
+                .contains("ip saddr @local_workloads_v4 ip daddr != @all_workloads_v4 masquerade")
+        );
+    }
+}
+
+#[test]
 fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
     let mut noncanonical = World::standard();
     noncanonical.policies[0].spec.rules[0].cidr = "10.0.0.1/8".to_string();
