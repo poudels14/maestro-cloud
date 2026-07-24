@@ -6,10 +6,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use build::LocalBuildSourceProvider;
 use cluster::{
-    ClusterCertificateAuthority, ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings,
-    NodeCertificateBundle, StoreJoinTicket, StoreMember, StoreProviderConfig, StoreStartMode,
+    ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle, StoreMember,
+    StoreProviderConfig,
 };
-use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
+use kernel_api::{NodeId, NodeInstanceId, SecretValue};
 use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
@@ -20,7 +20,6 @@ use node_agent::{
 };
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use semver::Version;
-use serde::{Deserialize, Serialize};
 use server::{ServerSettings, TlsIdentity};
 use upgrade::{StoreNodeUpgradeBackendSettings, UpgradeSettings};
 use webhook::HttpWebhookBackend;
@@ -31,182 +30,13 @@ use crate::log_backup_config::configure_log_maintenance;
 use crate::tailscale_resources::TailscaleSystemResources;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
-    DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, DatadogLaunchConfig,
-    LogBackupLaunchConfig, NodeUpgradeDependencies, OperatorLeaderWorkload, OperatorSettings,
-    RunningDaemon,
+    DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, NodeUpgradeDependencies,
+    OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
-/// Store process decision supplied explicitly on every daemon start.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
-pub enum StoreLaunchMode {
-    /// Create the designated master's first store member.
-    Bootstrap,
-    /// Start one member previously staged by the active cluster leader.
-    Join { ticket: StoreJoinTicket },
-    /// Reopen the member already persisted in this node's data directory.
-    Restart,
-    /// Connect a worker agent without starting a local store member.
-    Client,
-}
+mod config;
 
-impl StoreLaunchMode {
-    fn provider_mode(&self) -> Option<StoreStartMode> {
-        match self {
-            Self::Bootstrap => Some(StoreStartMode::Bootstrap),
-            Self::Join { ticket } => Some(StoreStartMode::Join(ticket.clone())),
-            Self::Restart => Some(StoreStartMode::Restart),
-            Self::Client => None,
-        }
-    }
-}
-
-/// Protected launch document consumed by the control-plane daemon executable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DaemonLaunchConfig {
-    /// Authoritative topology and fixed cluster settings.
-    pub cluster: ClusterConfig,
-    /// Stable local node selected from the topology.
-    pub node_id: NodeId,
-    /// Root of all role and provider persistence.
-    pub data_directory: PathBuf,
-    /// Containerd gRPC Unix socket used by the native production runtime.
-    #[serde(default = "default_containerd_socket")]
-    pub containerd_socket: PathBuf,
-    /// Exact etcd executable on control-plane nodes; absent on workers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub etcd_binary: Option<PathBuf>,
-    /// Explicit local store initialization decision.
-    pub store_mode: StoreLaunchMode,
-    /// Node-specific mutual TLS identity granted during bootstrap or join.
-    pub security: NodeCertificateBundle,
-    /// Cluster CA signer retained only by control-plane-capable nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certificate_issuer: Option<ClusterCertificateAuthority>,
-    /// Cluster-wide HS256 key used to authenticate operator API requests.
-    pub operator_jwt_secret: SecretValue,
-    /// Cluster-wide master secret used to encrypt internal persisted values.
-    pub store_encryption_secret: SecretValue,
-    /// Optional deterministic process identity, primarily for cluster tests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<NodeInstanceId>,
-    /// Optional node-local Datadog log delivery.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub datadog: Option<DatadogLaunchConfig>,
-    /// Optional node-local S3 log backup and retention target.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub log_backup: Option<LogBackupLaunchConfig>,
-    /// Optional cluster-wide GitHub pull-request previews.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview: Option<crate::PreviewLaunchConfig>,
-    /// Optional NixOS staging and reboot policy; absence disables cluster upgrades.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nixos_upgrade: Option<crate::NixosUpgradeLaunchConfig>,
-}
-
-impl DaemonLaunchConfig {
-    /// Validates all launch choices before local state or processes are touched.
-    pub fn validate(&self) -> Result<(), DaemonLaunchError> {
-        self.cluster.preflight()?;
-        if let Some(datadog) = &self.datadog {
-            datadog.validate()?;
-        }
-        if let Some(log_backup) = &self.log_backup {
-            log_backup.validate(&self.cluster.name, &self.node_id)?;
-        }
-        if let Some(preview) = &self.preview {
-            preview.validate()?;
-        }
-        if let Some(upgrade) = &self.nixos_upgrade {
-            upgrade.validate()?;
-        }
-        if !self.data_directory.is_absolute() || !self.containerd_socket.is_absolute() {
-            return Err(invalid(
-                "data directory and containerd socket must be absolute paths",
-            ));
-        }
-        let node = self.cluster.nodes.get(&self.node_id).ok_or_else(|| {
-            invalid(format!(
-                "node `{}` is absent from the cluster topology",
-                self.node_id
-            ))
-        })?;
-        api_settings(node, &self.security, self.operator_jwt_secret.clone()).validate()?;
-        if self.store_encryption_secret.expose().chars().count() < 32 {
-            return Err(invalid(
-                "store encryption secret must contain at least 32 characters",
-            ));
-        }
-        match (&self.etcd_binary, node.role.is_control_plane()) {
-            (Some(path), true) if path.is_absolute() => {}
-            (Some(_), true) => {
-                return Err(invalid("embedded etcd binary must be an absolute path"));
-            }
-            (None, true) => {
-                return Err(invalid(
-                    "control-plane nodes require an embedded etcd binary",
-                ));
-            }
-            (None, false) => {}
-            (Some(_), false) => {
-                return Err(invalid("worker nodes must not configure an etcd binary"));
-            }
-        }
-        match &self.store_mode {
-            StoreLaunchMode::Client if node.role.is_control_plane() => Err(invalid(
-                "control-plane nodes must start their declared local store member",
-            )),
-            mode if !node.role.is_control_plane() && !matches!(mode, StoreLaunchMode::Client) => {
-                Err(invalid("worker nodes must use client-only store access"))
-            }
-            StoreLaunchMode::Bootstrap if node.role != NodeRole::Master => Err(invalid(
-                "only the designated master may bootstrap the cluster store",
-            )),
-            StoreLaunchMode::Join { ticket }
-                if node.role == NodeRole::Master || ticket.node_id() != &self.node_id =>
-            {
-                Err(invalid(
-                    "join mode requires a non-master ticket bound to the local node",
-                ))
-            }
-            _ => Ok(()),
-        }?;
-        match (&self.certificate_issuer, node.role.is_control_plane()) {
-            (Some(issuer), true) if issuer.certificate_pem == self.security.trust_root_pem => {
-                Ok(())
-            }
-            (Some(_), true) => Err(invalid(
-                "certificate issuer must match the node identity trust root",
-            )),
-            (None, true) => Err(invalid(
-                "control-plane nodes require the cluster certificate issuer",
-            )),
-            (None, false) => Ok(()),
-            (Some(_), false) => Err(invalid(
-                "worker nodes must not retain cluster certificate signing material",
-            )),
-        }
-    }
-}
-
-/// Reads a secret-bearing launch document after enforcing owner-only permissions.
-pub fn load_launch_config(path: &Path) -> Result<DaemonLaunchConfig, DaemonLaunchError> {
-    validate_private_permissions(path)?;
-    let bytes = std::fs::read(path).map_err(|source| DaemonLaunchError::Io {
-        action: "read",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let config = serde_json::from_slice::<DaemonLaunchConfig>(&bytes).map_err(|source| {
-        DaemonLaunchError::InvalidDocument {
-            path: path.to_path_buf(),
-            source,
-        }
-    })?;
-    config.validate()?;
-    Ok(config)
-}
+pub use config::{DaemonLaunchConfig, StoreLaunchMode, load_launch_config};
 
 /// Builds production adapters and starts one daemon instance for its declared node role.
 pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, DaemonLaunchError> {
@@ -423,10 +253,6 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     Daemon::new(plan, factory).start().await.map_err(Into::into)
 }
 
-fn default_containerd_socket() -> PathBuf {
-    ContainerdRuntimeSettings::default().socket
-}
-
 fn api_settings(
     node: &cluster::NodeDefinition,
     security: &NodeCertificateBundle,
@@ -529,27 +355,4 @@ fn generate_instance_id() -> Result<NodeInstanceId, DaemonLaunchError> {
         .duration_since(UNIX_EPOCH)
         .map_or(0_u128, |duration| duration.as_nanos());
     NodeInstanceId::new(format!("{}-{entropy}", std::process::id())).map_err(Into::into)
-}
-
-fn validate_private_permissions(path: &Path) -> Result<(), DaemonLaunchError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path)
-            .map_err(|source| DaemonLaunchError::Io {
-                action: "inspect permissions of",
-                path: path.to_path_buf(),
-                source,
-            })?
-            .permissions()
-            .mode()
-            & 0o777;
-        if mode & 0o077 != 0 {
-            return Err(DaemonLaunchError::InsecurePermissions {
-                path: path.to_path_buf(),
-                mode,
-            });
-        }
-    }
-    Ok(())
 }
