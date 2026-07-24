@@ -10,8 +10,12 @@ use crate::{
     CasOutcome, Clock, Compare, DeleteRequest, ExpectedVersion, ListResult, MonotonicTime,
     Mutation, MutationResult, PutRequest, Session, SessionBinding, SessionId, Store, StoreError,
     StoreKey, StorePrefix, StoreWatch, StoredValue, Transaction, TransactionOutcome, Version,
-    WatchCursor, WatchEvent, WatchEventKind, WatchStart,
+    WatchCursor, WatchEventKind, WatchStart,
 };
+
+mod watcher;
+
+use watcher::{InMemoryWatch, RawEvent};
 
 const EVENT_HISTORY_CAPACITY: usize = 4_096;
 
@@ -200,12 +204,11 @@ impl Store for InMemoryStore {
             }
             WatchStart::After(cursor) => cursor,
         };
-        Ok(Box::new(InMemoryWatch {
-            inner: self.inner.clone(),
-            changes: self.inner.changes.subscribe(),
+        Ok(Box::new(InMemoryWatch::new(
+            self.inner.clone(),
             prefix,
             last_cursor,
-        }))
+        )))
     }
 
     async fn session(&self, ttl: Duration) -> Result<Box<dyn Session>, StoreError> {
@@ -297,74 +300,6 @@ impl Entry {
 struct SessionRecord {
     ttl: Duration,
     expires_at: MonotonicTime,
-}
-
-#[derive(Clone)]
-struct RawEvent {
-    cursor: WatchCursor,
-    kind: WatchEventKind,
-}
-
-struct InMemoryWatch {
-    inner: Arc<Inner>,
-    changes: watch::Receiver<u64>,
-    prefix: StorePrefix,
-    last_cursor: WatchCursor,
-}
-
-#[async_trait]
-impl StoreWatch for InMemoryWatch {
-    async fn next(&mut self) -> Result<WatchEvent, StoreError> {
-        loop {
-            expire_sessions(&self.inner).await;
-            let state = self.inner.state.lock().await;
-            if self.last_cursor < state.discarded_through {
-                return Err(StoreError::CursorExpired {
-                    cursor: self.last_cursor,
-                });
-            }
-            if let Some(event) = state
-                .history
-                .iter()
-                .find(|event| event.cursor > self.last_cursor && event_matches(event, &self.prefix))
-            {
-                self.last_cursor = event.cursor;
-                return Ok(WatchEvent {
-                    prefix: self.prefix.clone(),
-                    cursor: event.cursor,
-                    kind: event.kind.clone(),
-                });
-            }
-            self.last_cursor = WatchCursor::snapshot(state.version);
-            let next_expiry = state
-                .sessions
-                .values()
-                .map(|session| session.expires_at)
-                .min();
-            self.changes.borrow_and_update();
-            drop(state);
-
-            if let Some(deadline) = next_expiry {
-                tokio::select! {
-                    changed = self.changes.changed() => {
-                        changed.map_err(|_| StoreError::Contract {
-                            message: "in-memory change channel closed while the store is alive"
-                                .to_string(),
-                        })?;
-                    }
-                    () = self.inner.clock.sleep_until(deadline) => {}
-                }
-            } else {
-                self.changes
-                    .changed()
-                    .await
-                    .map_err(|_| StoreError::Contract {
-                        message: "in-memory change channel closed while the store is alive"
-                            .to_string(),
-                    })?;
-            }
-        }
-    }
 }
 
 struct InMemorySession {
@@ -493,11 +428,4 @@ fn validate_transaction(state: &State, transaction: &Transaction) -> Result<(), 
 fn compare_matches(state: &State, compare: &Compare) -> bool {
     let actual = state.entries.get(&compare.key).map(|entry| entry.version);
     matches_expected(compare.expected, actual)
-}
-
-fn event_matches(event: &RawEvent, prefix: &StorePrefix) -> bool {
-    match &event.kind {
-        WatchEventKind::Put(value) => value.key.as_str().starts_with(prefix.as_str()),
-        WatchEventKind::Delete { key, .. } => key.as_str().starts_with(prefix.as_str()),
-    }
 }
