@@ -15,6 +15,7 @@ use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use serde::{Deserialize, Serialize};
 
 use super::service_commands::next_generation;
+use super::write_plan::WritePlan;
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::system_resources::ensure_user_resource_id;
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
@@ -60,17 +61,19 @@ async fn write(
         state.store.get(&key).await.map_err(|error| {
             ApiError::internal(format!("failed to read FirewallPolicy: {error}"))
         })?;
-    let (policy, expected, write) = plan_write(current.as_ref(), &keys, &kind, policy_id, payload)?;
-    let response = FirewallPolicyCommandResponse::from(&policy);
-    let mutations = if write {
-        vec![Mutation::Put {
-            key: key.clone(),
-            value: encode(&policy)?,
-            session: None,
-        }]
-    } else {
-        Vec::new()
+    let plan = plan_write(current.as_ref(), &keys, &kind, policy_id, payload)?;
+    let (policy, expected, mutations) = match plan {
+        WritePlan::Retain { resource, expected } => (resource, expected, Vec::new()),
+        WritePlan::Put { resource, expected } => {
+            let mutation = Mutation::Put {
+                key: key.clone(),
+                value: encode(&resource)?,
+                session: None,
+            };
+            (resource, expected, vec![mutation])
+        }
     };
+    let response = FirewallPolicyCommandResponse::from(&policy);
     let response = request
         .commit(
             &state,
@@ -166,13 +169,12 @@ fn plan_write(
     kind: &ResourceKind,
     policy_id: FirewallPolicyId,
     payload: FirewallPolicyWriteRequest,
-) -> Result<(FirewallPolicy, ExpectedVersion, bool), ApiError> {
+) -> Result<WritePlan<FirewallPolicy>, ApiError> {
     match (current, payload.expected_revision) {
-        (None, None) => Ok((
-            new_policy(policy_id, payload.spec),
-            ExpectedVersion::Missing,
-            true,
-        )),
+        (None, None) => Ok(WritePlan::Put {
+            resource: new_policy(policy_id, payload.spec),
+            expected: ExpectedVersion::Missing,
+        }),
         (None, Some(_)) => Err(ApiError::conflict(
             "revisionConflict",
             "FirewallPolicy does not exist at the expected revision",
@@ -193,12 +195,18 @@ fn plan_write(
                 ));
             }
             if current.spec == payload.spec {
-                Ok((current, ExpectedVersion::Exact(stored.version), false))
+                Ok(WritePlan::Retain {
+                    resource: current,
+                    expected: ExpectedVersion::Exact(stored.version),
+                })
             } else {
                 current.meta.generation =
                     next_generation(current.meta.generation, "FirewallPolicy")?;
                 current.spec = payload.spec;
-                Ok((current, ExpectedVersion::Exact(stored.version), true))
+                Ok(WritePlan::Put {
+                    resource: current,
+                    expected: ExpectedVersion::Exact(stored.version),
+                })
             }
         }
     }

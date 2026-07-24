@@ -17,6 +17,8 @@ use crate::routes::service_diff;
 use crate::system_resources::ensure_user_resource_id;
 use crate::{ApiError, AppState, OperatorIdentity, mask, mutation, resource};
 
+use super::write_plan::WritePlan;
+
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/services", get(list_services))
@@ -66,22 +68,23 @@ async fn put_service(
         .get(&resource_key)
         .await
         .map_err(|error| ApiError::internal(format!("failed to read Service: {error}")))?;
-    let (service, expected, write) =
-        plan_service_write(current.as_ref(), &keys, &kind, service_id.clone(), payload)?;
+    let plan = plan_service_write(current.as_ref(), &keys, &kind, service_id.clone(), payload)?;
+    let (service, expected, mutations) = match plan {
+        WritePlan::Retain { resource, expected } => (resource, expected, Vec::new()),
+        WritePlan::Put { resource, expected } => {
+            let mutation = Mutation::Put {
+                key: resource_key.clone(),
+                value: serde_json::to_vec(&resource).map_err(|error| {
+                    ApiError::internal(format!("failed to encode Service resource: {error}"))
+                })?,
+                session: None,
+            };
+            (resource, expected, vec![mutation])
+        }
+    };
     let response = ServiceWriteResponse {
         service_id,
         generation: service.meta.generation,
-    };
-    let mutations = if write {
-        vec![Mutation::Put {
-            key: resource_key.clone(),
-            value: serde_json::to_vec(&service).map_err(|error| {
-                ApiError::internal(format!("failed to encode Service resource: {error}"))
-            })?,
-            session: None,
-        }]
-    } else {
-        Vec::new()
     };
     let response = request
         .commit(
@@ -107,13 +110,12 @@ pub(super) fn plan_service_write(
     kind: &ResourceKind,
     service_id: ServiceId,
     payload: ServiceWriteRequest,
-) -> Result<(Service, ExpectedVersion, bool), ApiError> {
+) -> Result<WritePlan<Service>, ApiError> {
     match (current, payload.expected_revision) {
-        (None, None) => Ok((
-            new_service(service_id, payload.spec),
-            ExpectedVersion::Missing,
-            true,
-        )),
+        (None, None) => Ok(WritePlan::Put {
+            resource: new_service(service_id, payload.spec),
+            expected: ExpectedVersion::Missing,
+        }),
         (None, Some(_)) => Err(ApiError::conflict(
             "revisionConflict",
             "Service does not exist at the expected revision",
@@ -138,9 +140,15 @@ pub(super) fn plan_service_write(
                         ApiError::conflict("generationExhausted", "Service generation is exhausted")
                     })?);
                 current.spec = payload.spec;
-                Ok((current, expected, true))
+                Ok(WritePlan::Put {
+                    resource: current,
+                    expected,
+                })
             } else {
-                Ok((current, expected, false))
+                Ok(WritePlan::Retain {
+                    resource: current,
+                    expected,
+                })
             }
         }
     }

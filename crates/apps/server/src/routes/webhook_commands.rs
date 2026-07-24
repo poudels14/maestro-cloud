@@ -14,6 +14,7 @@ use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
 use serde::{Deserialize, Serialize};
 
 use super::service_commands::next_generation;
+use super::write_plan::WritePlan;
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 
@@ -63,18 +64,19 @@ async fn write(
         .get(&key)
         .await
         .map_err(|error| ApiError::internal(format!("failed to read Webhook: {error}")))?;
-    let (webhook, expected, write) =
-        plan_write(current.as_ref(), &keys, &kind, webhook_id, payload)?;
-    let response = WebhookCommandResponse::from(&webhook);
-    let mutations = if write {
-        vec![Mutation::Put {
-            key: key.clone(),
-            value: encode(&webhook)?,
-            session: None,
-        }]
-    } else {
-        Vec::new()
+    let plan = plan_write(current.as_ref(), &keys, &kind, webhook_id, payload)?;
+    let (webhook, expected, mutations) = match plan {
+        WritePlan::Retain { resource, expected } => (resource, expected, Vec::new()),
+        WritePlan::Put { resource, expected } => {
+            let mutation = Mutation::Put {
+                key: key.clone(),
+                value: encode(&resource)?,
+                session: None,
+            };
+            (resource, expected, vec![mutation])
+        }
     };
+    let response = WebhookCommandResponse::from(&webhook);
     let response = request
         .commit(
             &state,
@@ -236,7 +238,7 @@ fn plan_write(
     kind: &ResourceKind,
     webhook_id: WebhookId,
     payload: WebhookWriteRequest,
-) -> Result<(Webhook, ExpectedVersion, bool), ApiError> {
+) -> Result<WritePlan<Webhook>, ApiError> {
     match (current, payload.expected_revision) {
         (None, None) => {
             let format = payload.format.unwrap_or_default();
@@ -251,11 +253,10 @@ fn plan_write(
             }
             let spec = payload.spec(None, endpoint, secret);
             validate_spec(&spec)?;
-            Ok((
-                new_webhook(webhook_id, spec),
-                ExpectedVersion::Missing,
-                true,
-            ))
+            Ok(WritePlan::Put {
+                resource: new_webhook(webhook_id, spec),
+                expected: ExpectedVersion::Missing,
+            })
         }
         (None, Some(_)) => Err(ApiError::conflict(
             "revisionConflict",
@@ -285,11 +286,17 @@ fn plan_write(
             }
             validate_spec(&spec)?;
             if current.spec == spec {
-                Ok((current, ExpectedVersion::Exact(stored.version), false))
+                Ok(WritePlan::Retain {
+                    resource: current,
+                    expected: ExpectedVersion::Exact(stored.version),
+                })
             } else {
                 current.meta.generation = next_generation(current.meta.generation, "Webhook")?;
                 current.spec = spec;
-                Ok((current, ExpectedVersion::Exact(stored.version), true))
+                Ok(WritePlan::Put {
+                    resource: current,
+                    expected: ExpectedVersion::Exact(stored.version),
+                })
             }
         }
     }

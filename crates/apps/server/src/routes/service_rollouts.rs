@@ -18,6 +18,7 @@ use super::service_commands::next_generation;
 use super::service_rollout_validation::{
     ensure_managed_owner, managed_policy_id, managed_route_id, new_route, owner, validate_desired,
 };
+use super::write_plan::WritePlan;
 use super::{service_diff, services};
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
 use crate::system_resources::ensure_user_resource_id;
@@ -252,7 +253,7 @@ impl ManagedResources {
         let service_expected = exact_expected(&self.service, expected.service, "Service")?;
         let route_expected = exact_expected(&self.ingress, expected.ingress, "IngressRoute")?;
         let policy_expected = exact_expected(&self.egress, expected.egress, "FirewallPolicy")?;
-        let (mut service, _, service_write) = services::plan_service_write(
+        let service_plan = services::plan_service_write(
             self.service.as_ref(),
             &self.keys,
             &service_kind,
@@ -262,7 +263,17 @@ impl ManagedResources {
                 spec: desired.service,
             },
         )?;
-        if service_write {
+        let (mut service, service_write) = match service_plan {
+            WritePlan::Retain {
+                resource,
+                expected: _,
+            } => (resource, WriteDecision::Skip),
+            WritePlan::Put {
+                resource,
+                expected: _,
+            } => (resource, WriteDecision::Apply),
+        };
+        if service_write == WriteDecision::Apply {
             service.status.rollout_bypass_generation = (frozen_rollout
                 == FrozenRolloutPolicy::BypassNextGeneration
                 && service.status.rollout == kernel_api::RolloutState::Frozen)
@@ -285,7 +296,7 @@ impl ManagedResources {
             desired.egress,
         )?;
         let mut mutations = Vec::new();
-        if service_write {
+        if service_write == WriteDecision::Apply {
             mutations.push(put(service_key.clone(), &service, "Service")?);
         }
         push_optional_mutation(

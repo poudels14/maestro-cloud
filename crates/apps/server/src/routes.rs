@@ -26,6 +26,7 @@ mod tailscale;
 mod traffic;
 mod upgrades;
 mod webhook_commands;
+mod write_plan;
 
 use axum::{Router, middleware};
 

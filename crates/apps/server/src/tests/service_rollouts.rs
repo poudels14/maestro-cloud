@@ -66,6 +66,43 @@ async fn declarative_rollout_atomically_creates_updates_and_removes_managed_reso
 
     let unchanged = diff(&server, desired.clone()).await?;
     assert_eq!(unchanged.status, ServiceDiffStatus::Unchanged);
+    let unchanged_response = apply(
+        &server,
+        "atomic-unchanged",
+        &ServiceRolloutRequest {
+            expected_revisions: unchanged.expected_revisions,
+            force: false,
+            desired: desired.clone(),
+        },
+    )
+    .await?;
+    assert_eq!(unchanged_response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        decode::<ServiceRolloutResponse>(unchanged_response).await?,
+        accepted
+    );
+    assert_eq!(
+        stored::<Service>(&store, &keys, "Service", "api")
+            .await?
+            .meta
+            .revision,
+        service.meta.revision
+    );
+    assert_eq!(
+        stored::<IngressRoute>(&store, &keys, "IngressRoute", "api-ingress")
+            .await?
+            .meta
+            .revision,
+        route.meta.revision
+    );
+    assert_eq!(
+        stored::<FirewallPolicy>(&store, &keys, "FirewallPolicy", "api-egress")
+            .await?
+            .meta
+            .revision,
+        policy.meta.revision
+    );
+
     let mut updated = desired;
     updated.service.replicas += 1;
     updated

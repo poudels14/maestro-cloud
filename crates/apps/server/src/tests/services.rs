@@ -67,6 +67,22 @@ async fn service_put_creates_updates_replays_and_rejects_collisions()
     let revision = required(required(&fetched, "meta")?, "revision")?.clone();
     assert!(!fetched.to_string().contains("database-password"));
     assert!(fetched.to_string().contains("••••word"));
+    let unchanged = json!({
+        "expectedRevision": revision.clone(),
+        "spec": required(&create, "spec")?.clone()
+    });
+    let response = put(&server, "request-unchanged", &unchanged).await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(required(&decode(response).await?, "generation")?, &json!(1));
+    assert_eq!(
+        store
+            .get(&service_key)
+            .await?
+            .ok_or("unchanged Service is missing")?
+            .version,
+        first.version
+    );
+
     let update = json!({
         "expectedRevision": revision,
         "spec": required(&collision, "spec")?.clone()
