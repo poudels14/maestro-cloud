@@ -1,5 +1,6 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
+assertion_line: 33
 expression: openapi_document()
 ---
 {
@@ -1790,6 +1791,31 @@ expression: openapi_document()
         ],
         "type": "object"
       },
+      "MaskedCrossClusterDnsRoute": {
+        "description": "Secret-free view of one scoped remote DNS route.",
+        "properties": {
+          "clusterId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ClusterId"
+              }
+            ],
+            "description": "Remote cluster identity embedded in its authoritative DNS suffix."
+          },
+          "nameservers": {
+            "description": "Remote bridge resolver addresses reachable through Tailscale.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "clusterId",
+          "nameservers"
+        ],
+        "type": "object"
+      },
       "MaskedTailscaleConfig": {
         "description": "Secret-free view of the managed Tailscale gateway fleet.",
         "properties": {
@@ -1797,6 +1823,13 @@ expression: openapi_document()
             "description": "Effective routes advertised to the tailnet.",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "crossClusterDns": {
+            "description": "Explicit remote cluster suffixes forwarded through the managed gateways.",
+            "items": {
+              "$ref": "#/components/schemas/MaskedCrossClusterDnsRoute"
             },
             "type": "array"
           },
@@ -1825,7 +1858,8 @@ expression: openapi_document()
           "advertiseRoutes",
           "dnsNameservers",
           "replicas",
-          "tags"
+          "tags",
+          "crossClusterDns"
         ],
         "type": "object"
       },
@@ -5922,7 +5956,6 @@ expression: openapi_document()
                 "$ref": "#/components/schemas/UpgradeOperation"
               }
             ],
-            "default": "upgrade",
             "description": "Whether nodes stage an upgrade or only restart their installed generation."
           },
           "targetVersion": {
@@ -5931,6 +5964,7 @@ expression: openapi_document()
           }
         },
         "required": [
+          "operation",
           "targetVersion",
           "mode"
         ],
