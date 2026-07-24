@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -8,11 +8,12 @@ use kernel_api::{ClusterId, NodeId, WorkloadId};
 use supervisor::{
     ProcessExit, ProcessHandle, ProcessSignal, ProcessStatus, ProcessSupervisor, SupervisorError,
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::file_log::FileLogStream;
 use crate::process_manifest::{
-    ManifestState, ProcessManifest, commit_process_start, load_manifests, load_optional_manifest,
-    remove_manifest, write_manifest,
+    ManifestState, ProcessManifest, commit_process_start, list_workload_ids,
+    load_optional_manifest, remove_manifest, write_manifest,
 };
 use crate::process_settings::ProcessRuntimeSettings;
 use crate::process_stream::ProcessEventJournal;
@@ -38,7 +39,7 @@ pub struct ProcessRuntime {
     clock: Arc<dyn RuntimeClock>,
     settings: ProcessRuntimeSettings,
     cached_specs: Arc<Mutex<BTreeMap<WorkloadId, ProcessWorkload>>>,
-    mutation: Arc<tokio::sync::Mutex<()>>,
+    operation_gates: Arc<tokio::sync::Mutex<BTreeMap<WorkloadId, Weak<Semaphore>>>>,
     events: ProcessEventJournal,
 }
 
@@ -61,7 +62,7 @@ impl ProcessRuntime {
             clock,
             settings: settings.validate()?,
             cached_specs: Arc::new(Mutex::new(BTreeMap::new())),
-            mutation: Arc::new(tokio::sync::Mutex::new(())),
+            operation_gates: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             events: ProcessEventJournal::new(),
         })
     }
@@ -229,6 +230,29 @@ impl ProcessRuntime {
                 message: "process runtime spec cache lock was poisoned".to_owned(),
             })
     }
+
+    pub(crate) async fn operation(
+        &self,
+        workload_id: &WorkloadId,
+    ) -> Result<OwnedSemaphorePermit, RuntimeError> {
+        let gate = {
+            let mut gates = self.operation_gates.lock().await;
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(workload_id).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(Semaphore::new(1));
+                    gates.insert(workload_id.clone(), Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        gate.acquire_owned()
+            .await
+            .map_err(|error| RuntimeError::Unavailable {
+                message: format!("process operation gate closed unexpectedly: {error}"),
+            })
+    }
 }
 
 #[async_trait]
@@ -247,7 +271,7 @@ impl WorkloadRuntime for ProcessRuntime {
         let workload_id = process.configuration.metadata.workload_id.clone();
         let paths = process_paths(&self.root, &workload_id);
         build_supervised_spec(process, &paths)?;
-        let _guard = self.mutation.lock().await;
+        let _operation = self.operation(&workload_id).await?;
         if let Some(manifest) = self.load_optional(workload_id.clone()).await? {
             if manifest.fingerprint != fingerprint {
                 return Err(RuntimeError::Conflict {
@@ -279,7 +303,7 @@ impl WorkloadRuntime for ProcessRuntime {
 
     async fn start(&self, handle: &WorkloadHandle) -> Result<(), RuntimeError> {
         validate_process_handle(handle)?;
-        let _guard = self.mutation.lock().await;
+        let _operation = self.operation(handle.workload_id()).await?;
         let mut manifest = self.load(handle.workload_id().clone()).await?;
         if let Some(process) = manifest.process {
             let status = self
@@ -330,7 +354,7 @@ impl WorkloadRuntime for ProcessRuntime {
         request: ShutdownRequest,
     ) -> Result<(), RuntimeError> {
         validate_process_handle(handle)?;
-        let _guard = self.mutation.lock().await;
+        let _operation = self.operation(handle.workload_id()).await?;
         let mut manifest = self.load(handle.workload_id().clone()).await?;
         let Some(process) = manifest.process else {
             manifest.state = ManifestState::Stopped;
@@ -354,7 +378,7 @@ impl WorkloadRuntime for ProcessRuntime {
 
     async fn kill(&self, handle: &WorkloadHandle) -> Result<(), RuntimeError> {
         validate_process_handle(handle)?;
-        let _guard = self.mutation.lock().await;
+        let _operation = self.operation(handle.workload_id()).await?;
         let mut manifest = self.load(handle.workload_id().clone()).await?;
         let Some(process) = manifest.process else {
             manifest.state = ManifestState::Stopped;
@@ -383,7 +407,7 @@ impl WorkloadRuntime for ProcessRuntime {
 
     async fn remove(&self, handle: &WorkloadHandle) -> Result<(), RuntimeError> {
         validate_process_handle(handle)?;
-        let _guard = self.mutation.lock().await;
+        let _operation = self.operation(handle.workload_id()).await?;
         let Some(mut manifest) = self.load_optional(handle.workload_id().clone()).await? else {
             return Ok(());
         };
@@ -413,7 +437,7 @@ impl WorkloadRuntime for ProcessRuntime {
 
     async fn status(&self, handle: &WorkloadHandle) -> Result<WorkloadStatus, RuntimeError> {
         validate_process_handle(handle)?;
-        let _guard = self.mutation.lock().await;
+        let _operation = self.operation(handle.workload_id()).await?;
         let mut manifest = self.load(handle.workload_id().clone()).await?;
         self.observe(&mut manifest).await
     }
@@ -423,14 +447,20 @@ impl WorkloadRuntime for ProcessRuntime {
         cluster_id: &ClusterId,
         node_id: &NodeId,
     ) -> Result<Vec<ObservedWorkload>, RuntimeError> {
-        let _guard = self.mutation.lock().await;
         let root = self.root.clone();
-        let manifests =
-            blocking(move || load_manifests(&root).map_err(|error| error.into_runtime())).await?;
+        let workload_ids =
+            blocking(move || list_workload_ids(&root).map_err(|error| error.into_runtime()))
+                .await?;
         let mut observed = Vec::new();
-        for mut manifest in manifests.into_iter().filter(|manifest| {
-            &manifest.metadata.cluster_id == cluster_id && &manifest.metadata.node_id == node_id
-        }) {
+        for workload_id in workload_ids {
+            let _operation = self.operation(&workload_id).await?;
+            let Some(mut manifest) = self.load_optional(workload_id).await? else {
+                continue;
+            };
+            if &manifest.metadata.cluster_id != cluster_id || &manifest.metadata.node_id != node_id
+            {
+                continue;
+            }
             let status = self.observe(&mut manifest).await?;
             observed.push(ObservedWorkload {
                 handle: process_handle(manifest.metadata.workload_id.clone())?,

@@ -103,14 +103,14 @@ pub(crate) fn load_optional_manifest(
     Ok(Some(manifest))
 }
 
-pub(crate) fn load_manifests(root: &Path) -> Result<Vec<ProcessManifest>, ManifestError> {
+pub(crate) fn list_workload_ids(root: &Path) -> Result<Vec<WorkloadId>, ManifestError> {
     let workloads = root.join("workloads");
     let entries = match fs::read_dir(&workloads) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(ManifestError::io("list", &workloads, error)),
     };
-    let mut manifests = Vec::new();
+    let mut workload_ids = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| ManifestError::io("list", &workloads, error))?;
         if !entry
@@ -122,10 +122,10 @@ pub(crate) fn load_manifests(root: &Path) -> Result<Vec<ProcessManifest>, Manife
         }
         let workload_id = WorkloadId::new(entry.file_name().to_string_lossy().into_owned())
             .map_err(|error| ManifestError::message("validate identity", &entry.path(), error))?;
-        manifests.push(load_manifest(root, &workload_id)?);
+        workload_ids.push(workload_id);
     }
-    manifests.sort_by(|left, right| left.metadata.workload_id.cmp(&right.metadata.workload_id));
-    Ok(manifests)
+    workload_ids.sort();
+    Ok(workload_ids)
 }
 
 pub(crate) fn write_manifest(root: &Path, manifest: &ProcessManifest) -> Result<(), ManifestError> {
