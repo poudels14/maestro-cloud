@@ -39,13 +39,11 @@ async fn process_backend_streams_logs_and_adopts_across_runtime_restart() {
     );
     let handle = first.create(&spec).await.unwrap();
     first.start(&handle).await.unwrap();
+    let stats = first.stats(&handle).await.unwrap();
     assert!(
-        first
-            .stats_handle(&handle)
-            .await
-            .unwrap()
-            .as_path()
-            .is_absolute()
+        stats
+            .cgroup_path()
+            .is_some_and(|path| path.as_path().is_absolute())
     );
 
     drop(first);

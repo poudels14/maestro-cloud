@@ -8,7 +8,7 @@ use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, Timestamp, Worklo
 use kernel_store::{Clock, MonotonicTime};
 use runtime::{
     CgroupPath, FakeRuntime, FakeRuntimeOperation, ProcessWorkload, RuntimeError, ShutdownRequest,
-    WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
+    WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec, WorkloadStatsSnapshot,
 };
 
 use crate::{
@@ -81,7 +81,7 @@ async fn stats_agent_isolates_handle_failures_but_not_snapshot_failures()
     let runtime = Arc::new(FakeRuntime::new());
     create_and_start(runtime.as_ref(), "workload-1").await?;
     runtime.fail_next(
-        FakeRuntimeOperation::StatsHandle,
+        FakeRuntimeOperation::Stats,
         RuntimeError::Unavailable {
             message: "cgroup lookup unavailable".to_owned(),
         },
@@ -101,7 +101,7 @@ async fn stats_agent_isolates_handle_failures_but_not_snapshot_failures()
     assert!(report.samples.is_empty());
     assert_eq!(report.failures.len(), 1);
     let failure = report.failures.first().expect("one failed sample");
-    assert_eq!(failure.stage, WorkloadStatsFailureStage::ResolveCgroup);
+    assert_eq!(failure.stage, WorkloadStatsFailureStage::ReadRuntime);
 
     runtime.fail_next(
         FakeRuntimeOperation::List,
@@ -181,6 +181,46 @@ async fn stats_agent_retains_cgroup_sample_when_optional_network_reading_fails()
             .ok_or("network collection failure missing")?
             .stage,
         WorkloadStatsFailureStage::ReadNetwork
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stats_agent_uses_one_runtime_native_snapshot_without_host_readers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    runtime.set_stats_snapshot(WorkloadStatsSnapshot {
+        resources: sample(),
+        network: Some(WorkloadNetworkStats {
+            receive_bytes: 300,
+            transmit_bytes: 500,
+        }),
+    });
+    let agent = WorkloadStatsAgent::new(
+        runtime,
+        Arc::new(SelectiveReader {
+            rejected: Some(workload_id("workload-1")),
+        }),
+        Arc::new(FixedNetworkReader { fail: true }),
+        Arc::new(RecordingSink::default()),
+        settings(),
+        Arc::new(FixedClock(Timestamp(1))),
+        Arc::new(ManualClock::default()),
+    )?;
+
+    let report = agent.collect().await?;
+
+    assert!(report.failures.is_empty());
+    assert_eq!(report.delivered, 1);
+    let collected = report.samples.first().ok_or("native sample missing")?;
+    assert_eq!(collected.stats, sample());
+    assert_eq!(
+        collected.network,
+        Some(WorkloadNetworkStats {
+            receive_bytes: 300,
+            transmit_bytes: 500,
+        })
     );
     Ok(())
 }

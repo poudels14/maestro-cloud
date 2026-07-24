@@ -5,7 +5,7 @@ use node_agent::{WorkloadStatsSample, WorkloadStatsSink, WorkloadStatsSinkError}
 
 use crate::{MetricRecordId, MetricStore, MetricStoreError, WorkloadMetricPoint};
 
-/// Normalizes agent cgroup samples and commits one replay-safe metric representation.
+/// Normalizes agent workload samples and commits one replay-safe metric representation.
 pub struct WorkloadMetricPipeline {
     store: Arc<dyn MetricStore>,
 }

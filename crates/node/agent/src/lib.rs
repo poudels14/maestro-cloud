@@ -18,7 +18,6 @@ mod assignment_resource;
 mod assignment_restart;
 mod assignment_status;
 mod assignment_types;
-#[cfg(target_os = "linux")]
 mod cgroup_stats;
 mod dns;
 mod dns_resource;
@@ -47,7 +46,6 @@ mod log_checkpoint;
 mod mesh;
 mod mesh_identity;
 mod mesh_resource;
-#[cfg(target_os = "linux")]
 mod network_stats;
 #[cfg(unix)]
 mod node_api;
@@ -59,7 +57,6 @@ mod node_api_mount;
 mod node_control;
 mod node_registry;
 mod secret_mount;
-#[cfg(target_os = "linux")]
 mod stats;
 mod workload_bridge;
 
@@ -87,7 +84,6 @@ pub use artifact_replication::{
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
 pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport};
-#[cfg(target_os = "linux")]
 pub use cgroup_stats::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,
     CgroupStats, CgroupStatsError, CgroupStatsReader, CgroupV2StatsReader,
@@ -130,7 +126,6 @@ pub use mesh::{
 };
 pub use mesh_identity::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, WireGuardPublicKey};
 pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock};
-#[cfg(target_os = "linux")]
 pub use network_stats::{
     HostNetworkStatsReader, WorkloadNetworkStats, WorkloadNetworkStatsError,
     WorkloadNetworkStatsReader,
@@ -149,7 +144,6 @@ pub use node_registry::{
     NodeRegistrySettings, NodeRegistrySettingsError,
 };
 pub use secret_mount::SecretMountError;
-#[cfg(target_os = "linux")]
 pub use stats::{
     WorkloadStatsAgent, WorkloadStatsAgentError, WorkloadStatsFailure, WorkloadStatsFailureStage,
     WorkloadStatsReport, WorkloadStatsSample, WorkloadStatsSettings, WorkloadStatsSink,

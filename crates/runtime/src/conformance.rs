@@ -60,7 +60,7 @@ pub enum WorkloadConformanceError {
     },
 }
 
-/// Exercises idempotent create/start/stop/remove, discovery, conflict, status, and cgroup semantics.
+/// Exercises idempotent lifecycle, discovery, conflict, status, and resource-stat semantics.
 ///
 /// The caller owns isolation and supplies a backend-native fixture. On success no workload remains.
 /// A failed battery may leave backend state for the caller's fixture cleanup to remove.
@@ -115,7 +115,9 @@ pub async fn exercise_workload_runtime(
     if runtime.status(&handle).await?.state != WorkloadState::Running {
         return Err(invariant("started workload did not report Running"));
     }
-    if !runtime.stats_handle(&handle).await?.as_path().is_absolute() {
+    if let crate::WorkloadStatsReading::CgroupV2(path) = runtime.stats(&handle).await?
+        && !path.as_path().is_absolute()
+    {
         return Err(invariant("runtime returned a relative cgroup path"));
     }
 

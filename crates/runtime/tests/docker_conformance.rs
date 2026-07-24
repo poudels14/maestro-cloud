@@ -1,26 +1,26 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 use runtime::conformance::{WorkloadRuntimeFixture, exercise_workload_runtime};
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 use runtime::{
     ArtifactReference, ContainerWorkload, DockerRuntime, ExecMode, ExecRequest,
     WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
 };
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 use std::collections::BTreeMap;
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 use std::time::Duration;
 
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 use runtime::conformance::{
     ExecConformanceFixture, RunningWorkloadFixture, assert_running_workload_adoptable,
     exercise_running_workload,
 };
 
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 #[tokio::test]
 #[ignore = "requires a Docker daemon and registry access for MAESTRO_DOCKER_TEST_IMAGE"]
 async fn docker_backend_passes_workload_runtime_conformance() {
@@ -55,7 +55,7 @@ async fn docker_backend_passes_workload_runtime_conformance() {
         .unwrap();
 }
 
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpec {
     WorkloadSpec::Container(ContainerWorkload {
         configuration: WorkloadConfiguration {
@@ -87,7 +87,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
     })
 }
 
-#[cfg(all(feature = "docker", feature = "test-util", target_os = "linux"))]
+#[cfg(all(feature = "docker", feature = "test-util", unix))]
 fn running_fixture() -> RunningWorkloadFixture {
     RunningWorkloadFixture {
         cluster_id: ClusterId::new("docker-conformance").unwrap(),

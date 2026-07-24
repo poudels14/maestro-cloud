@@ -1,16 +1,16 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 use std::collections::BTreeMap;
 
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 use docker::query_parameters::RemoveImageOptionsBuilder;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 use runtime::{
     ArtifactBuildRequest, ArtifactReference, ArtifactSource, ArtifactStore, DockerRuntime,
 };
 
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 #[tokio::test]
 #[ignore = "requires an isolated Docker daemon for artifact build and transfer acceptance"]
 async fn docker_artifact_build_resolve_export_and_import_round_trip() {

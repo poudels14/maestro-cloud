@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,8 +10,8 @@ use kernel_api::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactReference, Capabilities, CgroupPathError, ExecRequest, ExecSession, LogRequest,
-    LogStream, RuntimeError,
+    ArtifactReference, Capabilities, ExecRequest, ExecSession, LogRequest, LogStream, RuntimeError,
+    WorkloadStatsReading,
 };
 
 /// Workload metadata label carrying the configured HTTP healthcheck path.
@@ -309,26 +309,6 @@ pub struct ShutdownRequest {
     pub timeout: Duration,
 }
 
-/// Validated absolute cgroup-v2 path returned by a runtime backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CgroupPath(PathBuf);
-
-impl CgroupPath {
-    /// Validates that a backend path is absolute.
-    pub fn new(path: PathBuf) -> Result<Self, CgroupPathError> {
-        if path.is_absolute() {
-            Ok(Self(path))
-        } else {
-            Err(CgroupPathError::Relative { path })
-        }
-    }
-
-    /// Returns the absolute backend-reported cgroup path.
-    pub fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
-
 /// Backend-neutral workload lifecycle and streaming API.
 #[async_trait]
 pub trait WorkloadRuntime: Send + Sync {
@@ -389,7 +369,7 @@ pub trait WorkloadRuntime: Send + Sync {
         request: ExecRequest,
     ) -> Result<Box<dyn ExecSession>, RuntimeError>;
 
-    /// Returns the exact cgroup-v2 path for direct agent stats collection; the agent never guesses
-    /// from backend identities or cgroup namespace mode.
-    async fn stats_handle(&self, handle: &WorkloadHandle) -> Result<CgroupPath, RuntimeError>;
+    /// Returns either an exact cgroup-v2 path for direct host collection or a runtime-native
+    /// snapshot when the daemon owns the workload's kernel isolation.
+    async fn stats(&self, handle: &WorkloadHandle) -> Result<WorkloadStatsReading, RuntimeError>;
 }

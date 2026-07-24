@@ -8,23 +8,24 @@ use docker::exec::{CreateExecOptions, StartExecResults};
 use docker::query_parameters::{
     CreateContainerOptionsBuilder, EventsOptionsBuilder, InspectContainerOptions,
     ListContainersOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
-    StopContainerOptionsBuilder,
+    StatsOptionsBuilder, StopContainerOptionsBuilder,
 };
+use futures_util::StreamExt;
 use kernel_api::{ClusterId, NodeId};
 
-use crate::cgroup;
 use crate::docker_config::{CLUSTER_LABEL, MANAGED_LABEL, NODE_LABEL, container_config};
 use crate::docker_network_ipam::DockerNetworkState;
+use crate::docker_stats::normalize_stats;
 use crate::docker_stream::{DockerEventStream, DockerExecSession, DockerLogStream, log_since};
 use crate::docker_support::{
     container_id, docker_handle, is_conflict, is_not_found, is_not_modified, observed_workload,
-    process_id, runtime_error, validate_existing, workload_status,
+    runtime_error, validate_existing, workload_status,
 };
 use crate::{
-    ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecMode, ExecRequest, ExecSession,
-    LogMode, LogRequest, LogStream, ObservedWorkload, RuntimeCapability, RuntimeError,
-    RuntimeEventStream, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec,
-    WorkloadState, WorkloadStatus,
+    ArtifactStore, Capabilities, EventRequest, ExecMode, ExecRequest, ExecSession, LogMode,
+    LogRequest, LogStream, ObservedWorkload, RuntimeCapability, RuntimeError, RuntimeEventStream,
+    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState,
+    WorkloadStatsReading, WorkloadStatus,
 };
 
 /// Docker Engine workload backend using Bollard's native daemon API.
@@ -326,17 +327,20 @@ impl WorkloadRuntime for DockerRuntime {
         }
     }
 
-    async fn stats_handle(&self, handle: &WorkloadHandle) -> Result<CgroupPath, RuntimeError> {
-        let inspect = self.inspect_container(handle).await?;
-        let process_id = process_id(&inspect, handle.workload_id())?;
-        let path = tokio::task::spawn_blocking(move || cgroup::read_cgroup_path(process_id))
+    async fn stats(&self, handle: &WorkloadHandle) -> Result<WorkloadStatsReading, RuntimeError> {
+        let options = StatsOptionsBuilder::default()
+            .stream(false)
+            .one_shot(true)
+            .build();
+        let mut stream = self.client.stats(container_id(handle)?, Some(options));
+        let response = stream
+            .next()
             .await
-            .map_err(|error| RuntimeError::Unavailable {
-                message: format!("docker cgroup inspection task failed: {error}"),
-            })??;
-        CgroupPath::new(path).map_err(|error| RuntimeError::Rejected {
-            message: error.to_string(),
-        })
+            .ok_or_else(|| RuntimeError::Unavailable {
+                message: "Docker stats endpoint returned no sample".to_owned(),
+            })?
+            .map_err(|error| runtime_error(error, handle.workload_id()))?;
+        normalize_stats(&response).map(WorkloadStatsReading::Snapshot)
     }
 }
 

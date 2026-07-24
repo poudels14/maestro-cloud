@@ -47,23 +47,25 @@ mod containerd_support;
 mod containerd_task;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_volume;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_artifact;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_artifact_context;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_artifact_support;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_config;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_network;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_network_ipam;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
+mod docker_stats;
+#[cfg(all(feature = "docker", unix))]
 mod docker_stream;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_support;
 mod error;
 mod execution;
@@ -80,7 +82,7 @@ mod file_log;
 #[cfg(any(
     test,
     all(feature = "containerd", target_os = "linux"),
-    all(feature = "docker", target_os = "linux")
+    all(feature = "docker", unix)
 ))]
 mod managed_volume;
 mod network;
@@ -94,6 +96,7 @@ mod process_settings;
 mod process_stream;
 #[cfg(target_os = "linux")]
 mod process_support;
+mod stats;
 mod workload;
 
 pub use artifact::{
@@ -106,7 +109,7 @@ pub use clock::{MonotonicTime, RuntimeClock, TokioRuntimeClock};
 pub use containerd::ContainerdRuntime;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 pub use containerd_settings::ContainerdRuntimeSettings;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 pub use docker::DockerRuntime;
 pub use error::{CgroupPathError, RuntimeError};
 pub use execution::{
@@ -125,12 +128,16 @@ pub use network::{
 pub use process::ProcessRuntime;
 #[cfg(target_os = "linux")]
 pub use process_settings::ProcessRuntimeSettings;
+pub use stats::{
+    CgroupPath, WorkloadCpuStats, WorkloadIoStats, WorkloadMemoryEvents, WorkloadMemoryStats,
+    WorkloadNetworkStats, WorkloadProcessStats, WorkloadResourceStats, WorkloadStatsReading,
+    WorkloadStatsSnapshot,
+};
 pub use workload::{
-    CgroupPath, ContainerWorkload, EventCursor, EventRequest, HEALTHCHECK_PATH_LABEL, MountAccess,
-    MountSource, ObservedWorkload, ProcessWorkload, RuntimeEvent, RuntimeEventKind,
-    RuntimeEventStream, ShutdownRequest, VmWorkload, WorkloadConfiguration, WorkloadHandle,
-    WorkloadMetadata, WorkloadMount, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
-    WorkloadUser,
+    ContainerWorkload, EventCursor, EventRequest, HEALTHCHECK_PATH_LABEL, MountAccess, MountSource,
+    ObservedWorkload, ProcessWorkload, RuntimeEvent, RuntimeEventKind, RuntimeEventStream,
+    ShutdownRequest, VmWorkload, WorkloadConfiguration, WorkloadHandle, WorkloadMetadata,
+    WorkloadMount, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus, WorkloadUser,
 };
 
 /// Reusable backend-neutral conformance batteries.

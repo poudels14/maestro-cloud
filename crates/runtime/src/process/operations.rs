@@ -14,7 +14,8 @@ use crate::process_support::{
 use crate::{
     Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest, LogStream,
     ObservedWorkload, RuntimeError, RuntimeEventKind, RuntimeEventStream, ShutdownRequest,
-    WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
+    WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatsReading,
+    WorkloadStatus,
 };
 
 #[async_trait]
@@ -268,7 +269,7 @@ impl WorkloadRuntime for ProcessRuntime {
         })
     }
 
-    async fn stats_handle(&self, handle: &WorkloadHandle) -> Result<CgroupPath, RuntimeError> {
+    async fn stats(&self, handle: &WorkloadHandle) -> Result<WorkloadStatsReading, RuntimeError> {
         validate_process_handle(handle)?;
         let manifest = self.load(handle.workload_id().clone()).await?;
         let process = manifest.process.ok_or_else(|| RuntimeError::Conflict {
@@ -276,8 +277,10 @@ impl WorkloadRuntime for ProcessRuntime {
             message: "created process workload does not have a cgroup yet".to_owned(),
         })?;
         let path = blocking(move || read_cgroup_path(process)).await?;
-        CgroupPath::new(path).map_err(|error| RuntimeError::Rejected {
-            message: error.to_string(),
-        })
+        CgroupPath::new(path)
+            .map(WorkloadStatsReading::CgroupV2)
+            .map_err(|error| RuntimeError::Rejected {
+                message: error.to_string(),
+            })
     }
 }

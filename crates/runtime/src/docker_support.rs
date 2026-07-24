@@ -120,23 +120,6 @@ pub(crate) fn workload_status(inspect: &ContainerInspectResponse) -> WorkloadSta
     }
 }
 
-pub(crate) fn process_id(
-    inspect: &ContainerInspectResponse,
-    workload_id: &WorkloadId,
-) -> Result<u32, RuntimeError> {
-    let process_id = inspect
-        .state
-        .as_ref()
-        .and_then(|state| state.pid)
-        .ok_or_else(|| RuntimeError::Conflict {
-            workload_id: workload_id.clone(),
-            message: "docker container has no running process ID".to_owned(),
-        })?;
-    u32::try_from(process_id).map_err(|_| RuntimeError::Rejected {
-        message: format!("docker reported invalid container process ID `{process_id}`"),
-    })
-}
-
 pub(crate) fn runtime_event(message: EventMessage) -> Result<Option<RuntimeEvent>, RuntimeError> {
     let Some(kind) = message.action.as_deref().and_then(event_kind) else {
         return Ok(None);

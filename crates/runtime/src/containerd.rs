@@ -31,7 +31,8 @@ use crate::file_log::FileLogStream;
 use crate::{
     ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest,
     LogStream, ObservedWorkload, RuntimeCapability, RuntimeClock, RuntimeError, RuntimeEventStream,
-    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
+    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState,
+    WorkloadStatsReading, WorkloadStatus,
 };
 
 /// Native containerd workload backend scoped to one explicit containerd namespace.
@@ -461,7 +462,7 @@ impl WorkloadRuntime for ContainerdRuntime {
         .await
     }
 
-    async fn stats_handle(&self, handle: &WorkloadHandle) -> Result<CgroupPath, RuntimeError> {
+    async fn stats(&self, handle: &WorkloadHandle) -> Result<WorkloadStatsReading, RuntimeError> {
         let container_id = container_id(handle, &self.settings.namespace)?;
         let process = self
             .task(container_id, handle.workload_id())
@@ -484,9 +485,11 @@ impl WorkloadRuntime for ContainerdRuntime {
             .map_err(|error| RuntimeError::Unavailable {
                 message: format!("containerd cgroup inspection task failed: {error}"),
             })??;
-        CgroupPath::new(path).map_err(|error| RuntimeError::Rejected {
-            message: error.to_string(),
-        })
+        CgroupPath::new(path)
+            .map(WorkloadStatsReading::CgroupV2)
+            .map_err(|error| RuntimeError::Rejected {
+                message: error.to_string(),
+            })
     }
 }
 

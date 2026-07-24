@@ -7,16 +7,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use runtime::{NetworkProvider, NetworkProviderError, WorkloadHandle};
 
-const MAX_COUNTER_BYTES: u64 = 64;
+pub use runtime::WorkloadNetworkStats;
 
-/// Cumulative network counters for all host interfaces owned by one workload.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct WorkloadNetworkStats {
-    /// Bytes received by the workload since interface creation.
-    pub receive_bytes: u64,
-    /// Bytes transmitted by the workload since interface creation.
-    pub transmit_bytes: u64,
-}
+const MAX_COUNTER_BYTES: u64 = 64;
 
 /// Optional workload network counter boundary used by the stats agent.
 #[async_trait]

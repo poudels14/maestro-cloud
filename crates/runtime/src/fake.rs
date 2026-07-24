@@ -12,7 +12,8 @@ use crate::{
     Capabilities, CgroupPath, EventCursor, EventRequest, ExecOutput, ExecRequest, ExecSession,
     LogCursor, LogFrame, LogRequest, LogSource, LogStream, ObservedWorkload, RuntimeCapability,
     RuntimeError, RuntimeEvent, RuntimeEventKind, RuntimeEventStream, ShutdownRequest,
-    WorkloadHandle, WorkloadMetadata, WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus,
+    WorkloadHandle, WorkloadMetadata, WorkloadRuntime, WorkloadSpec, WorkloadState,
+    WorkloadStatsReading, WorkloadStatsSnapshot, WorkloadStatus,
 };
 
 use crate::fake_state::{
@@ -46,8 +47,8 @@ pub enum FakeRuntimeOperation {
     Logs,
     /// Interactive command creation.
     Exec,
-    /// Cgroup-handle discovery.
-    StatsHandle,
+    /// Workload resource sampling.
+    Stats,
 }
 
 /// Diagnostic record of one operation accepted by the fake seam.
@@ -67,6 +68,7 @@ pub struct FakeRuntimeCall {
 pub struct FakeRuntime {
     capabilities: Capabilities,
     state: Arc<Mutex<FakeState>>,
+    stats_snapshot: Arc<Mutex<Option<WorkloadStatsSnapshot>>>,
     event_tx: broadcast::Sender<FakeEventRecord>,
 }
 
@@ -86,8 +88,14 @@ impl FakeRuntime {
         Self {
             capabilities,
             state: Arc::new(Mutex::new(FakeState::default())),
+            stats_snapshot: Arc::new(Mutex::new(None)),
             event_tx,
         }
+    }
+
+    /// Makes resource collection return one reusable runtime-native snapshot.
+    pub fn set_stats_snapshot(&self, snapshot: WorkloadStatsSnapshot) {
+        *self.stats_snapshot.lock() = Some(snapshot);
     }
 
     /// Makes the next selected operation return one matchable error, then restores normal behavior.
@@ -434,17 +442,21 @@ impl WorkloadRuntime for FakeRuntime {
         }))
     }
 
-    async fn stats_handle(&self, handle: &WorkloadHandle) -> Result<CgroupPath, RuntimeError> {
+    async fn stats(&self, handle: &WorkloadHandle) -> Result<WorkloadStatsReading, RuntimeError> {
         let workload_id = handle.workload_id().clone();
-        self.begin(FakeRuntimeOperation::StatsHandle, Some(workload_id))
+        self.begin(FakeRuntimeOperation::Stats, Some(workload_id))
             .await?;
         let state = self.lock()?;
         checked_record(&state, handle)?;
         drop(state);
+        if let Some(snapshot) = *self.stats_snapshot.lock() {
+            return Ok(WorkloadStatsReading::Snapshot(snapshot));
+        }
         CgroupPath::new(PathBuf::from(format!(
             "/sys/fs/cgroup/maestro/{}",
             handle.workload_id()
         )))
+        .map(WorkloadStatsReading::CgroupV2)
         .map_err(|error| RuntimeError::Rejected {
             message: error.to_string(),
         })

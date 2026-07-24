@@ -4,11 +4,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, Timestamp, WorkloadId};
 use kernel_store::Clock;
-use runtime::{WorkloadMetadata, WorkloadRuntime, WorkloadState};
+use runtime::{
+    WorkloadMetadata, WorkloadResourceStats, WorkloadRuntime, WorkloadState, WorkloadStatsReading,
+};
 use tokio::sync::watch;
 
 use crate::StatusClock;
-use crate::cgroup_stats::{CgroupStats, CgroupStatsReader};
+use crate::cgroup_stats::CgroupStatsReader;
 use crate::network_stats::{WorkloadNetworkStats, WorkloadNetworkStatsReader};
 
 /// Node and cluster scope used to discover owned runtime workloads.
@@ -29,8 +31,8 @@ pub struct WorkloadStatsSample {
     pub metadata: WorkloadMetadata,
     /// Wall-clock collection time.
     pub collected_at: Timestamp,
-    /// Backend-neutral cgroup v2 counters.
-    pub stats: CgroupStats,
+    /// Backend-neutral workload resource counters.
+    pub stats: WorkloadResourceStats,
     /// Cumulative host-interface counters when the runtime exposes an owned interface.
     pub network: Option<WorkloadNetworkStats>,
 }
@@ -38,8 +40,8 @@ pub struct WorkloadStatsSample {
 /// Point in collection at which one workload could not be sampled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkloadStatsFailureStage {
-    /// The runtime could not resolve its native object to a cgroup path.
-    ResolveCgroup,
+    /// The runtime could not obtain its native stats reading.
+    ReadRuntime,
     /// The resolved cgroup could not be read safely.
     ReadCgroup,
     /// Runtime attachment inspection or host-interface counter reading failed.
@@ -96,7 +98,7 @@ pub enum WorkloadStatsSinkError {
     },
 }
 
-/// Collects uniform cgroup stats without invoking backend-specific stats APIs.
+/// Collects uniform resource stats through runtime-native or direct-cgroup readings.
 pub struct WorkloadStatsAgent {
     runtime: Arc<dyn WorkloadRuntime>,
     reader: Arc<dyn CgroupStatsReader>,
@@ -177,42 +179,52 @@ impl WorkloadStatsAgent {
             ..Default::default()
         };
         for workload in selected {
-            let path = match self.runtime.stats_handle(&workload.handle).await {
-                Ok(path) => path,
+            let reading = match self.runtime.stats(&workload.handle).await {
+                Ok(reading) => reading,
                 Err(error) => {
                     report.failures.push(WorkloadStatsFailure {
                         workload_id: workload.metadata.workload_id,
-                        stage: WorkloadStatsFailureStage::ResolveCgroup,
+                        stage: WorkloadStatsFailureStage::ReadRuntime,
                         message: error.to_string(),
                     });
                     continue;
                 }
             };
-            match self.reader.read(&path).await {
-                Ok(stats) => {
-                    let network = match self.network_reader.read(&workload.handle).await {
-                        Ok(network) => network,
-                        Err(error) => {
-                            report.failures.push(WorkloadStatsFailure {
-                                workload_id: workload.metadata.workload_id.clone(),
-                                stage: WorkloadStatsFailureStage::ReadNetwork,
-                                message: error.to_string(),
-                            });
-                            None
-                        }
-                    };
+            match reading {
+                WorkloadStatsReading::CgroupV2(path) => match self.reader.read(&path).await {
+                    Ok(stats) => {
+                        let network = match self.network_reader.read(&workload.handle).await {
+                            Ok(network) => network,
+                            Err(error) => {
+                                report.failures.push(WorkloadStatsFailure {
+                                    workload_id: workload.metadata.workload_id.clone(),
+                                    stage: WorkloadStatsFailureStage::ReadNetwork,
+                                    message: error.to_string(),
+                                });
+                                None
+                            }
+                        };
+                        report.samples.push(WorkloadStatsSample {
+                            metadata: workload.metadata,
+                            collected_at: self.clock.now(),
+                            stats,
+                            network,
+                        });
+                    }
+                    Err(error) => report.failures.push(WorkloadStatsFailure {
+                        workload_id: workload.metadata.workload_id,
+                        stage: WorkloadStatsFailureStage::ReadCgroup,
+                        message: error.to_string(),
+                    }),
+                },
+                WorkloadStatsReading::Snapshot(snapshot) => {
                     report.samples.push(WorkloadStatsSample {
                         metadata: workload.metadata,
                         collected_at: self.clock.now(),
-                        stats,
-                        network,
+                        stats: snapshot.resources,
+                        network: snapshot.network,
                     });
                 }
-                Err(error) => report.failures.push(WorkloadStatsFailure {
-                    workload_id: workload.metadata.workload_id,
-                    stage: WorkloadStatsFailureStage::ReadCgroup,
-                    message: error.to_string(),
-                }),
             }
         }
         report

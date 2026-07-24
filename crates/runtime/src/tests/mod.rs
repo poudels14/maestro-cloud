@@ -27,19 +27,21 @@ mod containerd_settings;
 mod containerd_support;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_volume;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_artifact;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_config;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_fixture;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_network;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_network_ipam;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
+mod docker_stats;
+#[cfg(all(feature = "docker", unix))]
 mod docker_stream;
-#[cfg(all(feature = "docker", target_os = "linux"))]
+#[cfg(all(feature = "docker", unix))]
 mod docker_support;
 mod fake;
 mod fake_network;

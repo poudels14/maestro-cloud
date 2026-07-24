@@ -14,7 +14,7 @@ pub struct MetricRecordId {
     pub collected_at: Timestamp,
 }
 
-/// One backend-neutral set of cumulative cgroup v2 workload counters.
+/// One backend-neutral set of cumulative workload resource counters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkloadMetricPoint {
@@ -22,7 +22,7 @@ pub struct WorkloadMetricPoint {
     pub id: MetricRecordId,
     /// Durable service, deployment, assignment, and cluster ownership.
     pub metadata: WorkloadMetadata,
-    /// Total CPU time consumed by the workload cgroup.
+    /// Total CPU time consumed by the workload.
     pub cpu_usage_usec: u64,
     /// CPU time consumed in user mode.
     pub cpu_user_usec: u64,
@@ -34,11 +34,11 @@ pub struct WorkloadMetricPoint {
     pub cpu_throttled_periods: u64,
     /// Total duration for which CPU execution was throttled.
     pub cpu_throttled_usec: u64,
-    /// Current memory charged to the workload cgroup.
+    /// Current memory charged to the workload.
     pub memory_current_bytes: u64,
     /// Hard memory limit, absent when unlimited.
     pub memory_maximum_bytes: Option<u64>,
-    /// Processes killed by the cgroup out-of-memory handler.
+    /// Processes killed by the workload out-of-memory handler.
     pub memory_out_of_memory_kills: u64,
     /// Low-memory reclaim events.
     pub memory_low_events: u64,

@@ -6,91 +6,13 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use runtime::CgroupPath;
 
+pub use runtime::{
+    WorkloadCpuStats as CgroupCpuStats, WorkloadIoStats as CgroupIoStats,
+    WorkloadMemoryEvents as CgroupMemoryEvents, WorkloadMemoryStats as CgroupMemoryStats,
+    WorkloadProcessStats as CgroupProcessStats, WorkloadResourceStats as CgroupStats,
+};
+
 const MAX_CGROUP_FILE_BYTES: u64 = 64 * 1024;
-
-/// CPU accounting read directly from cgroup v2 `cpu.stat`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CgroupCpuStats {
-    /// Total CPU time consumed by this cgroup.
-    pub usage_usec: u64,
-    /// CPU time consumed in user mode.
-    pub user_usec: u64,
-    /// CPU time consumed in kernel mode.
-    pub system_usec: u64,
-    /// Configured CPU scheduling periods elapsed.
-    pub periods: u64,
-    /// Scheduling periods in which the cgroup was throttled.
-    pub throttled_periods: u64,
-    /// Total duration for which CPU execution was throttled.
-    pub throttled_usec: u64,
-}
-
-/// Memory pressure counters read from cgroup v2 `memory.events`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CgroupMemoryEvents {
-    /// Times the low boundary was reclaimed through.
-    pub low: u64,
-    /// Times processes were throttled by the high boundary.
-    pub high: u64,
-    /// Times the hard memory limit was reached.
-    pub maximum: u64,
-    /// Out-of-memory events observed for this cgroup.
-    pub out_of_memory: u64,
-    /// Processes killed by the cgroup OOM handler.
-    pub out_of_memory_kills: u64,
-    /// Whole-cgroup OOM kills, when supported by the kernel.
-    pub out_of_memory_group_kills: u64,
-}
-
-/// Current memory use, limit, and pressure events for one workload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CgroupMemoryStats {
-    /// Current resident and cached memory charged to the cgroup.
-    pub current_bytes: u64,
-    /// Hard memory limit, or `None` when the cgroup is unlimited.
-    pub maximum_bytes: Option<u64>,
-    /// Memory pressure and OOM counters.
-    pub events: CgroupMemoryEvents,
-}
-
-/// Block-device totals summed across every device in cgroup v2 `io.stat`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CgroupIoStats {
-    /// Bytes read from block devices.
-    pub read_bytes: u64,
-    /// Bytes written to block devices.
-    pub write_bytes: u64,
-    /// Read operations issued.
-    pub read_operations: u64,
-    /// Write operations issued.
-    pub write_operations: u64,
-    /// Discarded bytes.
-    pub discarded_bytes: u64,
-    /// Discard operations issued.
-    pub discard_operations: u64,
-}
-
-/// Process occupancy and configured limit for one cgroup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CgroupProcessStats {
-    /// Current processes and threads charged to the cgroup.
-    pub current: u64,
-    /// Maximum allowed processes, or `None` when unlimited.
-    pub maximum: Option<u64>,
-}
-
-/// One backend-neutral cgroup v2 workload sample.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CgroupStats {
-    /// CPU accounting.
-    pub cpu: CgroupCpuStats,
-    /// Memory accounting.
-    pub memory: CgroupMemoryStats,
-    /// Block I/O accounting.
-    pub io: CgroupIoStats,
-    /// Process accounting.
-    pub processes: CgroupProcessStats,
-}
 
 /// Reads backend-neutral workload stats from a runtime-resolved cgroup.
 #[async_trait]
