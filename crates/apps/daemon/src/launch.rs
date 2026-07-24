@@ -43,6 +43,7 @@ use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
 use crate::platform::{AbsentHostNetworkBackend, RuntimeDelegatedNetworkStatsReader};
 use crate::tailscale_resources::TailscaleSystemResources;
+use crate::traefik_resources::TraefikSystemResources;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
     DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, HostTelemetryDependencies,
@@ -99,7 +100,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             cluster.ports,
             data_directory.join("store"),
             store_encryption_secret.clone(),
-            security,
+            security.clone(),
         )?;
         let provider = Arc::new(EmbeddedEtcdProvider::new(
             provider_config,
@@ -188,6 +189,17 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let node_upgrade = None;
     let tailscale_resources = TailscaleSystemResources::from_cluster(&cluster)
         .map_err(|error| invalid(format!("invalid Tailscale system resources: {error}")))?;
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let traefik_resources = Some(
+        TraefikSystemResources::for_docker_node(&cluster, &node_id, &security)
+            .map_err(|error| invalid(format!("invalid Traefik system resources: {error}")))?,
+    );
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let traefik_resources: Option<TraefikSystemResources> = None;
+    let system_host_ports = traefik_resources
+        .as_ref()
+        .map(TraefikSystemResources::host_port_grants)
+        .unwrap_or_default();
     let mut operator_settings = OperatorSettings::production(&cluster)?;
     operator_settings.preview = configured_preview
         .as_ref()
@@ -228,7 +240,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
                 webhooks: webhook_backend.clone(),
             },
         )
-        .with_tailscale_resources(tailscale_resources),
+        .with_tailscale_resources(tailscale_resources)
+        .with_traefik_resources(traefik_resources),
     );
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
@@ -278,7 +291,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             firewall_backend,
             bridge_backend,
             workload_network_mode,
-            system_host_ports: Default::default(),
+            system_host_ports,
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             workload_runtime: runtime.clone(),
             artifact_store: runtime.clone(),

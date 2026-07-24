@@ -38,6 +38,7 @@ mod runtime;
 mod s3_backup;
 mod stats_metric_sampler;
 mod tailscale_resources;
+mod traefik_resources;
 
 use std::{collections::BTreeMap, net::Ipv4Addr};
 

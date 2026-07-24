@@ -22,6 +22,8 @@ use webhook::{WebhookDeliveryBackend, WebhookReconciler};
 
 use crate::tailscale_reconciler::TailscaleResourceReconciler;
 use crate::tailscale_resources::TailscaleSystemResources;
+use crate::traefik_reconciler::TraefikResourceReconciler;
+use crate::traefik_resources::TraefikSystemResources;
 use crate::{LeaderWorkload, OperatorSettings, OperatorSuiteError, RoleError};
 
 /// Side-effect integrations shared by leader-owned operators.
@@ -70,6 +72,7 @@ pub struct OperatorLeaderWorkload {
     settings: OperatorSettings,
     builds: BuildOperatorBackends,
     tailscale: Option<TailscaleSystemResources>,
+    traefik: Option<TraefikSystemResources>,
 }
 
 impl OperatorLeaderWorkload {
@@ -88,6 +91,7 @@ impl OperatorLeaderWorkload {
             settings,
             builds,
             tailscale: None,
+            traefik: None,
         }
     }
 
@@ -96,6 +100,14 @@ impl OperatorLeaderWorkload {
         tailscale: Option<TailscaleSystemResources>,
     ) -> Self {
         self.tailscale = tailscale;
+        self
+    }
+
+    pub(crate) fn with_traefik_resources(
+        mut self,
+        traefik: Option<TraefikSystemResources>,
+    ) -> Self {
+        self.traefik = traefik;
         self
     }
 }
@@ -107,6 +119,17 @@ impl LeaderWorkload for OperatorLeaderWorkload {
         store: Arc<FencedStore>,
         shutdown: watch::Receiver<bool>,
     ) -> Result<(), RoleError> {
+        TraefikResourceReconciler::new(&self.cluster_id, self.traefik.clone())
+            .map_err(|error| {
+                RoleError::new(format!(
+                    "failed to construct Traefik resource reconciler: {error}"
+                ))
+            })?
+            .reconcile(store.as_ref(), self.timestamp_clock.now())
+            .await
+            .map_err(|error| {
+                RoleError::new(format!("failed to reconcile Traefik resources: {error}"))
+            })?;
         let tailscale = TailscaleResourceReconciler::new(&self.cluster_id, self.tailscale.clone())
             .map_err(|error| {
                 RoleError::new(format!(
