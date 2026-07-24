@@ -5,6 +5,7 @@
 //! runtime guarantees ordered startup, reverse shutdown, and rollback.
 
 mod admission;
+mod agent_api;
 mod agent_lifecycle;
 mod agent_network;
 mod agent_role;

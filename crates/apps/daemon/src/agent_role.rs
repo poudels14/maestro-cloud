@@ -1,18 +1,16 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use logs::{NodeLogQueryStore, NodeTrafficQueryStore};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
     FirewallBackend, MeshBackend, NodeRegistration, WorkloadBridgeBackend,
 };
 
+use crate::agent_api::{AgentApiInputs, bind_agent_api};
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
 use crate::agent_network::{build_bridge_agent, build_firewall_agent, build_mesh_agent};
 use crate::agent_tasks::{AgentTaskInputs, spawn_agent_tasks};
 use crate::artifact_replication::build_artifact_replication_agent;
-use crate::cluster_query_clients;
-use crate::config_view::masked_cluster_config;
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::join_activation::activate_joined_member;
 use crate::log_delivery::build_sink_workers;
@@ -109,8 +107,6 @@ where
             .fail(role_error("activate joined store member", error))
             .await;
     }
-    let local_log_queries = runtimes.log_query_store();
-    let local_traffic_queries = runtimes.traffic_query_store();
     let controller_stats = Arc::new(logs::LiveControllerStats::new(
         runtimes.log_stats_store(),
         factory
@@ -149,128 +145,25 @@ where
             ))
             .await;
     }
-    let workload_metric_queries = runtimes.metric_query_store();
-    let host_metric_queries = runtimes.host_metric_query_store();
-    let cluster_query_client = match cluster_query_clients::log_query_store(
+    let api_server = match bind_agent_api(
+        factory,
         plan,
-        &factory.api_settings,
-        local_log_queries.clone(),
-        local_traffic_queries.clone(),
-    ) {
-        Ok(queries) => Arc::new(queries),
-        Err(error) => return runtimes.fail(error).await,
-    };
-    let cluster_log_queries = cluster_query_client.clone() as Arc<dyn NodeLogQueryStore>;
-    let cluster_traffic_queries = cluster_query_client as Arc<dyn NodeTrafficQueryStore>;
-    let cluster_log_nodes = plan.cluster().nodes.keys().cloned().collect::<Vec<_>>();
-    let cluster_traffic_nodes = cluster_log_nodes.clone();
-    let cluster_metric_queries = match cluster_query_clients::metric_query_store(
-        plan,
-        &factory.api_settings,
-        workload_metric_queries.clone(),
-        host_metric_queries.clone(),
-    ) {
-        Ok(queries) => Arc::new(queries) as Arc<dyn server::NodeMetricQueryStore>,
-        Err(error) => return runtimes.fail(error).await,
-    };
-    let cluster_metric_nodes = cluster_log_nodes.clone();
-    let cluster_stats_queries = match cluster_query_clients::stats_query_store(
-        plan,
-        &factory.api_settings,
-        controller_stats.clone(),
-        stats_metric_queries.clone(),
-    ) {
-        Ok(queries) => Arc::new(queries) as Arc<dyn server::NodeStatsQueryStore>,
-        Err(error) => return runtimes.fail(error).await,
-    };
-    let cluster_stats_nodes = cluster_log_nodes.clone();
-    let exec_sessions = if spec.workload_enabled {
-        match cluster_query_clients::exec_sessions(factory, plan, spec, store.clone()) {
-            Ok(sessions) => Some(Arc::new(sessions) as Arc<dyn server::ClusterExecSessions>),
-            Err(error) => return runtimes.fail(error).await,
-        }
-    } else {
-        None
-    };
-    let admission = match (&factory.admission, &factory.agent_store) {
-        (Some(dependencies), AgentStore::Managed { provider, .. }) => match dependencies
-            .coordinator(plan.cluster().clone(), provider.clone(), store.clone())
-        {
-            Ok(coordinator) => Some(coordinator),
-            Err(error) => {
-                return runtimes
-                    .fail(role_error("construct cluster admission coordinator", error))
-                    .await;
-            }
+        spec,
+        AgentApiInputs {
+            store: store.clone(),
+            local_log_queries: runtimes.log_query_store(),
+            local_traffic_queries: runtimes.traffic_query_store(),
+            workload_metric_queries: runtimes.metric_query_store(),
+            host_metric_queries: runtimes.host_metric_query_store(),
+            controller_stats,
+            backup_stats,
+            stats_metric_queries,
         },
-        (Some(_), AgentStore::Remote(_)) => {
-            return runtimes
-                .fail(RoleError::new(
-                    "worker store clients cannot host cluster admission",
-                ))
-                .await;
-        }
-        (None, _) => None,
-    };
-    let api_server = match server::ApiServer::new(
-        store.clone(),
-        plan.cluster().cluster_id.clone(),
-        factory.api_settings.clone(),
     )
-    .map(|server| {
-        let server = server
-            .with_cluster_config(masked_cluster_config(plan.cluster(), &spec.node_id))
-            .with_artifact_archive_store(factory.artifact_archives.clone())
-            .with_artifact_store(factory.artifact_store.clone())
-            .with_firewall_settings(factory.firewall_settings.clone())
-            .with_log_query_store(local_log_queries)
-            .with_cluster_log_query_store(cluster_log_nodes, cluster_log_queries)
-            .with_traffic_query_stores(
-                local_traffic_queries,
-                cluster_traffic_nodes,
-                cluster_traffic_queries,
-            )
-            .with_metric_query_stores(
-                spec.node_id.clone(),
-                workload_metric_queries,
-                host_metric_queries,
-            )
-            .with_cluster_metric_query_store(cluster_metric_nodes, cluster_metric_queries)
-            .with_stats_providers(
-                controller_stats,
-                backup_stats,
-                stats_metric_queries,
-                cluster_stats_nodes,
-                cluster_stats_queries,
-            );
-        let server = match exec_sessions {
-            Some(sessions) => server.with_exec_sessions(sessions),
-            None => server,
-        };
-        let server = match &admission {
-            Some(coordinator) => server.with_admission_coordinator(coordinator.clone()),
-            None => server,
-        };
-        let server = match &factory.agent_store {
-            AgentStore::Managed { provider, .. } => server.with_store_provider(provider.clone()),
-            AgentStore::Remote(_) => server,
-        };
-        match &factory.webhook_backend {
-            Some(backend) => server.with_webhook_backend(backend.clone()),
-            None => server,
-        }
-    }) {
-        Ok(server) => match server.bind().await {
-            Ok(server) => server,
-            Err(error) => {
-                return runtimes.fail(role_error("bind operator API", error)).await;
-            }
-        },
-        Err(error) => {
-            return runtimes
-                .fail(role_error("construct operator API", error))
-                .await;
-        }
+    .await
+    {
+        Ok(server) => server,
+        Err(error) => return runtimes.fail(error).await,
     };
     let sink_workers = match build_sink_workers(
         &factory.log_sinks,
