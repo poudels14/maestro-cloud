@@ -300,5 +300,5 @@ reused. Retain enough live control-plane members for quorum throughout a drain,
 upgrade, or removal.
 
 For remote tailnet access to workload routes and cluster DNS, continue with
-[Tailscale operator access](tailscale.md). For production migration and
-rollback, follow [cutover.md](cutover.md).
+[Tailscale operator access](tailscale.md). For the one-way production
+migration, follow [cutover.md](cutover.md).

@@ -96,6 +96,42 @@ impl DaemonLaunchDocument {
         Ok(document)
     }
 
+    pub(crate) fn cutover(
+        cluster: ClusterConfig,
+        node_id: NodeId,
+        data_directory: PathBuf,
+        containerd_socket: PathBuf,
+        etcd_binary: PathBuf,
+        security: NodeCertificateBundle,
+        certificate_issuer: ClusterCertificateAuthority,
+        operator_jwt_secret: SecretValue,
+        store_encryption_secret: SecretValue,
+    ) -> Result<Self, CliError> {
+        let role = cluster
+            .nodes
+            .get(&node_id)
+            .ok_or_else(|| {
+                CliError::invalid_input(format!(
+                    "cutover node `{node_id}` is absent from the cluster topology"
+                ))
+            })?
+            .role;
+        let document = Self {
+            cluster,
+            node_id,
+            data_directory,
+            containerd_socket,
+            etcd_binary: role.is_control_plane().then_some(etcd_binary),
+            store_mode: StoreLaunchDocument::cutover(role),
+            security,
+            certificate_issuer: role.is_control_plane().then_some(certificate_issuer),
+            operator_jwt_secret,
+            store_encryption_secret,
+        };
+        document.validate()?;
+        Ok(document)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), CliError> {
         self.cluster
             .preflight()
@@ -199,6 +235,14 @@ enum StoreLaunchDocument {
 }
 
 impl StoreLaunchDocument {
+    fn cutover(role: NodeRole) -> Self {
+        if role.is_control_plane() {
+            Self::Restart
+        } else {
+            Self::Client
+        }
+    }
+
     fn joined(
         node_id: &NodeId,
         role: NodeRole,

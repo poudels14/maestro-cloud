@@ -88,9 +88,9 @@ rewrite module provisions containerd, BuildKit, etcd, and the host tools used by
 the production adapters.
 
 The runtime crate also contains a native Docker API backend for its supported
-development capabilities. Production daemon composition currently selects
-containerd; production adoption of already-running legacy Docker workloads is
-one of the explicit cutover decisions listed below.
+development capabilities. Production daemon composition selects containerd.
+Cutover deliberately restarts migrated workloads under that runtime instead of
+carrying a legacy Docker adoption path.
 
 ## Form a cluster
 
@@ -274,13 +274,14 @@ secret-free review plan, applies only that reviewed plan, verifies destination
 ownership and exact state, and migrates node-local hot/cold telemetry under
 manifest control.
 
-Follow [Rewrite cutover and rollback](docs/cutover.md) for the exact rehearsal,
-apply, verification, rollback, and evidence-retention procedure. Production
-cutover is not approved merely because the package builds.
+Follow [Rewrite cutover migration](docs/cutover.md) for the exact rehearsal,
+apply, native-store restore, launch, verification, and evidence-retention
+procedure. Production cutover is not approved merely because the package
+builds.
 
 The cutover keeps the one-way data migration and does not preserve legacy API
-or runtime compatibility after migration. The exact workload transition
-window still requires operator sign-off before the production rehearsal.
+or runtime compatibility after migration. Migrated workloads are recreated
+under the rewrite runtime during the planned cutover window.
 
 ## Release artifacts
 
@@ -323,7 +324,7 @@ cutover gates.
 ## Operator documentation
 
 - [Multi-node rewrite operations](docs/multi-node.md)
-- [Rewrite cutover and rollback](docs/cutover.md)
+- [Rewrite cutover migration](docs/cutover.md)
 - [Rewrite NixOS deployment](docs/nixos-rewrite.md)
 - [Tailscale operator access](docs/tailscale.md)
 - [Pull-request previews](docs/pr-previews.md)

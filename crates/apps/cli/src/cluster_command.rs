@@ -7,6 +7,7 @@ use kernel_api::UpgradeMode;
 use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
 use crate::cluster::{self, NodeLifecycleAction};
+use crate::cluster_cutover::{self, CutoverBundleOptions};
 use crate::cluster_formation;
 use crate::cluster_join::{self, JoinOptions};
 use crate::cluster_restart::{self, RestartSelection, RestartSelectionArgs};
@@ -47,6 +48,37 @@ pub(crate) enum ClusterCommand {
         /// Create the private daemon launch document at this path.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+    },
+    /// Create restart/client launch documents for a one-way migrated cluster.
+    PrepareCutover {
+        /// Cluster configuration source matching the reviewed migration topology.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Protected data root containing the initialized cluster authority.
+        #[arg(long, value_name = "PATH")]
+        authority_data_dir: PathBuf,
+        /// Absolute data root used by rewrite daemons on every target node.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+        /// Absolute containerd gRPC socket path on target nodes.
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = "/run/containerd/containerd.sock"
+        )]
+        containerd_socket: PathBuf,
+        /// Absolute etcd executable used by target control-plane nodes.
+        #[arg(long, value_name = "PATH")]
+        etcd_binary: PathBuf,
+        /// Owner-only file containing the exact migration/store master secret.
+        #[arg(long, value_name = "PATH")]
+        store_secret_file: PathBuf,
+        /// Owner-only file containing the new shared operator JWT secret.
+        #[arg(long, value_name = "PATH")]
+        operator_secret_file: PathBuf,
+        /// Protected directory receiving one private launch document per node.
+        #[arg(long, value_name = "PATH")]
+        output_dir: PathBuf,
     },
     /// Issue a private certificate bundle for one declared cluster node.
     IssueNode {
@@ -227,6 +259,32 @@ pub(crate) async fn run(
                 &containerd_socket,
                 &etcd_binary,
                 destination.as_deref(),
+                output,
+                &SystemConfigSourceReader,
+            )
+            .await
+        }
+        ClusterCommand::PrepareCutover {
+            config,
+            authority_data_dir,
+            data_dir,
+            containerd_socket,
+            etcd_binary,
+            store_secret_file,
+            operator_secret_file,
+            output_dir,
+        } => {
+            cluster_cutover::prepare_cutover_bundle(
+                CutoverBundleOptions {
+                    config_source: config,
+                    authority_data_directory: authority_data_dir,
+                    target_data_directory: data_dir,
+                    containerd_socket,
+                    etcd_binary,
+                    store_secret_file,
+                    operator_secret_file,
+                    output_directory: output_dir,
+                },
                 output,
                 &SystemConfigSourceReader,
             )

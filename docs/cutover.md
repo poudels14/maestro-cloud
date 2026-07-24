@@ -1,30 +1,32 @@
 # Rewrite cutover migration
 
-`maestro-migrate` captures, reviews, and applies the one-shot etcd schema
-conversion. It writes only the rewrite namespace and commits its migration
-marker last. A native etcd snapshot remains the rollback artifact; the logical
-snapshot described here is the reviewed migration input.
+`maestro-migrate` converts legacy etcd resources and node-local telemetry, then
+restores the converted etcd database into the rewrite's embedded-store layout.
+The transition is one-way: rewrite daemons restart desired workloads under the
+new runtime, and legacy API/runtime compatibility is not retained.
 
-The snapshot, client private key, and secret files must be absolute, regular,
-owner-only files. The master-secret file contains the exact legacy/new store
-secret bytes: do not append a newline. Outputs are installed with mode `0600`
-and are never overwritten.
+The logical snapshot, native snapshots, client private key, launch documents,
+and secret files must be absolute, regular, owner-only files. The store-secret
+file contains the exact legacy master-secret bytes; do not trim or append a
+newline. Outputs use mode `0600` and are never overwritten.
 
 Legacy telemetry does not share the rewrite's on-disk schema. Each node's probe
 owns three DuckDB files and a manifest-committed Parquet tree under
 `<cluster>/system/probe/data`; the rewrite owns versioned log and metric stores
-under `<cluster>/agent`. Treating those files as interchangeable would silently
-start empty observability stores.
+under `<cluster>/agent`. The telemetry conversion is therefore a required part
+of cutover.
 
 ## Rehearsal
 
+Use the same paths, configuration, secrets, binary versions, and node count
+planned for production.
+
 1. Restore a verified production etcd snapshot into an isolated staging
-   cluster. Keep all legacy and rewrite daemons stopped and allow legacy leases
-   to expire.
+   cluster. Keep all legacy and rewrite daemons stopped, start only legacy etcd,
+   and allow legacy leases to expire.
+
 2. On every stopped node, capture and review the exact node-local telemetry
-   inventory. The command opens all three DuckDB files read-only, verifies every
-   Parquet object against its commit manifest, rejects temporary/uncommitted
-   files, and binds the ordered file inventory into `sourceSha256`:
+   inventory:
 
    ```sh
    maestro-migrate telemetry-plan \
@@ -34,8 +36,7 @@ start empty observability stores.
      --output /var/lib/maestro/cutover/node-a-telemetry-plan.json
    ```
 
-   Repeat this for every node. Retain these artifacts with the native etcd
-   snapshot; they are the input fences for node-local telemetry conversion.
+   Repeat for every node. Retain the plans with both native etcd snapshots.
 
 3. Capture one revision-consistent logical snapshot:
 
@@ -48,21 +49,25 @@ start empty observability stores.
      --output /var/lib/maestro/cutover/legacy-snapshot.json
    ```
 
-4. Generate and review the secret-free plan report. The command validates every
-   known legacy key family and fails if leadership, requests, maintenance, or
-   node lifecycle work is still in progress. Successful legacy `up` deployments
-   are frozen to the image they already built because the old controller
-   intentionally deleted their one-use source archives. An incomplete upload
-   without a resolved image must finish or be removed before capture.
+4. Generate and review both secret-free plans:
 
    ```sh
    maestro-migrate plan \
      --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
      --master-secret-file /run/maestro/store-master-secret \
      --output /var/lib/maestro/cutover/plan-report.json
+
+   maestro-migrate store-plan \
+     --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
+     --output /var/lib/maestro/cutover/store-plan.json
    ```
 
-5. Apply the exact reviewed artifact:
+   Planning validates every known legacy key family and fails if leadership,
+   requests, maintenance, or node-lifecycle work is still in progress. Compare
+   the store plan's cluster ID, control-plane node IDs, addresses, and peer
+   ports with the rewrite `maestro.jsonc` before proceeding.
+
+5. Apply and independently verify the exact reviewed logical artifact:
 
    ```sh
    maestro-migrate apply \
@@ -73,18 +78,7 @@ start empty observability stores.
      --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
      --master-secret-file /run/maestro/store-master-secret \
      --migration-id legacy-v1
-   ```
 
-   Apply compares the live legacy digest before any destination writes and
-   recaptures it immediately before the completion marker. Success prints an
-   `applied` or `alreadyComplete` outcome, the same plan report, and an exact
-   destination verification.
-
-6. While every daemon is still stopped, independently verify the completion
-   marker and every migrated resource and request barrier. Archive the
-   secret-free evidence file with the reviewed plan:
-
-   ```sh
    maestro-migrate verify \
      --endpoint https://127.0.0.1:2379 \
      --certificate-authority /run/maestro/etcd-ca.pem \
@@ -96,13 +90,85 @@ start empty observability stores.
      --output /var/lib/maestro/cutover/verification.json
    ```
 
-   Verification fails if the marker is absent or bound to another snapshot, or
-   if any planned logical value is absent or changed, or if unreviewed state
-   exists in the destination namespace. Run it before starting rewrite daemons
-   because reconcilers legitimately update migrated resources.
+   Apply fences the live legacy digest before writes and immediately before its
+   completion marker. Verification must run before rewrite daemons can mutate
+   migrated resources.
 
-7. On every stopped node, apply and independently verify the reviewed
-   telemetry plan:
+6. While legacy etcd is still the only running process, take a second native
+   snapshot containing the verified rewrite namespace:
+
+   ```sh
+   ETCDCTL_API=3 etcdctl \
+     --endpoints=https://127.0.0.1:2379 \
+     --cacert=/run/maestro/etcd-ca.pem \
+     --cert=/run/maestro/etcd-client.pem \
+     --key=/run/maestro/etcd-client-key.pem \
+     snapshot save /var/lib/maestro/cutover/post-migration.db
+
+   chmod 0600 /var/lib/maestro/cutover/post-migration.db
+   etcdutl snapshot status \
+     --write-out=table \
+     /var/lib/maestro/cutover/post-migration.db
+   ```
+
+   The pre-migration native snapshot is the last abort point. The
+   post-migration native snapshot is the source for every rewrite store member.
+
+7. Create one shared CA and one launch document per declared node. The operator
+   secret is new; the store secret must be the exact secret used by migration:
+
+   ```sh
+   install -d -m 0700 \
+     /var/lib/maestro-cutover-authority \
+     /var/lib/maestro/cutover/launches
+
+   umask 077
+   openssl rand -hex 32 | tr -d '\n' \
+     >/run/maestro/operator-jwt-secret
+
+   maestro cluster init-ca \
+     --config maestro.jsonc \
+     --data-dir /var/lib/maestro-cutover-authority
+
+   maestro cluster prepare-cutover \
+     --config maestro.jsonc \
+     --authority-data-dir /var/lib/maestro-cutover-authority \
+     --data-dir /var/lib/maestro/production \
+     --etcd-binary /run/current-system/sw/bin/etcd \
+     --store-secret-file /run/maestro/store-master-secret \
+     --operator-secret-file /run/maestro/operator-jwt-secret \
+     --output-dir /var/lib/maestro/cutover/launches
+   ```
+
+   Securely copy each `<node-id>.launch.json` only to its named node. The
+   documents are create-only and exact reruns verify rather than rotate their
+   certificates or secrets.
+
+8. Stop legacy etcd. On each control-plane node, restore the same
+   post-migration snapshot into an otherwise empty rewrite data root:
+
+   ```sh
+   maestro-migrate store-restore \
+     --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
+     --native-snapshot /var/lib/maestro/cutover/post-migration.db \
+     --node-id node-a \
+     --data-directory /var/lib/maestro/production \
+     --etcdutl-binary /run/current-system/sw/bin/etcdutl
+
+   maestro-migrate store-verify \
+     --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
+     --native-snapshot /var/lib/maestro/cutover/post-migration.db \
+     --node-id node-a \
+     --data-directory /var/lib/maestro/production \
+     --output /var/lib/maestro/cutover/node-a-store-verification.json
+   ```
+
+   Repeat for every control-plane node. Restore writes into a tool-owned partial
+   directory, binds the result to both snapshot digests, seeds provider restart
+   state, and atomically installs `<data-directory>/store`. Exact reruns are
+   idempotent.
+
+9. On every stopped node, apply and verify its reviewed telemetry plan:
 
    ```sh
    maestro-migrate telemetry-apply \
@@ -117,37 +183,39 @@ start empty observability stores.
      --output /var/lib/maestro/cutover/node-a-telemetry-verification.json
    ```
 
-   Apply creates an owner-only intent before opening the rewrite stores and
-   installs its completion marker only after recapturing the source and matching
-   an ordered logical digest of every destination record. Exact reruns are
-   idempotent. Workload and host resource samples are normalized into the
-   rewrite's cumulative metric model; cluster/service aggregates are regenerated
-   from workload samples, and retired Prometheus traffic aggregates remain in
-   the source archive because rewrite traffic history is derived from access
-   logs.
+10. Stop and remove the legacy Maestro workload and system containers without
+    deleting their volumes or data directories. This is the one-way commit
+    point: there is no supported downgrade to the legacy controller after
+    workloads begin restarting under the rewrite runtime.
 
-8. Boot the rewrite daemons and complete the parity/adoption checklist. Do not
-   treat a successful schema migration as approval for a runtime transition;
-   the production runtime adoption mode is a separate cutover gate.
+11. Start all restored control-plane daemons close enough together to establish
+    quorum, then start worker daemons:
+
+    ```sh
+    maestro-daemon start /run/maestro/node-a.launch.json
+    ```
+
+    Verify cluster quorum, node readiness, assignment convergence, workload
+    recreation, ingress, DNS, firewall, logs, metrics, and every service
+    lifecycle operation in the parity checklist. Flip external DNS or ingress
+    only after those checks pass.
 
 ## Production and recovery
 
-Immediately before production capture, take and verify a native etcd snapshot,
-then stop every legacy daemon while leaving etcd available. Retain that native
-snapshot, the logical snapshot, plan report, old binaries, and migration output
-through the burn-in window. Retain the verification evidence alongside them.
+Production repeats the rehearsed artifact flow exactly. Archive the logical
+snapshot, both native snapshots, plan reports, per-node store and telemetry
+verification, launch-document fingerprints, binary versions, and final parity
+evidence.
 
-Etcd and telemetry destination writes are collision-safe and resumable. If
-either apply stops before its marker and the corresponding source digest is
-unchanged, rerun the same artifact. If an etcd source digest changed, do not
-plan a different artifact over partial destinations: restore the native
-rollback snapshot first, re-establish quiescence, and restart capture. If a
-node-local telemetry source changed, retain its untouched legacy telemetry
-directory, move the incomplete rewrite `agent` directory aside, then recapture
-and review that node before retrying.
+Before the one-way commit point, an apply interrupted before its marker may be
+rerun only if the corresponding source digest is unchanged. If the legacy etcd
+source changed, restore the pre-migration native snapshot and restart capture.
+If a telemetry source changed, archive the incomplete rewrite `agent`
+directory, recapture that node, and review a new plan.
 
-Rollback remains: stop rewrite daemons, restore the verified native etcd
-snapshot, leave each legacy telemetry directory in place, and start the old
-daemons. The rewrite `agent` stores are isolated and can remain offline as
-forensic evidence. Whether workloads can remain running during that operation
-depends on the separately approved runtime-adoption mode.
+After the commit point, recovery always moves forward on the rewrite. An exact
+store restore can be rerun; if an installed store is damaged, archive it,
+restore every member again from the retained post-migration snapshot, and use
+the same launch documents. There is no compatibility shim, workload adoption
+mode, old-schema daemon mode, or control-plane-only rollback procedure to
+maintain.

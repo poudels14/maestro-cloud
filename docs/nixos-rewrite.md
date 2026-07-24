@@ -129,6 +129,6 @@ adapter binaries selected by that document. Prefer the NixOS module for
 production and use the image only where those dependencies are explicitly
 supplied by the container orchestrator.
 
-Selecting this module does not approve production runtime adoption. Complete
-the runtime-adoption gate and the migration rehearsal in `cutover.md` before
-enabling the service on a production node.
+Selecting this module does not approve production cutover. Complete the
+one-way store restore, planned workload-restart rehearsal, and evidence checks
+in `cutover.md` before enabling the service on a production node.

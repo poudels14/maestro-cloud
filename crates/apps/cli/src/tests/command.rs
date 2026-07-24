@@ -23,6 +23,28 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "prepare-cutover",
+            "--config",
+            "maestro.jsonc",
+            "--authority-data-dir",
+            "/var/lib/maestro-cutover",
+            "--data-dir",
+            "/var/lib/maestro",
+            "--etcd-binary",
+            "/run/current-system/sw/bin/etcd",
+            "--store-secret-file",
+            "/run/maestro/store-secret",
+            "--operator-secret-file",
+            "/run/maestro/operator-secret",
+            "--output-dir",
+            "/run/maestro/cutover-launches",
+        ])
+        .is_ok()
+    );
     assert!(Cli::try_parse_from(["maestro", "cluster", "upgrade", "system", "--yes"]).is_err());
     assert!(
         Cli::try_parse_from([

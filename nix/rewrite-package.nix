@@ -49,7 +49,8 @@
     cargoBuildFlags = packageFlags;
     cargoTestFlags = packageFlags ++ ["--all-targets"];
     doCheck = !static;
-    # Keep rollback code in the development workspace without making releases depend on it.
+    # Keep the legacy implementation in the development workspace without
+    # making rewrite releases depend on it.
     postPatch = ''
       substituteInPlace Cargo.toml \
         --replace-fail 'members = ["controller", ' 'members = ['

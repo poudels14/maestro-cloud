@@ -10,6 +10,7 @@ mod archive;
 mod cluster;
 mod cluster_command;
 mod cluster_config;
+mod cluster_cutover;
 mod cluster_formation;
 mod cluster_join;
 mod cluster_restart;
