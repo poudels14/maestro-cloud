@@ -8,6 +8,7 @@ const node = {
   hostname: "worker-a",
   role: "worker",
   hostAddress: "10.0.0.11",
+  workloadNetworkMode: "clusterRouted",
   subnet: "10.51.0.0/24",
   dataPlaneReady: true,
   version: "0.5.0",

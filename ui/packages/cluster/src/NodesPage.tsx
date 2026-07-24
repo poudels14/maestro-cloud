@@ -51,7 +51,7 @@ function NodesPage(props: { api: ClusterApi }) {
             <span>Role</span>
             <span>Version</span>
             <span>Address</span>
-            <span>Workload subnet</span>
+            <span>Workload network</span>
             <span class="text-right">Action</span>
           </div>
           <For each={nodes.data ?? []}>

@@ -30,6 +30,8 @@ mod operator_error;
 mod operator_settings;
 mod operators;
 mod plan;
+#[cfg(any(target_os = "macos", feature = "macos-platform"))]
+mod platform;
 mod preview_config;
 mod runtime;
 mod s3_backup;
@@ -41,8 +43,8 @@ mod workload_agents;
 
 pub use admission::AdmissionDependencies;
 pub use control_plane::{
-    AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload,
-    NodeUpgradeDependencies,
+    AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
+    HostTelemetryDependencies, LeaderWorkload, NodeUpgradeDependencies,
 };
 pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig};
 pub use dead_letter_admin::{

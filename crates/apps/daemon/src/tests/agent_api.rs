@@ -21,7 +21,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use crate::agent_api::{AgentApiInputs, bind_agent_api};
 use crate::{
     AgentStore, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    OperatorSettings,
+    HostTelemetryDependencies, OperatorSettings,
 };
 
 use super::build_backend::FakeBuildBackend;
@@ -67,6 +67,7 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
         &cluster.cluster_id,
         &voter_id,
         voter_subnet,
+        kernel_api::WorkloadNetworkMode::ClusterRouted,
         Some(WorkloadUserSpec {
             user_id: 1_000,
             group_id: 1_000,
@@ -110,6 +111,7 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
             bridge_backend: RecordingBridgeBackend {
                 applications: Arc::new(Mutex::new(Vec::<WorkloadBridge>::new())),
             },
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: Arc::new(Mutex::new(Vec::new())),
             }),
@@ -126,8 +128,10 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
             host_metric_sinks: Vec::new(),
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
-            host_stats_reader: Arc::new(FixedHostStatsReader),
-            host_disk_reader: Arc::new(FixedHostDiskReader),
+            host_telemetry: HostTelemetryDependencies::Available {
+                resource_reader: Arc::new(FixedHostStatsReader),
+                disk_reader: Arc::new(FixedHostDiskReader),
+            },
             network_provider: Arc::new(FakeNetworkProvider::default()),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: Arc::new(Mutex::new(Vec::new())),

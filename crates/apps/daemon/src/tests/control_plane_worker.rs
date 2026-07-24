@@ -1,3 +1,4 @@
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 
 use build::LocalBuildSourceProvider;
@@ -11,7 +12,7 @@ use semver::Version;
 
 use crate::{
     AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    OperatorSettings,
+    HostTelemetryDependencies, OperatorSettings,
 };
 
 use super::build_backend::FakeBuildBackend;
@@ -21,7 +22,7 @@ use super::control_plane::{
     FixedStatusClock, PausedClock, RecordingBridgeBackend, RecordingDnsBinder,
     RecordingFirewallBackend, RecordingHealthProber, RecordingMeshBackend, test_api_settings,
 };
-use super::control_plane_resources::{load_assignment, seed_agent_resources};
+use super::control_plane_resources::{load_assignment, load_node, seed_agent_resources};
 
 #[tokio::test]
 async fn worker_agent_uses_remote_store_without_starting_a_controller()
@@ -40,6 +41,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
         &cluster.cluster_id,
         &worker_id,
         worker.workload_subnet,
+        kernel_api::WorkloadNetworkMode::RuntimeDelegated,
         None,
     )
     .await?;
@@ -51,20 +53,25 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
     )?;
     let workload_runtime = Arc::new(FakeRuntime::new());
     let network_provider = Arc::new(FakeNetworkProvider::default());
+    let mesh_applications = Arc::new(Mutex::new(Vec::new()));
+    let firewall_applications = Arc::new(Mutex::new(Vec::new()));
+    let bridge_applications = Arc::new(Mutex::new(Vec::new()));
+    let dns_bindings = Arc::new(Mutex::new(Vec::new()));
     let factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store: AgentStore::Remote(store.clone()),
             mesh_backend: RecordingMeshBackend {
-                applications: Arc::new(Mutex::new(Vec::new())),
+                applications: mesh_applications.clone(),
             },
             firewall_backend: RecordingFirewallBackend {
-                applications: Arc::new(Mutex::new(Vec::new())),
+                applications: firewall_applications.clone(),
             },
             bridge_backend: RecordingBridgeBackend {
-                applications: Arc::new(Mutex::new(Vec::new())),
+                applications: bridge_applications.clone(),
             },
+            workload_network_mode: kernel_api::WorkloadNetworkMode::RuntimeDelegated,
             dns_server_binder: Arc::new(RecordingDnsBinder {
-                bindings: Arc::new(Mutex::new(Vec::new())),
+                bindings: dns_bindings.clone(),
             }),
             workload_runtime: workload_runtime.clone(),
             artifact_store: Arc::new(FakeBuildBackend::default()) as Arc<dyn ArtifactStore>,
@@ -79,8 +86,10 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             host_metric_sinks: Vec::new(),
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
-            host_stats_reader: Arc::new(FixedHostStatsReader),
-            host_disk_reader: Arc::new(FixedHostDiskReader),
+            host_telemetry: HostTelemetryDependencies::Available {
+                resource_reader: Arc::new(FixedHostStatsReader),
+                disk_reader: Arc::new(FixedHostDiskReader),
+            },
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: Arc::new(Mutex::new(Vec::new())),
@@ -99,12 +108,18 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
     );
 
     let running = Daemon::new(plan, factory).start().await?;
+    let assignment = load_assignment(&store, &cluster.cluster_id).await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Running);
     assert_eq!(
-        load_assignment(&store, &cluster.cluster_id)
+        assignment.status.workload_address,
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)))
+    );
+    assert_eq!(
+        load_node(&store, &cluster.cluster_id, &worker_id)
             .await?
-            .status
-            .phase,
-        AssignmentPhase::Running
+            .spec
+            .workload_network_mode,
+        kernel_api::WorkloadNetworkMode::RuntimeDelegated
     );
     assert_eq!(
         workload_runtime
@@ -119,6 +134,30 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             network_provider.attachment_count()
         ),
         (1, 1)
+    );
+    assert!(
+        mesh_applications
+            .lock()
+            .map_err(|_| "mesh application lock poisoned")?
+            .is_empty()
+    );
+    assert!(
+        firewall_applications
+            .lock()
+            .map_err(|_| "firewall application lock poisoned")?
+            .is_empty()
+    );
+    assert!(
+        bridge_applications
+            .lock()
+            .map_err(|_| "bridge application lock poisoned")?
+            .is_empty()
+    );
+    assert!(
+        dns_bindings
+            .lock()
+            .map_err(|_| "DNS binding lock poisoned")?
+            .is_empty()
     );
     running.shutdown().await?;
     Ok(())

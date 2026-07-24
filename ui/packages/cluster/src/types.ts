@@ -22,6 +22,7 @@ interface ClusterNode {
   hostname: string;
   role: ApiSchemas["NodeRole"];
   hostAddress: string;
+  workloadNetworkMode: ApiSchemas["WorkloadNetworkMode"];
   subnet: string;
   dataPlaneReady: boolean;
   dataPlaneError?: string | null;

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,23 +16,36 @@ use kernel_controller::SystemTimestampClock;
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
 use node_agent::{
-    CgroupV2StatsReader, HickoryDnsServerBinder, HostNetworkStatsReader, LinuxHostDiskReader,
-    LinuxHostStatsReader, LinuxMeshBackend, LinuxWorkloadBridgeBackend, MeshIdentity,
-    NetworkHealthProber, NftablesFirewallBackend, SystemStatusClock,
+    CgroupV2StatsReader, HickoryDnsServerBinder, MeshIdentity, NetworkHealthProber,
+    SystemStatusClock,
 };
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+use node_agent::{
+    HostNetworkStatsReader, LinuxHostDiskReader, LinuxHostStatsReader, LinuxMeshBackend,
+    LinuxWorkloadBridgeBackend, NftablesFirewallBackend,
+};
+#[cfg(any(target_os = "macos", feature = "macos-platform"))]
+use runtime::DockerRuntime;
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use semver::Version;
 use server::{ServerSettings, TlsIdentity};
-use upgrade::{StoreNodeUpgradeBackendSettings, UpgradeSettings};
+use upgrade::StoreNodeUpgradeBackendSettings;
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+use upgrade::UpgradeSettings;
 use webhook::HttpWebhookBackend;
 
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+use crate::NodeUpgradeDependencies;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
+#[cfg(any(target_os = "macos", feature = "macos-platform"))]
+use crate::platform::{AbsentHostNetworkBackend, RuntimeDelegatedNetworkStatsReader};
 use crate::tailscale_resources::TailscaleSystemResources;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
-    DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, NodeUpgradeDependencies,
+    DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, HostTelemetryDependencies,
     OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
@@ -111,7 +126,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         )
     };
     let mesh_identity = MeshIdentity::load_or_generate(&data_directory.join("agent").join("mesh"))?;
-    let containerd = Arc::new(
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let runtime = Arc::new(
         ContainerdRuntime::connect(
             ContainerdRuntimeSettings {
                 socket: containerd_socket,
@@ -123,9 +139,17 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         )
         .await?,
     );
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let runtime = {
+        let _containerd_socket = containerd_socket;
+        Arc::new(DockerRuntime::connect_with_defaults()?)
+    };
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     let volatile_root = PathBuf::from("/run/maestro")
         .join(cluster.cluster_id.as_str())
         .join(node_id.as_str());
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let volatile_root = data_directory.join("runtime").join("volatile");
     let instance_id = match instance_id {
         Some(instance_id) => instance_id,
         None => generate_instance_id()?,
@@ -149,7 +173,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         None => Version::parse(env!("CARGO_PKG_VERSION"))
             .map_err(|error| invalid(format!("daemon package version is invalid: {error}")))?,
     };
-    let node_upgrade = configured_upgrade.map_or_else(
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let node_upgrade = Some(configured_upgrade.map_or_else(
         || NodeUpgradeDependencies {
             stager: None,
             rebooter: Arc::new(upgrade::ProcessNodeRebooter::new()),
@@ -158,17 +183,26 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             stager: Some(upgrade.stager),
             rebooter: upgrade.rebooter,
         },
-    );
+    ));
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let node_upgrade = None;
     let tailscale_resources = TailscaleSystemResources::from_cluster(&cluster)
         .map_err(|error| invalid(format!("invalid Tailscale system resources: {error}")))?;
     let mut operator_settings = OperatorSettings::production(&cluster)?;
     operator_settings.preview = configured_preview
         .as_ref()
         .map(|preview| preview.settings.clone());
-    operator_settings.upgrade = Some(
-        UpgradeSettings::new(Duration::from_secs(30), Duration::from_secs(5), 3)
-            .map_err(|error| invalid(error.to_string()))?,
-    );
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    {
+        operator_settings.upgrade = Some(
+            UpgradeSettings::new(Duration::from_secs(30), Duration::from_secs(5), 3)
+                .map_err(|error| invalid(error.to_string()))?,
+        );
+    }
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    {
+        operator_settings.upgrade = None;
+    }
     let api_firewall_settings = operator_settings.firewall.clone();
     let store_upgrades = Some(
         StoreNodeUpgradeBackendSettings::new(Duration::from_secs(60 * 60), Duration::from_secs(2))
@@ -187,7 +221,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             BuildOperatorBackends {
                 source: build_source.clone(),
                 revisions: build_source.clone(),
-                artifacts: containerd.clone(),
+                artifacts: runtime.clone(),
                 pull_requests: configured_preview.map(|preview| preview.pull_requests),
                 upgrades: None,
                 store_upgrades,
@@ -210,16 +244,43 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     )
     .await?;
     let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
-    let network_stats_reader = Arc::new(HostNetworkStatsReader::production(containerd.clone()));
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let network_stats_reader = Arc::new(HostNetworkStatsReader::production(runtime.clone()));
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let network_stats_reader = Arc::new(RuntimeDelegatedNetworkStatsReader);
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let mesh_backend = LinuxMeshBackend::new();
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let mesh_backend = AbsentHostNetworkBackend;
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let firewall_backend = NftablesFirewallBackend::new();
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let firewall_backend = AbsentHostNetworkBackend;
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let bridge_backend = LinuxWorkloadBridgeBackend::new();
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let bridge_backend = AbsentHostNetworkBackend;
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let workload_network_mode = kernel_api::WorkloadNetworkMode::ClusterRouted;
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let workload_network_mode = kernel_api::WorkloadNetworkMode::RuntimeDelegated;
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let host_telemetry = HostTelemetryDependencies::Available {
+        resource_reader: Arc::new(LinuxHostStatsReader::production()),
+        disk_reader: Arc::new(LinuxHostDiskReader::production()),
+    };
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let host_telemetry = HostTelemetryDependencies::Unavailable;
     let mut factory = DaemonRoleFactory::new(
         DaemonRoleDependencies {
             agent_store,
-            mesh_backend: LinuxMeshBackend::new(),
-            firewall_backend: NftablesFirewallBackend::new(),
-            bridge_backend: LinuxWorkloadBridgeBackend::new(),
+            mesh_backend,
+            firewall_backend,
+            bridge_backend,
+            workload_network_mode,
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
-            workload_runtime: containerd.clone(),
-            artifact_store: containerd.clone(),
+            workload_runtime: runtime.clone(),
+            artifact_store: runtime.clone(),
             artifact_archives: build_source,
             log_store_runtime: Box::new(log_store_runtime),
             log_sinks: datadog_sinks.logs,
@@ -228,9 +289,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             metric_store_runtime: Box::new(metric_store_runtime),
             stats_reader: Arc::new(CgroupV2StatsReader),
             network_stats_reader,
-            host_stats_reader: Arc::new(LinuxHostStatsReader::production()),
-            host_disk_reader: Arc::new(LinuxHostDiskReader::production()),
-            network_provider: containerd,
+            host_telemetry,
+            network_provider: runtime,
             health_prober,
             volatile_root,
             mesh_identity,
@@ -238,7 +298,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             running_version,
             monotonic_clock: clock,
             status_clock: Arc::new(SystemStatusClock),
-            node_upgrade: Some(node_upgrade),
+            node_upgrade,
             api_settings,
             firewall_settings: api_firewall_settings,
         },

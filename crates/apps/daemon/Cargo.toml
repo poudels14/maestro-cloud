@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+macos-platform = ["runtime/docker"]
+
 [dependencies]
 async-trait = "=0.1.89"
 aws-config = { version = "=1.9.0", default-features = false, features = [
@@ -34,7 +37,7 @@ logstore = { version = "0.1.0", path = "../../observability/logstore" }
 metrics = { version = "0.1.0", path = "../../observability/metrics" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
 preview = { version = "0.1.0", path = "../../operators/preview" }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 scheduler = { version = "0.1.0", path = "../../operators/scheduler" }
 semver.workspace = true
 server = { version = "0.1.0", path = "../server" }
@@ -61,3 +64,9 @@ tempfile = "=3.27.0"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt", "time"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["docker"] }

@@ -1,14 +1,10 @@
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use node_agent::{
-    AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, DnsResourceAgent, DnsServerSettings,
-    FirewallBackend, MeshBackend, NodeRegistration, WorkloadBridgeBackend,
-};
+use node_agent::{FirewallBackend, MeshBackend, NodeRegistration, WorkloadBridgeBackend};
 
 use crate::agent_api::{AgentApiInputs, bind_agent_api};
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
-use crate::agent_network::{build_bridge_agent, build_firewall_agent, build_mesh_agent};
+use crate::agent_network::prepare_agent_network;
 use crate::agent_tasks::{AgentTaskInputs, spawn_agent_tasks};
 use crate::artifact_replication::build_artifact_replication_agent;
 use crate::control_plane::{DaemonRoleFactory, role_error};
@@ -191,41 +187,19 @@ where
         Err(error) => return runtimes.fail(error).await,
     };
 
-    let bridge_agent = match build_bridge_agent(factory, plan, spec, bridge_backend) {
-        Ok(agent) => agent,
-        Err(error) => return runtimes.fail(error).await,
-    };
-    let mesh_agent = match build_mesh_agent(factory, plan, spec, store.clone(), mesh_backend) {
-        Ok(agent) => agent,
-        Err(error) => return runtimes.fail(error).await,
-    };
-    let firewall_agent =
-        match build_firewall_agent(factory, plan, spec, store.clone(), firewall_backend) {
-            Ok(agent) => agent,
-            Err(error) => return runtimes.fail(error).await,
-        };
-    let resolver = match AuthoritativeDnsResolver::new() {
-        Ok(resolver) => resolver,
-        Err(error) => {
-            return runtimes
-                .fail(role_error("construct authoritative DNS resolver", error))
-                .await;
-        }
-    };
-    let dns_agent = match DnsResourceAgent::new(
+    let network_agents = match prepare_agent_network(
+        factory,
+        plan,
+        spec,
         store.clone(),
-        &plan.cluster().cluster_id,
-        spec.node_id.clone(),
-        resolver.clone(),
-        factory.monotonic_clock.clone(),
-        factory.settings.dns_resync_interval,
-    ) {
-        Ok(agent) => agent,
-        Err(error) => {
-            return runtimes
-                .fail(role_error("construct DNS resource agent", error))
-                .await;
-        }
+        mesh_backend,
+        firewall_backend,
+        bridge_backend,
+    )
+    .await
+    {
+        Ok(agents) => agents,
+        Err(error) => return runtimes.fail(error).await,
     };
     let mut assignment_agent = if spec.workload_enabled {
         match build_assignment_agent(
@@ -278,45 +252,6 @@ where
     let node_registry_agent = match build_node_registry_agent(factory, plan, spec, store.clone()) {
         Ok(agent) => agent,
         Err(error) => return runtimes.fail(error).await,
-    };
-    if let Err(error) = bridge_agent.reconcile_once().await {
-        return runtimes
-            .fail(role_error("establish workload bridge", error))
-            .await;
-    }
-    if let Err(error) = mesh_agent.reconcile_once().await {
-        return runtimes
-            .fail(role_error("establish initial mesh snapshot", error))
-            .await;
-    }
-    if let Err(error) = dns_agent.reconcile_once().await {
-        return runtimes
-            .fail(role_error("establish initial DNS snapshot", error))
-            .await;
-    }
-    if let Err(error) = firewall_agent.reconcile_once().await {
-        return runtimes
-            .fail(role_error("establish initial firewall snapshot", error))
-            .await;
-    }
-    let dns_settings = match DnsServerSettings::new(SocketAddr::new(
-        IpAddr::V4(bridge_agent.desired().gateway),
-        AUTHORITATIVE_DNS_PORT,
-    )) {
-        Ok(settings) => settings,
-        Err(error) => {
-            return runtimes
-                .fail(role_error("validate authoritative DNS listener", error))
-                .await;
-        }
-    };
-    let dns_server = match factory.dns_server_binder.bind(dns_settings, resolver).await {
-        Ok(server) => server,
-        Err(error) => {
-            return runtimes
-                .fail(role_error("bind authoritative DNS listener", error))
-                .await;
-        }
     };
     if let Some(agent) = health_agent.as_ref()
         && let Err(error) = agent.reconcile_once().await
@@ -402,11 +337,7 @@ where
         node_registry_agent,
         node_registration,
         artifact_replication_agent,
-        bridge_agent,
-        mesh_agent,
-        dns_agent,
-        firewall_agent,
-        dns_server,
+        network_agents,
         stats_metric_sampler,
         assignment_agent,
         health_agent,

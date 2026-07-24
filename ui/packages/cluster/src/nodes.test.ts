@@ -7,7 +7,8 @@ function node(
   id: string,
   hostname: string,
   lastSeen: number,
-  conditions: ApiSchemas["Condition"][] = []
+  conditions: ApiSchemas["Condition"][] = [],
+  workloadNetworkMode: ApiSchemas["WorkloadNetworkMode"] = "clusterRouted"
 ): ApiSchemas["Node"] {
   return {
     meta: { id, generation: 1, revision: id === "node-b" ? 9 : 4 },
@@ -15,7 +16,7 @@ function node(
       hostname,
       hostAddress: id === "node-b" ? "10.0.0.12" : "10.0.0.11",
       role: id === "node-b" ? "worker" : "master",
-      workloadNetworkMode: "clusterRouted"
+      workloadNetworkMode
     },
     status: { instanceId: `${id}-instance`, lastSeen, version: "0.5.0", conditions }
   };
@@ -71,6 +72,7 @@ test("projects node liveness, mesh readiness, and drain state", () => {
     hostname: "worker-b",
     role: "worker",
     hostAddress: "10.0.0.12",
+    workloadNetworkMode: "clusterRouted",
     subnet: "10.51.1.0/24",
     dataPlaneReady: true,
     dataPlaneError: null,
@@ -116,4 +118,17 @@ test("reports a desired mesh generation that has not been applied", () => {
 
   assert.equal(projected[0]?.dataPlaneReady, false);
   assert.equal(projected[0]?.dataPlaneError, "Mesh network generation is not applied");
+});
+
+test("reports runtime-delegated networking without requiring a mesh publication", () => {
+  const projected = projectClusterNodes(
+    [node("node-b", "worker-b", 100_000, [], "runtimeDelegated")],
+    [],
+    100_000
+  );
+
+  assert.equal(projected[0]?.workloadNetworkMode, "runtimeDelegated");
+  assert.equal(projected[0]?.subnet, "runtime delegated");
+  assert.equal(projected[0]?.dataPlaneReady, true);
+  assert.equal(projected[0]?.dataPlaneError, null);
 });

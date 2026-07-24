@@ -15,10 +15,12 @@ function projectClusterNodes(
       const meshCondition = network?.status.conditions?.find(
         (condition) => condition.type === "MeshReady"
       );
+      const runtimeDelegated = node.spec.workloadNetworkMode === "runtimeDelegated";
       const dataPlaneReady =
-        network != null &&
-        network.status.appliedGeneration === network.meta.generation &&
-        meshCondition?.status === "true";
+        runtimeDelegated ||
+        (network != null &&
+          network.status.appliedGeneration === network.meta.generation &&
+          meshCondition?.status === "true");
       const drainCondition = node.status.conditions?.find(
         (condition) => condition.type === "Draining"
       );
@@ -34,9 +36,13 @@ function projectClusterNodes(
         hostname: node.spec.hostname,
         role: node.spec.role,
         hostAddress: node.spec.hostAddress,
-        subnet: network?.spec.workloadSubnet ?? "unavailable",
+        workloadNetworkMode: node.spec.workloadNetworkMode,
+        subnet: runtimeDelegated
+          ? "runtime delegated"
+          : (network?.spec.workloadSubnet ?? "unavailable"),
         dataPlaneReady,
-        dataPlaneError: dataPlaneReady ? null : meshReadinessError(network, meshCondition),
+        dataPlaneError:
+          dataPlaneReady || runtimeDelegated ? null : meshReadinessError(network, meshCondition),
         version: node.status.version,
         alive: node.status.lastSeen >= nowMs - NODE_LIVENESS_WINDOW_MS,
         lastSeenAtMs: node.status.lastSeen,

@@ -5,11 +5,11 @@ use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     ClusterId, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase, DeploymentSpec,
     DeploymentStatus, DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue,
-    ExecPolicy, Generation, HealthCheckSpec, HealthProbe, NodeApiAccess, NodeFirewall,
+    ExecPolicy, Generation, HealthCheckSpec, HealthProbe, Node, NodeApiAccess, NodeFirewall,
     NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus, NodeId, Object, ObjectMeta,
     PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
     ResourceKind, ResourceName, ResourceRevision, ServiceId, ServiceSpec, Timestamp,
-    WorkloadUserSpec,
+    WorkloadNetworkMode, WorkloadUserSpec,
 };
 use kernel_store::{CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store};
 
@@ -18,24 +18,20 @@ pub(super) async fn seed_agent_resources(
     cluster_id: &ClusterId,
     node_id: &NodeId,
     workload_subnet: cluster::Ipv4Cidr,
+    network_mode: WorkloadNetworkMode,
     node_api_user: Option<WorkloadUserSpec>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let workload_address = workload_subnet
         .workload_addresses()
         .next()
         .ok_or("workload subnet has no assignable address")?;
-    let assignment = workload_assignment(node_id, workload_address)?;
+    let assignment = workload_assignment(node_id, workload_address, network_mode)?;
     let replica = replica_state(&assignment)?;
-    let resources = [
+    let mut resources = vec![
         (
             "NodeFirewall",
             node_id.as_str(),
             serde_json::to_vec(&firewall(node_id)?)?,
-        ),
-        (
-            "DnsRecord",
-            "api",
-            serde_json::to_vec(&dns_record(workload_address)?)?,
         ),
         (
             "Deployment",
@@ -49,6 +45,13 @@ pub(super) async fn seed_agent_resources(
         ),
         ("ReplicaState", "replica-1", serde_json::to_vec(&replica)?),
     ];
+    if network_mode == WorkloadNetworkMode::ClusterRouted {
+        resources.push((
+            "DnsRecord",
+            "api",
+            serde_json::to_vec(&dns_record(workload_address)?)?,
+        ));
+    }
     for (kind, id, value) in resources {
         put(store, cluster_id, kind, id, value).await?;
     }
@@ -64,6 +67,19 @@ pub(super) async fn load_assignment(
         &ResourceName::new("assignment-1")?,
     );
     let stored = store.get(&key).await?.ok_or("assignment was not stored")?;
+    Ok(serde_json::from_slice(&stored.value)?)
+}
+
+pub(super) async fn load_node(
+    store: &InMemoryStore,
+    cluster_id: &ClusterId,
+    node_id: &NodeId,
+) -> Result<Node, Box<dyn std::error::Error>> {
+    let key = Keyspace::new(cluster_id).resource(
+        &ResourceKind::new("Node")?,
+        &ResourceName::new(node_id.as_str())?,
+    );
+    let stored = store.get(&key).await?.ok_or("node was not stored")?;
     Ok(serde_json::from_slice(&stored.value)?)
 }
 
@@ -138,6 +154,7 @@ fn dns_record(address: Ipv4Addr) -> Result<DnsRecord, kernel_api::InvalidIdentif
 fn workload_assignment(
     node_id: &NodeId,
     workload_address: Ipv4Addr,
+    network_mode: WorkloadNetworkMode,
 ) -> Result<Assignment, kernel_api::InvalidIdentifier> {
     Ok(Object {
         meta: metadata(AssignmentId::new("assignment-1")?),
@@ -148,7 +165,10 @@ fn workload_assignment(
             replica_index: 0,
             node_id: node_id.clone(),
             placement_epoch: 1,
-            workload_address: Some(IpAddr::V4(workload_address)),
+            workload_address: match network_mode {
+                WorkloadNetworkMode::ClusterRouted => Some(IpAddr::V4(workload_address)),
+                WorkloadNetworkMode::RuntimeDelegated => None,
+            },
             replaces_assignment_id: None,
         },
         status: AssignmentStatus {

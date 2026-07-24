@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use cluster::{
-    CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle, StoreJoinTicket,
-};
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+use cluster::StoreJoinTicket;
+use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::{
@@ -14,6 +14,7 @@ use crate::{
 use super::cluster_with_nodes;
 
 #[test]
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 fn launch_validation_binds_store_mode_to_local_role_and_ticket()
 -> Result<(), Box<dyn std::error::Error>> {
     let master = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
@@ -81,6 +82,7 @@ fn launch_document_requires_owner_only_permissions() -> Result<(), Box<dyn std::
 }
 
 #[test]
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::error::Error>> {
     let config = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     assert!(
@@ -107,6 +109,27 @@ fn launch_validation_requires_absolute_host_paths() -> Result<(), Box<dyn std::e
         .validate()
         .is_err()
     );
+    Ok(())
+}
+
+#[test]
+#[cfg(any(target_os = "macos", feature = "macos-platform"))]
+fn macos_launch_profile_requires_one_node_and_omits_nixos_upgrades()
+-> Result<(), Box<dyn std::error::Error>> {
+    let launch = DaemonLaunchConfig {
+        containerd_socket: PathBuf::from("ignored-by-docker"),
+        ..config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?
+    };
+    launch.validate()?;
+
+    let mut multiple_nodes = launch.clone();
+    multiple_nodes.cluster =
+        cluster_with_nodes(&[("master", NodeRole::Master), ("worker", NodeRole::Worker)])?;
+    assert!(multiple_nodes.validate().is_err());
+
+    let mut nixos_upgrade = launch;
+    nixos_upgrade.nixos_upgrade = Some(NixosUpgradeLaunchConfig::new("/etc/maestro"));
+    assert!(nixos_upgrade.validate().is_err());
     Ok(())
 }
 
@@ -212,6 +235,7 @@ fn log_backup_launch_config_validates_s3_kms_prefix_and_retention()
 }
 
 #[test]
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 fn nixos_upgrade_launch_config_requires_hermetic_binary_pairs()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;

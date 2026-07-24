@@ -20,6 +20,7 @@ const node = {
   hostname: "worker-b",
   role: "hybrid",
   hostAddress: "10.1.0.12",
+  workloadNetworkMode: "clusterRouted",
   subnet: "10.51.0.0/24",
   dataPlaneReady: true,
   version: "0.4.7",

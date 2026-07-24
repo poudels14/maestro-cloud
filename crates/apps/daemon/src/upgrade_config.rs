@@ -82,6 +82,7 @@ impl NixosUpgradeLaunchConfig {
     }
 }
 
+#[cfg_attr(any(target_os = "macos", feature = "macos-platform"), allow(dead_code))]
 pub(crate) struct ConfiguredNixosUpgrade {
     pub(crate) stager: Arc<dyn NixosUpgradeStager>,
     pub(crate) rebooter: Arc<dyn NodeRebooter>,

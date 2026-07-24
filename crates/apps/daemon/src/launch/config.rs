@@ -48,7 +48,7 @@ pub struct DaemonLaunchConfig {
     pub node_id: NodeId,
     /// Root of all role and provider persistence.
     pub data_directory: PathBuf,
-    /// Containerd gRPC Unix socket used by the native production runtime.
+    /// Containerd gRPC Unix socket used by Linux; ignored by the macOS Docker profile.
     #[serde(default = "default_containerd_socket")]
     pub containerd_socket: PathBuf,
     /// Exact etcd executable on control-plane nodes; absent on workers.
@@ -98,10 +98,25 @@ impl DaemonLaunchConfig {
         if let Some(upgrade) = &self.nixos_upgrade {
             upgrade.validate()?;
         }
-        if !self.data_directory.is_absolute() || !self.containerd_socket.is_absolute() {
-            return Err(invalid(
-                "data directory and containerd socket must be absolute paths",
-            ));
+        if !self.data_directory.is_absolute() {
+            return Err(invalid("data directory must be an absolute path"));
+        }
+        #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+        if !self.containerd_socket.is_absolute() {
+            return Err(invalid("containerd socket must be an absolute path"));
+        }
+        #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+        {
+            if self.cluster.nodes.len() != 1 {
+                return Err(invalid(
+                    "the macOS Docker profile supports exactly one cluster node",
+                ));
+            }
+            if self.nixos_upgrade.is_some() {
+                return Err(invalid(
+                    "NixOS upgrades are unavailable in the macOS Docker profile",
+                ));
+            }
         }
         let node = self.cluster.nodes.get(&self.node_id).ok_or_else(|| {
             invalid(format!(

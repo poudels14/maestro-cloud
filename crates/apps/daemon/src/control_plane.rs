@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cluster::{StoreProvider, StoreStartMode};
-use kernel_api::NodeInstanceId;
+use kernel_api::{NodeInstanceId, WorkloadNetworkMode};
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use logs::{LogSink, LogStoreRuntime, SinkRuntimeRegistry};
@@ -51,6 +51,19 @@ pub struct NodeUpgradeDependencies {
     pub rebooter: Arc<dyn NodeRebooter>,
 }
 
+/// Host telemetry adapters exposed only on platforms with native host readers.
+pub enum HostTelemetryDependencies {
+    /// Direct host resource and mount readers are available.
+    Available {
+        /// Aggregate CPU, memory, and network reader.
+        resource_reader: Arc<dyn HostStatsReader>,
+        /// Host mount identity and capacity reader.
+        disk_reader: Arc<dyn HostDiskReader>,
+    },
+    /// The platform intentionally omits host telemetry.
+    Unavailable,
+}
+
 /// One leader-owned workload bound to the exact fence for an election term.
 #[async_trait]
 pub trait LeaderWorkload: Send + Sync {
@@ -72,6 +85,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub firewall_backend: FirewallBackendType,
     /// Host-network adapter that owns the node-local workload bridge.
     pub bridge_backend: BridgeBackendType,
+    /// Address ownership and node-local network agents enabled for workloads.
+    pub workload_network_mode: WorkloadNetworkMode,
     /// UDP/TCP listener binder for the node-local authoritative DNS server.
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Native backend used for workload lifecycle, adoption, and events.
@@ -94,10 +109,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub stats_reader: Arc<dyn CgroupStatsReader>,
     /// Runtime-aware reader for optional cumulative workload network counters.
     pub network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
-    /// Direct aggregate host CPU, memory, and network reader.
-    pub host_stats_reader: Arc<dyn HostStatsReader>,
-    /// Direct host mount identity and capacity reader.
-    pub host_disk_reader: Arc<dyn HostDiskReader>,
+    /// Platform-specific host telemetry capability and adapters.
+    pub host_telemetry: HostTelemetryDependencies,
     /// Host-owned workload address allocator and attachment backend.
     pub network_provider: Arc<dyn NetworkProvider>,
     /// Bounded HTTP and TCP probe adapter for local workload readiness.
@@ -128,6 +141,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) mesh_backend: Mutex<Option<MeshBackendType>>,
     pub(crate) firewall_backend: Mutex<Option<FirewallBackendType>>,
     pub(crate) bridge_backend: Mutex<Option<BridgeBackendType>>,
+    pub(crate) workload_network_mode: WorkloadNetworkMode,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) artifact_store: Arc<dyn ArtifactStore>,
@@ -141,8 +155,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) host_metric_sinks: Vec<Arc<dyn HostMetricSink>>,
     pub(crate) stats_reader: Arc<dyn CgroupStatsReader>,
     pub(crate) network_stats_reader: Arc<dyn WorkloadNetworkStatsReader>,
-    pub(crate) host_stats_reader: Arc<dyn HostStatsReader>,
-    pub(crate) host_disk_reader: Arc<dyn HostDiskReader>,
+    pub(crate) host_telemetry: HostTelemetryDependencies,
     pub(crate) network_provider: Arc<dyn NetworkProvider>,
     pub(crate) health_prober: Arc<dyn HealthProber>,
     pub(crate) volatile_root: PathBuf,
@@ -178,6 +191,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             mesh_backend: Mutex::new(Some(dependencies.mesh_backend)),
             firewall_backend: Mutex::new(Some(dependencies.firewall_backend)),
             bridge_backend: Mutex::new(Some(dependencies.bridge_backend)),
+            workload_network_mode: dependencies.workload_network_mode,
             dns_server_binder: dependencies.dns_server_binder,
             workload_runtime: dependencies.workload_runtime,
             artifact_store: dependencies.artifact_store,
@@ -191,8 +205,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             host_metric_sinks: dependencies.host_metric_sinks,
             stats_reader: dependencies.stats_reader,
             network_stats_reader: dependencies.network_stats_reader,
-            host_stats_reader: dependencies.host_stats_reader,
-            host_disk_reader: dependencies.host_disk_reader,
+            host_telemetry: dependencies.host_telemetry,
             network_provider: dependencies.network_provider,
             health_prober: dependencies.health_prober,
             volatile_root: dependencies.volatile_root,

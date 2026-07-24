@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use kernel_api::NodeSpec;
+use kernel_api::{NodeSpec, WorkloadNetworkMode};
 use kernel_store::Store;
 use logs::{LogStore, OtlpEnvelopeStore, OtlpLogHandler, OtlpSignalHandler, RuntimeLogPipeline};
 use metrics::{HostMetricPipeline, HostMetricStore, MetricStore, WorkloadMetricPipeline};
@@ -14,7 +14,7 @@ use node_agent::{
 use runtime::{NetworkAddressing, NetworkCidr, NetworkSpec};
 use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
 
-use crate::control_plane::{DaemonRoleFactory, role_error};
+use crate::control_plane::{DaemonRoleFactory, HostTelemetryDependencies, role_error};
 use crate::{DaemonPlan, RoleError, RoleSpec};
 
 pub(crate) fn build_node_registry_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
@@ -37,7 +37,7 @@ pub(crate) fn build_node_registry_agent<MeshBackendType, FirewallBackendType, Br
                 hostname: node.hostname.clone(),
                 host_address: node.endpoint.host_address.into(),
                 role: node.role,
-                workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
+                workload_network_mode: factory.workload_network_mode,
                 scheduling_labels: Default::default(),
             },
             instance_id: factory.instance_id().clone(),
@@ -90,21 +90,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         .nodes
         .get(&spec.node_id)
         .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
-    let gateway = node.workload_subnet.gateway_address().ok_or_else(|| {
-        RoleError::new("local workload subnet has no usable workload bridge gateway")
-    })?;
-    let network = NetworkSpec {
-        name: WORKLOAD_BRIDGE_NAME.to_owned(),
-        addressing: NetworkAddressing::Managed {
-            range: NetworkCidr::new(
-                IpAddr::V4(node.workload_subnet.network_address()),
-                node.workload_subnet.prefix(),
-            )
-            .map_err(|error| role_error("build workload network range", error))?,
-            gateway: IpAddr::V4(gateway),
-        },
-        mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
-    };
+    let network = assignment_network(node, factory.workload_network_mode)?;
     AssignmentAgent::new(
         store.clone(),
         factory.workload_runtime.clone(),
@@ -112,8 +98,8 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         AssignmentAgentSettings {
             cluster_id: plan.cluster().cluster_id.clone(),
             node_id: spec.node_id.clone(),
-            network,
-            dns_server: Some(IpAddr::V4(gateway)),
+            network: network.spec,
+            dns_server: network.dns_server,
             stop_timeout: factory.settings.workload_stop_timeout,
             resync_interval: factory.settings.assignment_resync_interval,
             restart_backoff_base: factory.settings.restart_backoff_base,
@@ -148,6 +134,47 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         factory.status_clock.clone(),
     )
     .map_err(|error| role_error("construct assignment agent", error))
+}
+
+struct AssignmentNetwork {
+    spec: NetworkSpec,
+    dns_server: Option<IpAddr>,
+}
+
+fn assignment_network(
+    node: &cluster::NodeDefinition,
+    mode: WorkloadNetworkMode,
+) -> Result<AssignmentNetwork, RoleError> {
+    match mode {
+        WorkloadNetworkMode::ClusterRouted => {
+            let gateway = node.workload_subnet.gateway_address().ok_or_else(|| {
+                RoleError::new("local workload subnet has no usable workload bridge gateway")
+            })?;
+            Ok(AssignmentNetwork {
+                spec: NetworkSpec {
+                    name: WORKLOAD_BRIDGE_NAME.to_owned(),
+                    addressing: NetworkAddressing::Managed {
+                        range: NetworkCidr::new(
+                            IpAddr::V4(node.workload_subnet.network_address()),
+                            node.workload_subnet.prefix(),
+                        )
+                        .map_err(|error| role_error("build workload network range", error))?,
+                        gateway: IpAddr::V4(gateway),
+                    },
+                    mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
+                },
+                dns_server: Some(IpAddr::V4(gateway)),
+            })
+        }
+        WorkloadNetworkMode::RuntimeDelegated => Ok(AssignmentNetwork {
+            spec: NetworkSpec {
+                name: WORKLOAD_BRIDGE_NAME.to_owned(),
+                addressing: NetworkAddressing::Delegated,
+                mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
+            },
+            dns_server: None,
+        }),
+    }
 }
 
 pub(crate) fn build_health_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
@@ -225,10 +252,17 @@ pub(crate) fn build_host_telemetry_agent<
     plan: &DaemonPlan,
     spec: &RoleSpec,
     store: Arc<dyn HostMetricStore>,
-) -> Result<HostTelemetryAgent, RoleError> {
+) -> Result<Option<HostTelemetryAgent>, RoleError> {
+    let HostTelemetryDependencies::Available {
+        resource_reader,
+        disk_reader,
+    } = &factory.host_telemetry
+    else {
+        return Ok(None);
+    };
     HostTelemetryAgent::new(
-        factory.host_stats_reader.clone(),
-        factory.host_disk_reader.clone(),
+        resource_reader.clone(),
+        disk_reader.clone(),
         Arc::new(HostMetricPipeline::new(store)),
         HostTelemetrySettings {
             cluster_id: plan.cluster().cluster_id.clone(),
@@ -238,5 +272,6 @@ pub(crate) fn build_host_telemetry_agent<
         factory.status_clock.clone(),
         factory.monotonic_clock.clone(),
     )
+    .map(Some)
     .map_err(|error| role_error("construct host telemetry agent", error))
 }

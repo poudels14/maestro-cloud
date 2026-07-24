@@ -43,7 +43,8 @@ use tokio::sync::{Notify, watch};
 
 use crate::{
     AdmissionDependencies, AgentStore, Daemon, DaemonPlan, DaemonRoleDependencies,
-    DaemonRoleFactory, DaemonRoleSettings, LeaderWorkload, OperatorSettings, RoleError,
+    DaemonRoleFactory, DaemonRoleSettings, HostTelemetryDependencies, LeaderWorkload,
+    OperatorSettings, RoleError,
 };
 
 use super::build_backend::FakeBuildBackend;
@@ -113,6 +114,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .get(&NodeId::new("master")?)
             .ok_or("master topology missing")?
             .workload_subnet,
+        kernel_api::WorkloadNetworkMode::ClusterRouted,
         Some(WorkloadUserSpec {
             user_id: std::fs::metadata(directory.path())?.uid(),
             group_id: std::fs::metadata(directory.path())?.gid(),
@@ -132,6 +134,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             bridge_backend: RecordingBridgeBackend {
                 applications: bridge_applications.clone(),
             },
+            workload_network_mode: kernel_api::WorkloadNetworkMode::ClusterRouted,
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: dns_bindings.clone(),
             }),
@@ -148,8 +151,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             host_metric_sinks: vec![host_metric_delivery_sink.clone()],
             stats_reader: Arc::new(FixedStatsReader),
             network_stats_reader: Arc::new(FixedNetworkStatsReader),
-            host_stats_reader: Arc::new(FixedHostStatsReader),
-            host_disk_reader: Arc::new(FixedHostDiskReader),
+            host_telemetry: HostTelemetryDependencies::Available {
+                resource_reader: Arc::new(FixedHostStatsReader),
+                disk_reader: Arc::new(FixedHostDiskReader),
+            },
             network_provider: network_provider.clone(),
             health_prober: Arc::new(RecordingHealthProber {
                 targets: health_targets.clone(),
