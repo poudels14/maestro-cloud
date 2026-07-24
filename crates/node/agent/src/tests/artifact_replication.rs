@@ -126,7 +126,8 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
             DeploymentPhase::Terminated,
             Some("sha256:latest"),
         )?,
-        image_deployment("registry", 4, "registry.test/api@sha256:external")?,
+        registry_build_deployment("registry-build", 4, "registry.test/api@sha256:built")?,
+        image_deployment("registry", 5, "registry.test/api@sha256:external")?,
     ];
     assert_eq!(
         retained_digests(&deployments)?,
@@ -140,6 +141,7 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
         BTreeSet::from([
             ArtifactDigest::new("sha256:active")?,
             ArtifactDigest::new("sha256:latest")?,
+            ArtifactDigest::new("registry.test/api@sha256:built")?,
             ArtifactDigest::new("registry.test/api@sha256:external")?,
         ])
     );
@@ -274,6 +276,7 @@ fn deployment(
                     },
                     dockerfile: "Dockerfile".to_owned(),
                     watch: false,
+                    registry: None,
                     environment: BTreeMap::new(),
                     secrets: BTreeMap::new(),
                 },
@@ -301,6 +304,18 @@ fn image_deployment(
     deployment.spec.service = service(ArtifactTemplate::Image {
         reference: digest.to_owned(),
     })?;
+    Ok(deployment)
+}
+
+fn registry_build_deployment(
+    id: &str,
+    created_at: i64,
+    digest: &str,
+) -> Result<Deployment, kernel_api::InvalidIdentifier> {
+    let mut deployment = deployment(id, created_at, DeploymentPhase::Ready, Some(digest))?;
+    if let ArtifactTemplate::Build { template } = &mut deployment.spec.service.artifact {
+        template.registry = Some("registry.test".to_owned());
+    }
     Ok(deployment)
 }
 

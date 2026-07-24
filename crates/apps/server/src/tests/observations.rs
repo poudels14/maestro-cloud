@@ -229,6 +229,7 @@ pub(super) fn build(
                 },
                 dockerfile: "Dockerfile".to_string(),
                 watch: false,
+                registry: None,
                 environment: BTreeMap::new(),
                 secrets: BTreeMap::from([(
                     "REGISTRY_PASSWORD".to_string(),

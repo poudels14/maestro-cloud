@@ -49,6 +49,12 @@ pub struct BuildTemplate {
     /// Poll the configured Git ref and roll out newly resolved commits.
     #[serde(default, skip_serializing_if = "is_false")]
     pub watch: bool,
+    /// Optional registry prefix receiving a deployment-unique immutable build.
+    ///
+    /// Absence keeps the artifact registry-free and enables Maestro peer
+    /// replication between workload nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     /// Non-secret build variables.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,

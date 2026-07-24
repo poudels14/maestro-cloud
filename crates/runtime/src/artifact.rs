@@ -62,6 +62,29 @@ impl ArtifactDigest {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Rebinds this content digest to the repository portion of a destination.
+    pub fn for_reference(&self, reference: &ArtifactReference) -> Result<Self, ArtifactStoreError> {
+        let value = reference.as_str();
+        let repository = if let Some((repository, _)) = value.rsplit_once('@') {
+            repository
+        } else {
+            let slash = value.rfind('/');
+            let colon = value.rfind(':');
+            colon
+                .filter(|colon| slash.is_none_or(|slash| *colon > slash))
+                .and_then(|colon| value.get(..colon))
+                .unwrap_or(value)
+        };
+        if repository.trim().is_empty() {
+            return Err(ArtifactStoreError::InvalidReference);
+        }
+        let content = self
+            .as_str()
+            .rsplit_once('@')
+            .map_or_else(|| self.as_str(), |(_, digest)| digest);
+        Self::new(format!("{repository}@{content}"))
+    }
 }
 
 impl TryFrom<String> for ArtifactDigest {
@@ -193,6 +216,19 @@ pub trait ArtifactStore: Send + Sync {
         digest: &ArtifactDigest,
         destination: &ArtifactReference,
     ) -> Result<(), ArtifactStoreError>;
+
+    /// Pushes a local artifact and returns its immutable remote reference.
+    ///
+    /// Backends whose local and registry manifest digests differ must override
+    /// this method and resolve the registry's committed digest.
+    async fn publish(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.push(digest, destination).await?;
+        digest.for_reference(destination)
+    }
 
     /// Resolves a local or remote reference without changing workload state.
     async fn resolve_digest(

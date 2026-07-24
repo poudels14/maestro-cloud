@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod artifact;
 mod capabilities;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_artifact;

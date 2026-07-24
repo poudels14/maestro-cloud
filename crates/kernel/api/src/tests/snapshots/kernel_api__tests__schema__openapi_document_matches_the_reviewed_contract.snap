@@ -1,5 +1,6 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
+assertion_line: 33
 expression: openapi_document()
 ---
 {
@@ -69,6 +70,11 @@ expression: openapi_document()
                 },
                 "description": "Non-secret build variables.",
                 "type": "object"
+              },
+              "registry": {
+                "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
+                "nullable": true,
+                "type": "string"
               },
               "secrets": {
                 "additionalProperties": {
@@ -464,6 +470,11 @@ expression: openapi_document()
             },
             "description": "Non-secret build variables.",
             "type": "object"
+          },
+          "registry": {
+            "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
+            "nullable": true,
+            "type": "string"
           },
           "secrets": {
             "additionalProperties": {

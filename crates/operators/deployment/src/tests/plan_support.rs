@@ -76,6 +76,7 @@ pub(super) fn build_template() -> BuildTemplate {
         },
         dockerfile: "Dockerfile".to_string(),
         watch: false,
+        registry: None,
         environment: BTreeMap::new(),
         secrets: BTreeMap::new(),
     }

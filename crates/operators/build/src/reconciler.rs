@@ -12,7 +12,9 @@ use kernel_controller::{
     RuntimeConfig, TimestampClock,
 };
 use kernel_store::{Clock, Keyspace};
-use runtime::{ArtifactBuildRequest, ArtifactStore, ArtifactStoreError};
+use runtime::{
+    ArtifactBuildRequest, ArtifactDigest, ArtifactReference, ArtifactStore, ArtifactStoreError,
+};
 
 use crate::source::{BuildSourceError, BuildSourceProvider, PreparedBuildSource};
 use crate::writer::{BuildStatusWriter, BuildWriteError};
@@ -203,7 +205,7 @@ impl BuildReconciler {
             secrets: build.spec.template.secrets.clone(),
             tags: Vec::new(),
         };
-        match self.artifacts.build(&request).await {
+        match self.build_and_publish(&build, &request).await {
             Ok(digest) => {
                 build.status.phase = BuildPhase::Succeeded;
                 build.status.image_digest = Some(digest.as_str().to_string());
@@ -226,6 +228,24 @@ impl BuildReconciler {
                     .await
             }
         }
+    }
+
+    async fn build_and_publish(
+        &self,
+        build: &Build,
+        request: &ArtifactBuildRequest,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let digest = self.artifacts.build(request).await?;
+        let Some(registry) = &build.spec.template.registry else {
+            return Ok(digest);
+        };
+        let destination = ArtifactReference::new(format!(
+            "{}/{service}:{deployment}",
+            registry.trim_end_matches('/'),
+            service = build.spec.service_id,
+            deployment = build.spec.deployment_id,
+        ))?;
+        self.artifacts.publish(&digest, &destination).await
     }
 
     async fn fail(

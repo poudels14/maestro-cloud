@@ -112,6 +112,18 @@ fn validate_artifact(artifact: &ArtifactTemplate) -> Result<(), ServiceSpecError
         }
         ArtifactTemplate::Build { template } => {
             relative_clean_path("artifact.dockerfile", &template.dockerfile)?;
+            if let Some(registry) = &template.registry {
+                nonempty_text("artifact.registry", registry)?;
+                if registry.ends_with('/')
+                    || registry.contains('@')
+                    || registry.chars().any(char::is_whitespace)
+                {
+                    return invalid(
+                        "artifact.registry",
+                        "registry prefix must not contain whitespace or `@` and must not end in `/`",
+                    );
+                }
+            }
             validate_public_environment("artifact.environment", &template.environment)?;
             validate_secret_environment("artifact.secrets", &template.secrets)?;
             match &template.source {

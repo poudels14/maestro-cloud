@@ -22,6 +22,7 @@ pub(super) fn base_service() -> Service {
                     },
                     dockerfile: "Dockerfile".to_string(),
                     watch: true,
+                    registry: None,
                     environment: BTreeMap::new(),
                     secrets: BTreeMap::new(),
                 },

@@ -79,6 +79,37 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
 }
 
 #[tokio::test]
+async fn registry_build_publishes_a_deployment_unique_immutable_reference() -> TestResult {
+    let world = TestWorld::new().await?;
+    let mut build = queued_build("Dockerfile")?;
+    build.spec.template.registry = Some("registry.example/team".to_owned());
+    world.seed(&build).await?;
+    let source = Arc::new(RecordingSource::successful("commit-abc"));
+    let artifacts = Arc::new(RecordingArtifacts::successful()?);
+    let controller = world.runtime(source, artifacts.clone())?;
+
+    assert_eq!(controller.reconcile_snapshot().await?, 0);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+
+    let succeeded = world.build().await?;
+    assert_eq!(succeeded.status.phase, BuildPhase::Succeeded);
+    assert_eq!(
+        succeeded.status.image_digest.as_deref(),
+        Some("registry.example/team/api@sha256:abc123")
+    );
+    assert_eq!(
+        artifacts.publishes(),
+        [(
+            runtime::ArtifactDigest::new("sha256:abc123")?,
+            runtime::ArtifactReference::new("registry.example/team/api:deployment-1")?,
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn permanent_source_rejection_is_recorded_as_failed() -> TestResult {
     let world = TestWorld::new().await?;
     world.seed(&queued_build("Dockerfile")?).await?;

@@ -171,6 +171,7 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
                                 repo: "https://github.com/example/api.git",
                                 branch: "main",
                                 dockerfile: "Dockerfile",
+                                registry: "registry.example/team/",
                                 env: { source: "build.env" },
                                 secrets: { source: "aws-secret://build-secrets" }
                             },
@@ -210,6 +211,7 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
         template.secrets.get("REGISTRY_TOKEN"),
         Some(&SecretValue::new("private-token"))
     );
+    assert_eq!(template.registry.as_deref(), Some("registry.example/team"));
     assert_eq!(
         desired.spec.environment.get("MODE").map(String::as_str),
         Some("fallback")

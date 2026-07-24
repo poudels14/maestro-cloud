@@ -238,6 +238,7 @@ pub(super) struct BuildConfig {
     pub(super) dockerfile: String,
     #[serde(default)]
     pub(super) watch: bool,
+    pub(super) registry: Option<String>,
     #[serde(default)]
     pub(super) env: ValueSource,
     #[serde(default)]

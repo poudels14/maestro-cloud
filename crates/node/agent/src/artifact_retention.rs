@@ -11,8 +11,8 @@ pub(crate) fn retained_digests(
     let mut latest = BTreeMap::<ServiceId, (kernel_api::Timestamp, DeploymentId)>::new();
     for deployment in deployments.iter().filter(|deployment| {
         matches!(
-            deployment.spec.service.artifact,
-            ArtifactTemplate::Build { .. }
+            &deployment.spec.service.artifact,
+            ArtifactTemplate::Build { template } if template.registry.is_none()
         ) && deployment.status.image_digest.is_some()
     }) {
         let candidate = (deployment.status.created_at, deployment.meta.id.clone());
@@ -29,8 +29,8 @@ pub(crate) fn retained_digests(
         .iter()
         .filter(|deployment| {
             matches!(
-                deployment.spec.service.artifact,
-                ArtifactTemplate::Build { .. }
+                &deployment.spec.service.artifact,
+                ArtifactTemplate::Build { template } if template.registry.is_none()
             ) && (matches!(
                 deployment.status.phase,
                 DeploymentPhase::Building

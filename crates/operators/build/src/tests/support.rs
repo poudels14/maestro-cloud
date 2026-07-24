@@ -174,6 +174,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                 },
                 dockerfile: dockerfile.to_string(),
                 watch: false,
+                registry: None,
                 environment: BTreeMap::from([("PROFILE".to_string(), "release".to_string())]),
                 secrets: BTreeMap::from([
                     (
@@ -274,6 +275,7 @@ pub(super) fn prepared(revision: &str) -> PreparedBuildSource {
 pub(super) struct RecordingArtifacts {
     result: Result<ArtifactDigest, ArtifactStoreError>,
     calls: Mutex<Vec<ArtifactBuildRequest>>,
+    publishes: Mutex<Vec<(ArtifactDigest, ArtifactReference)>>,
     race: Mutex<Option<(Arc<InMemoryStore>, kernel_store::StoreKey)>>,
 }
 
@@ -282,12 +284,17 @@ impl RecordingArtifacts {
         Ok(Self {
             result: Ok(ArtifactDigest::new("sha256:abc123")?),
             calls: Mutex::new(Vec::new()),
+            publishes: Mutex::new(Vec::new()),
             race: Mutex::new(None),
         })
     }
 
     pub(super) fn calls(&self) -> Vec<ArtifactBuildRequest> {
         lock(&self.calls).clone()
+    }
+
+    pub(super) fn publishes(&self) -> Vec<(ArtifactDigest, ArtifactReference)> {
+        lock(&self.publishes).clone()
     }
 
     pub(super) fn race_with_cancellation(
@@ -346,6 +353,15 @@ impl ArtifactStore for RecordingArtifacts {
         _destination: &ArtifactReference,
     ) -> Result<(), ArtifactStoreError> {
         Err(unused("push"))
+    }
+
+    async fn publish(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        lock(&self.publishes).push((digest.clone(), destination.clone()));
+        digest.for_reference(destination)
     }
 
     async fn resolve_digest(

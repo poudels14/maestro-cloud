@@ -186,6 +186,12 @@ maestro services up api \
   --context .
 ```
 
+Builds omit `build.registry` by default and are replicated directly between
+Maestro nodes. Set it to a registry prefix such as
+`registry.example/team` to publish a deployment-unique tag and deploy the
+registry's immutable digest; registry credentials remain a node-runtime
+responsibility.
+
 The CLI also exposes deployment history, redeploy, in-place workload restart,
 cancel, remove, service delete, freeze/unfreeze, and replica override commands.
 Use `maestro services --help` for their exact optimistic-concurrency and

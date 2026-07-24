@@ -126,8 +126,8 @@ impl AssignmentAgent {
         dns_server: Option<std::net::IpAddr>,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
         if matches!(
-            deployment.spec.service.artifact,
-            ArtifactTemplate::Build { .. }
+            &deployment.spec.service.artifact,
+            ArtifactTemplate::Build { template } if template.registry.is_none()
         ) && let Some(replication) = self.artifact_replication.as_ref()
         {
             let digest = deployment.status.image_digest.as_deref().ok_or_else(|| {

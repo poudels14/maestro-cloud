@@ -388,6 +388,7 @@ fn build_service() -> Service {
             },
             dockerfile: "Dockerfile".to_string(),
             watch: false,
+            registry: None,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },

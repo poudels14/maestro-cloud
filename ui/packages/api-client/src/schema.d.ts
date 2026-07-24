@@ -1329,6 +1329,13 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /**
+             * @description Optional registry prefix receiving a deployment-unique immutable build.
+             *
+             *     Absence keeps the artifact registry-free and enables Maestro peer
+             *     replication between workload nodes.
+             */
+            registry?: string | null;
             /** @description Secret build variables that are redacted from debug output. */
             secrets?: {
                 [key: string]: components["schemas"]["SecretValue"];
@@ -1466,6 +1473,13 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /**
+             * @description Optional registry prefix receiving a deployment-unique immutable build.
+             *
+             *     Absence keeps the artifact registry-free and enables Maestro peer
+             *     replication between workload nodes.
+             */
+            registry?: string | null;
             /** @description Secret build variables that are redacted from debug output. */
             secrets?: {
                 [key: string]: components["schemas"]["SecretValue"];

@@ -116,6 +116,32 @@ impl ArtifactStore for DockerRuntime {
         .await
     }
 
+    async fn publish(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.push(digest, destination).await?;
+        let remote = self
+            .client
+            .inspect_registry_image(destination.as_str(), None)
+            .await
+            .map_err(|error| {
+                operation_error("resolve pushed", Some(destination.as_str()), error)
+            })?;
+        let digest = remote
+            .descriptor
+            .digest
+            .filter(|digest| !digest.trim().is_empty())
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: format!(
+                    "Docker registry inspection for `{}` omitted the pushed digest",
+                    destination.as_str()
+                ),
+            })?;
+        ArtifactDigest::new(digest)?.for_reference(destination)
+    }
+
     async fn resolve_digest(
         &self,
         reference: &ArtifactReference,

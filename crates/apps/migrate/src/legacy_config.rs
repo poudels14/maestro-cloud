@@ -144,13 +144,6 @@ fn convert_build(
     data: &LegacyDeploymentData,
     pinned_revision: Option<&str>,
 ) -> Result<ArtifactTemplate, LegacyPlanError> {
-    if let Some(registry) = &build.registry {
-        return Err(unsupported(
-            service_id,
-            "build.registry",
-            format!("per-service registry `{registry}` has no native resource yet"),
-        ));
-    }
     if let Some(depot) = &build.depot {
         return Err(unsupported(
             service_id,
@@ -184,6 +177,16 @@ fn convert_build(
     .into_iter()
     .map(|(key, value)| (key, SecretValue::new(value)))
     .collect();
+    let registry = build
+        .registry
+        .as_deref()
+        .map(str::trim)
+        .map(|registry| registry.trim_end_matches('/'))
+        .filter(|registry| !registry.is_empty())
+        .map(str::to_owned);
+    if build.registry.is_some() && registry.is_none() {
+        return Err(invalid(service_id, "build.registry cannot be empty"));
+    }
     Ok(ArtifactTemplate::Build {
         template: BuildTemplate {
             source: BuildSource::Git {
@@ -195,6 +198,7 @@ fn convert_build(
             },
             dockerfile: build.dockerfile.clone(),
             watch: build.watch,
+            registry,
             environment,
             secrets,
         },

@@ -311,6 +311,20 @@ async fn convert_build(
             BuildSource::Tarball { archive_id }
         }
     };
+    let registry = match build.registry.as_deref() {
+        Some(registry) => {
+            let registry = required_text(&format!("{service_path}.build.registry"), registry)?;
+            let registry = registry.trim_end_matches('/');
+            if registry.is_empty() {
+                return Err(invalid(
+                    &format!("{service_path}.build.registry"),
+                    "cannot contain only `/`",
+                ));
+            }
+            Some(registry.to_owned())
+        }
+        None => None,
+    };
     Ok(BuildTemplate {
         source,
         dockerfile: required_text(
@@ -318,6 +332,7 @@ async fn convert_build(
             &build.dockerfile,
         )?,
         watch: build.watch,
+        registry,
         environment,
         secrets,
     })

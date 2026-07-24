@@ -223,6 +223,7 @@ fn service_spec(revision: &str) -> ServiceSpec {
                 },
                 dockerfile: "Dockerfile".to_string(),
                 watch: true,
+                registry: None,
                 environment: BTreeMap::new(),
                 secrets: BTreeMap::from([(
                     "GH_TOKEN".to_owned(),

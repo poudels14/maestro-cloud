@@ -77,6 +77,7 @@ fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
             },
             dockerfile: "Dockerfile".to_string(),
             watch: false,
+            registry: None,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },
@@ -172,6 +173,23 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             },
             dockerfile: "../Dockerfile".to_string(),
             watch: false,
+            registry: None,
+            environment: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+        },
+    };
+    assert!(spec.validate().is_err());
+
+    let mut spec = valid_service_spec();
+    spec.artifact = ArtifactTemplate::Build {
+        template: BuildTemplate {
+            source: BuildSource::Git {
+                repository: "https://example.test/repo.git".to_string(),
+                revision: "main".to_string(),
+            },
+            dockerfile: "Dockerfile".to_string(),
+            watch: false,
+            registry: Some("registry.example/team/".to_string()),
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },
