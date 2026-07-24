@@ -9,7 +9,7 @@ use node_agent::{
     AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
     HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, NodeApiServices,
     NodeRegistryAgent, NodeRegistrySettings, RuntimeLogAgent, RuntimeLogAgentSettings,
-    WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
+    StoreNodeControlHandler, WORKLOAD_BRIDGE_NAME, WorkloadStatsAgent, WorkloadStatsSettings,
 };
 use runtime::{NetworkCidr, NetworkSpec};
 use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
@@ -102,7 +102,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         mtu_bytes: cluster::WIREGUARD_MTU_BYTES,
     };
     AssignmentAgent::new(
-        store,
+        store.clone(),
         factory.workload_runtime.clone(),
         factory.network_provider.clone(),
         AssignmentAgentSettings {
@@ -118,13 +118,18 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             node_api_root: factory.volatile_root.join("node-api"),
         },
         #[cfg(unix)]
-        Some(NodeApiServices::with_log_ingest(Arc::new(
-            OtlpLogHandler::new(
+        Some(
+            NodeApiServices::with_log_ingest(Arc::new(OtlpLogHandler::new(
                 plan.cluster().cluster_id.clone(),
                 log_store,
                 factory.status_clock.clone(),
-            ),
-        ))),
+            )))
+            .with_control(Arc::new(StoreNodeControlHandler::new(
+                store.clone(),
+                &plan.cluster().cluster_id,
+                factory.status_clock.clone(),
+            ))),
+        ),
         factory.monotonic_clock.clone(),
         factory.status_clock.clone(),
     )

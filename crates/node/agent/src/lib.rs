@@ -55,6 +55,8 @@ mod node_api;
 mod node_api_files;
 #[cfg(unix)]
 mod node_api_mount;
+#[cfg(unix)]
+mod node_control;
 mod node_registry;
 mod secret_mount;
 #[cfg(target_os = "linux")]
@@ -140,6 +142,8 @@ pub use node_api::{
 };
 #[cfg(unix)]
 pub use node_api_files::NodeApiMountError;
+#[cfg(unix)]
+pub use node_control::StoreNodeControlHandler;
 pub use node_registry::{
     NodeRegistration, NodeRegistryAction, NodeRegistryAgent, NodeRegistryError,
     NodeRegistrySettings, NodeRegistrySettingsError,

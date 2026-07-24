@@ -3863,6 +3863,7 @@ dependencies = [
  "hickory-server",
  "insta",
  "kernel-api",
+ "kernel-controller",
  "kernel-store",
  "libc",
  "netlink-packet-route 0.30.0",

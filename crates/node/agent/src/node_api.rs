@@ -102,6 +102,12 @@ impl NodeApiServices {
             traces: unavailable,
         }
     }
+
+    /// Attaches the privileged mutation handler used when a workload's access policy permits it.
+    pub fn with_control(mut self, control: Arc<dyn NodeControlHandler>) -> Self {
+        self.control = control;
+        self
+    }
 }
 
 #[derive(Debug)]
