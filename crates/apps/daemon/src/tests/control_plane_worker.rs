@@ -74,6 +74,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: dns_bindings.clone(),
             }),
+            dns_plugin_settings: None,
             workload_runtime: workload_runtime.clone(),
             artifact_store: Arc::new(FakeBuildBackend::default()) as Arc<dyn ArtifactStore>,
             artifact_archives: Arc::new(LocalBuildSourceProvider::new(

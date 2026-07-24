@@ -1,4 +1,7 @@
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
+
+use kernel_api::ClusterId;
 
 use crate::CliError;
 use crate::config::{ConfigKind, init, load_cluster, validate};
@@ -212,7 +215,11 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_rout
             tailscale: {
                 "auth-key": "aws-secret://tailscale-auth",
                 "advertise-routes": null,
-                replicas: 1
+                replicas: 1,
+                "cross-cluster-dns": [{
+                    "cluster-id": "remote",
+                    nameservers: ["172.23.1.1", "172.23.2.1"]
+                }]
             },
             node: "node-1""#,
     );
@@ -237,6 +244,15 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_rout
         ["172.22.0.0/16".parse()?]
     );
     assert_eq!(tailscale.tags, ["tag:maestro-gateway"]);
+    let route = tailscale
+        .cross_cluster_dns
+        .first()
+        .ok_or("cross-cluster DNS route missing")?;
+    assert_eq!(route.cluster_id, ClusterId::new("remote")?);
+    assert_eq!(
+        route.nameservers,
+        [Ipv4Addr::new(172, 23, 1, 1), Ipv4Addr::new(172, 23, 2, 1)]
+    );
     Ok(())
 }
 

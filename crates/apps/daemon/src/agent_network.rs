@@ -47,6 +47,10 @@ where
                 build_firewall_agent(factory, plan, spec, store.clone(), firewall_backend)?;
             let resolver = AuthoritativeDnsResolver::new()
                 .map_err(|error| role_error("construct authoritative DNS resolver", error))?;
+            let resolver = match &factory.dns_plugin_settings {
+                Some(settings) => settings.attach(resolver),
+                None => resolver,
+            };
             let dns = DnsResourceAgent::new(
                 store,
                 &plan.cluster().cluster_id,

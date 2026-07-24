@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use cluster::{
-    ClusterConfig, ClusterPorts, ClusterPreflightError, DEFAULT_WIREGUARD_PORT, Ipv4Cidr,
-    NodeDefinition, NodeEndpoint, TailscaleConfigError, TailscaleGatewayConfig,
+    ClusterConfig, ClusterPorts, ClusterPreflightError, CrossClusterDnsRoute,
+    DEFAULT_WIREGUARD_PORT, Ipv4Cidr, NodeDefinition, NodeEndpoint, TailscaleConfigError,
+    TailscaleGatewayConfig,
 };
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 use serde::Deserialize;
@@ -131,11 +132,41 @@ async fn convert_tailscale(
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
+    let cross_cluster_dns = input
+        .cross_cluster_dns
+        .into_iter()
+        .enumerate()
+        .map(|(route_index, route)| {
+            let cluster_path = format!("tailscale.cross-cluster-dns[{route_index}].cluster-id");
+            let cluster_id = ClusterId::new(required(&cluster_path, route.cluster_id)?)
+                .map_err(|error| invalid(&cluster_path, error))?;
+            let nameservers = route
+                .nameservers
+                .into_iter()
+                .enumerate()
+                .map(|(nameserver_index, nameserver)| {
+                    nameserver.parse::<Ipv4Addr>().map_err(|error| {
+                        invalid(
+                            &format!(
+                                "tailscale.cross-cluster-dns[{route_index}].nameservers[{nameserver_index}]"
+                            ),
+                            error,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(CrossClusterDnsRoute {
+                cluster_id,
+                nameservers,
+            })
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
     Ok(Some(TailscaleGatewayConfig {
         auth_key: SecretValue::new(auth_key),
         advertise_routes,
         replicas: input.replicas,
         tags: input.tags,
+        cross_cluster_dns,
     }))
 }
 
@@ -273,6 +304,23 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
             | TailscaleConfigError::DuplicateTag { index, .. } => {
                 format!("tailscale.tags[{index}]")
             }
+            TailscaleConfigError::LocalDnsRoute { route_index }
+            | TailscaleConfigError::DuplicateDnsRoute { route_index, .. }
+            | TailscaleConfigError::EmptyDnsNameservers { route_index } => {
+                format!("tailscale.cross-cluster-dns[{route_index}]")
+            }
+            TailscaleConfigError::UnsafeDnsNameserver {
+                route_index,
+                nameserver_index,
+                ..
+            }
+            | TailscaleConfigError::DuplicateDnsNameserver {
+                route_index,
+                nameserver_index,
+                ..
+            } => format!(
+                "tailscale.cross-cluster-dns[{route_index}].nameservers[{nameserver_index}]"
+            ),
         },
     };
     invalid(&path, detail)
@@ -312,6 +360,15 @@ struct TailscaleInput {
     replicas: u32,
     #[serde(default = "default_tailscale_tags")]
     tags: Vec<String>,
+    #[serde(default)]
+    cross_cluster_dns: Vec<CrossClusterDnsInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct CrossClusterDnsInput {
+    cluster_id: String,
+    nameservers: Vec<String>,
 }
 
 const fn default_tailscale_replicas() -> u32 {

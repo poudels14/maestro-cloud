@@ -6,7 +6,7 @@ use kernel_api::{ClusterId, NodeId, SecretValue};
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, BoundDnsServer, DnsResourceAgent,
-    DnsServerSettings,
+    DnsServerSettings, TailscaleDnsPluginSettings,
 };
 use tokio::sync::watch;
 
@@ -31,6 +31,8 @@ pub struct DnsResolverLaunchConfig {
     pub port: u16,
     /// Periodic full-snapshot interval in addition to store watches.
     pub resync_interval: Duration,
+    /// Optional scoped forwarding through managed Tailscale gateway workloads.
+    pub dns_plugin_settings: Option<TailscaleDnsPluginSettings>,
 }
 
 impl DnsResolverLaunchConfig {
@@ -94,6 +96,10 @@ pub async fn run_dns_resolver(
         EtcdStore::connect_with_tls_and_encryption(config.endpoints, tls, encryption_key).await?,
     ) as Arc<dyn Store>;
     let resolver = AuthoritativeDnsResolver::new()?;
+    let resolver = match &config.dns_plugin_settings {
+        Some(settings) => settings.attach(resolver),
+        None => resolver,
+    };
     let agent = DnsResourceAgent::new(
         store,
         &config.cluster_id,

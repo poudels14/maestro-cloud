@@ -4,9 +4,9 @@ use std::net::Ipv4Addr;
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
 use crate::{
-    ClusterConfig, ClusterPorts, ClusterPreflightError, DEFAULT_WIREGUARD_PORT, Ipv4Cidr,
-    NodeDefinition, NodeEndpoint, TailscaleAuthKeyRecord, TailscaleConfigError,
-    TailscaleGatewayConfig,
+    ClusterConfig, ClusterPorts, ClusterPreflightError, CrossClusterDnsRoute,
+    DEFAULT_WIREGUARD_PORT, Ipv4Cidr, NodeDefinition, NodeEndpoint, TailscaleAuthKeyRecord,
+    TailscaleConfigError, TailscaleGatewayConfig,
 };
 
 #[test]
@@ -129,6 +129,7 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
         advertise_routes: None,
         replicas: 2,
         tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: Vec::new(),
     });
     config.preflight()?;
 
@@ -182,6 +183,31 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
         config.preflight(),
         Err(ClusterPreflightError::InvalidTailscale(
             TailscaleConfigError::InvalidTag { index: 0, .. }
+        ))
+    ));
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
+    tailscale.tags = vec!["tag:maestro-gateway".to_owned()];
+    tailscale.cross_cluster_dns = vec![CrossClusterDnsRoute {
+        cluster_id: ClusterId::new("remote")?,
+        nameservers: vec![Ipv4Addr::new(172, 23, 1, 1)],
+    }];
+    config.preflight()?;
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
+    tailscale
+        .cross_cluster_dns
+        .first_mut()
+        .ok_or("cross-cluster DNS route missing")?
+        .nameservers = vec![Ipv4Addr::new(172, 22, 1, 1)];
+    assert!(matches!(
+        config.preflight(),
+        Err(ClusterPreflightError::InvalidTailscale(
+            TailscaleConfigError::UnsafeDnsNameserver {
+                route_index: 0,
+                nameserver_index: 0,
+                ..
+            }
         ))
     ));
     Ok(())

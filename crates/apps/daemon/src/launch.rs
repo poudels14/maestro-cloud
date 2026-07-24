@@ -17,7 +17,7 @@ use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
 use node_agent::{
     CgroupV2StatsReader, HickoryDnsServerBinder, MeshIdentity, NetworkHealthProber,
-    SystemStatusClock,
+    SystemStatusClock, TailscaleDnsPluginSettings, TailscaleDnsRoute,
 };
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use node_agent::{
@@ -76,6 +76,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         nixos_upgrade,
     } = config;
     let known_members = control_plane_members(&cluster);
+    let dns_plugin_settings = dns_plugin_settings(&cluster)?;
     let clock = Arc::new(TokioClock::new());
     let local_node = cluster
         .nodes
@@ -308,6 +309,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             workload_network_mode,
             system_host_ports,
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
+            dns_plugin_settings,
             workload_runtime: runtime.clone(),
             artifact_store: runtime.clone(),
             artifact_archives: build_source,
@@ -340,6 +342,24 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         factory = factory.with_admission_dependencies(admission);
     }
     Daemon::new(plan, factory).start().await.map_err(Into::into)
+}
+
+fn dns_plugin_settings(
+    cluster: &ClusterConfig,
+) -> Result<Option<TailscaleDnsPluginSettings>, DaemonLaunchError> {
+    let routes = cluster
+        .tailscale
+        .iter()
+        .flat_map(|tailscale| &tailscale.cross_cluster_dns)
+        .map(|route| TailscaleDnsRoute::new(route.cluster_id.clone(), route.nameservers.clone()))
+        .collect::<Vec<_>>();
+    if routes.is_empty() {
+        Ok(None)
+    } else {
+        TailscaleDnsPluginSettings::new(cluster.cluster_id.clone(), routes, Duration::from_secs(5))
+            .map(Some)
+            .map_err(|error| invalid(format!("invalid cross-cluster DNS settings: {error}")))
+    }
 }
 
 fn api_settings(

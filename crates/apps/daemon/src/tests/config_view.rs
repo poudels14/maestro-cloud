@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use cluster::{
-    ClusterConfig, ClusterPorts, Ipv4Cidr, NodeDefinition, NodeEndpoint, TailscaleGatewayConfig,
+    ClusterConfig, ClusterPorts, CrossClusterDnsRoute, Ipv4Cidr, NodeDefinition, NodeEndpoint,
+    TailscaleGatewayConfig,
 };
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
 
@@ -39,6 +40,10 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
             advertise_routes: None,
             replicas: 1,
             tags: vec!["tag:maestro-gateway".to_owned()],
+            cross_cluster_dns: vec![CrossClusterDnsRoute {
+                cluster_id: ClusterId::new("remote")?,
+                nameservers: vec![Ipv4Addr::new(172, 23, 1, 1)],
+            }],
         }),
     };
 
@@ -48,5 +53,8 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
     assert!(encoded.contains("node-a.internal"));
     assert!(encoded.contains("\"advertiseRoutes\":[\"172.22.0.0/16\"]"));
     assert!(encoded.contains("\"dnsNameservers\":[\"172.22.1.1\"]"));
+    assert!(encoded.contains(
+        "\"crossClusterDns\":[{\"clusterId\":\"remote\",\"nameservers\":[\"172.23.1.1\"]}]"
+    ));
     Ok(())
 }

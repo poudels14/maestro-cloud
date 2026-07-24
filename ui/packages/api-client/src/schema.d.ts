@@ -1997,10 +1997,19 @@ export interface components {
              */
             wireguard: number;
         };
+        /** @description Secret-free view of one scoped remote DNS route. */
+        MaskedCrossClusterDnsRoute: {
+            /** @description Remote cluster identity embedded in its authoritative DNS suffix. */
+            clusterId: components["schemas"]["ClusterId"];
+            /** @description Remote bridge resolver addresses reachable through Tailscale. */
+            nameservers: string[];
+        };
         /** @description Secret-free view of the managed Tailscale gateway fleet. */
         MaskedTailscaleConfig: {
             /** @description Effective routes advertised to the tailnet. */
             advertiseRoutes: string[];
+            /** @description Explicit remote cluster suffixes forwarded through the managed gateways. */
+            crossClusterDns: components["schemas"]["MaskedCrossClusterDnsRoute"][];
             /** @description Cluster bridge resolvers reachable through the advertised routes. */
             dnsNameservers: string[];
             /**

@@ -14,6 +14,7 @@ const GATEWAY_SERVICE_ID: &str = "maestro-system-tailscale-gateway";
 const GATEWAY_POLICY_ID: &str = "maestro-system-tailscale-egress";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "tailscale-gateway";
+const TAILSCALE_SOCKS_PORT: u16 = 1_055;
 pub(crate) const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f";
 const TAILSCALE_VERSION: &str = "tailscale-1.98.8";
 pub(crate) const AUTH_SCRIPT: &str = "if [ ! -s /state/tailscaled.state ]; then\n  set -a\n  . /run/secrets/tailscale.env\n  set +a\nfi\nexec /usr/local/bin/containerboot";
@@ -46,11 +47,15 @@ impl TailscaleSystemResources {
             ("TS_ENABLE_HEALTH_CHECK".to_owned(), "true".to_owned()),
             (
                 "TS_EXTRA_ARGS".to_owned(),
-                format!("--advertise-tags={}", config.tags.join(",")),
+                format!("--accept-routes --advertise-tags={}", config.tags.join(",")),
             ),
             ("TS_KUBE_SECRET".to_owned(), String::new()),
             ("TS_LOCAL_ADDR_PORT".to_owned(), ":9002".to_owned()),
             ("TS_ROUTES".to_owned(), routes.join(",")),
+            (
+                "TS_SOCKS5_SERVER".to_owned(),
+                format!(":{TAILSCALE_SOCKS_PORT}"),
+            ),
             ("TS_STATE_DIR".to_owned(), "/state".to_owned()),
             ("TS_USERSPACE".to_owned(), "true".to_owned()),
         ]);
@@ -78,7 +83,7 @@ impl TailscaleSystemResources {
                     arguments: vec!["-ceu".to_owned(), AUTH_SCRIPT.to_owned()],
                 }),
                 replicas: config.replicas,
-                exposed_ports: vec![9_002],
+                exposed_ports: vec![TAILSCALE_SOCKS_PORT, 9_002],
                 health_check: Some(HealthCheckSpec {
                     probe: HealthProbe::Http {
                         port: 9_002,

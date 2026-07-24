@@ -46,7 +46,7 @@ impl TailscaleDnsRoute {
 }
 
 /// Explicit cross-cluster forwarding through managed Tailscale SOCKS gateways.
-pub struct TailscaleDnsResolverPlugin {
+pub(crate) struct TailscaleDnsResolverPlugin {
     zone: DnsZoneReader,
     gateway_name: String,
     routes: Vec<TailscaleDnsRoute>,
@@ -54,29 +54,20 @@ pub struct TailscaleDnsResolverPlugin {
     client: Arc<dyn DnsForwardClient>,
 }
 
-impl TailscaleDnsResolverPlugin {
-    /// Constructs a scoped forwarder; it cannot resolve names outside declared cluster suffixes.
-    pub fn new(
-        zone: DnsZoneReader,
-        local_cluster_id: &ClusterId,
-        routes: Vec<TailscaleDnsRoute>,
-        timeout: Duration,
-    ) -> Result<Self, DnsResolverPluginError> {
-        Self::with_client(
-            zone,
-            local_cluster_id,
-            routes,
-            timeout,
-            Arc::new(Socks5DnsForwardClient::default()),
-        )
-    }
+/// Validated node-local view of optional cross-cluster DNS configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TailscaleDnsPluginSettings {
+    local_cluster_id: ClusterId,
+    routes: Vec<TailscaleDnsRoute>,
+    timeout: Duration,
+}
 
-    pub(crate) fn with_client(
-        zone: DnsZoneReader,
-        local_cluster_id: &ClusterId,
+impl TailscaleDnsPluginSettings {
+    /// Validates suffix ownership, nameserver safety, and a bounded lookup timeout.
+    pub fn new(
+        local_cluster_id: ClusterId,
         routes: Vec<TailscaleDnsRoute>,
         timeout: Duration,
-        client: Arc<dyn DnsForwardClient>,
     ) -> Result<Self, DnsResolverPluginError> {
         if routes.is_empty() {
             return Err(DnsResolverPluginError::new(
@@ -88,17 +79,45 @@ impl TailscaleDnsResolverPlugin {
                 "cross-cluster DNS timeout must be nonzero",
             ));
         }
-        validate_routes(local_cluster_id, &routes)?;
+        validate_routes(&local_cluster_id, &routes)?;
         Ok(Self {
+            local_cluster_id,
+            routes,
+            timeout,
+        })
+    }
+
+    /// Attaches the configured plugin to one local authoritative resolver.
+    pub fn attach(
+        &self,
+        resolver: crate::AuthoritativeDnsResolver,
+    ) -> crate::AuthoritativeDnsResolver {
+        let plugin = TailscaleDnsResolverPlugin::with_client(
+            resolver.zone_reader(),
+            &self.local_cluster_id,
+            self.routes.clone(),
+            self.timeout,
+            Arc::new(Socks5DnsForwardClient::default()),
+        );
+        resolver.with_plugin(Arc::new(plugin))
+    }
+}
+
+impl TailscaleDnsResolverPlugin {
+    pub(crate) fn with_client(
+        zone: DnsZoneReader,
+        local_cluster_id: &ClusterId,
+        routes: Vec<TailscaleDnsRoute>,
+        timeout: Duration,
+        client: Arc<dyn DnsForwardClient>,
+    ) -> Self {
+        Self {
             zone,
-            gateway_name: format!(
-                "{GATEWAY_SERVICE_ID}.{}.{MAESTRO_DNS_ZONE}",
-                local_cluster_id
-            ),
+            gateway_name: gateway_name(local_cluster_id),
             routes,
             timeout,
             client,
-        })
+        }
     }
 
     async fn proxy_addresses(&self) -> Result<Vec<SocketAddr>, DnsResolverPluginError> {
@@ -131,6 +150,10 @@ impl TailscaleDnsResolverPlugin {
             name == domain || name.ends_with(&format!(".{domain}"))
         })
     }
+}
+
+fn gateway_name(local_cluster_id: &ClusterId) -> String {
+    format!("{GATEWAY_SERVICE_ID}.{local_cluster_id}.{MAESTRO_DNS_ZONE}")
 }
 
 fn validate_routes(

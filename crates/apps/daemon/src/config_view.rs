@@ -1,7 +1,7 @@
 use cluster::ClusterConfig;
 use kernel_api::{
-    MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedTailscaleConfig,
-    NodeId,
+    MaskedClusterConfig, MaskedClusterConfigNode, MaskedClusterConfigPorts,
+    MaskedCrossClusterDnsRoute, MaskedTailscaleConfig, NodeId,
 };
 
 pub(crate) fn masked_cluster_config(
@@ -52,6 +52,14 @@ pub(crate) fn masked_cluster_config(
                     .collect(),
                 replicas: tailscale.replicas,
                 tags: tailscale.tags.clone(),
+                cross_cluster_dns: tailscale
+                    .cross_cluster_dns
+                    .iter()
+                    .map(|route| MaskedCrossClusterDnsRoute {
+                        cluster_id: route.cluster_id.clone(),
+                        nameservers: route.nameservers.iter().map(ToString::to_string).collect(),
+                    })
+                    .collect(),
             }
         }),
     }

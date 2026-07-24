@@ -61,5 +61,6 @@ fn config() -> Result<DnsResolverLaunchConfig, kernel_api::InvalidIdentifier> {
         store_encryption_secret: PathBuf::from("/run/secrets/etcd/store-key"),
         port: 53,
         resync_interval: Duration::from_secs(30),
+        dns_plugin_settings: None,
     })
 }

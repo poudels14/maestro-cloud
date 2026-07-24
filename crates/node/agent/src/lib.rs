@@ -94,7 +94,7 @@ pub use dns::{
     DnsResponseCode, DnsZoneReader, DnsZoneSummary, MAESTRO_DNS_ZONE,
 };
 pub use dns_plugin::{
-    DnsResolverPlugin, DnsResolverPluginError, TailscaleDnsResolverPlugin, TailscaleDnsRoute,
+    DnsResolverPlugin, DnsResolverPluginError, TailscaleDnsPluginSettings, TailscaleDnsRoute,
 };
 pub use dns_resource::{DnsReconcileReport, DnsResourceAgent, DnsResourceError};
 pub use dns_server::{

@@ -8,6 +8,7 @@ use daemon::{
     load_launch_config, run_dns_resolver, stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
+use node_agent::{TailscaleDnsPluginSettings, TailscaleDnsRoute};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Parser)]
@@ -42,6 +43,8 @@ enum DaemonCommand {
         port: u16,
         #[arg(long, default_value_t = 30)]
         resync_seconds: u64,
+        #[arg(long = "cross-cluster-dns")]
+        cross_cluster_dns: Vec<String>,
     },
     /// Reads logs from the running local node over its authenticated node API.
     Logs {
@@ -121,7 +124,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             store_encryption_secret,
             port,
             resync_seconds,
+            cross_cluster_dns,
         } => {
+            let dns_plugin_settings = parse_cross_cluster_dns(&cluster_id, &cross_cluster_dns)?;
             dns(DnsResolverLaunchConfig {
                 cluster_id,
                 node_id,
@@ -132,6 +137,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 store_encryption_secret,
                 port,
                 resync_interval: Duration::from_secs(resync_seconds),
+                dns_plugin_settings,
             })
             .await
         }
@@ -161,6 +167,37 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             write_admin_output(output).await
         }
     }
+}
+
+fn parse_cross_cluster_dns(
+    local_cluster_id: &kernel_api::ClusterId,
+    values: &[String],
+) -> Result<Option<TailscaleDnsPluginSettings>, Box<dyn std::error::Error>> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let routes = values
+        .iter()
+        .map(
+            |value| -> Result<TailscaleDnsRoute, Box<dyn std::error::Error>> {
+                let (cluster_id, nameservers) = value.split_once('=').ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("cross-cluster DNS route `{value}` must use CLUSTER=IP[,IP]"),
+                    )
+                })?;
+                let cluster_id = kernel_api::ClusterId::new(cluster_id)?;
+                let nameservers = nameservers
+                    .split(',')
+                    .map(str::parse)
+                    .collect::<Result<Vec<std::net::Ipv4Addr>, _>>()?;
+                Ok(TailscaleDnsRoute::new(cluster_id, nameservers))
+            },
+        )
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    TailscaleDnsPluginSettings::new(local_cluster_id.clone(), routes, Duration::from_secs(5))
+        .map(Some)
+        .map_err(Into::into)
 }
 
 async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::Error>> {

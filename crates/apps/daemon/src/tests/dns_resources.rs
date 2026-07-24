@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cluster::{CertificateKeyPair, NodeCertificateBundle};
+use cluster::{
+    CertificateKeyPair, CrossClusterDnsRoute, NodeCertificateBundle, TailscaleGatewayConfig,
+};
 use kernel_api::{
     ArtifactTemplate, ClusterId, HealthProbe, NodeApiAccess, NodeId, NodeInstanceId, NodeRole,
     ResourceKind, SecretMountSpec, SecretValue, Service, Timestamp,
@@ -21,7 +23,17 @@ use super::cluster_with_nodes;
 
 #[test]
 fn builds_store_authenticated_delegated_dns_service() -> Result<(), Box<dyn std::error::Error>> {
-    let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
+    let mut cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
+    cluster.tailscale = Some(TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        replicas: 1,
+        tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: vec![CrossClusterDnsRoute {
+            cluster_id: ClusterId::new("remote")?,
+            nameservers: vec!["172.23.1.1".parse()?, "172.23.2.1".parse()?],
+        }],
+    });
     let node_id = NodeId::new("master")?;
     let resources = DnsResolverSystemResources::for_docker_node(
         &cluster,
@@ -68,6 +80,8 @@ fn builds_store_authenticated_delegated_dns_service() -> Result<(), Box<dyn std:
             "/run/secrets/dns/client-key.pem",
             "--store-encryption-secret",
             "/run/secrets/dns/store-key",
+            "--cross-cluster-dns",
+            "remote=172.23.1.1,172.23.2.1",
         ]
     );
     assert!(

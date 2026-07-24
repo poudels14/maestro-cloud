@@ -77,4 +77,16 @@ pub struct MaskedTailscaleConfig {
     pub replicas: u32,
     /// Tailnet policy tags applied during authentication.
     pub tags: Vec<String>,
+    /// Explicit remote cluster suffixes forwarded through the managed gateways.
+    pub cross_cluster_dns: Vec<MaskedCrossClusterDnsRoute>,
+}
+
+/// Secret-free view of one scoped remote DNS route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskedCrossClusterDnsRoute {
+    /// Remote cluster identity embedded in its authoritative DNS suffix.
+    pub cluster_id: ClusterId,
+    /// Remote bridge resolver addresses reachable through Tailscale.
+    pub nameservers: Vec<String>,
 }

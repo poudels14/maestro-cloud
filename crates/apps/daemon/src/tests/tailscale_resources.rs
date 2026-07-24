@@ -31,6 +31,7 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         advertise_routes: None,
         replicas: 2,
         tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: Vec::new(),
     });
 
     let resources = required(
@@ -40,7 +41,18 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
     let service = resources.service;
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.exec, ExecPolicy::Denied);
-    assert_eq!(service.spec.exposed_ports, vec![9_002]);
+    assert_eq!(service.spec.exposed_ports, vec![1_055, 9_002]);
+    assert_eq!(
+        service.spec.environment.get("TS_SOCKS5_SERVER"),
+        Some(&":1055".to_owned())
+    );
+    assert!(
+        service
+            .spec
+            .environment
+            .get("TS_EXTRA_ARGS")
+            .is_some_and(|value| value.contains("--accept-routes"))
+    );
     assert!(matches!(
         service.spec.artifact,
         ArtifactTemplate::Image { reference } if reference == TAILSCALE_IMAGE
@@ -62,7 +74,7 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
             .environment
             .get("TS_EXTRA_ARGS")
             .map(String::as_str),
-        Some("--advertise-tags=tag:maestro-gateway")
+        Some("--accept-routes --advertise-tags=tag:maestro-gateway")
     );
     assert!(!service.spec.environment.contains_key("TS_AUTHKEY"));
     let secrets = required(service.spec.secrets, "gateway secret mount")?;
@@ -125,6 +137,7 @@ async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
         advertise_routes: None,
         replicas: 2,
         tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: Vec::new(),
     });
     let desired = required(
         TailscaleSystemResources::from_cluster(&cluster)?,
@@ -220,6 +233,7 @@ async fn refuses_a_reserved_id_collision_without_creating_the_other_resource()
         advertise_routes: None,
         replicas: 1,
         tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: Vec::new(),
     });
     let desired = required(
         TailscaleSystemResources::from_cluster(&cluster)?,
@@ -258,6 +272,7 @@ async fn stale_leadership_cannot_create_gateway_resources() -> Result<(), Box<dy
         advertise_routes: None,
         replicas: 1,
         tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: Vec::new(),
     });
     let desired = required(
         TailscaleSystemResources::from_cluster(&cluster)?,
@@ -298,6 +313,7 @@ async fn live_auth_key_changes_trigger_fenced_gateway_reconciliation()
         advertise_routes: None,
         replicas: 1,
         tags: vec!["tag:maestro-gateway".to_owned()],
+        cross_cluster_dns: Vec::new(),
     });
     let desired = required(
         TailscaleSystemResources::from_cluster(&cluster)?,

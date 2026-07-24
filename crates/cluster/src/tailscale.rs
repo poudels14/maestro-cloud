@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 
-use kernel_api::SecretValue;
+use kernel_api::{ClusterId, SecretValue};
 use serde::{Deserialize, Serialize};
 
 use crate::Ipv4Cidr;
@@ -42,11 +43,25 @@ pub struct TailscaleGatewayConfig {
     /// Tailnet policy tags assigned during initial authentication.
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
+    /// Explicit remote cluster suffixes reachable only through managed Tailscale gateways.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cross_cluster_dns: Vec<CrossClusterDnsRoute>,
+}
+
+/// One remote Maestro DNS suffix and its bridge resolver addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CrossClusterDnsRoute {
+    /// Remote cluster identity embedded in its authoritative DNS names.
+    pub cluster_id: ClusterId,
+    /// Remote bridge resolver addresses advertised into the shared tailnet.
+    pub nameservers: Vec<Ipv4Addr>,
 }
 
 impl TailscaleGatewayConfig {
     pub(crate) fn validate(
         &self,
+        local_cluster_id: &ClusterId,
         cluster_cidr: Ipv4Cidr,
         workload_subnets: &[Ipv4Cidr],
     ) -> Result<(), TailscaleConfigError> {
@@ -104,6 +119,7 @@ impl TailscaleGatewayConfig {
                 });
             }
         }
+        self.validate_dns_routes(local_cluster_id, cluster_cidr)?;
         Ok(())
     }
 
@@ -112,6 +128,51 @@ impl TailscaleGatewayConfig {
         self.advertise_routes
             .clone()
             .unwrap_or_else(|| vec![cluster_cidr])
+    }
+
+    fn validate_dns_routes(
+        &self,
+        local_cluster_id: &ClusterId,
+        cluster_cidr: Ipv4Cidr,
+    ) -> Result<(), TailscaleConfigError> {
+        let mut cluster_ids = BTreeSet::new();
+        for (route_index, route) in self.cross_cluster_dns.iter().enumerate() {
+            if &route.cluster_id == local_cluster_id {
+                return Err(TailscaleConfigError::LocalDnsRoute { route_index });
+            }
+            if !cluster_ids.insert(route.cluster_id.clone()) {
+                return Err(TailscaleConfigError::DuplicateDnsRoute {
+                    route_index,
+                    cluster_id: route.cluster_id.clone(),
+                });
+            }
+            if route.nameservers.is_empty() {
+                return Err(TailscaleConfigError::EmptyDnsNameservers { route_index });
+            }
+            let mut nameservers = BTreeSet::new();
+            for (nameserver_index, nameserver) in route.nameservers.iter().enumerate() {
+                if !nameserver.is_private()
+                    || nameserver.is_loopback()
+                    || nameserver.is_multicast()
+                    || nameserver == &Ipv4Addr::BROADCAST
+                    || cluster_cidr.contains(*nameserver)
+                {
+                    return Err(TailscaleConfigError::UnsafeDnsNameserver {
+                        route_index,
+                        nameserver_index,
+                        nameserver: *nameserver,
+                    });
+                }
+                if !nameservers.insert(nameserver) {
+                    return Err(TailscaleConfigError::DuplicateDnsNameserver {
+                        route_index,
+                        nameserver_index,
+                        nameserver: *nameserver,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -147,6 +208,52 @@ pub enum TailscaleConfigError {
     InvalidTag { index: usize, tag: String },
     #[error("Tailscale tag {index} duplicates `{tag}`")]
     DuplicateTag { index: usize, tag: String },
+    /// A remote route attempted to delegate the local cluster suffix.
+    #[error("Tailscale cross-cluster DNS route {route_index} targets the local cluster")]
+    LocalDnsRoute {
+        /// Position of the rejected route.
+        route_index: usize,
+    },
+    /// More than one route attempted to own the same remote cluster suffix.
+    #[error(
+        "Tailscale cross-cluster DNS route {route_index} duplicates remote cluster `{cluster_id}`"
+    )]
+    DuplicateDnsRoute {
+        /// Position of the duplicate route.
+        route_index: usize,
+        /// Remote identity already owned by an earlier route.
+        cluster_id: ClusterId,
+    },
+    /// A remote suffix was declared without any authoritative bridge resolver.
+    #[error("Tailscale cross-cluster DNS route {route_index} has no nameservers")]
+    EmptyDnsNameservers {
+        /// Position of the empty route.
+        route_index: usize,
+    },
+    /// A remote resolver address was public, unsafe, or part of the local cluster pool.
+    #[error(
+        "Tailscale cross-cluster DNS route {route_index} nameserver {nameserver_index} `{nameserver}` is not a remote private bridge address"
+    )]
+    UnsafeDnsNameserver {
+        /// Position of the owning route.
+        route_index: usize,
+        /// Position of the rejected nameserver.
+        nameserver_index: usize,
+        /// Unsafe remote resolver address.
+        nameserver: Ipv4Addr,
+    },
+    /// One remote route listed the same resolver address more than once.
+    #[error(
+        "Tailscale cross-cluster DNS route {route_index} nameserver {nameserver_index} duplicates `{nameserver}`"
+    )]
+    DuplicateDnsNameserver {
+        /// Position of the owning route.
+        route_index: usize,
+        /// Position of the duplicate nameserver.
+        nameserver_index: usize,
+        /// Resolver address already present in the route.
+        nameserver: Ipv4Addr,
+    },
 }
 
 const fn default_replicas() -> u32 {

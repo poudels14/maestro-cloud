@@ -67,7 +67,7 @@ async fn plugin_forwards_only_declared_remote_cluster_suffixes()
         )],
         Duration::from_secs(3),
         client.clone(),
-    )?;
+    );
     let resolver = base.with_plugin(Arc::new(plugin));
 
     let remote = resolver
@@ -110,7 +110,7 @@ async fn plugin_requires_a_ready_managed_gateway() -> Result<(), Box<dyn std::er
         )],
         Duration::from_secs(3),
         Arc::new(RecordingClient::default()),
-    )?;
+    );
     let resolver = base.with_plugin(Arc::new(plugin));
 
     let error = resolver

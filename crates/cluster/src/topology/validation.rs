@@ -108,7 +108,7 @@ impl ClusterConfig {
                 .filter(|node| node.role.runs_workloads())
                 .map(|node| node.workload_subnet)
                 .collect::<Vec<_>>();
-            tailscale.validate(self.cluster_cidr, &workload_subnets)?;
+            tailscale.validate(&self.cluster_id, self.cluster_cidr, &workload_subnets)?;
         }
         control_plane_nodes.sort();
 

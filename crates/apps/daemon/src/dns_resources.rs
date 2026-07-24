@@ -71,6 +71,21 @@ impl DnsResolverSystemResources {
             "--store-encryption-secret".to_owned(),
             format!("{CREDENTIAL_DIRECTORY}/store-key"),
         ]);
+        if let Some(tailscale) = &cluster.tailscale {
+            for route in &tailscale.cross_cluster_dns {
+                arguments.push("--cross-cluster-dns".to_owned());
+                arguments.push(format!(
+                    "{}={}",
+                    route.cluster_id,
+                    route
+                        .nameservers
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            }
+        }
         let service = Object {
             meta: ObjectMeta {
                 id: service_id,

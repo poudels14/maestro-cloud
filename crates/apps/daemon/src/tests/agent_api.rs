@@ -116,6 +116,7 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
             dns_server_binder: Arc::new(RecordingDnsBinder {
                 bindings: Arc::new(Mutex::new(Vec::new())),
             }),
+            dns_plugin_settings: None,
             workload_runtime: runtime,
             artifact_store: artifacts.clone() as Arc<dyn ArtifactStore>,
             artifact_archives: Arc::new(LocalBuildSourceProvider::new(

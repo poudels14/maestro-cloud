@@ -94,7 +94,13 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
     "auth-key": "aws-secret://maestro/production/tailscale-auth-key",
     "advertise-routes": null,
     "replicas": 2,
-    "tags": ["tag:maestro-gateway"]
+    "tags": ["tag:maestro-gateway"],
+    "cross-cluster-dns": [
+      {
+        "cluster-id": "staging",
+        "nameservers": ["172.23.1.1", "172.23.2.1"]
+      }
+    ]
   },
   "node": "node-1"
 }
@@ -108,7 +114,8 @@ The defaults are:
 
 - `advertise-routes: null`, which advertises the complete cluster CIDR;
 - `replicas: 2`; and
-- `tags: ["tag:maestro-gateway"]`.
+- `tags: ["tag:maestro-gateway"]`; and
+- `cross-cluster-dns: []`, which disables remote suffix forwarding.
 
 Every explicit advertised route must be unique, canonical, contained by the
 cluster CIDR, and include at least one workload bridge resolver. Replica count
@@ -147,7 +154,13 @@ Use every address in `tailscale.dnsNameservers` as a restricted nameserver for
     "advertiseRoutes": ["172.22.0.0/16"],
     "dnsNameservers": ["172.22.1.1", "172.22.2.1"],
     "replicas": 2,
-    "tags": ["tag:maestro-gateway"]
+    "tags": ["tag:maestro-gateway"],
+    "crossClusterDns": [
+      {
+        "clusterId": "staging",
+        "nameservers": ["172.23.1.1", "172.23.2.1"]
+      }
+    ]
   }
 }
 ```
@@ -161,6 +174,24 @@ In the Tailscale admin console, add each address as a custom nameserver and
 restrict it to `maestro.internal`. Do not make it a global nameserver unless
 that is an intentional tailnet-wide DNS policy. Tailscale documents this model
 as [restricted nameservers (split DNS)](https://tailscale.com/docs/reference/dns-in-tailscale).
+
+## Configure cross-cluster DNS
+
+Each `cross-cluster-dns` entry delegates exactly
+`<cluster-id>.maestro.internal` to the listed bridge resolvers. The local
+resolver forwards those queries over DNS/TCP through a ready managed Tailscale
+gateway's SOCKS5 listener. It still refuses every undeclared suffix and never
+performs general recursion.
+
+Use resolver addresses returned by `maestro cluster config` on the remote
+cluster. They must be private addresses outside the local cluster CIDR. Add at
+least two addresses when the remote cluster has multiple workload nodes.
+Tailscale gateways accept remote subnet routes automatically; the routes must
+also be approved in the tailnet policy.
+
+Cross-cluster discovery fails closed with `SERVFAIL` when no managed gateway or
+remote resolver is reachable. Local cluster DNS continues to answer from its
+store-fed authoritative snapshot.
 
 ## Verify access
 
