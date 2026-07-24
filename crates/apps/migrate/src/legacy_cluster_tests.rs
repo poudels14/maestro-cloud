@@ -14,51 +14,7 @@ const MASTER_SECRET: &str = "correct horse battery staple";
 
 #[test]
 fn cutover_plan_converts_scheduled_assignment_and_replica_state() -> TestResult {
-    let mut entries = vec![
-        service_info(),
-        history_counter(),
-        deployment_history(),
-        json_entry(
-            "/maetro/cluster/assignments/node-a",
-            json!({
-                "nodeId": "node-a",
-                "generation": 7,
-                "assignments": [{
-                    "assignmentId": "assignment-1",
-                    "placementEpoch": 3,
-                    "serviceId": "api",
-                    "deploymentId": "deploy-1",
-                    "replicaIndex": 0,
-                    "nodeId": "node-a",
-                    "containerIp": "10.42.1.5",
-                    "createdAtMs": 3_000
-                }]
-            }),
-        ),
-        json_entry(
-            "/maetro/cluster/replica-states/node-a/assignment-1",
-            json!({
-                "serviceId": "api",
-                "deploymentId": "deploy-1",
-                "replicaIndex": 0,
-                "status": "READY",
-                "healthcheckFailures": 2,
-                "restartAttempts": 4,
-                "nodeId": "node-a",
-                "assignmentId": "assignment-1",
-                "endpoint": {
-                    "containerIp": "10.42.1.5",
-                    "containerHostname": "api-deploy",
-                    "ingressContainerPort": 8080,
-                    "gateway": {"hostIp": "10.0.0.5", "port": 443}
-                },
-                "error": "last transient failure"
-            }),
-        ),
-    ];
-    entries.extend(node_entries("node-a", "master", 10, 1));
-    entries.extend(cluster_state());
-    let snapshot = LegacySnapshot::new(entries)?;
+    let snapshot = running_assignment_snapshot()?;
 
     let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
     let assignment: Assignment = decode_write(&plan, BuiltinKind::Assignment)?;
@@ -320,6 +276,54 @@ fn service_config() -> serde_json::Value {
         "image": "registry.example/api:latest",
         "deploy": {"exposePorts": [8080]}
     })
+}
+
+pub(crate) fn running_assignment_snapshot() -> Result<LegacySnapshot, crate::SnapshotError> {
+    let mut entries = vec![
+        service_info(),
+        history_counter(),
+        deployment_history(),
+        json_entry(
+            "/maetro/cluster/assignments/node-a",
+            json!({
+                "nodeId": "node-a",
+                "generation": 7,
+                "assignments": [{
+                    "assignmentId": "assignment-1",
+                    "placementEpoch": 3,
+                    "serviceId": "api",
+                    "deploymentId": "deploy-1",
+                    "replicaIndex": 0,
+                    "nodeId": "node-a",
+                    "containerIp": "10.42.1.5",
+                    "createdAtMs": 3_000
+                }]
+            }),
+        ),
+        json_entry(
+            "/maetro/cluster/replica-states/node-a/assignment-1",
+            json!({
+                "serviceId": "api",
+                "deploymentId": "deploy-1",
+                "replicaIndex": 0,
+                "status": "READY",
+                "healthcheckFailures": 2,
+                "restartAttempts": 4,
+                "nodeId": "node-a",
+                "assignmentId": "assignment-1",
+                "endpoint": {
+                    "containerIp": "10.42.1.5",
+                    "containerHostname": "api-deploy",
+                    "ingressContainerPort": 8080,
+                    "gateway": {"hostIp": "10.0.0.5", "port": 443}
+                },
+                "error": "last transient failure"
+            }),
+        ),
+    ];
+    entries.extend(node_entries("node-a", "master", 10, 1));
+    entries.extend(cluster_state());
+    LegacySnapshot::new(entries)
 }
 
 fn json_entry(key: &str, value: serde_json::Value) -> LegacyEntry {

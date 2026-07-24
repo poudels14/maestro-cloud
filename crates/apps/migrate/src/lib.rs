@@ -61,6 +61,8 @@ pub use telemetry_plan::{
 };
 
 #[cfg(test)]
+mod cutover_runtime_tests;
+#[cfg(test)]
 mod legacy_cluster_tests;
 #[cfg(test)]
 mod legacy_derived_tests;
