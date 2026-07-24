@@ -17,6 +17,8 @@ mod control_plane;
 mod datadog;
 mod dead_letter_admin;
 mod dns_launch;
+mod dns_reconciler;
+mod dns_resources;
 mod error;
 mod join_activation;
 mod launch;
@@ -28,6 +30,7 @@ mod log_delivery;
 mod log_maintenance;
 mod metric_delivery;
 mod operator_error;
+mod operator_leader;
 mod operator_settings;
 mod operators;
 mod plan;
@@ -65,11 +68,9 @@ pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
 pub use operator_error::OperatorSuiteError;
+pub use operator_leader::{BuildOperatorBackends, OperatorBackends, OperatorLeaderWorkload};
 pub use operator_settings::{OperatorSettings, PreviewOperatorSettings};
-pub use operators::{
-    BuildOperatorBackends, OperatorBackends, OperatorInvocationReport, OperatorLeaderWorkload,
-    OperatorSuite,
-};
+pub use operators::{OperatorInvocationReport, OperatorSuite};
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
 pub use preview_config::{PreviewLaunchConfig, PreviewLaunchError};
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};

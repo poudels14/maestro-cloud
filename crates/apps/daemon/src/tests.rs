@@ -8,6 +8,7 @@ mod control_plane_worker;
 mod datadog;
 mod dead_letter_admin;
 mod dns_launch;
+mod dns_resources;
 mod join_activation;
 mod launch;
 mod leadership;

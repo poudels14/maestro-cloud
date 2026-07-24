@@ -38,6 +38,7 @@ use webhook::HttpWebhookBackend;
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use crate::NodeUpgradeDependencies;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
+use crate::dns_resources::DnsResolverSystemResources;
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
@@ -190,6 +191,19 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let tailscale_resources = TailscaleSystemResources::from_cluster(&cluster)
         .map_err(|error| invalid(format!("invalid Tailscale system resources: {error}")))?;
     #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    let dns_resolver_resources = Some(
+        DnsResolverSystemResources::for_docker_node(
+            &cluster,
+            &node_id,
+            &security,
+            &store_encryption_secret,
+            &running_version,
+        )
+        .map_err(|error| invalid(format!("invalid DNS resolver system resources: {error}")))?,
+    );
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    let dns_resolver_resources: Option<DnsResolverSystemResources> = None;
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
     let traefik_resources = Some(
         TraefikSystemResources::for_docker_node(&cluster, &node_id, &security)
             .map_err(|error| invalid(format!("invalid Traefik system resources: {error}")))?,
@@ -241,6 +255,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             },
         )
         .with_tailscale_resources(tailscale_resources)
+        .with_dns_resolver_resources(dns_resolver_resources)
         .with_traefik_resources(traefik_resources),
     );
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
