@@ -13,6 +13,9 @@ fn command_surface_separates_capture_plan_apply_and_verify() -> TestResult {
     assert!(stdout.contains("plan"));
     assert!(stdout.contains("apply"));
     assert!(stdout.contains("verify"));
+    assert!(stdout.contains("store-plan"));
+    assert!(stdout.contains("store-restore"));
+    assert!(stdout.contains("store-verify"));
     assert!(stdout.contains("telemetry-plan"));
     assert!(stdout.contains("telemetry-apply"));
     assert!(stdout.contains("telemetry-verify"));
@@ -21,6 +24,9 @@ fn command_surface_separates_capture_plan_apply_and_verify() -> TestResult {
         "capture",
         "apply",
         "verify",
+        "store-plan",
+        "store-restore",
+        "store-verify",
         "telemetry-plan",
         "telemetry-apply",
         "telemetry-verify",

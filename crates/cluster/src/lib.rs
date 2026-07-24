@@ -12,6 +12,7 @@ mod embedded_etcd_files;
 mod embedded_etcd_membership;
 mod embedded_etcd_plan;
 mod embedded_etcd_process;
+mod embedded_etcd_restore;
 mod join;
 mod join_crypto;
 mod join_key;
@@ -33,6 +34,7 @@ pub use certificates::{
     NodeCertificateBundle, certificate_fingerprint,
 };
 pub use embedded_etcd::{EmbeddedEtcdProvider, EmbeddedEtcdSettings};
+pub use embedded_etcd_restore::initialize_restored_etcd_member;
 pub use join::{
     CaDiscoveryRequest, CaDiscoveryResponse, JoinPrivateKey, JoinProtocolError, JoinRequest,
     RequestSignature, SignedJoinRequest, create_ca_discovery_response, public_key_fingerprint,

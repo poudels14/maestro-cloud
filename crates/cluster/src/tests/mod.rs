@@ -4,6 +4,7 @@ mod admission;
 mod admission_coordinator;
 mod certificates;
 mod embedded_etcd;
+mod embedded_etcd_restore;
 mod fixtures;
 mod join;
 mod join_crypto;

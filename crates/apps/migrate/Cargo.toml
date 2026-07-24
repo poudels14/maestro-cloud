@@ -10,6 +10,7 @@ aes-gcm = "=0.10.3"
 argon2 = "=0.5.3"
 base64 = "=0.22.1"
 clap.workspace = true
+cluster = { version = "0.1.0", path = "../../cluster" }
 duckdb = { version = "=1.4.1", features = ["bundled", "json", "parquet"] }
 etcd-client.workspace = true
 hex.workspace = true
@@ -32,7 +33,6 @@ tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "rt
 zeroize = { version = "=1.9.0", features = ["derive"] }
 
 [dev-dependencies]
-cluster = { version = "0.1.0", path = "../../cluster" }
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 

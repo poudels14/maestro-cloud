@@ -19,7 +19,7 @@ use crate::{
     embedded_etcd_process::{EtcdProcess, RunningEtcd, connect_store},
 };
 
-const LOCAL_STATE_FORMAT_VERSION: u8 = 1;
+pub(crate) const LOCAL_STATE_FORMAT_VERSION: u8 = 1;
 
 /// Time bounds used by embedded-etcd lifecycle and membership operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,18 +214,19 @@ impl StoreProvider for EmbeddedEtcdProvider {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LocalProviderState {
-    format_version: u8,
-    cluster_id: kernel_api::ClusterId,
-    node_id: kernel_api::NodeId,
-    initialization: LocalInitialization,
+pub(crate) struct LocalProviderState {
+    pub(crate) format_version: u8,
+    pub(crate) cluster_id: kernel_api::ClusterId,
+    pub(crate) node_id: kernel_api::NodeId,
+    pub(crate) initialization: LocalInitialization,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "digest")]
-enum LocalInitialization {
+pub(crate) enum LocalInitialization {
     Bootstrap,
     Join(String),
+    Restored(String),
 }
 
 pub(crate) fn prepare_local_state(
@@ -332,7 +333,10 @@ fn validate_existing_state(
     Ok(())
 }
 
-fn write_new_state(path: &Path, state: &LocalProviderState) -> Result<(), StoreProviderError> {
+pub(crate) fn write_new_state(
+    path: &Path,
+    state: &LocalProviderState,
+) -> Result<(), StoreProviderError> {
     let encoded =
         serde_json::to_vec_pretty(state).map_err(|error| StoreProviderError::Lifecycle {
             reason: format!("failed to encode local provider state: {error}"),

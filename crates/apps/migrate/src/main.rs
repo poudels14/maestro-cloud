@@ -9,7 +9,8 @@ use kernel_store::{Keyspace, Store};
 use migrate::{
     CapturedLegacySnapshot, CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource,
     LegacySnapshot, LegacyTelemetryPlan, MigrationOutcome, MigrationPlanReport,
-    MigrationVerification, apply_legacy_telemetry, plan_legacy_snapshot, verify_legacy_telemetry,
+    MigrationVerification, apply_legacy_telemetry, plan_legacy_snapshot, plan_legacy_store_restore,
+    restore_legacy_store, verify_legacy_store_restore, verify_legacy_telemetry,
 };
 use serde::Serialize;
 
@@ -70,6 +71,49 @@ enum Command {
         master_secret_file: PathBuf,
         #[arg(long, default_value = "legacy-v1")]
         migration_id: ResourceName,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Emits the rewritten etcd topology restored from a post-migration native snapshot.
+    StorePlan {
+        /// Reviewed logical snapshot captured before schema conversion.
+        #[arg(long)]
+        snapshot: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Restores one rewritten store member into an empty daemon data directory.
+    StoreRestore {
+        /// Reviewed logical snapshot captured before schema conversion.
+        #[arg(long)]
+        snapshot: PathBuf,
+        /// Native etcd snapshot captured after migration verification.
+        #[arg(long)]
+        native_snapshot: PathBuf,
+        /// Migrated control-plane node that will own this member.
+        #[arg(long)]
+        node_id: String,
+        /// Rewrite cluster data root on this node.
+        #[arg(long)]
+        data_directory: PathBuf,
+        /// Exact etcdutl executable used for snapshot restoration.
+        #[arg(long)]
+        etcdutl_binary: PathBuf,
+    },
+    /// Verifies one restored member against both reviewed snapshot artifacts.
+    StoreVerify {
+        /// Reviewed logical snapshot captured before schema conversion.
+        #[arg(long)]
+        snapshot: PathBuf,
+        /// Native etcd snapshot captured after migration verification.
+        #[arg(long)]
+        native_snapshot: PathBuf,
+        /// Migrated control-plane node that owns this member.
+        #[arg(long)]
+        node_id: String,
+        /// Rewrite cluster data root on this node.
+        #[arg(long)]
+        data_directory: PathBuf,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -173,6 +217,44 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 output.as_deref(),
             )
             .await
+        }
+        Command::StorePlan { snapshot, output } => {
+            let snapshot = load_snapshot(&snapshot)?;
+            let plan = plan_legacy_store_restore(&snapshot)?;
+            write_json(&plan, output.as_deref())
+        }
+        Command::StoreRestore {
+            snapshot,
+            native_snapshot,
+            node_id,
+            data_directory,
+            etcdutl_binary,
+        } => {
+            let snapshot = load_snapshot(&snapshot)?;
+            let plan = plan_legacy_store_restore(&snapshot)?;
+            let node_id = parse_node_id(node_id)?;
+            let report = restore_legacy_store(
+                &plan,
+                &node_id,
+                &native_snapshot,
+                &data_directory,
+                &etcdutl_binary,
+            )?;
+            write_json(&report, None)
+        }
+        Command::StoreVerify {
+            snapshot,
+            native_snapshot,
+            node_id,
+            data_directory,
+            output,
+        } => {
+            let snapshot = load_snapshot(&snapshot)?;
+            let plan = plan_legacy_store_restore(&snapshot)?;
+            let node_id = parse_node_id(node_id)?;
+            let report =
+                verify_legacy_store_restore(&plan, &node_id, &native_snapshot, &data_directory)?;
+            write_json(&report, output.as_deref())
         }
         Command::TelemetryPlan {
             legacy_data_directory,
@@ -295,6 +377,10 @@ fn load_snapshot(path: &Path) -> Result<LegacySnapshot, Box<dyn std::error::Erro
 
 fn load_telemetry_plan(path: &Path) -> Result<LegacyTelemetryPlan, Box<dyn std::error::Error>> {
     Ok(serde_json::from_slice(&read_telemetry_plan(path)?)?)
+}
+
+fn parse_node_id(value: String) -> Result<kernel_api::NodeId, Box<dyn std::error::Error>> {
+    Ok(kernel_api::NodeId::new(value)?)
 }
 
 async fn verify_source(

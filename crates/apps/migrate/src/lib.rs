@@ -30,6 +30,7 @@ mod plan;
 mod report;
 mod runner;
 mod snapshot;
+mod store_restore;
 mod telemetry_apply;
 mod telemetry_conversion;
 mod telemetry_destination;
@@ -45,6 +46,11 @@ pub use plan::{MigrationPlan, MigrationRequestClaim, MigrationWrite, PlanError};
 pub use report::{MigrationPlanReport, ReportError};
 pub use runner::{CutoverMigration, MigrationError, MigrationOutcome, MigrationVerification};
 pub use snapshot::{LegacyEntry, LegacySnapshot, SnapshotError};
+pub use store_restore::{
+    LegacyStoreRestoreError, LegacyStoreRestoreMember, LegacyStoreRestoreOutcome,
+    LegacyStoreRestorePlan, LegacyStoreRestoreReport, plan_legacy_store_restore,
+    restore_legacy_store, verify_legacy_store_restore,
+};
 pub use telemetry_apply::{
     LegacyTelemetryApplyOutcome, LegacyTelemetryApplyReport, LegacyTelemetryDestination,
     LegacyTelemetryMigrationError, LegacyTelemetryStreamVerification, LegacyTelemetryVerification,
@@ -82,5 +88,7 @@ mod legacy_upload_tests;
 mod legacy_webhook_tests;
 #[cfg(test)]
 mod real_etcd_tests;
+#[cfg(test)]
+mod store_restore_tests;
 #[cfg(test)]
 mod tests;
