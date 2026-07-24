@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use kernel_api::{ClusterId, NodeId, NodeRole, ResourceKind, ResourceName, Secret
 use kernel_store::{Keyspace, Store, TokioClock};
 use serde_json::json;
 use time::{Duration as CertificateDuration, OffsetDateTime};
+use tokio::io::AsyncWriteExt;
 
 use crate::legacy_fixtures::CLUSTER_ID;
 use crate::legacy_tests::{
@@ -21,15 +23,17 @@ use crate::legacy_tests::{
 };
 use crate::{
     CutoverEtcdConnection, CutoverMigration, LegacyEtcdSource, MigrationError, MigrationOutcome,
-    MigrationVerification, plan_legacy_snapshot,
+    MigrationVerification, plan_legacy_snapshot, plan_legacy_store_restore, restore_legacy_store,
+    verify_legacy_store_restore,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[tokio::test]
-#[ignore = "requires MAESTRO_ETCD_BIN and MAESTRO_ETCD_TEST_IP"]
-async fn real_cutover_fences_and_commits_encrypted_destinations() -> TestResult {
+#[ignore = "requires MAESTRO_ETCD_BIN, MAESTRO_ETCDUTL_BIN, and MAESTRO_ETCD_TEST_IP"]
+async fn real_cutover_migrates_restores_and_restarts_encrypted_store() -> TestResult {
     let binary = PathBuf::from(std::env::var("MAESTRO_ETCD_BIN")?);
+    let etcdutl_binary = PathBuf::from(std::env::var("MAESTRO_ETCDUTL_BIN")?);
     let host_address = std::env::var("MAESTRO_ETCD_TEST_IP")?.parse::<Ipv4Addr>()?;
     if !host_address.is_private() || host_address.is_loopback() {
         return Err("MAESTRO_ETCD_TEST_IP must be a private non-loopback address".into());
@@ -37,19 +41,14 @@ async fn real_cutover_fences_and_commits_encrypted_destinations() -> TestResult 
 
     let directory = tempfile::tempdir()?;
     let ports = allocate_ports(host_address)?;
-    let config = provider_config(directory.path(), host_address, ports)?;
+    let config = provider_config(directory.path(), host_address, ports, MASTER_SECRET)?;
     let endpoint = format!("https://{host_address}:{}", ports.store_client);
     let connection = cutover_connection(&config, endpoint.clone())?;
     let provider = EmbeddedEtcdProvider::new(
         config.clone(),
-        binary,
+        binary.clone(),
         Arc::new(TokioClock::new()),
-        EmbeddedEtcdSettings::new(
-            Duration::from_secs(30),
-            Duration::from_secs(2),
-            Duration::from_millis(100),
-            Duration::from_secs(1),
-        )?,
+        embedded_settings()?,
     )?;
     let runtime = provider.start(StoreStartMode::Bootstrap).await?;
     let mut raw = raw_client(&config, &endpoint).await?;
@@ -107,6 +106,9 @@ async fn real_cutover_fences_and_commits_encrypted_destinations() -> TestResult 
             Some(write.value().to_vec())
         );
     }
+    let native_snapshot = directory.path().join("post-migration.db");
+    save_native_snapshot(&mut raw, &native_snapshot).await?;
+    let restore_plan = plan_legacy_store_restore(&snapshot)?;
 
     raw.put(
         "/maetro/services/api/deployments/history-next-index",
@@ -121,7 +123,45 @@ async fn real_cutover_fences_and_commits_encrypted_destinations() -> TestResult 
         Err(MigrationError::SourceFence { .. })
     ));
 
+    drop(source);
+    drop(raw);
+    drop(store);
+    drop(migration);
     runtime.shutdown(StoreShutdown::Immediate).await?;
+
+    let restored_root = directory.path().join("rewrite");
+    restore_legacy_store(
+        &restore_plan,
+        &NodeId::new("node-a")?,
+        &native_snapshot,
+        &restored_root,
+        &etcdutl_binary,
+    )?;
+    verify_legacy_store_restore(
+        &restore_plan,
+        &NodeId::new("node-a")?,
+        &native_snapshot,
+        &restored_root,
+    )?;
+
+    let restored_config = provider_config(&restored_root, host_address, ports, MASTER_SECRET)?;
+    let restored_provider = EmbeddedEtcdProvider::new(
+        restored_config,
+        binary,
+        Arc::new(TokioClock::new()),
+        embedded_settings()?,
+    )?;
+    let restored_runtime = restored_provider.start(StoreStartMode::Restart).await?;
+    let restored_store = restored_runtime.store();
+    for write in plan.writes() {
+        let key = keyspace.resource(&ResourceKind::new(write.kind().as_str())?, write.id());
+        assert_eq!(
+            restored_store.get(&key).await?.map(|stored| stored.value),
+            Some(write.value().to_vec())
+        );
+    }
+    drop(restored_store);
+    restored_runtime.shutdown(StoreShutdown::Immediate).await?;
     Ok(())
 }
 
@@ -141,6 +181,7 @@ fn provider_config(
     root: &Path,
     host_address: Ipv4Addr,
     ports: ClusterPorts,
+    store_secret: &str,
 ) -> Result<StoreProviderConfig, Box<dyn std::error::Error>> {
     let cluster_id = ClusterId::new(CLUSTER_ID)?;
     let node_id = NodeId::new("node-a")?;
@@ -162,9 +203,36 @@ fn provider_config(
         BTreeMap::from([(node_id, member)]),
         ports,
         root.join("store"),
-        SecretValue::new("provider-only-encryption-secret-with-32-characters"),
+        SecretValue::new(store_secret),
         security,
     )?)
+}
+
+async fn save_native_snapshot(client: &mut Client, path: &Path) -> TestResult {
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(path)?;
+    let mut file = tokio::fs::File::from_std(file);
+    let mut snapshot = client.snapshot().await?;
+    while let Some(chunk) = snapshot.message().await? {
+        file.write_all(chunk.blob()).await?;
+    }
+    file.sync_all().await?;
+    Ok(())
+}
+
+fn embedded_settings() -> Result<EmbeddedEtcdSettings, cluster::StoreProviderError> {
+    EmbeddedEtcdSettings::new(
+        Duration::from_secs(30),
+        Duration::from_secs(2),
+        Duration::from_millis(100),
+        Duration::from_secs(1),
+    )
 }
 
 fn cutover_connection(
