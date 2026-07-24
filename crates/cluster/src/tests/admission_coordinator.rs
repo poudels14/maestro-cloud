@@ -85,11 +85,20 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
     });
     let operator_secret = SecretValue::new("operator-test-secret-with-at-least-32-characters");
     let storage_secret = SecretValue::new("storage-test-secret-with-at-least-32-characters");
+    let launch_policy = crate::ClusterLaunchPolicy {
+        depot: Some(crate::DepotLaunchConfig {
+            token: SecretValue::new("depot-test-secret"),
+            executable: "/opt/depot/bin/depot".into(),
+            timeout_secs: 900,
+        }),
+        ..crate::ClusterLaunchPolicy::default()
+    };
     let coordinator = AdmissionCoordinator::new(
         config.clone(),
         authority,
         operator_secret.clone(),
         storage_secret.clone(),
+        launch_policy.clone(),
         provider.clone(),
         store.clone(),
     )?;
@@ -150,6 +159,7 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
     )?;
     assert_eq!(first_payload.operator_jwt_secret, operator_secret);
     assert_eq!(first_payload.store_encryption_secret, storage_secret);
+    assert_eq!(first_payload.launch_policy, launch_policy);
     assert!(first_payload.store_join_ticket.is_some());
     assert!(first_payload.certificate_issuer.is_some());
 
@@ -292,6 +302,7 @@ async fn approval_rejects_unknown_master_and_conflicting_keys()
         authority,
         SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         SecretValue::new("storage-test-secret-with-at-least-32-characters"),
+        crate::ClusterLaunchPolicy::default(),
         Arc::new(RecordingProvider {
             staged: Mutex::new(Vec::new()),
         }),

@@ -213,6 +213,7 @@ fn cutover_plan_preserves_build_network_and_preview_policy() -> TestResult {
             "dockerfile": "Dockerfile",
             "watch": true,
             "registry": "registry.example/team/",
+            "depot": {"project": "project-123"},
             "env": {"source": "env://build"},
             "secrets": {"source": "secret://build"}
         },
@@ -325,6 +326,10 @@ fn cutover_plan_preserves_build_network_and_preview_policy() -> TestResult {
         BuildSource::Git { revision, .. } if revision == "0123456789abcdef"
     ));
     assert_eq!(template.registry.as_deref(), Some("registry.example/team"));
+    assert_eq!(
+        template.depot.as_ref().map(|depot| depot.project.as_str()),
+        Some("project-123")
+    );
     assert_eq!(build.status.image_digest, deployment.status.image_digest);
     assert_eq!(route.spec.hosts, ["alt.example.test", "web.example.test"]);
     assert_eq!(route.spec.target_port, 8080);

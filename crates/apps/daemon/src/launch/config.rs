@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::{
-    DatadogLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
+    DatadogLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
+    PreviewLaunchConfig,
 };
 
 /// Store process decision supplied explicitly on every daemon start.
@@ -71,6 +72,9 @@ pub struct DaemonLaunchConfig {
     /// Optional node-local Datadog log delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub datadog: Option<DatadogLaunchConfig>,
+    /// Optional cluster-wide Depot remote-builder credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depot: Option<DepotLaunchConfig>,
     /// Optional node-local S3 log backup and retention target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_backup: Option<LogBackupLaunchConfig>,
@@ -87,16 +91,24 @@ impl DaemonLaunchConfig {
     pub fn validate(&self) -> Result<(), DaemonLaunchError> {
         self.cluster.preflight()?;
         if let Some(datadog) = &self.datadog {
-            datadog.validate()?;
+            crate::datadog::validate_datadog(datadog)?;
+        }
+        if let Some(depot) = &self.depot {
+            crate::depot_config::validate_depot(depot)
+                .map_err(|error| invalid(error.to_string()))?;
         }
         if let Some(log_backup) = &self.log_backup {
-            log_backup.validate(&self.cluster.name, &self.node_id)?;
+            crate::log_backup_config::validate_log_backup(
+                log_backup,
+                &self.cluster.name,
+                &self.node_id,
+            )?;
         }
         if let Some(preview) = &self.preview {
-            preview.validate()?;
+            crate::preview_config::validate_preview(preview)?;
         }
         if let Some(upgrade) = &self.nixos_upgrade {
-            upgrade.validate()?;
+            crate::upgrade_config::validate_nixos_upgrade(upgrade)?;
         }
         if !self.data_directory.is_absolute() {
             return Err(invalid("data directory must be an absolute path"));

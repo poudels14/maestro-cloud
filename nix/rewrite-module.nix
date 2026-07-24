@@ -6,6 +6,7 @@
   ...
 }: let
   cfg = config.services.maestro-rewrite;
+  depotPackage = import ./depot-package.nix {inherit pkgs;};
 in {
   options.services.maestro-rewrite = {
     enable = lib.mkEnableOption "rewritten Maestro control plane";
@@ -63,7 +64,7 @@ in {
       };
     };
 
-    environment.systemPackages = [cfg.package cfg.etcdPackage];
+    environment.systemPackages = [cfg.package cfg.etcdPackage depotPackage];
 
     systemd.services.maestro-rewrite = {
       description = "Rewritten Maestro control plane";
@@ -84,6 +85,7 @@ in {
           cfg.etcdPackage
           pkgs.buildkit
           pkgs.coreutils
+          depotPackage
           pkgs.git
           pkgs.iproute2
           pkgs.kmod

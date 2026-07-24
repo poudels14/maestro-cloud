@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use build::LocalBuildSourceProvider;
 use cluster::{
-    ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle, StoreMember,
-    StoreProviderConfig,
+    ClusterConfig, ClusterLaunchPolicy, EmbeddedEtcdProvider, EmbeddedEtcdSettings,
+    NodeCertificateBundle, StoreMember, StoreProviderConfig,
 };
 use kernel_api::{NodeId, NodeInstanceId, SecretValue};
 use kernel_controller::SystemTimestampClock;
@@ -70,6 +70,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         store_encryption_secret,
         instance_id,
         datadog,
+        depot,
         log_backup,
         preview,
         nixos_upgrade,
@@ -84,10 +85,18 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let configured_datadog =
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
     let api_settings = api_settings(local_node, &security, operator_jwt_secret.clone());
+    let launch_policy = ClusterLaunchPolicy {
+        datadog: datadog.clone(),
+        depot: depot.clone(),
+        log_backup: log_backup.clone(),
+        preview: preview.clone(),
+        nixos_upgrade: nixos_upgrade.clone(),
+    };
     let admission = certificate_issuer.map(|authority| AdmissionDependencies {
         authority,
         operator_jwt_secret,
         store_encryption_secret: store_encryption_secret.clone(),
+        launch_policy,
     });
     let agent_store = if local_node.role.is_control_plane() {
         let local_member = known_members
@@ -162,13 +171,20 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         build_root.join("workspaces"),
         build_root.join("archives"),
     )?);
+    let depot_backend = depot
+        .as_ref()
+        .map(|depot| {
+            crate::depot_config::configure_depot(depot, build_root.join("depot"), runtime.clone())
+        })
+        .transpose()
+        .map_err(|error| invalid(error.to_string()))?;
     let configured_preview = preview
         .as_ref()
-        .map(|preview| preview.configure())
+        .map(crate::preview_config::configure_preview)
         .transpose()?;
     let configured_upgrade = nixos_upgrade
         .as_ref()
-        .map(crate::NixosUpgradeLaunchConfig::configure)
+        .map(crate::upgrade_config::configure_nixos_upgrade)
         .transpose()?;
     let running_version = match configured_upgrade.as_ref() {
         Some(upgrade) => upgrade.running_version.clone(),
@@ -267,6 +283,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
                 source: build_source.clone(),
                 revisions: build_source.clone(),
                 artifacts: runtime.clone(),
+                depot: depot_backend,
                 pull_requests: configured_preview.map(|preview| preview.pull_requests),
                 upgrades: None,
                 store_upgrades,

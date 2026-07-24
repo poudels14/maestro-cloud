@@ -216,6 +216,7 @@ impl RealProcessCluster {
                     .map_err(RealClusterError::from_display)?,
             ),
             datadog: None,
+            depot: None,
             log_backup: None,
             preview: None,
             nixos_upgrade: None,
@@ -431,6 +432,7 @@ impl RealProcessCluster {
             ports: self.cluster.ports,
             tailscale: self.cluster.tailscale.clone(),
             cloudflare: self.cluster.cloudflare.clone(),
+            launch_policy: cluster::ClusterLaunchPolicy::default(),
             certificates,
             operator_jwt_secret: SecretValue::new(
                 "real-cluster-operator-secret-with-32-characters",

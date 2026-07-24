@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::{
     ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentGoal,
-    DeploymentPhase, ExecPolicy, NodeApiAccess, NodeId, PlacementConstraint, PreviewPolicy,
-    SecretMountSpec, SecretValue, ServiceId, ServiceSpec, VolumeSource, workload_hostname,
+    DeploymentPhase, DepotBuildConfig, ExecPolicy, NodeApiAccess, NodeId, PlacementConstraint,
+    PreviewPolicy, SecretMountSpec, SecretValue, ServiceId, ServiceSpec, VolumeSource,
+    workload_hostname,
 };
 
 #[test]
@@ -78,6 +79,7 @@ fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
             dockerfile: "Dockerfile".to_string(),
             watch: false,
             registry: None,
+            depot: None,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },
@@ -174,6 +176,7 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             dockerfile: "../Dockerfile".to_string(),
             watch: false,
             registry: None,
+            depot: None,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },
@@ -190,10 +193,20 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             dockerfile: "Dockerfile".to_string(),
             watch: false,
             registry: Some("registry.example/team/".to_string()),
+            depot: None,
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
         },
     };
+    assert!(spec.validate().is_err());
+
+    let ArtifactTemplate::Build { template } = &mut spec.artifact else {
+        unreachable!("fixture is a build")
+    };
+    template.registry = None;
+    template.depot = Some(DepotBuildConfig {
+        project: "invalid project".to_owned(),
+    });
     assert!(spec.validate().is_err());
 
     let mut spec = valid_service_spec();

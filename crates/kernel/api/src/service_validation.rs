@@ -124,6 +124,17 @@ fn validate_artifact(artifact: &ArtifactTemplate) -> Result<(), ServiceSpecError
                     );
                 }
             }
+            if let Some(depot) = &template.depot {
+                nonempty_text("artifact.depot.project", &depot.project)?;
+                if depot.project.chars().any(char::is_whitespace)
+                    || depot.project.chars().any(char::is_control)
+                {
+                    return invalid(
+                        "artifact.depot.project",
+                        "Depot project must not contain whitespace or control characters",
+                    );
+                }
+            }
             validate_public_environment("artifact.environment", &template.environment)?;
             validate_secret_environment("artifact.secrets", &template.secrets)?;
             match &template.source {

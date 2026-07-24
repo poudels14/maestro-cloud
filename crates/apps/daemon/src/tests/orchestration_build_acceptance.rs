@@ -127,6 +127,7 @@ impl BuildCluster for BuildAcceptanceWorld {
                 dockerfile: fixture.dockerfile,
                 watch: fixture.watch,
                 registry: None,
+                depot: None,
                 environment: fixture.arguments,
                 secrets: fixture
                     .secret_names

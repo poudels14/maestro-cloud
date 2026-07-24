@@ -94,6 +94,7 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             dockerfile: "Dockerfile".to_owned(),
             watch: false,
             registry: None,
+            depot: None,
             environment: Default::default(),
             secrets: Default::default(),
         },

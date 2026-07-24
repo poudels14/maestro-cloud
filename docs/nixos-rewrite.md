@@ -48,8 +48,8 @@ before starting.
 Control-plane launch documents should use
 `/run/current-system/sw/bin/etcd` for `etcdBinary`. The module installs the
 selected etcd package into the system profile, enables native containerd, and
-starts the containerd-backed BuildKit worker. It also exposes the nftables,
-network, Git, and NixOS tools used by rewrite adapters.
+starts the containerd-backed BuildKit worker. It also installs Depot and exposes
+the nftables, network, Git, and NixOS tools used by rewrite adapters.
 
 Create a new master document directly from the validated cluster config:
 

@@ -60,6 +60,20 @@ expression: openapi_document()
           {
             "description": "Build an image from a source repository or uploaded archive.",
             "properties": {
+              "depot": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DepotBuildConfig"
+                  },
+                  {
+                    "enum": [
+                      null
+                    ],
+                    "nullable": true
+                  }
+                ],
+                "description": "Optional Depot remote-builder project."
+              },
               "dockerfile": {
                 "description": "Path to the container build definition within the source.",
                 "type": "string"
@@ -460,6 +474,20 @@ expression: openapi_document()
       "BuildTemplate": {
         "description": "Source and build environment applied to each generated build resource.",
         "properties": {
+          "depot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DepotBuildConfig"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Optional Depot remote-builder project."
+          },
           "dockerfile": {
             "description": "Path to the container build definition within the source.",
             "type": "string"
@@ -916,6 +944,20 @@ expression: openapi_document()
         "required": [
           "phase",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "DepotBuildConfig": {
+        "additionalProperties": false,
+        "description": "Service-level selection for Depot's remote builder infrastructure.",
+        "properties": {
+          "project": {
+            "description": "Depot project ID receiving the remote build.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
         ],
         "type": "object"
       },

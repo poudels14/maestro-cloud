@@ -9,9 +9,10 @@ use kernel_store::{
 use crate::admission::admit_replayed_join_request;
 use crate::{
     AdmissionError, CertificateError, CertificateValidity, ClusterCertificateAuthority,
-    ClusterConfig, ClusterPreflightError, EncryptedJoinResponse, JoinPayload, JoinProtocolError,
-    JoinRequest, JoinResponseStatus, RequestSignature, StoreMember, StoreProvider,
-    StoreProviderError, admit_join_request, create_ca_discovery_response, encrypt_join_response,
+    ClusterConfig, ClusterLaunchPolicy, ClusterPreflightError, EncryptedJoinResponse, JoinPayload,
+    JoinProtocolError, JoinRequest, JoinResponseStatus, RequestSignature, StoreMember,
+    StoreProvider, StoreProviderError, admit_join_request, create_ca_discovery_response,
+    encrypt_join_response,
 };
 
 mod approval;
@@ -27,6 +28,7 @@ pub struct AdmissionCoordinator {
     authority: ClusterCertificateAuthority,
     operator_jwt_secret: SecretValue,
     store_encryption_secret: SecretValue,
+    launch_policy: ClusterLaunchPolicy,
     provider: Arc<dyn StoreProvider>,
     store: Arc<dyn Store>,
     keys: Keyspace,
@@ -39,6 +41,7 @@ impl AdmissionCoordinator {
         authority: ClusterCertificateAuthority,
         operator_jwt_secret: SecretValue,
         store_encryption_secret: SecretValue,
+        launch_policy: ClusterLaunchPolicy,
         provider: Arc<dyn StoreProvider>,
         store: Arc<dyn Store>,
     ) -> Result<Self, AdmissionCoordinatorError> {
@@ -55,6 +58,7 @@ impl AdmissionCoordinator {
             authority,
             operator_jwt_secret,
             store_encryption_secret,
+            launch_policy,
             provider,
             store,
             keys,
@@ -322,6 +326,7 @@ impl AdmissionCoordinator {
             ports: self.config.ports,
             tailscale: self.config.tailscale.clone(),
             cloudflare: self.config.cloudflare.clone(),
+            launch_policy: self.launch_policy.clone(),
             certificates,
             operator_jwt_secret: self.operator_jwt_secret.clone(),
             store_encryption_secret: self.store_encryption_secret.clone(),

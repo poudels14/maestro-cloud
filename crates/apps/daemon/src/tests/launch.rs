@@ -8,8 +8,8 @@ use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 use crate::launch::panel_directory;
 use crate::{
     DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
-    LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig, StoreLaunchMode,
-    load_launch_config,
+    DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
+    StoreLaunchMode, load_launch_config,
 };
 
 use super::cluster_with_nodes;
@@ -195,6 +195,35 @@ fn datadog_launch_config_is_validated_and_debug_redacted() -> Result<(), Box<dyn
 }
 
 #[test]
+fn depot_launch_config_is_validated_serialized_and_debug_redacted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    launch.depot = Some(DepotLaunchConfig {
+        token: SecretValue::new("depot-super-secret"),
+        executable: PathBuf::from("/opt/depot/bin/depot"),
+        timeout_secs: 900,
+    });
+    launch.validate()?;
+    assert!(!format!("{launch:?}").contains("depot-super-secret"));
+    let encoded = serde_json::to_value(&launch)?;
+    assert_eq!(
+        encoded
+            .get("depot")
+            .and_then(|depot| depot.get("executable"))
+            .and_then(serde_json::Value::as_str),
+        Some("/opt/depot/bin/depot")
+    );
+
+    launch
+        .depot
+        .as_mut()
+        .ok_or("Depot config missing")?
+        .timeout_secs = 0;
+    assert!(launch.validate().is_err());
+    Ok(())
+}
+
+#[test]
 fn preview_launch_config_validates_domain_quota_and_redacts_token()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
@@ -321,6 +350,7 @@ fn config(
         ),
         instance_id: Some(NodeInstanceId::new("instance-1")?),
         datadog: None,
+        depot: None,
         log_backup: None,
         preview: None,
         nixos_upgrade: None,

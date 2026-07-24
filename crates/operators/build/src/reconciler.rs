@@ -16,6 +16,7 @@ use runtime::{
     ArtifactBuildRequest, ArtifactDigest, ArtifactReference, ArtifactStore, ArtifactStoreError,
 };
 
+use crate::DepotBuildBackend;
 use crate::source::{BuildSourceError, BuildSourceProvider, PreparedBuildSource};
 use crate::writer::{BuildStatusWriter, BuildWriteError};
 
@@ -26,6 +27,7 @@ const READY_CONDITION: &str = "Ready";
 pub struct BuildReconciler {
     source: Arc<dyn BuildSourceProvider>,
     artifacts: Arc<dyn ArtifactStore>,
+    depot: Option<Arc<dyn DepotBuildBackend>>,
     timestamp_clock: Arc<dyn TimestampClock>,
     writer: BuildStatusWriter,
     prefix: kernel_store::StorePrefix,
@@ -44,10 +46,17 @@ impl BuildReconciler {
         Ok(Self {
             source,
             artifacts,
+            depot: None,
             timestamp_clock,
             writer: BuildStatusWriter::new(&cluster_id)?,
             prefix: keyspace.resource_kind(&kind),
         })
+    }
+
+    /// Selects the protected Depot backend for templates that name a Depot project.
+    pub fn with_depot_backend(mut self, depot: Option<Arc<dyn DepotBuildBackend>>) -> Self {
+        self.depot = depot;
+        self
     }
 
     /// Wraps this operator in the shared watch, resync, and retry runtime.
@@ -235,7 +244,19 @@ impl BuildReconciler {
         build: &Build,
         request: &ArtifactBuildRequest,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
-        let digest = self.artifacts.build(request).await?;
+        let digest = match &build.spec.template.depot {
+            Some(depot) => {
+                let backend = self
+                    .depot
+                    .as_ref()
+                    .ok_or_else(|| ArtifactStoreError::Rejected {
+                        message: "build selects Depot but this cluster has no Depot token"
+                            .to_owned(),
+                    })?;
+                backend.build(request, &depot.project).await?
+            }
+            None => self.artifacts.build(request).await?,
+        };
         let Some(registry) = &build.spec.template.registry else {
             return Ok(digest);
         };

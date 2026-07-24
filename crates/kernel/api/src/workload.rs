@@ -55,12 +55,23 @@ pub struct BuildTemplate {
     /// replication between workload nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
+    /// Optional Depot remote-builder project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depot: Option<DepotBuildConfig>,
     /// Non-secret build variables.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
     /// Secret build variables that are redacted from debug output.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: BTreeMap<String, SecretValue>,
+}
+
+/// Service-level selection for Depot's remote builder infrastructure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DepotBuildConfig {
+    /// Depot project ID receiving the remote build.
+    pub project: String,
 }
 
 fn is_false(value: &bool) -> bool {

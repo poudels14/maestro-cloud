@@ -14,8 +14,9 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroizing;
 
 use crate::{
-    CloudflareTunnelConfig, ClusterCertificateAuthority, ClusterPorts, Ipv4Cidr, JoinPrivateKey,
-    JoinProtocolError, JoinRequest, NodeCertificateBundle, NodeDefinition, TailscaleGatewayConfig,
+    CloudflareTunnelConfig, ClusterCertificateAuthority, ClusterLaunchPolicy, ClusterPorts,
+    Ipv4Cidr, JoinPrivateKey, JoinProtocolError, JoinRequest, NodeCertificateBundle,
+    NodeDefinition, TailscaleGatewayConfig,
     join::{canonical_body, decode_leader_public_key, decode_public_key, validate_shared_secret},
 };
 
@@ -50,6 +51,9 @@ pub struct JoinPayload {
     /// Optional remotely managed Cloudflare Tunnel connector fleet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloudflare: Option<CloudflareTunnelConfig>,
+    /// Optional production integrations copied into the joining node's protected launch document.
+    #[serde(default)]
+    pub launch_policy: ClusterLaunchPolicy,
     /// Node-specific mutual-authentication identity.
     pub certificates: NodeCertificateBundle,
     /// Cluster-wide key used to authenticate operator API requests.

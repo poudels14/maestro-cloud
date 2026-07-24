@@ -311,6 +311,170 @@ async fn cloudflare_config_resolves_the_tunnel_token_and_validates_replicas()
 }
 
 #[tokio::test]
+async fn production_launch_policy_resolves_secrets_and_preserves_operational_settings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24").replace(
+        "\n            node: \"node-1\"",
+        r#"
+            datadog: {
+                "api-key": "file://datadog.key",
+                site: "datadoghq.eu",
+                "include-ingress-logs": false,
+                logs: { "include-healthcheck": false },
+                metrics: { enabled: true, tags: ["env:prod"] }
+            },
+            depot: {
+                token: "aws-secret://depot-token",
+                executable: "/opt/depot/bin/depot",
+                "timeout-secs": 900
+            },
+            "log-backup": {
+                bucket: "maestro-logs",
+                "kms-key-id": "alias/maestro",
+                region: "us-west-2",
+                prefix: "clusters/prod",
+                "retention-days": 30
+            },
+            preview: {
+                domain: "preview.example.test",
+                "github-token": "file://github.key",
+                "max-concurrent-previews": 12
+            },
+            "nixos-upgrade": {
+                flake: "/etc/maestro",
+                configuration: "production",
+                "manifest-relative-path": "crates/apps/daemon/Cargo.toml",
+                "nix-binary": "/nix/store/nix/bin/nix",
+                "nixos-rebuild-binary": "/run/current-system/sw/bin/nixos-rebuild",
+                "systemctl-binary": "/run/current-system/sw/bin/systemctl"
+            },
+            node: "node-1""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([
+            (source.to_owned(), document),
+            (
+                "file:///config/datadog.key".to_owned(),
+                "datadog-secret".to_owned(),
+            ),
+            (
+                "aws-secret://depot-token".to_owned(),
+                "depot-secret".to_owned(),
+            ),
+            (
+                "file:///config/github.key".to_owned(),
+                "github-secret".to_owned(),
+            ),
+        ]),
+    };
+
+    let loaded = load_cluster(source, &reader).await?;
+    let datadog = loaded
+        .launch_policy
+        .datadog
+        .as_ref()
+        .ok_or("Datadog launch policy missing")?;
+    assert_eq!(datadog.api_key.expose(), "datadog-secret");
+    assert!(!datadog.include_ingress_logs);
+    assert!(datadog.include_tailscale_logs);
+    assert!(!datadog.logs.include_healthcheck);
+    assert_eq!(datadog.metrics.tags, ["env:prod"]);
+    let depot = loaded
+        .launch_policy
+        .depot
+        .as_ref()
+        .ok_or("Depot launch policy missing")?;
+    assert_eq!(depot.token.expose(), "depot-secret");
+    assert_eq!(
+        depot.executable,
+        std::path::Path::new("/opt/depot/bin/depot")
+    );
+    assert_eq!(depot.timeout_secs, 900);
+    let backup = loaded
+        .launch_policy
+        .log_backup
+        .as_ref()
+        .ok_or("log backup launch policy missing")?;
+    assert_eq!(backup.retention_days, Some(30));
+    let preview = loaded
+        .launch_policy
+        .preview
+        .as_ref()
+        .ok_or("preview launch policy missing")?;
+    assert_eq!(preview.github_token.expose(), "github-secret");
+    assert_eq!(preview.max_concurrent_previews, 12);
+    let upgrade = loaded
+        .launch_policy
+        .nixos_upgrade
+        .as_ref()
+        .ok_or("NixOS upgrade launch policy missing")?;
+    assert_eq!(upgrade.configuration, "production");
+    assert_eq!(
+        upgrade.systemctl_binary.as_deref(),
+        Some(std::path::Path::new("/run/current-system/sw/bin/systemctl"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_launch_policy_rejects_invalid_settings_before_writing_launch_documents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        (
+            r#"datadog: { "api-key": "token", site: "https://invalid" }"#,
+            "datadog:",
+        ),
+        (
+            r#"depot: { token: "token", "timeout-secs": 0 }"#,
+            "depot.timeout-secs:",
+        ),
+        (
+            r#""log-backup": {
+                bucket: "maestro-logs",
+                "kms-key-id": "alias/maestro",
+                "retention-days": 0
+            }"#,
+            "log-backup.retention-days:",
+        ),
+        (
+            r#"preview: {
+                domain: "preview.example.test",
+                "github-token": "token",
+                "max-concurrent-previews": 0
+            }"#,
+            "preview.max-concurrent-previews:",
+        ),
+        (
+            r#""nixos-upgrade": {
+                flake: "relative",
+                configuration: "production"
+            }"#,
+            "nixos-upgrade.flake:",
+        ),
+    ];
+
+    for (index, (policy, expected)) in cases.into_iter().enumerate() {
+        let source = format!("file:///config/invalid-policy-{index}.jsonc");
+        let document = cluster_document("172.22.1.0/24").replace(
+            "\n            node: \"node-1\"",
+            &format!("\n            {policy},\n            node: \"node-1\""),
+        );
+        let reader = MemoryReader {
+            sources: BTreeMap::from([(source.clone(), document)]),
+        };
+        let error = load_cluster(&source, &reader)
+            .await
+            .expect_err("invalid production launch policy must fail");
+        assert!(
+            error.to_string().contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn cluster_config_rejects_removed_camel_case_aliases()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.jsonc";

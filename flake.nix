@@ -171,41 +171,7 @@
       cfg = config.services.maestro;
       isNerdctl = cfg.runtime == "nerdctl";
       isDocker = cfg.runtime == "docker";
-      depotVersion = "2.101.43";
-      depotArch =
-        {
-          x86_64-linux = "amd64";
-          aarch64-linux = "arm64";
-        }
-        .${pkgs.system};
-      depotSha256 =
-        {
-          x86_64-linux = "fa80b793eb74e04d5620fa19f32010d93a30250d75ccd074b6a61d65124138d1";
-          aarch64-linux = "985ff1808ccdc0b9fa20b6d3be737b5cc669dfe6ba8634e9ebdb334eb115cad6";
-        }
-        .${pkgs.system};
-      depotPackage = pkgs.stdenvNoCC.mkDerivation {
-        pname = "depot";
-        version = depotVersion;
-
-        src = pkgs.fetchurl {
-          url = "https://dl.depot.dev/cli/download/Linux/${depotArch}/${depotVersion}";
-          sha256 = depotSha256;
-        };
-
-        dontUnpack = true;
-        nativeBuildInputs = [pkgs.gnutar];
-
-        installPhase = ''
-          runHook preInstall
-          mkdir -p "$out/bin"
-          tmpdir=$(mktemp -d)
-          ${pkgs.gnutar}/bin/tar -xzf "$src" -C "$tmpdir"
-          install -m755 "$tmpdir/bin/depot" "$out/bin/depot"
-          rm -rf "$tmpdir"
-          runHook postInstall
-        '';
-      };
+      depotPackage = import ./nix/depot-package.nix {inherit pkgs;};
     in {
       options.services.maestro = {
         enable = lib.mkEnableOption "Maestro deployment controller";

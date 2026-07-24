@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use build::{BuildRevisionResolver, BuildSourceProvider};
+use build::{BuildRevisionResolver, BuildSourceProvider, DepotBuildBackend};
 use ingress::{IngressBackend, StoreTraefikProvider, TraefikBackend};
 use kernel_api::ClusterId;
 use kernel_controller::{FencedStore, TimestampClock};
@@ -34,6 +34,8 @@ pub struct OperatorBackends {
     pub build_revisions: Arc<dyn BuildRevisionResolver>,
     /// Builds and stores immutable runtime artifacts.
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Runs service builds that select a Depot project.
+    pub depot: Option<Arc<dyn DepotBuildBackend>>,
     /// Lists pull requests and upserts preview feedback when previews are configured.
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
     /// Applies idempotent rolling or all-node host upgrade batches.
@@ -51,6 +53,8 @@ pub struct BuildOperatorBackends {
     pub revisions: Arc<dyn BuildRevisionResolver>,
     /// Builds and stores immutable runtime artifacts.
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Fence-independent Depot process adapter retained across leadership terms.
+    pub depot: Option<Arc<dyn DepotBuildBackend>>,
     /// Fence-independent pull-request API retained across leadership terms.
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
     /// Fence-independent node-upgrade backend retained across leadership terms.
@@ -237,6 +241,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 build_source: self.builds.source.clone(),
                 build_revisions: self.builds.revisions.clone(),
                 artifacts: self.builds.artifacts.clone(),
+                depot: self.builds.depot.clone(),
                 pull_requests: self.builds.pull_requests.clone(),
                 upgrades,
                 webhooks: self.builds.webhooks.clone(),

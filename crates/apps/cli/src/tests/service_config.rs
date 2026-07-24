@@ -172,6 +172,7 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
                                 branch: "main",
                                 dockerfile: "Dockerfile",
                                 registry: "registry.example/team/",
+                                depot: { project: "project-123" },
                                 env: { source: "build.env" },
                                 secrets: { source: "aws-secret://build-secrets" }
                             },
@@ -212,6 +213,10 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
         Some(&SecretValue::new("private-token"))
     );
     assert_eq!(template.registry.as_deref(), Some("registry.example/team"));
+    assert_eq!(
+        template.depot.as_ref().map(|depot| depot.project.as_str()),
+        Some("project-123")
+    );
     assert_eq!(
         desired.spec.environment.get("MODE").map(String::as_str),
         Some("fallback")

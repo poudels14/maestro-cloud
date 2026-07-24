@@ -74,6 +74,7 @@ pub(crate) async fn prepare_cutover_bundle(
             authority.clone(),
             operator_jwt_secret.clone(),
             store_encryption_secret.clone(),
+            loaded.launch_policy.clone(),
         )?;
         let launch_path = options
             .output_directory

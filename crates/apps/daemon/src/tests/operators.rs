@@ -410,6 +410,7 @@ fn queued_build() -> Result<Build, kernel_api::InvalidIdentifier> {
                 dockerfile: "Dockerfile".to_owned(),
                 watch: false,
                 registry: None,
+                depot: None,
                 environment: BTreeMap::new(),
                 secrets: BTreeMap::from([(
                     "GH_TOKEN".to_owned(),

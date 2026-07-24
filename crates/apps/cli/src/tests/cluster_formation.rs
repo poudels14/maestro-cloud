@@ -188,6 +188,10 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
     assert!(launch.pointer("/certificateIssuer/privateKeyPem").is_some());
     assert!(launch.pointer("/operatorJwtSecret").is_some());
     assert!(launch.pointer("/storeEncryptionSecret").is_some());
+    assert_eq!(
+        launch.pointer("/depot/token"),
+        Some(&"formation-depot-secret".into())
+    );
     let first_output = String::from_utf8(first_output)?;
     assert!(first_output.contains("created bootstrap launch document"));
     assert!(!first_output.contains("operatorJwtSecret"));
@@ -226,6 +230,11 @@ pub(super) fn cluster_document() -> String {
                 },
                 "control-allow-cidrs": ["10.20.0.0/24"],
                 "join-secret": "a-test-join-secret-with-at-least-32-characters"
+            },
+            depot: {
+                token: "formation-depot-secret",
+                executable: "/opt/depot/bin/depot",
+                "timeout-secs": 900
             },
             node: "node-1"
         }"#

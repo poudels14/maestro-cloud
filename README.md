@@ -81,11 +81,12 @@ A rewrite daemon host requires:
 - privileges for bridges, veth pairs, WireGuard, routes, cgroups, and
   nftables;
 - owner-only durable storage, conventionally `/var/lib/maestro`; and
-- BuildKit on nodes that build local or Git-backed service images.
+- BuildKit on nodes that perform native builds, or the Depot CLI on nodes that
+  run services whose build selects a Depot project.
 
 Control-plane nodes also require the configured etcd executable. The NixOS
-rewrite module provisions containerd, BuildKit, etcd, and the host tools used by
-the production adapters.
+rewrite module provisions containerd, BuildKit, Depot, etcd, and the host tools
+used by the production adapters.
 
 The runtime crate also contains a native Docker API backend for its supported
 development capabilities. Production daemon composition selects containerd.
@@ -131,6 +132,13 @@ rewrite module, or directly while developing:
 ```sh
 sudo maestro-daemon start /run/maestro/launch.json
 ```
+
+Optional top-level `datadog`, `depot`, `log-backup`, `preview`, and
+`nixos-upgrade` settings are validated with the cluster config and copied into
+the protected launch document. Credential fields accept literal values,
+`file://` sources, or `aws-secret://` sources. Node admission carries the same
+policy inside the encrypted join response, so worker-local config never needs
+another copy of those credentials.
 
 For multi-node admission, network requirements, join preparation, approval,
 verification, drain, restart, upgrade, and removal procedures, follow
@@ -191,6 +199,30 @@ Maestro nodes. Set it to a registry prefix such as
 `registry.example/team` to publish a deployment-unique tag and deploy the
 registry's immutable digest; registry credentials remain a node-runtime
 responsibility.
+
+To use Depot, configure the cluster-level `depot.token`, then select the remote
+builder per service:
+
+```jsonc
+{
+  "services": {
+    "api": {
+      "build": {
+        "repo": "https://github.com/example/api.git",
+        "branch": "main",
+        "dockerfile": "Dockerfile",
+        "depot": { "project": "your-depot-project" }
+      },
+      "deploy": { "exposePorts": [8080] }
+    }
+  }
+}
+```
+
+The token is passed to the Depot process only through `DEPOT_TOKEN`. Build
+arguments and BuildKit-style secrets are preserved, and the single-platform
+result is imported into Maestro's artifact store before optional immutable
+registry publication.
 
 The CLI also exposes deployment history, redeploy, in-place workload restart,
 cancel, remove, service delete, freeze/unfreeze, and replica override commands.

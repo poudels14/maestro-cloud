@@ -124,6 +124,14 @@ Validate the fully merged document before making any local state:
 maestro config validate /etc/maestro/maestro.jsonc
 ```
 
+Top-level `datadog`, `depot`, `log-backup`, `preview`, and `nixos-upgrade`
+settings form the production launch policy. Their credential fields accept
+literal values, relative or absolute `file://` sources, and
+`aws-secret://` sources. Bootstrap writes the policy to the protected master
+launch document; admission sends the same policy to every node inside its
+request-bound encrypted join response. Do not copy these credentials into
+worker-specific overlay files.
+
 ## Host prerequisites
 
 Every node needs:
@@ -135,8 +143,9 @@ Every node needs:
   WireGuard, routes, and nftables; and
 - durable, owner-only storage for `/var/lib/maestro`.
 
-Control-plane nodes also need the configured etcd executable. Build-capable
-nodes need BuildKit as described by the deployment module.
+Control-plane nodes also need the configured etcd executable. Nodes performing
+native builds need BuildKit; nodes selected for remote builds need the Depot
+CLI. The rewrite NixOS module provides both.
 
 Cloud security groups and upstream firewalls must allow:
 

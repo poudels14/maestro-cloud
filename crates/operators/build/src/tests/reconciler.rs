@@ -1,12 +1,14 @@
 use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 
-use kernel_api::{Build, BuildPhase, Condition, ConditionState};
-use runtime::ArtifactSource;
+use async_trait::async_trait;
+use kernel_api::{Build, BuildPhase, Condition, ConditionState, DepotBuildConfig};
+use runtime::{ArtifactBuildRequest, ArtifactDigest, ArtifactSource, ArtifactStoreError};
 
 use super::support::{
     RecordingArtifacts, RecordingSource, TestResult, TestWorld, prepared, queued_build,
 };
-use crate::BuildSourceError;
+use crate::{BuildSourceError, DepotBuildBackend};
 
 #[tokio::test]
 async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult {
@@ -106,6 +108,73 @@ async fn registry_build_publishes_a_deployment_unique_immutable_reference() -> T
             runtime::ArtifactReference::new("registry.example/team/api:deployment-1")?,
         )]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn depot_build_uses_remote_backend_before_registry_publication() -> TestResult {
+    let world = TestWorld::new().await?;
+    let mut build = queued_build("Dockerfile")?;
+    build.spec.template.depot = Some(DepotBuildConfig {
+        project: "project-123".to_owned(),
+    });
+    build.spec.template.registry = Some("registry.example/team".to_owned());
+    world.seed(&build).await?;
+    let source = Arc::new(RecordingSource::successful("commit-abc"));
+    let artifacts = Arc::new(RecordingArtifacts::successful()?);
+    let depot = Arc::new(RecordingDepot::new()?);
+    let controller = world.runtime_with_depot(source, artifacts.clone(), Some(depot.clone()))?;
+
+    assert_eq!(controller.reconcile_snapshot().await?, 0);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+
+    assert!(artifacts.calls().is_empty());
+    assert_eq!(depot.projects(), ["project-123".to_owned()]);
+    assert_eq!(depot.requests().len(), 1);
+    assert_eq!(
+        world.build().await?.status.image_digest.as_deref(),
+        Some("registry.example/team/api@sha256:depot")
+    );
+    assert_eq!(
+        artifacts.publishes(),
+        [(
+            ArtifactDigest::new("sha256:depot")?,
+            runtime::ArtifactReference::new("registry.example/team/api:deployment-1")?,
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn depot_build_fails_cleanly_when_cluster_has_no_token() -> TestResult {
+    let world = TestWorld::new().await?;
+    let mut build = queued_build("Dockerfile")?;
+    build.spec.template.depot = Some(DepotBuildConfig {
+        project: "project-123".to_owned(),
+    });
+    world.seed(&build).await?;
+    let artifacts = Arc::new(RecordingArtifacts::successful()?);
+    let controller = world.runtime(
+        Arc::new(RecordingSource::successful("commit-abc")),
+        artifacts.clone(),
+    )?;
+
+    controller.reconcile_snapshot().await?;
+    controller.reconcile_snapshot().await?;
+    controller.reconcile_snapshot().await?;
+    controller.reconcile_snapshot().await?;
+
+    let failed = world.build().await?;
+    assert_eq!(failed.status.phase, BuildPhase::Failed);
+    assert_eq!(only_condition(&failed)?.reason.0, "ArtifactBuildRejected");
+    assert!(
+        only_condition(&failed)?
+            .message
+            .contains("cluster has no Depot token")
+    );
+    assert!(artifacts.calls().is_empty());
     Ok(())
 }
 
@@ -253,4 +322,48 @@ fn only_condition(build: &Build) -> TestResult<&Condition> {
         .conditions
         .first()
         .ok_or_else(|| "Build condition missing".into())
+}
+
+struct RecordingDepot {
+    digest: ArtifactDigest,
+    projects: Mutex<Vec<String>>,
+    requests: Mutex<Vec<ArtifactBuildRequest>>,
+}
+
+impl RecordingDepot {
+    fn new() -> TestResult<Self> {
+        Ok(Self {
+            digest: ArtifactDigest::new("sha256:depot")?,
+            projects: Mutex::new(Vec::new()),
+            requests: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn projects(&self) -> Vec<String> {
+        lock(&self.projects).clone()
+    }
+
+    fn requests(&self) -> Vec<ArtifactBuildRequest> {
+        lock(&self.requests).clone()
+    }
+}
+
+#[async_trait]
+impl DepotBuildBackend for RecordingDepot {
+    async fn build(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        lock(&self.requests).push(request.clone());
+        lock(&self.projects).push(project.to_owned());
+        Ok(self.digest.clone())
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }

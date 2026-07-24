@@ -178,6 +178,7 @@ pub(crate) async fn bootstrap(
                 containerd_socket,
                 etcd_binary,
                 &authority,
+                &loaded.launch_policy,
             ) {
                 return Err(CliError::invalid_input(format!(
                     "existing daemon launch document `{}` does not match this bootstrap request",
@@ -208,6 +209,7 @@ pub(crate) async fn bootstrap(
                 authority.clone(),
                 generated_secret(),
                 generated_secret(),
+                loaded.launch_policy.clone(),
             )?;
             let persisted = persist_private_exact(&launch_path, &launch, "daemon launch document")?;
             (launch, persisted)

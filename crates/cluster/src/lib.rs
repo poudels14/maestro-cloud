@@ -17,6 +17,7 @@ mod embedded_etcd_restore;
 mod join;
 mod join_crypto;
 mod join_key;
+mod launch_policy;
 mod network;
 mod node_lifecycle;
 mod ports;
@@ -50,6 +51,10 @@ pub use join_crypto::{
     encrypt_join_response,
 };
 pub use join_key::{JoinKeyError, load_or_create_join_key};
+pub use launch_policy::{
+    ClusterLaunchPolicy, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
+    DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
+};
 pub use network::{CidrError, Ipv4Cidr};
 pub use node_lifecycle::{NodeSchedulingAction, set_node_scheduling};
 pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};

@@ -21,7 +21,9 @@ use runtime::{
     ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
 };
 
-use crate::{BuildReconciler, BuildSourceError, BuildSourceProvider, PreparedBuildSource};
+use crate::{
+    BuildReconciler, BuildSourceError, BuildSourceProvider, DepotBuildBackend, PreparedBuildSource,
+};
 
 pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -95,12 +97,24 @@ impl TestWorld {
         source: Arc<dyn BuildSourceProvider>,
         artifacts: Arc<dyn ArtifactStore>,
     ) -> TestResult<kernel_controller::ControllerRuntime<BuildReconciler>> {
-        let reconciler = Arc::new(BuildReconciler::new(
-            self.cluster_id.clone(),
-            source,
-            artifacts,
-            Arc::new(FixedTimestampClock),
-        )?);
+        self.runtime_with_depot(source, artifacts, None)
+    }
+
+    pub(super) fn runtime_with_depot(
+        &self,
+        source: Arc<dyn BuildSourceProvider>,
+        artifacts: Arc<dyn ArtifactStore>,
+        depot: Option<Arc<dyn DepotBuildBackend>>,
+    ) -> TestResult<kernel_controller::ControllerRuntime<BuildReconciler>> {
+        let reconciler = Arc::new(
+            BuildReconciler::new(
+                self.cluster_id.clone(),
+                source,
+                artifacts,
+                Arc::new(FixedTimestampClock),
+            )?
+            .with_depot_backend(depot),
+        );
         Ok(reconciler.runtime(
             self.fenced.clone(),
             Arc::new(NoopClock),
@@ -175,6 +189,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                 dockerfile: dockerfile.to_string(),
                 watch: false,
                 registry: None,
+                depot: None,
                 environment: BTreeMap::from([("PROFILE".to_string(), "release".to_string())]),
                 secrets: BTreeMap::from([
                     (

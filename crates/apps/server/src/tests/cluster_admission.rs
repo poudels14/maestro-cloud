@@ -38,6 +38,7 @@ async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_jo
         authority,
         operator_secret.clone(),
         store_secret.clone(),
+        cluster::ClusterLaunchPolicy::default(),
         Arc::new(UnusedProvider),
         store.clone(),
     )?);
@@ -174,6 +175,7 @@ async fn join_rejects_a_transport_source_other_than_the_signed_endpoint()
         ClusterCertificateAuthority::generate(&config.name, authority_validity()?)?,
         operator_secret.clone(),
         SecretValue::new("storage-test-secret-with-at-least-32-characters"),
+        cluster::ClusterLaunchPolicy::default(),
         Arc::new(UnusedProvider),
         store.clone(),
     )?);

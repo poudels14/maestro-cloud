@@ -1,10 +1,8 @@
 use kernel_api::SecretValue;
 use logs::InMemoryLogStoreRuntime;
 
-use crate::datadog::{
-    DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig, build_datadog_sinks,
-    configure_datadog,
-};
+use crate::datadog::{build_datadog_sinks, configure_datadog};
+use crate::{DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig};
 
 #[test]
 fn metric_sink_is_opt_in_and_uses_an_independent_cursor_namespace()

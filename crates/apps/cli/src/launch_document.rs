@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use cluster::{
-    ClusterCertificateAuthority, ClusterConfig, JoinPayload, NodeCertificateBundle,
-    StoreJoinTicket, certificate_fingerprint,
+    ClusterCertificateAuthority, ClusterConfig, ClusterLaunchPolicy, DatadogLaunchConfig,
+    DepotLaunchConfig, JoinPayload, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
+    NodeCertificateBundle, PreviewLaunchConfig, StoreJoinTicket, certificate_fingerprint,
 };
 use kernel_api::{NodeId, NodeRole, SecretValue};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,16 @@ pub(crate) struct DaemonLaunchDocument {
     certificate_issuer: Option<ClusterCertificateAuthority>,
     operator_jwt_secret: SecretValue,
     store_encryption_secret: SecretValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    datadog: Option<DatadogLaunchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    depot: Option<DepotLaunchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    log_backup: Option<LogBackupLaunchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview: Option<PreviewLaunchConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nixos_upgrade: Option<NixosUpgradeLaunchConfig>,
 }
 
 impl DaemonLaunchDocument {
@@ -37,7 +48,15 @@ impl DaemonLaunchDocument {
         certificate_issuer: ClusterCertificateAuthority,
         operator_jwt_secret: SecretValue,
         store_encryption_secret: SecretValue,
+        launch_policy: ClusterLaunchPolicy,
     ) -> Result<Self, CliError> {
+        let ClusterLaunchPolicy {
+            datadog,
+            depot,
+            log_backup,
+            preview,
+            nixos_upgrade,
+        } = launch_policy;
         let document = Self {
             cluster,
             node_id,
@@ -49,6 +68,11 @@ impl DaemonLaunchDocument {
             certificate_issuer: Some(certificate_issuer),
             operator_jwt_secret,
             store_encryption_secret,
+            datadog,
+            depot,
+            log_backup,
+            preview,
+            nixos_upgrade,
         };
         document.validate()?;
         Ok(document)
@@ -62,6 +86,13 @@ impl DaemonLaunchDocument {
         etcd_binary: Option<PathBuf>,
         payload: JoinPayload,
     ) -> Result<Self, CliError> {
+        let ClusterLaunchPolicy {
+            datadog,
+            depot,
+            log_backup,
+            preview,
+            nixos_upgrade,
+        } = payload.launch_policy;
         let cluster = ClusterConfig {
             cluster_id: payload.cluster_id,
             name: payload.cluster_name,
@@ -92,6 +123,11 @@ impl DaemonLaunchDocument {
             certificate_issuer: payload.certificate_issuer,
             operator_jwt_secret: payload.operator_jwt_secret,
             store_encryption_secret: payload.store_encryption_secret,
+            datadog,
+            depot,
+            log_backup,
+            preview,
+            nixos_upgrade,
         };
         document.validate()?;
         Ok(document)
@@ -107,6 +143,7 @@ impl DaemonLaunchDocument {
         certificate_issuer: ClusterCertificateAuthority,
         operator_jwt_secret: SecretValue,
         store_encryption_secret: SecretValue,
+        launch_policy: ClusterLaunchPolicy,
     ) -> Result<Self, CliError> {
         let role = cluster
             .nodes
@@ -117,6 +154,13 @@ impl DaemonLaunchDocument {
                 ))
             })?
             .role;
+        let ClusterLaunchPolicy {
+            datadog,
+            depot,
+            log_backup,
+            preview,
+            nixos_upgrade,
+        } = launch_policy;
         let document = Self {
             cluster,
             node_id,
@@ -128,6 +172,11 @@ impl DaemonLaunchDocument {
             certificate_issuer: role.is_control_plane().then_some(certificate_issuer),
             operator_jwt_secret,
             store_encryption_secret,
+            datadog,
+            depot,
+            log_backup,
+            preview,
+            nixos_upgrade,
         };
         document.validate()?;
         Ok(document)
@@ -199,6 +248,7 @@ impl DaemonLaunchDocument {
         containerd_socket: &Path,
         etcd_binary: &Path,
         authority: &ClusterCertificateAuthority,
+        launch_policy: &ClusterLaunchPolicy,
     ) -> bool {
         self.cluster == *cluster
             && self.node_id == *node_id
@@ -207,6 +257,11 @@ impl DaemonLaunchDocument {
             && self.etcd_binary.as_deref() == Some(etcd_binary)
             && self.store_mode == StoreLaunchDocument::Bootstrap
             && self.certificate_issuer.as_ref() == Some(authority)
+            && self.datadog == launch_policy.datadog
+            && self.depot == launch_policy.depot
+            && self.log_backup == launch_policy.log_backup
+            && self.preview == launch_policy.preview
+            && self.nixos_upgrade == launch_policy.nixos_upgrade
     }
 }
 

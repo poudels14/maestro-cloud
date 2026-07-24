@@ -32,6 +32,7 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         ports: config.ports,
         tailscale: config.tailscale.clone(),
         cloudflare: config.cloudflare.clone(),
+        launch_policy: crate::ClusterLaunchPolicy::default(),
         certificates,
         operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new("store-test-secret-with-at-least-32-characters"),

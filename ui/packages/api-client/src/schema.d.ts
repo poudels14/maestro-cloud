@@ -1323,6 +1323,8 @@ export interface components {
             /** @enum {string} */
             type: "image";
         } | {
+            /** @description Optional Depot remote-builder project. */
+            depot?: components["schemas"]["DepotBuildConfig"] | (null);
             /** @description Path to the container build definition within the source. */
             dockerfile: string;
             /** @description Non-secret build variables. */
@@ -1467,6 +1469,8 @@ export interface components {
         };
         /** @description Source and build environment applied to each generated build resource. */
         BuildTemplate: {
+            /** @description Optional Depot remote-builder project. */
+            depot?: components["schemas"]["DepotBuildConfig"] | (null);
             /** @description Path to the container build definition within the source. */
             dockerfile: string;
             /** @description Non-secret build variables. */
@@ -1650,6 +1654,11 @@ export interface components {
             phase: components["schemas"]["DeploymentPhase"];
             /** @description Time the deployment first became ready. */
             readyAt?: components["schemas"]["Timestamp"] | (null);
+        };
+        /** @description Service-level selection for Depot's remote builder infrastructure. */
+        DepotBuildConfig: {
+            /** @description Depot project ID receiving the remote build. */
+            project: string;
         };
         DiskInfo: {
             /** Format: int64 */

@@ -144,16 +144,6 @@ fn convert_build(
     data: &LegacyDeploymentData,
     pinned_revision: Option<&str>,
 ) -> Result<ArtifactTemplate, LegacyPlanError> {
-    if let Some(depot) = &build.depot {
-        return Err(unsupported(
-            service_id,
-            "build.depot",
-            format!(
-                "Depot project `{}` has no native resource yet",
-                depot.project
-            ),
-        ));
-    }
     let repository = build
         .repo
         .as_deref()
@@ -187,6 +177,20 @@ fn convert_build(
     if build.registry.is_some() && registry.is_none() {
         return Err(invalid(service_id, "build.registry cannot be empty"));
     }
+    let depot = build
+        .depot
+        .as_ref()
+        .map(|depot| {
+            let project = depot.project.trim();
+            if project.is_empty() {
+                Err(invalid(service_id, "build.depot.project cannot be empty"))
+            } else {
+                Ok(kernel_api::DepotBuildConfig {
+                    project: project.to_owned(),
+                })
+            }
+        })
+        .transpose()?;
     Ok(ArtifactTemplate::Build {
         template: BuildTemplate {
             source: BuildSource::Git {
@@ -199,6 +203,7 @@ fn convert_build(
             dockerfile: build.dockerfile.clone(),
             watch: build.watch,
             registry,
+            depot,
             environment,
             secrets,
         },

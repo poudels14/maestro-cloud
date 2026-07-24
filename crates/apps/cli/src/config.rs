@@ -189,6 +189,33 @@ const CLUSTER_TEMPLATE: &str = r#"{
   //     "replicas": 2
   //   }
   // },
+  // "datadog": {
+  //   "api-key": "aws-secret://maestro/datadog-api-key",
+  //   "site": "datadoghq.com",
+  //   "metrics": {
+  //     "enabled": true,
+  //     "tags": ["env:production"]
+  //   }
+  // },
+  // "depot": {
+  //   "token": "aws-secret://maestro/depot-token",
+  //   "timeout-secs": 1800
+  // },
+  // "log-backup": {
+  //   "bucket": "maestro-production-logs",
+  //   "kms-key-id": "alias/maestro-logs",
+  //   "region": "us-west-2",
+  //   "retention-days": 30
+  // },
+  // "preview": {
+  //   "domain": "preview.example.com",
+  //   "github-token": "aws-secret://maestro/github-token",
+  //   "max-concurrent-previews": 20
+  // },
+  // "nixos-upgrade": {
+  //   "flake": "/etc/maestro",
+  //   "configuration": "production"
+  // },
   "node": "node-1"
 }
 "#;
@@ -199,6 +226,13 @@ const SERVICES_TEMPLATE: &str = r#"{
     "service-1": {
       "name": "Service 1",
       "image": "traefik/whoami:latest",
+      // To build remotely, replace "image" with:
+      // "build": {
+      //   "repo": "https://github.com/example/service-1.git",
+      //   "branch": "main",
+      //   "dockerfile": "Dockerfile",
+      //   "depot": { "project": "your-depot-project" }
+      // },
       "deploy": {
         "exposePorts": [80],
         "replicas": 1,

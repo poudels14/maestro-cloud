@@ -240,9 +240,17 @@ pub(super) struct BuildConfig {
     pub(super) watch: bool,
     pub(super) registry: Option<String>,
     #[serde(default)]
+    pub(super) depot: Option<DepotConfig>,
+    #[serde(default)]
     pub(super) env: ValueSource,
     #[serde(default)]
     pub(super) secrets: ValueSource,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct DepotConfig {
+    pub(super) project: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

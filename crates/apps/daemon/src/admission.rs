@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cluster::{
     AdmissionCoordinator, AdmissionCoordinatorError, ClusterCertificateAuthority, ClusterConfig,
-    StoreProvider,
+    ClusterLaunchPolicy, StoreProvider,
 };
 use kernel_api::SecretValue;
 use kernel_store::Store;
@@ -16,6 +16,8 @@ pub struct AdmissionDependencies {
     pub operator_jwt_secret: SecretValue,
     /// Cluster-wide at-rest encryption key delivered to every node.
     pub store_encryption_secret: SecretValue,
+    /// Optional production integrations delivered through encrypted join grants.
+    pub launch_policy: ClusterLaunchPolicy,
 }
 
 impl AdmissionDependencies {
@@ -30,6 +32,7 @@ impl AdmissionDependencies {
             self.authority.clone(),
             self.operator_jwt_secret.clone(),
             self.store_encryption_secret.clone(),
+            self.launch_policy.clone(),
             provider,
             store,
         )

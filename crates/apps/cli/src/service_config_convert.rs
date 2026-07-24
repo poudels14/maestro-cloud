@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    ArtifactTemplate, BuildSource, BuildTemplate, CommandSpec, ExecPolicy, HealthCheckSpec,
-    HealthProbe, NodeApiAccess, NodeId, PlacementConstraint, PreviewPolicy, SecretMountSpec,
-    SecretValue, ServiceId, ServiceSpec, VolumeAccess, VolumeMountSpec, VolumeSource,
+    ArtifactTemplate, BuildSource, BuildTemplate, CommandSpec, DepotBuildConfig, ExecPolicy,
+    HealthCheckSpec, HealthProbe, NodeApiAccess, NodeId, PlacementConstraint, PreviewPolicy,
+    SecretMountSpec, SecretValue, ServiceId, ServiceSpec, VolumeAccess, VolumeMountSpec,
+    VolumeSource,
 };
 use sha2::{Digest, Sha256};
 
@@ -325,6 +326,16 @@ async fn convert_build(
         }
         None => None,
     };
+    let depot = build
+        .depot
+        .map(|depot| {
+            required_text(
+                &format!("{service_path}.build.depot.project"),
+                &depot.project,
+            )
+            .map(|project| DepotBuildConfig { project })
+        })
+        .transpose()?;
     Ok(BuildTemplate {
         source,
         dockerfile: required_text(
@@ -333,6 +344,7 @@ async fn convert_build(
         )?,
         watch: build.watch,
         registry,
+        depot,
         environment,
         secrets,
     })

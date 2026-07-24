@@ -110,6 +110,14 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
         ports: loaded.cluster.ports,
         tailscale: loaded.cluster.tailscale.clone(),
         cloudflare: loaded.cluster.cloudflare.clone(),
+        launch_policy: cluster::ClusterLaunchPolicy {
+            depot: Some(cluster::DepotLaunchConfig {
+                token: SecretValue::new("joined-depot-secret"),
+                executable: "/opt/depot/bin/depot".into(),
+                timeout_secs: 600,
+            }),
+            ..cluster::ClusterLaunchPolicy::default()
+        },
         certificates: authority.issue_node_certificate(
             &loaded.node_id,
             &node.hostname,
@@ -162,6 +170,10 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
     );
     assert!(launch.pointer("/security/identity/privateKeyPem").is_some());
     assert!(launch.pointer("/operatorJwtSecret").is_some());
+    assert_eq!(
+        launch.pointer("/depot/token"),
+        Some(&"joined-depot-secret".into())
+    );
     assert!(launch.pointer("/storeEncryptionSecret").is_some());
     assert!(launch.pointer("/certificateIssuer").is_none());
     assert!(launch.pointer("/etcdBinary").is_none());
@@ -252,6 +264,7 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
         ports: loaded.cluster.ports,
         tailscale: loaded.cluster.tailscale.clone(),
         cloudflare: loaded.cluster.cloudflare.clone(),
+        launch_policy: cluster::ClusterLaunchPolicy::default(),
         certificates: authority.issue_node_certificate(
             &loaded.node_id,
             &node.hostname,
@@ -325,6 +338,7 @@ fn unusable_payload(
         ports: config.ports,
         tailscale: config.tailscale.clone(),
         cloudflare: config.cloudflare.clone(),
+        launch_policy: cluster::ClusterLaunchPolicy::default(),
         certificates: authority.issue_node_certificate(
             &node_id,
             &node.hostname,

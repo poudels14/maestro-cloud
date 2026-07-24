@@ -99,6 +99,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         store_encryption_secret: SecretValue::new(
             "storage-test-secret-with-at-least-32-characters",
         ),
+        launch_policy: cluster::ClusterLaunchPolicy::default(),
     };
     let plan = DaemonPlan::new(
         cluster.clone(),

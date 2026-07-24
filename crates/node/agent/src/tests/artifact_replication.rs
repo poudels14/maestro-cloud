@@ -277,6 +277,7 @@ fn deployment(
                     dockerfile: "Dockerfile".to_owned(),
                     watch: false,
                     registry: None,
+                    depot: None,
                     environment: BTreeMap::new(),
                     secrets: BTreeMap::new(),
                 },

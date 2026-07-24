@@ -1,3 +1,4 @@
+mod depot;
 mod git_process;
 mod local_source;
 mod reconciler;

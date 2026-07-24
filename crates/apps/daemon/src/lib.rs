@@ -17,6 +17,7 @@ mod config_view;
 mod control_plane;
 mod datadog;
 mod dead_letter_admin;
+mod depot_config;
 mod dns_launch;
 mod dns_reconciler;
 mod dns_resources;
@@ -49,14 +50,18 @@ mod upgrade_config;
 mod workload_agents;
 
 pub use admission::AdmissionDependencies;
+pub use cluster::{
+    DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig, DepotLaunchConfig,
+    LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
+};
 pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
     HostTelemetryDependencies, LeaderWorkload, NodeUpgradeDependencies,
 };
-pub use datadog::{DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig};
 pub use dead_letter_admin::{
     DeadLetterAdminCommand, DeadLetterAdminError, DeadLetterAdminOutput, administer_dead_letters,
 };
+pub use depot_config::DepotLaunchError;
 pub use dns_launch::{
     DEFAULT_DNS_RESOLVER_PORT, DnsResolverLaunchConfig, DnsResolverLaunchError, run_dns_resolver,
 };
@@ -64,7 +69,6 @@ pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{DaemonLaunchConfig, StoreLaunchMode, launch_daemon, load_launch_config};
 pub use launch_error::DaemonLaunchError;
 pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};
-pub use log_backup_config::LogBackupLaunchConfig;
 pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
@@ -73,10 +77,10 @@ pub use operator_leader::{BuildOperatorBackends, OperatorBackends, OperatorLeade
 pub use operator_settings::{OperatorSettings, PreviewOperatorSettings};
 pub use operators::{OperatorInvocationReport, OperatorSuite};
 pub use plan::{DaemonPlan, DaemonRole, RoleSpec};
-pub use preview_config::{PreviewLaunchConfig, PreviewLaunchError};
+pub use preview_config::PreviewLaunchError;
 pub use runtime::{Daemon, RoleFactory, RoleRuntime, RunningDaemon};
 pub use s3_backup::{S3BackupObjectStore, S3BackupObjectStoreError};
-pub use upgrade_config::{NixosUpgradeLaunchConfig, NixosUpgradeLaunchError};
+pub use upgrade_config::NixosUpgradeLaunchError;
 
 #[cfg(test)]
 mod tests;

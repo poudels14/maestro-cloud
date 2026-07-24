@@ -75,12 +75,15 @@ impl OperatorSuite {
         settings: OperatorSettings,
         backends: OperatorBackends,
     ) -> Result<Self, OperatorSuiteError> {
-        let builds = Arc::new(BuildReconciler::new(
-            cluster_id.clone(),
-            backends.build_source,
-            backends.artifacts,
-            timestamp_clock.clone(),
-        )?)
+        let builds = Arc::new(
+            BuildReconciler::new(
+                cluster_id.clone(),
+                backends.build_source,
+                backends.artifacts,
+                timestamp_clock.clone(),
+            )?
+            .with_depot_backend(backends.depot),
+        )
         .runtime(
             store.clone(),
             monotonic_clock.clone(),

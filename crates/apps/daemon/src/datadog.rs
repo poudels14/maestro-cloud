@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use kernel_api::SecretValue;
+use crate::DaemonLaunchError;
+use cluster::DatadogLaunchConfig;
 use logs::{
     DatadogLogSink, DatadogLogSinkSettings, DatadogLogSinkSettingsError, HttpTransport,
     LogFilterKind, LogSink, LogSourceInclusion, LogStoreRuntime, ReqwestHttpTransport,
@@ -10,105 +11,51 @@ use metrics::{
     DatadogMetricSink, DatadogMetricSinkSettings, HostMetricSink, MetricHttpTransport, MetricSink,
     ReqwestMetricHttpTransport,
 };
-use serde::{Deserialize, Serialize};
 
-use crate::DaemonLaunchError;
-
-/// Node-local Datadog log-delivery view extracted from the authoritative config.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatadogLaunchConfig {
-    /// Secret API credential exposed only while constructing the sink adapter.
-    pub api_key: SecretValue,
-    /// Datadog intake site such as `datadoghq.com` or `datadoghq.eu`.
-    pub site: String,
-    /// Whether ingress service and access-log records are delivered.
-    #[serde(default = "default_true")]
-    pub include_ingress_logs: bool,
-    /// Whether useful Tailscale records are delivered after noise filtering.
-    #[serde(default = "default_true")]
-    pub include_tailscale_logs: bool,
-    /// Sink-local log filtering choices.
-    #[serde(default)]
-    pub logs: DatadogLogsLaunchConfig,
-    /// Opt-in Datadog workload metric delivery and its global tags.
-    #[serde(default)]
-    pub metrics: DatadogMetricsLaunchConfig,
+pub(crate) fn validate_datadog(config: &DatadogLaunchConfig) -> Result<(), DaemonLaunchError> {
+    log_sink_settings(config)?;
+    if config.metrics.enabled {
+        metric_sink_settings(config, "validation-cluster", "validation-host")?;
+    }
+    Ok(())
 }
 
-impl DatadogLaunchConfig {
-    pub(crate) fn validate(&self) -> Result<(), DaemonLaunchError> {
-        self.log_sink_settings()?;
-        if self.metrics.enabled {
-            self.metric_sink_settings("validation-cluster", "validation-host")?;
-        }
-        Ok(())
-    }
-
-    fn log_sink_settings(&self) -> Result<DatadogLogSinkSettings, DatadogLogSinkSettingsError> {
-        let filters = if self.logs.include_healthcheck {
-            Vec::new()
-        } else {
-            vec![LogFilterKind::SuccessfulHealthcheck]
-        };
-        DatadogLogSinkSettings::new(self.api_key.expose(), &self.site).map(|settings| {
-            settings
-                .ingress_logs(if self.include_ingress_logs {
-                    LogSourceInclusion::Include
-                } else {
-                    LogSourceInclusion::Exclude
-                })
-                .tailscale_logs(if self.include_tailscale_logs {
-                    LogSourceInclusion::Include
-                } else {
-                    LogSourceInclusion::Exclude
-                })
-                .filters(filters)
-        })
-    }
-
-    fn metric_sink_settings(
-        &self,
-        cluster_name: &str,
-        hostname: &str,
-    ) -> Result<DatadogMetricSinkSettings, metrics::DatadogMetricSinkSettingsError> {
-        DatadogMetricSinkSettings::new(
-            self.api_key.expose(),
-            &self.site,
-            cluster_name,
-            hostname,
-            self.metrics.tags.clone(),
-        )
-    }
+fn log_sink_settings(
+    config: &DatadogLaunchConfig,
+) -> Result<DatadogLogSinkSettings, DatadogLogSinkSettingsError> {
+    let filters = if config.logs.include_healthcheck {
+        Vec::new()
+    } else {
+        vec![LogFilterKind::SuccessfulHealthcheck]
+    };
+    DatadogLogSinkSettings::new(config.api_key.expose(), &config.site).map(|settings| {
+        settings
+            .ingress_logs(if config.include_ingress_logs {
+                LogSourceInclusion::Include
+            } else {
+                LogSourceInclusion::Exclude
+            })
+            .tailscale_logs(if config.include_tailscale_logs {
+                LogSourceInclusion::Include
+            } else {
+                LogSourceInclusion::Exclude
+            })
+            .filters(filters)
+    })
 }
 
-/// Datadog log-specific filtering view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatadogLogsLaunchConfig {
-    /// Whether successful configured workload healthchecks are retained.
-    #[serde(default = "default_true")]
-    pub include_healthcheck: bool,
-}
-
-impl Default for DatadogLogsLaunchConfig {
-    fn default() -> Self {
-        Self {
-            include_healthcheck: true,
-        }
-    }
-}
-
-/// Datadog metric-specific enablement and global series tags.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatadogMetricsLaunchConfig {
-    /// Enables durable node-local delivery of normalized workload metrics.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Additional tags appended after cluster and host identity.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+fn metric_sink_settings(
+    config: &DatadogLaunchConfig,
+    cluster_name: &str,
+    hostname: &str,
+) -> Result<DatadogMetricSinkSettings, metrics::DatadogMetricSinkSettingsError> {
+    DatadogMetricSinkSettings::new(
+        config.api_key.expose(),
+        &config.site,
+        cluster_name,
+        hostname,
+        config.metrics.tags.clone(),
+    )
 }
 
 pub(crate) struct ConfiguredDatadog {
@@ -136,14 +83,14 @@ pub(crate) fn configure_datadog(
     config
         .map(|config| {
             Ok(ConfiguredDatadog {
-                log_settings: config.log_sink_settings()?,
+                log_settings: log_sink_settings(config)?,
                 log_transport: Arc::new(ReqwestHttpTransport::new(Duration::from_secs(30))?),
                 metrics: config
                     .metrics
                     .enabled
                     .then(|| {
                         Ok::<_, DaemonLaunchError>(ConfiguredDatadogMetrics {
-                            settings: config.metric_sink_settings(cluster_name, hostname)?,
+                            settings: metric_sink_settings(config, cluster_name, hostname)?,
                             metric_transport: Arc::new(ReqwestMetricHttpTransport::new(
                                 Duration::from_secs(15),
                             )?),
@@ -189,8 +136,4 @@ pub(crate) fn build_datadog_sinks(
         metrics: metric_sinks,
         host_metrics: host_metric_sinks,
     }
-}
-
-fn default_true() -> bool {
-    true
 }

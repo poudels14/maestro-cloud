@@ -27,6 +27,7 @@ in
   assert daemon.serviceConfig.UMask == "0077";
   assert daemon.serviceConfig.LimitNOFILE == 1048576;
   assert config.services.maestro-rewrite.package == rewritePackage;
+  assert lib.any (package: lib.getName package == "depot") config.environment.systemPackages;
   assert lib.hasInfix "/bin/maestro-daemon" daemonCommand;
   assert lib.hasInfix "\"start\" \"/run/maestro/launch.json\"" daemonCommand;
     pkgs.runCommand "maestro-rewrite-module-check" {} ''

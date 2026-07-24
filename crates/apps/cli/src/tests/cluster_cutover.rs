@@ -78,6 +78,14 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
         master.pointer("/operatorJwtSecret"),
         Some(&"new-operator-jwt-secret-at-least-32-characters".into())
     );
+    assert_eq!(
+        master.pointer("/depot/token"),
+        Some(&"formation-depot-secret".into())
+    );
+    assert_eq!(
+        worker.pointer("/depot/token"),
+        Some(&"formation-depot-secret".into())
+    );
 
     let mut second_output = Vec::new();
     prepare_cutover_bundle(options(), &mut second_output, &reader).await?;
