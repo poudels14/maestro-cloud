@@ -3331,10 +3331,7 @@ export interface components {
             mode: components["schemas"]["UpgradeMode"];
             /** @description Explicit node selection, or every eligible node when empty. */
             nodeIds?: components["schemas"]["NodeId"][];
-            /**
-             * @description Whether nodes stage an upgrade or only restart their installed generation.
-             * @default upgrade
-             */
+            /** @description Whether nodes stage an upgrade or only restart their installed generation. */
             operation: components["schemas"]["UpgradeOperation"];
             /** @description Minimum semantic version for upgrades; restart runs carry `0.0.0`. */
             targetVersion: string;

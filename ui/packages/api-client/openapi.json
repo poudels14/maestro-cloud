@@ -7093,7 +7093,6 @@
                 "$ref": "#/components/schemas/UpgradeOperation"
               }
             ],
-            "default": "upgrade",
             "description": "Whether nodes stage an upgrade or only restart their installed generation."
           },
           "targetVersion": {
@@ -7102,6 +7101,7 @@
           }
         },
         "required": [
+          "operation",
           "targetVersion",
           "mode"
         ],

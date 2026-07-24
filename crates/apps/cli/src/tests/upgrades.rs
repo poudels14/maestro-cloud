@@ -214,7 +214,7 @@ fn run(
 ) -> Result<UpgradeRun, serde_json::Error> {
     serde_json::from_value(json!({
         "meta": {"id": id, "revision": revision, "generation": 1},
-        "spec": {"targetVersion": target, "mode": mode},
+        "spec": {"operation": "upgrade", "targetVersion": target, "mode": mode},
         "status": {"phase": phase}
     }))
 }

@@ -81,11 +81,10 @@ pub struct PreviewStatus {
 pub type Preview = Object<PreviewId, PreviewSpec, PreviewStatus>;
 
 /// Host mutation performed by the shared cluster-maintenance state machine.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum UpgradeOperation {
     /// Stage a new boot generation before restarting each selected node.
-    #[default]
     Upgrade,
     /// Preserve the installed generation and only restart each selected node.
     Restart,
@@ -156,7 +155,6 @@ impl UpgradePhase {
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeRunSpec {
     /// Whether nodes stage an upgrade or only restart their installed generation.
-    #[serde(default)]
     pub operation: UpgradeOperation,
     /// Minimum semantic version for upgrades; restart runs carry `0.0.0`.
     pub target_version: String,

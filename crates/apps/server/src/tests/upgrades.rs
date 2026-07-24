@@ -26,7 +26,11 @@ async fn upgrades_are_validated_created_observed_and_canceled_optimistically()
             "bad-version",
             json!({
                 "upgradeRunId": "upgrade-bad",
-                "spec": {"targetVersion": "not-semver", "mode": "rolling"}
+                "spec": {
+                    "operation": "upgrade",
+                    "targetVersion": "not-semver",
+                    "mode": "rolling"
+                }
             }),
         )
         .await?
@@ -40,6 +44,7 @@ async fn upgrades_are_validated_created_observed_and_canceled_optimistically()
             json!({
                 "upgradeRunId": "upgrade-duplicate",
                 "spec": {
+                    "operation": "upgrade",
                     "targetVersion": "2.0.0",
                     "mode": "rolling",
                     "nodeIds": ["node-1", "node-1"]
@@ -54,6 +59,7 @@ async fn upgrades_are_validated_created_observed_and_canceled_optimistically()
     let create_payload = json!({
         "upgradeRunId": "upgrade-1",
         "spec": {
+            "operation": "upgrade",
             "targetVersion": " 2.0.0 ",
             "mode": "rolling",
             "nodeIds": ["node-1"]
