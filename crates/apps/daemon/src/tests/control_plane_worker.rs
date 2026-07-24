@@ -113,7 +113,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
     assert_eq!(assignment.status.phase, AssignmentPhase::Running);
     assert_eq!(
         assignment.status.workload_address,
-        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)))
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 3)))
     );
     assert_eq!(
         load_node(&store, &cluster.cluster_id, &worker_id)
@@ -127,14 +127,14 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             .list(&cluster.cluster_id, &worker_id)
             .await?
             .len(),
-        1
+        2
     );
     assert_eq!(
         (
             network_provider.lease_count(),
             network_provider.attachment_count()
         ),
-        (1, 1)
+        (2, 2)
     );
     assert!(
         mesh_applications

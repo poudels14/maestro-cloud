@@ -13,6 +13,8 @@ use kernel_api::{
 };
 use kernel_store::{CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store};
 
+use crate::dns_resources::DNS_RESOLVER_SERVICE_ID;
+
 pub(super) async fn seed_agent_resources(
     store: &InMemoryStore,
     cluster_id: &ClusterId,
@@ -51,11 +53,57 @@ pub(super) async fn seed_agent_resources(
             "api",
             serde_json::to_vec(&dns_record(workload_address)?)?,
         ));
+    } else {
+        let (resolver_deployment, resolver_assignment, resolver_replica) =
+            delegated_dns_resources(node_id, workload_address)?;
+        resources.extend([
+            (
+                "Deployment",
+                "maestro-system-dns-deployment",
+                serde_json::to_vec(&resolver_deployment)?,
+            ),
+            (
+                "Assignment",
+                "maestro-system-dns-assignment",
+                serde_json::to_vec(&resolver_assignment)?,
+            ),
+            (
+                "ReplicaState",
+                "maestro-system-dns-replica",
+                serde_json::to_vec(&resolver_replica)?,
+            ),
+        ]);
     }
     for (kind, id, value) in resources {
         put(store, cluster_id, kind, id, value).await?;
     }
     Ok(())
+}
+
+fn delegated_dns_resources(
+    node_id: &NodeId,
+    workload_address: Ipv4Addr,
+) -> Result<(Deployment, Assignment, ReplicaState), kernel_api::InvalidIdentifier> {
+    let service_id = ServiceId::new(DNS_RESOLVER_SERVICE_ID)?;
+    let mut deployment = deployment(None)?;
+    deployment.meta.id = DeploymentId::new("maestro-system-dns-deployment")?;
+    deployment.spec.service_id = service_id.clone();
+    deployment.spec.service.name = "Maestro DNS Resolver".to_owned();
+    deployment.status.phase = DeploymentPhase::Ready;
+    deployment.status.ready_at = Some(Timestamp(1_750_000_000_000));
+
+    let mut assignment = workload_assignment(
+        node_id,
+        workload_address,
+        WorkloadNetworkMode::RuntimeDelegated,
+    )?;
+    assignment.meta.id = AssignmentId::new("maestro-system-dns-assignment")?;
+    assignment.spec.service_id = service_id;
+    assignment.spec.deployment_id = deployment.meta.id.clone();
+
+    let mut replica = replica_state(&assignment)?;
+    replica.meta.id = ReplicaStateId::new("maestro-system-dns-replica")?;
+    Ok((deployment, assignment, replica))
 }
 
 pub(super) async fn load_assignment(
