@@ -66,7 +66,6 @@ pub struct NodeUpgradeCommand {
     /// Stable target node.
     pub node_id: NodeId,
     /// Whether this command stages an upgrade or only reboots the current generation.
-    #[serde(default)]
     pub operation: UpgradeOperation,
     /// Minimum Maestro version, or the restart sentinel for restart-only commands.
     pub target_version: String,
