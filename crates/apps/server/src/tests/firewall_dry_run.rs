@@ -101,6 +101,7 @@ fn settings() -> FirewallSettings {
         protected_host_ports: vec![443],
         control_allow_cidrs: vec!["10.20.0.0/24".to_string()],
         system_services: BTreeSet::new(),
+        host_port_routes: Vec::new(),
     }
 }
 

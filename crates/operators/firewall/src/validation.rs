@@ -54,6 +54,13 @@ pub(crate) fn validate(input: FirewallInput) -> Result<ValidatedInput, FirewallP
             });
         }
     }
+    for route in &settings.host_port_routes {
+        if !settings.system_services.contains(&route.service_id) {
+            return Err(FirewallPlanError::HostPortRouteNotSystem {
+                service_id: route.service_id.clone(),
+            });
+        }
+    }
     let nodes = index_nodes(input.node_networks)?;
     let assignments = validate_assignments(input.assignments, &services, &nodes)?;
     let control_cidrs = settings
@@ -106,6 +113,28 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
     }
     if settings.protected_host_ports.contains(&0) {
         return Err(FirewallPlanError::ZeroProtectedHostPort);
+    }
+    if settings
+        .host_port_routes
+        .iter()
+        .any(|route| route.host_port == 0 || route.workload_port == 0)
+    {
+        return Err(FirewallPlanError::ZeroHostPortRoute);
+    }
+    settings.host_port_routes.sort();
+    let mut endpoints = BTreeSet::new();
+    for route in &settings.host_port_routes {
+        if settings.protected_host_ports.contains(&route.host_port) {
+            return Err(FirewallPlanError::HostPortRouteConflictsProtected {
+                port: route.host_port,
+            });
+        }
+        if !endpoints.insert((route.host_port, route.protocol)) {
+            return Err(FirewallPlanError::DuplicateHostPortRoute {
+                port: route.host_port,
+                protocol: route.protocol,
+            });
+        }
     }
     settings.protected_host_ports.sort_unstable();
     settings.protected_host_ports.dedup();

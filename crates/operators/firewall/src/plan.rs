@@ -57,6 +57,21 @@ pub enum FirewallPlanError {
     /// Port zero cannot identify a protected host listener.
     #[error("protected host ports must be greater than zero")]
     ZeroProtectedHostPort,
+    /// Port zero cannot identify a host publication endpoint.
+    #[error("host port routes must use nonzero host and workload ports")]
+    ZeroHostPortRoute,
+    /// Two system routes cannot own the same host endpoint.
+    #[error("host port `{port}/{protocol:?}` is routed more than once")]
+    DuplicateHostPortRoute {
+        port: u16,
+        protocol: crate::HostPortProtocol,
+    },
+    /// Host routing is restricted to declared system services.
+    #[error("host port route references non-system Service `{service_id}`")]
+    HostPortRouteNotSystem { service_id: ServiceId },
+    /// A public workload route cannot bypass a protected control-plane listener.
+    #[error("host port route `{port}` conflicts with a protected host port")]
+    HostPortRouteConflictsProtected { port: u16 },
     /// A configured or resource CIDR was malformed or noncanonical.
     #[error("invalid CIDR `{value}` at `{field}`: {message}")]
     InvalidCidr {

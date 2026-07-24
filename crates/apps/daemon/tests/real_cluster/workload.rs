@@ -327,10 +327,15 @@ impl RealProcessCluster {
             .list(&self.cluster.cluster_id, &self.node(0)?.node_id)
             .await
             .map_err(RealClusterError::from_display)?;
-        let [workload] = workloads.as_slice() else {
+        let matching = workloads
+            .iter()
+            .filter(|workload| workload.metadata.service_id.as_str() == "m3-runtime")
+            .collect::<Vec<_>>();
+        let [workload] = matching.as_slice() else {
             return Err(RealClusterError::new(format!(
-                "expected one owned runtime workload, observed {}",
-                workloads.len()
+                "expected one m3-runtime workload, observed {} across {} owned workloads",
+                matching.len(),
+                workloads.len(),
             )));
         };
         if workload.status.state != WorkloadState::Running {

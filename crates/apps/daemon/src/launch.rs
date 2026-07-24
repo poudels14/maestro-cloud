@@ -202,18 +202,25 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     );
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     let dns_resolver_resources: Option<DnsResolverSystemResources> = None;
-    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
     let traefik_resources = Some(
-        TraefikSystemResources::for_docker_node(&cluster, &node_id, &security)
+        TraefikSystemResources::for_cluster(&cluster, &security)
             .map_err(|error| invalid(format!("invalid Traefik system resources: {error}")))?,
     );
-    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
-    let traefik_resources: Option<TraefikSystemResources> = None;
     let system_host_ports = traefik_resources
         .as_ref()
         .map(TraefikSystemResources::host_port_grants)
         .unwrap_or_default();
     let mut operator_settings = OperatorSettings::production(&cluster)?;
+    if let Some(resources) = &traefik_resources {
+        operator_settings
+            .firewall
+            .system_services
+            .insert(resources.service.meta.id.clone());
+        #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+        {
+            operator_settings.firewall.host_port_routes = resources.firewall_routes();
+        }
+    }
     operator_settings.preview = configured_preview
         .as_ref()
         .map(|preview| preview.settings.clone());

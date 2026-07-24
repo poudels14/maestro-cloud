@@ -10,7 +10,9 @@ use kernel_api::{
     RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp, TransportProtocol,
 };
 
-use crate::{FirewallInput, FirewallPlanError, FirewallSettings, plan};
+use crate::{
+    FirewallInput, FirewallPlanError, FirewallSettings, HostPortProtocol, HostPortRoute, plan,
+};
 
 #[test]
 fn generated_per_node_rulesets_match_the_reviewed_contract() {
@@ -128,6 +130,35 @@ fn local_workloads_are_masqueraded_only_when_leaving_cluster_subnets() {
 }
 
 #[test]
+fn host_ports_route_to_one_running_local_system_assignment() {
+    let output = plan(World::standard().input()).unwrap();
+    let first = output
+        .rulesets
+        .iter()
+        .find(|ruleset| ruleset.node_id.as_str() == "node-1")
+        .unwrap();
+    let second = output
+        .rulesets
+        .iter()
+        .find(|ruleset| ruleset.node_id.as_str() == "node-2")
+        .unwrap();
+    assert!(
+        first
+            .script
+            .contains("iifname != \"maestro0\" tcp dport 443 dnat ip to 10.42.1.20:8443")
+    );
+    assert!(!first.script.contains("10.42.2.20:8443"));
+    assert!(
+        second
+            .script
+            .contains("iifname != \"maestro0\" tcp dport 443 dnat ip to 10.42.2.20:8443")
+    );
+    assert!(!second.script.contains("10.42.1.20:8443"));
+    assert!(first.script.contains("tcp dport 443 reject"));
+    assert!(second.script.contains("tcp dport 443 reject"));
+}
+
+#[test]
 fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
     let mut noncanonical = World::standard();
     noncanonical.policies[0].spec.rules[0].cidr = "10.0.0.1/8".to_string();
@@ -168,6 +199,23 @@ fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
         plan(addressless.input()),
         Err(FirewallPlanError::MissingAssignmentAddress { .. })
     ));
+
+    let mut duplicate_route = World::standard();
+    duplicate_route
+        .settings
+        .host_port_routes
+        .push(duplicate_route.settings.host_port_routes[0].clone());
+    assert!(matches!(
+        plan(duplicate_route.input()),
+        Err(FirewallPlanError::DuplicateHostPortRoute { .. })
+    ));
+
+    let mut protected_route = World::standard();
+    protected_route.settings.protected_host_ports.push(443);
+    assert!(matches!(
+        plan(protected_route.input()),
+        Err(FirewallPlanError::HostPortRouteConflictsProtected { port: 443 })
+    ));
 }
 
 #[test]
@@ -200,13 +248,20 @@ impl World {
     pub(super) fn standard() -> Self {
         let api = service("api");
         let system = service("maestro-dns");
+        let ingress = service("maestro-system-ingress");
         let settings = FirewallSettings {
             table_name: "maestro_firewall".to_string(),
             workload_interface: "maestro0".to_string(),
             dns_port: 53,
             protected_host_ports: vec![3001, 3000],
             control_allow_cidrs: vec!["fd00::/8".to_string(), "10.0.0.0/8".to_string()],
-            system_services: BTreeSet::from([system.meta.id.clone()]),
+            system_services: BTreeSet::from([system.meta.id.clone(), ingress.meta.id.clone()]),
+            host_port_routes: vec![HostPortRoute {
+                service_id: ingress.meta.id.clone(),
+                host_port: 443,
+                workload_port: 8443,
+                protocol: HostPortProtocol::Tcp,
+            }],
         };
         let policies = vec![
             policy(
@@ -271,11 +326,13 @@ impl World {
             assignment("api-node-1", &api, "node-1", "10.42.1.10"),
             assignment("api-node-2", &api, "node-2", "10.42.2.10"),
             assignment("dns-node-1", &system, "node-1", "10.42.1.250"),
+            assignment("ingress-node-1", &ingress, "node-1", "10.42.1.20"),
+            assignment("ingress-node-2", &ingress, "node-2", "10.42.2.20"),
         ];
         Self {
             settings,
             policies,
-            services: vec![api, system],
+            services: vec![api, system, ingress],
             assignments,
             networks,
         }

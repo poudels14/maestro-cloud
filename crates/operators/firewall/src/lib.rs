@@ -16,7 +16,7 @@ mod writer;
 pub use controller::{FirewallController, FirewallError, FirewallReport};
 pub use model::{
     FirewallBundle, FirewallInput, FirewallPlan, FirewallPolicyStatusUpdate, FirewallRuleset,
-    FirewallSettings,
+    FirewallSettings, HostPortProtocol, HostPortRoute,
 };
 pub use plan::{FirewallPlanError, plan};
 pub use reconciler::{FirewallBaselineReconciler, FirewallPolicyReconciler};

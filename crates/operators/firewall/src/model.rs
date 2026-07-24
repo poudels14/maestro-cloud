@@ -5,6 +5,28 @@ use kernel_api::{
     ResourceRevision, Service, ServiceId,
 };
 
+/// Transport supported by one host-to-workload publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HostPortProtocol {
+    /// TCP listener.
+    Tcp,
+    /// UDP listener.
+    Udp,
+}
+
+/// One daemon-owned host endpoint routed to a local system workload.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HostPortRoute {
+    /// System service receiving traffic.
+    pub service_id: ServiceId,
+    /// Public host port.
+    pub host_port: u16,
+    /// Destination port inside the workload.
+    pub workload_port: u16,
+    /// Transport protocol.
+    pub protocol: HostPortProtocol,
+}
+
 /// Static cluster security settings compiled beside resource policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirewallSettings {
@@ -20,6 +42,8 @@ pub struct FirewallSettings {
     pub control_allow_cidrs: Vec<String>,
     /// Ordinary services exempt from user egress policies because they form the system plane.
     pub system_services: BTreeSet<ServiceId>,
+    /// Public endpoints translated to a ready local system workload.
+    pub host_port_routes: Vec<HostPortRoute>,
 }
 
 /// Complete typed snapshot consumed by one firewall compilation pass.

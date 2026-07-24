@@ -1,33 +1,22 @@
-use std::collections::BTreeMap;
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
-use std::collections::BTreeSet;
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 use cluster::{ClusterConfig, NodeCertificateBundle};
-use kernel_api::{AnnotationKey, Service, ServiceId};
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 use kernel_api::{
-    ArtifactTemplate, CommandSpec, ExecPolicy, Generation, HealthCheckSpec, HealthProbe,
-    NodeApiAccess, NodeId, Object, ObjectMeta, PlacementConstraint, ResourceRevision, RolloutState,
-    SecretMountSpec, SecretValue, ServiceSpec, ServiceStatus, WorkloadUserSpec,
+    AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, Generation, HealthCheckSpec,
+    HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ResourceRevision,
+    RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec, ServiceStatus,
+    WorkloadUserSpec,
 };
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 use kernel_store::Keyspace;
-use runtime::HostPortPublication;
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
-use runtime::PortProtocol;
+use runtime::{HostPortPublication, PortProtocol};
 
 pub(crate) const TRAEFIK_SERVICE_ID: &str = "maestro-system-traefik";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "traefik";
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 pub(crate) const TRAEFIK_IMAGE: &str =
     "traefik:v3.6.23@sha256:d85749d4d10d970ed2b3a7cb2406d9b9da1cdd6ea975a39c727aab809d73136a";
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 const TRAEFIK_VERSION: &str = "traefik-3.6.23";
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 const ETCD_SECRET_DIRECTORY: &str = "/run/secrets/etcd";
 
 /// Ordinary service and daemon-only host publications for cluster ingress.
@@ -38,16 +27,20 @@ pub(crate) struct TraefikSystemResources {
 }
 
 impl TraefikSystemResources {
-    #[cfg(any(target_os = "macos", feature = "macos-platform", test))]
-    pub(crate) fn for_docker_node(
+    pub(crate) fn for_cluster(
         cluster: &ClusterConfig,
-        node_id: &NodeId,
         security: &NodeCertificateBundle,
     ) -> Result<Self, TraefikResourceError> {
-        if !cluster.nodes.contains_key(node_id) {
-            return Err(TraefikResourceError::UnknownNode {
-                node_id: node_id.to_string(),
-            });
+        let replicas = u32::try_from(
+            cluster
+                .nodes
+                .values()
+                .filter(|node| node.role.runs_workloads())
+                .count(),
+        )
+        .map_err(|_| TraefikResourceError::TooManyWorkloadNodes)?;
+        if replicas == 0 {
+            return Err(TraefikResourceError::NoWorkloadNodes);
         }
         let service_id = ServiceId::new(TRAEFIK_SERVICE_ID)?;
         let root_key = Keyspace::new(&cluster.cluster_id)
@@ -105,7 +98,7 @@ impl TraefikSystemResources {
                 },
                 preview: None,
                 command: Some(command),
-                replicas: 1,
+                replicas,
                 exposed_ports: vec![80, 443],
                 health_check: Some(HealthCheckSpec {
                     probe: HealthProbe::Http {
@@ -140,10 +133,7 @@ impl TraefikSystemResources {
                     ]),
                 }),
                 volumes: Vec::new(),
-                placement: PlacementConstraint {
-                    node_id: Some(node_id.clone()),
-                    labels: BTreeMap::new(),
-                },
+                placement: PlacementConstraint::default(),
                 exec: ExecPolicy::Denied,
             },
             status: ServiceStatus {
@@ -164,6 +154,22 @@ impl TraefikSystemResources {
     pub(crate) fn host_port_grants(&self) -> BTreeMap<ServiceId, Vec<HostPortPublication>> {
         BTreeMap::from([(self.service.meta.id.clone(), self.host_ports.clone())])
     }
+
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    pub(crate) fn firewall_routes(&self) -> Vec<firewall::HostPortRoute> {
+        self.host_ports
+            .iter()
+            .map(|publication| firewall::HostPortRoute {
+                service_id: self.service.meta.id.clone(),
+                host_port: publication.host_port,
+                workload_port: publication.container_port,
+                protocol: match publication.protocol {
+                    PortProtocol::Tcp => firewall::HostPortProtocol::Tcp,
+                    PortProtocol::Udp => firewall::HostPortProtocol::Udp,
+                },
+            })
+            .collect()
+    }
 }
 
 pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool {
@@ -176,7 +182,6 @@ fn managed_annotation() -> AnnotationKey {
     AnnotationKey(MANAGED_ANNOTATION.to_owned())
 }
 
-#[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 fn host_port(port: u16) -> HostPortPublication {
     HostPortPublication {
         container_port: port,
@@ -191,10 +196,10 @@ fn host_port(port: u16) -> HostPortPublication {
 pub(crate) enum TraefikResourceError {
     #[error(transparent)]
     Identifier(#[from] kernel_api::InvalidIdentifier),
-    #[cfg(any(target_os = "macos", feature = "macos-platform", test))]
     #[error(transparent)]
     Service(#[from] kernel_api::ServiceSpecError),
-    #[cfg(any(target_os = "macos", feature = "macos-platform", test))]
-    #[error("local Traefik node `{node_id}` is absent from the cluster topology")]
-    UnknownNode { node_id: String },
+    #[error("cluster has no workload-capable node for Traefik")]
+    NoWorkloadNodes,
+    #[error("cluster has too many workload nodes to represent Traefik replicas")]
+    TooManyWorkloadNodes,
 }

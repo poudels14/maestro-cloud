@@ -21,14 +21,17 @@ use crate::traefik_resources::{TRAEFIK_IMAGE, TRAEFIK_SERVICE_ID, TraefikSystemR
 use super::cluster_with_nodes;
 
 #[test]
-fn builds_pinned_mtls_ingress_service_and_host_publications()
+fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
 -> Result<(), Box<dyn std::error::Error>> {
-    let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
-    let node_id = NodeId::new("master")?;
-    let resources = TraefikSystemResources::for_docker_node(&cluster, &node_id, &security())?;
+    let cluster = cluster_with_nodes(&[
+        ("master", NodeRole::Master),
+        ("worker", NodeRole::Worker),
+        ("control", NodeRole::ControlPlane),
+    ])?;
+    let resources = TraefikSystemResources::for_cluster(&cluster, &security())?;
     let service = &resources.service;
     assert_eq!(service.meta.id.as_str(), TRAEFIK_SERVICE_ID);
-    assert_eq!(service.spec.replicas, 1);
+    assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.node_api, NodeApiAccess::IdentityAndTelemetry);
     assert_eq!(
         service.spec.user,
@@ -37,7 +40,7 @@ fn builds_pinned_mtls_ingress_service_and_host_publications()
             group_id: 0
         })
     );
-    assert_eq!(service.spec.placement.node_id, Some(node_id));
+    assert_eq!(service.spec.placement, Default::default());
     assert!(matches!(
         &service.spec.artifact,
         ArtifactTemplate::Image { reference } if reference == TRAEFIK_IMAGE
@@ -51,7 +54,6 @@ fn builds_pinned_mtls_ingress_service_and_host_publications()
     for expected in [
         "--providers.etcd=true",
         "--providers.etcd.rootKey=/maestro/clusters/daemon-test/integrations/traefik",
-        "--providers.etcd.endpoints=10.20.0.11:2379",
         "--providers.etcd.tls.ca=/run/secrets/etcd/ca.pem",
         "--providers.etcd.tls.cert=/run/secrets/etcd/client.pem",
         "--providers.etcd.tls.key=/run/secrets/etcd/client-key.pem",
@@ -66,6 +68,14 @@ fn builds_pinned_mtls_ingress_service_and_host_publications()
                 .any(|argument| argument == expected)
         );
     }
+    let endpoints = command
+        .arguments
+        .iter()
+        .find(|argument| argument.starts_with("--providers.etcd.endpoints="))
+        .ok_or("Traefik etcd endpoints are missing")?;
+    assert!(endpoints.contains("10.20.0.11:2379"));
+    assert!(endpoints.contains("10.20.0.13:2379"));
+    assert!(!endpoints.contains("10.20.0.12:2379"));
     assert!(
         !command
             .arguments
@@ -99,6 +109,24 @@ fn builds_pinned_mtls_ingress_service_and_host_publications()
             vec![publication(80), publication(443)]
         )])
     );
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    assert_eq!(
+        resources.firewall_routes(),
+        vec![
+            firewall::HostPortRoute {
+                service_id: ServiceId::new(TRAEFIK_SERVICE_ID)?,
+                host_port: 80,
+                workload_port: 80,
+                protocol: firewall::HostPortProtocol::Tcp,
+            },
+            firewall::HostPortRoute {
+                service_id: ServiceId::new(TRAEFIK_SERVICE_ID)?,
+                host_port: 443,
+                workload_port: 443,
+                protocol: firewall::HostPortProtocol::Tcp,
+            },
+        ]
+    );
     Ok(())
 }
 
@@ -109,8 +137,7 @@ async fn reconciles_create_update_and_removal_under_one_fence()
     let (store, fenced, _session) = fenced_store(&cluster_id).await?;
     let mut cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     cluster.cluster_id = cluster_id.clone();
-    let node_id = NodeId::new("master")?;
-    let mut desired = TraefikSystemResources::for_docker_node(&cluster, &node_id, &security())?;
+    let mut desired = TraefikSystemResources::for_cluster(&cluster, &security())?;
 
     TraefikResourceReconciler::new(&cluster_id, Some(desired.clone()))?
         .reconcile(&fenced, Timestamp(10_000))

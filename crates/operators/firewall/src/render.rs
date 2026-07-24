@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use kernel_api::{FirewallVerdict, PortRange, ServiceId, TransportProtocol};
+use kernel_api::{AssignmentPhase, FirewallVerdict, PortRange, ServiceId, TransportProtocol};
 use sha2::{Digest, Sha256};
 
-use crate::FirewallRuleset;
 use crate::cidr::AddressFamily;
 use crate::validation::{SubjectKey, ValidatedInput, ValidatedPolicy};
+use crate::{FirewallRuleset, HostPortProtocol};
 
 const LABEL_DOMAIN: &[u8] = b"maestro-firewall-label-v1\0";
 
@@ -92,6 +92,12 @@ fn render_node(
     }
     renderer.add_hook_chain("forward", "forward", -50, "accept", forward);
     renderer.add_nat_hook_chain(
+        "prerouting",
+        "prerouting",
+        "dstnat",
+        host_port_rules(input, node),
+    );
+    renderer.add_nat_hook_chain(
         "postrouting",
         "postrouting",
         "srcnat",
@@ -110,6 +116,7 @@ fn render_node(
         ),
     ]);
     render_control_protection(input, renderer, &mut input_rules);
+    render_unrouted_host_port_guards(input, &mut input_rules);
     input_rules.push("ip saddr @all_workloads_v4 reject".to_string());
     let host_policy = input
         .policies
@@ -120,6 +127,34 @@ fn render_node(
         input_rules.push(format!("jump {chain}"));
     }
     renderer.add_hook_chain("input", "input", -50, "accept", input_rules);
+}
+
+fn host_port_rules(input: &ValidatedInput, node: &crate::validation::NodeContext) -> Vec<String> {
+    input
+        .settings
+        .host_port_routes
+        .iter()
+        .filter_map(|route| {
+            let address = input
+                .assignments
+                .iter()
+                .find(|assignment| {
+                    assignment.spec.node_id == node.node_id
+                        && assignment.spec.service_id == route.service_id
+                        && assignment.status.phase == AssignmentPhase::Running
+                })?
+                .spec
+                .workload_address?;
+            let protocol = match route.protocol {
+                crate::HostPortProtocol::Tcp => "tcp",
+                crate::HostPortProtocol::Udp => "udp",
+            };
+            Some(format!(
+                "iifname != \"{}\" {protocol} dport {} dnat ip to {address}:{}",
+                input.settings.workload_interface, route.host_port, route.workload_port
+            ))
+        })
+        .collect()
 }
 
 fn service_sources(assignments: &[&kernel_api::Assignment], service_id: &ServiceId) -> Vec<String> {
@@ -174,6 +209,29 @@ fn render_control_protection(
         }
     }
     rules.push(format!("tcp dport {ports} reject"));
+}
+
+fn render_unrouted_host_port_guards(input: &ValidatedInput, rules: &mut Vec<String>) {
+    for protocol in [HostPortProtocol::Tcp, HostPortProtocol::Udp] {
+        let ports = input
+            .settings
+            .host_port_routes
+            .iter()
+            .filter(|route| route.protocol == protocol)
+            .map(|route| PortRange {
+                start: route.host_port,
+                end: route.host_port,
+            })
+            .collect::<Vec<_>>();
+        if ports.is_empty() {
+            continue;
+        }
+        let protocol = match protocol {
+            HostPortProtocol::Tcp => "tcp",
+            HostPortProtocol::Udp => "udp",
+        };
+        rules.push(format!("{protocol} dport {} reject", render_ports(&ports)));
+    }
 }
 
 fn render_policy(

@@ -1,20 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::ServiceId;
-use runtime::{HostPortPublication, RuntimeCapability, RuntimeError, WorkloadRuntime};
+use runtime::{
+    HostPortPublication, NetworkAddressing, RuntimeCapability, RuntimeError, WorkloadRuntime,
+};
 
 const SYSTEM_RESOURCE_PREFIX: &str = "maestro-system-";
 
 pub(crate) fn validate_system_host_ports(
     runtime: &dyn WorkloadRuntime,
+    addressing: NetworkAddressing,
     grants: &BTreeMap<ServiceId, Vec<HostPortPublication>>,
 ) -> Result<(), RuntimeError> {
     if grants.is_empty() {
         return Ok(());
     }
-    if !runtime
-        .capabilities()
-        .supports(RuntimeCapability::HostPortPublishing)
+    if matches!(addressing, NetworkAddressing::Delegated)
+        && !runtime
+            .capabilities()
+            .supports(RuntimeCapability::HostPortPublishing)
     {
         return Err(RuntimeError::Unsupported {
             capability: RuntimeCapability::HostPortPublishing,
@@ -51,4 +55,14 @@ pub(crate) fn validate_system_host_ports(
         }
     }
     Ok(())
+}
+
+pub(crate) fn runtime_host_ports(
+    addressing: NetworkAddressing,
+    publications: Vec<HostPortPublication>,
+) -> Vec<HostPortPublication> {
+    match addressing {
+        NetworkAddressing::Managed { .. } => Vec::new(),
+        NetworkAddressing::Delegated => publications,
+    }
 }
