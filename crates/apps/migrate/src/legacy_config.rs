@@ -215,7 +215,7 @@ fn convert_secrets(
         ));
     };
     let values = resolved_secret_values(&config.id, secrets, &data.deploy_secrets)?;
-    Ok(Some(SecretMountSpec {
+    Ok(Some(SecretMountSpec::Dotenv {
         mount_path: secrets.mount_path.clone(),
         items: values
             .into_iter()

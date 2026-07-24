@@ -76,6 +76,7 @@ fn deployment(id: &str, phase: &str, created_at: u64) -> Result<Deployment, serd
                 "replicas": 1,
                 "environment": {},
                 "secrets": {
+                    "format": "dotenv",
                     "mountPath": "/run/secrets/service.env",
                     "items": {"TOKEN": "private-deployment-secret"}
                 },

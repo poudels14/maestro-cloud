@@ -116,6 +116,7 @@ impl From<SecretMountError> for ConvergeFailure {
             SecretMountError::InvalidRoot { .. }
             | SecretMountError::InvalidTarget { .. }
             | SecretMountError::InvalidKey { .. }
+            | SecretMountError::InvalidFileName { .. }
             | SecretMountError::UnsafePath { .. }
             | SecretMountError::ContentConflict { .. }
             | SecretMountError::Encode { .. } => {

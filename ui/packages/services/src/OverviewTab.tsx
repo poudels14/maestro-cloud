@@ -2,6 +2,7 @@ import { For, Show, type JSX } from "solid-js";
 import { GitPullRequest } from "lucide-solid";
 import type { ServicesApi } from "./api";
 import type { Service } from "./types";
+import { secretNames } from "./secretView";
 import { serviceDisplayStatus, servicePreviews } from "./serviceView";
 import { StatusBadge } from "@maestro/kit";
 import { ConfigSection } from "./overview/ConfigSection";
@@ -88,7 +89,7 @@ function OverviewTab(props: {
       label,
       value
     }));
-  const secretKeys = () => Object.keys(props.service.spec.secrets?.items ?? {}).sort();
+  const secretKeys = () => secretNames(props.service.spec.secrets);
   const previews = () => servicePreviews(props.services, props.service.meta.id);
   const isPreview = () => props.service.previewResource != null;
 

@@ -90,7 +90,10 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
             .spec
             .secrets
             .as_ref()
-            .and_then(|secrets| secrets.items.get("TOKEN")),
+            .and_then(|secrets| match secrets {
+                kernel_api::SecretMountSpec::Dotenv { items, .. } => items.get("TOKEN"),
+                kernel_api::SecretMountSpec::Files { .. } => None,
+            }),
         Some(&SecretValue::new("super-secret-token"))
     );
     assert!(matches!(

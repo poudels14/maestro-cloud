@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
-use crate::{ArtifactTemplate, BuildSource, HealthProbe, NodeApiAccess, ServiceSpec, VolumeSource};
+use crate::{
+    ArtifactTemplate, BuildSource, HealthProbe, NodeApiAccess, SecretMountSpec, ServiceSpec,
+    VolumeSource,
+};
 
 impl ServiceSpec {
     /// Validates semantic invariants before desired state enters the store.
@@ -55,8 +58,21 @@ impl ServiceSpec {
             );
         }
         if let Some(secrets) = &self.secrets {
-            absolute_clean_path("secrets.mountPath", &secrets.mount_path)?;
-            validate_secret_environment("secrets.items", &secrets.items)?;
+            absolute_clean_path("secrets.mountPath", secrets.mount_path())?;
+            match secrets {
+                SecretMountSpec::Dotenv { items, .. } => {
+                    validate_secret_environment("secrets.items", items)?;
+                }
+                SecretMountSpec::Files { files, .. } => {
+                    if files.is_empty() {
+                        return invalid("secrets.files", "at least one file is required");
+                    }
+                    for (name, value) in files {
+                        single_path_component("secrets.files", name)?;
+                        no_nul("secrets.files", value.expose())?;
+                    }
+                }
+            }
         }
         let mut targets = BTreeSet::new();
         for volume in &self.volumes {
@@ -174,6 +190,21 @@ fn relative_clean_path(field: &str, value: &str) -> Result<(), ServiceSpecError>
         invalid(
             field,
             "path must be relative and contain no parent traversal",
+        )
+    } else {
+        no_nul(field, value)
+    }
+}
+
+fn single_path_component(field: &str, value: &str) -> Result<(), ServiceSpecError> {
+    let mut components = Path::new(value).components();
+    if value.is_empty()
+        || !matches!(components.next(), Some(Component::Normal(_)))
+        || components.next().is_some()
+    {
+        invalid(
+            field,
+            "file names must contain exactly one normal path component",
         )
     } else {
         no_nul(field, value)

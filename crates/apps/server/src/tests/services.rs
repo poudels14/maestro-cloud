@@ -150,6 +150,7 @@ async fn service_diff_returns_exact_revision_and_masks_changed_values()
     spec_object.insert(
         "secrets".to_string(),
         json!({
+            "format": "dotenv",
             "mountPath": "/run/secrets/service.env",
             "items": {"DATABASE_PASSWORD": "replacement-password"}
         }),

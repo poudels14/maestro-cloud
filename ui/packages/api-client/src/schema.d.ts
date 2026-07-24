@@ -2918,13 +2918,24 @@ export interface components {
         ResourceRevision: number;
         /** @description Whether new service deployments may begin. */
         RolloutState: "active" | "frozen";
-        /** @description Secret values rendered into one private, read-only workload file. */
+        /** @description Secret values rendered into one private, read-only workload mount. */
         SecretMountSpec: {
+            /** @enum {string} */
+            format: "dotenv";
             /** @description Dotenv keys and plaintext values encrypted by the store boundary. */
             items?: {
                 [key: string]: components["schemas"]["SecretValue"];
             };
             /** @description Absolute workload-visible file path. */
+            mountPath: string;
+        } | {
+            /** @description Single-component file names and plaintext contents encrypted by the store boundary. */
+            files: {
+                [key: string]: components["schemas"]["SecretValue"];
+            };
+            /** @enum {string} */
+            format: "files";
+            /** @description Absolute workload-visible directory path. */
             mountPath: string;
         };
         /** @description A secret-bearing wire value whose debug representation is always redacted. */

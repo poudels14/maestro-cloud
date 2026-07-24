@@ -8,6 +8,7 @@ import { LogViewer, type LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
 import { replicaFailure } from "./deploymentView";
 import { deploymentReplicasQuery } from "./queries";
+import { secretNames } from "./secretView";
 import type { Deployment } from "./types";
 import { ReplicaRow } from "./DeploymentRow";
 
@@ -162,7 +163,7 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
   const replicas = useQuery(() => deploymentReplicasQuery(props.api, deployment()));
   const artifact = () => deployment().spec.service.artifact;
   const environment = () => Object.entries(deployment().spec.service.environment ?? {});
-  const secretKeys = () => Object.keys(deployment().spec.service.secrets?.items ?? {}).sort();
+  const secretKeys = () => secretNames(deployment().spec.service.secrets);
   const buildEnvironment = () => {
     const value = artifact();
     return value.type === "build" ? Object.entries(value.environment ?? {}) : [];

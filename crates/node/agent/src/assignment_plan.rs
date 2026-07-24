@@ -129,7 +129,7 @@ fn validate_node_api_mount_targets(deployment: &Deployment) -> Result<(), Worklo
                 .service
                 .secrets
                 .iter()
-                .map(|mount| mount.mount_path.as_str()),
+                .map(kernel_api::SecretMountSpec::mount_path),
         );
     for target in targets {
         if std::path::Path::new(target).starts_with(reserved) {

@@ -124,15 +124,54 @@ pub struct HealthCheckSpec {
     pub unhealthy_threshold: u32,
 }
 
-/// Secret values rendered into one private, read-only workload file.
+/// Secret values rendered into one private, read-only workload mount.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SecretMountSpec {
-    /// Absolute workload-visible file path.
-    pub mount_path: String,
-    /// Dotenv keys and plaintext values encrypted by the store boundary.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub items: BTreeMap<String, SecretValue>,
+#[serde(
+    tag = "format",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SecretMountSpec {
+    /// One dotenv-compatible file containing environment-style keys.
+    Dotenv {
+        /// Absolute workload-visible file path.
+        mount_path: String,
+        /// Dotenv keys and plaintext values encrypted by the store boundary.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        items: BTreeMap<String, SecretValue>,
+    },
+    /// One directory containing named files with exact secret bytes.
+    Files {
+        /// Absolute workload-visible directory path.
+        mount_path: String,
+        /// Single-component file names and plaintext contents encrypted by the store boundary.
+        files: BTreeMap<String, SecretValue>,
+    },
+}
+
+impl SecretMountSpec {
+    /// Returns the absolute path receiving the private mount.
+    pub fn mount_path(&self) -> &str {
+        match self {
+            Self::Dotenv { mount_path, .. } | Self::Files { mount_path, .. } => mount_path,
+        }
+    }
+
+    /// Returns the secret-bearing values independent of their on-disk representation.
+    pub fn values(&self) -> &BTreeMap<String, SecretValue> {
+        match self {
+            Self::Dotenv { items, .. } => items,
+            Self::Files { files, .. } => files,
+        }
+    }
+
+    /// Returns mutable secret-bearing values for response redaction.
+    pub fn values_mut(&mut self) -> &mut BTreeMap<String, SecretValue> {
+        match self {
+            Self::Dotenv { items, .. } => items,
+            Self::Files { files, .. } => files,
+        }
+    }
 }
 
 /// Whether API-initiated interactive execution is available to a workload.

@@ -92,7 +92,7 @@ pub(super) async fn convert_service(
             .into_iter()
             .map(|(key, value)| (key, SecretValue::new(value)))
             .collect();
-            Some(SecretMountSpec { mount_path, items })
+            Some(SecretMountSpec::Dotenv { mount_path, items })
         }
     };
 

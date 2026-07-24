@@ -523,7 +523,7 @@ pub(super) fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
             environment: BTreeMap::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
-            secrets: Some(SecretMountSpec {
+            secrets: Some(SecretMountSpec::Dotenv {
                 mount_path: "/run/secrets/api.env".to_string(),
                 items: BTreeMap::from([(
                     "DATABASE_PASSWORD".to_string(),

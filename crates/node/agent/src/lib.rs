@@ -54,6 +54,7 @@ mod node_api_mount;
 mod node_control;
 mod node_registry;
 mod secret_mount;
+mod secret_mount_files;
 mod stats;
 mod workload_bridge;
 

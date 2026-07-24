@@ -24,7 +24,7 @@ pub(crate) fn service_spec(spec: &mut ServiceSpec) {
         values(template.secrets.values_mut());
     }
     if let Some(secrets) = &mut spec.secrets {
-        values(secrets.items.values_mut());
+        values(secrets.values_mut().values_mut());
     }
 }
 

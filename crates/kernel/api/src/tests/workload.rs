@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
     ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentGoal,
     DeploymentPhase, ExecPolicy, NodeApiAccess, NodeId, PlacementConstraint, PreviewPolicy,
-    ServiceId, ServiceSpec, VolumeSource, workload_hostname,
+    SecretMountSpec, SecretValue, ServiceId, ServiceSpec, VolumeSource, workload_hostname,
 };
 
 #[test]
@@ -176,6 +176,20 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             secrets: BTreeMap::new(),
         },
     };
+    assert!(spec.validate().is_err());
+
+    let mut spec = valid_service_spec();
+    spec.secrets = Some(SecretMountSpec::Files {
+        mount_path: "/run/secrets/etcd".to_string(),
+        files: BTreeMap::new(),
+    });
+    assert!(spec.validate().is_err());
+
+    let mut spec = valid_service_spec();
+    spec.secrets = Some(SecretMountSpec::Files {
+        mount_path: "/run/secrets/etcd".to_string(),
+        files: BTreeMap::from([("../ca.pem".to_string(), SecretValue::new("certificate"))]),
+    });
     assert!(spec.validate().is_err());
 }
 

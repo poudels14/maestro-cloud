@@ -60,7 +60,7 @@ pub(super) async fn put_service(
             environment: BTreeMap::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
-            secrets: Some(SecretMountSpec {
+            secrets: Some(SecretMountSpec::Dotenv {
                 mount_path: "/run/secrets/maestro.env".to_owned(),
                 items: BTreeMap::from([(
                     "TOKEN".to_owned(),

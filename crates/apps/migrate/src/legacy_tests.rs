@@ -170,8 +170,11 @@ fn cutover_plan_converts_service_and_deployment_resources() -> TestResult {
         .secrets
         .as_ref()
         .ok_or_else(|| std::io::Error::other("missing secret mount"))?;
+    let kernel_api::SecretMountSpec::Dotenv { items, .. } = secret_mount else {
+        return Err("migrated secret mount is not dotenv".into());
+    };
     assert_eq!(
-        secret_mount.items.get("TOKEN").map(|value| value.expose()),
+        items.get("TOKEN").map(|value| value.expose()),
         Some("secret")
     );
     assert_eq!(deployment.spec.service_generation.0, 1);

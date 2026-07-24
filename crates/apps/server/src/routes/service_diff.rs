@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use kernel_api::{ArtifactTemplate, SecretValue, ServiceDiffChange, ServiceSpec};
+use kernel_api::{ArtifactTemplate, SecretMountSpec, SecretValue, ServiceDiffChange, ServiceSpec};
 use serde::Serialize;
 
 use crate::ApiError;
@@ -87,15 +87,27 @@ pub(super) fn changes(
     )?;
     push_json(
         &mut changes,
+        "secrets.format",
+        &current.secrets.as_ref().map(secret_format),
+        &desired.secrets.as_ref().map(secret_format),
+    )?;
+    push_json(
+        &mut changes,
         "secrets.mountPath",
-        &current.secrets.as_ref().map(|value| &value.mount_path),
-        &desired.secrets.as_ref().map(|value| &value.mount_path),
+        &current.secrets.as_ref().map(SecretMountSpec::mount_path),
+        &desired.secrets.as_ref().map(SecretMountSpec::mount_path),
     )?;
     push_secret_map(
         &mut changes,
         "secrets.items",
-        current.secrets.as_ref().map(|value| &value.items),
-        desired.secrets.as_ref().map(|value| &value.items),
+        current.secrets.as_ref().and_then(dotenv_items),
+        desired.secrets.as_ref().and_then(dotenv_items),
+    );
+    push_secret_map(
+        &mut changes,
+        "secrets.files",
+        current.secrets.as_ref().and_then(secret_files),
+        desired.secrets.as_ref().and_then(secret_files),
     );
     push_json(&mut changes, "volumes", &current.volumes, &desired.volumes)?;
     push_json(
@@ -106,6 +118,27 @@ pub(super) fn changes(
     )?;
     push_json(&mut changes, "exec", &current.exec, &desired.exec)?;
     Ok(changes)
+}
+
+fn secret_format(secrets: &SecretMountSpec) -> &'static str {
+    match secrets {
+        SecretMountSpec::Dotenv { .. } => "dotenv",
+        SecretMountSpec::Files { .. } => "files",
+    }
+}
+
+fn dotenv_items(secrets: &SecretMountSpec) -> Option<&BTreeMap<String, SecretValue>> {
+    match secrets {
+        SecretMountSpec::Dotenv { items, .. } => Some(items),
+        SecretMountSpec::Files { .. } => None,
+    }
+}
+
+fn secret_files(secrets: &SecretMountSpec) -> Option<&BTreeMap<String, SecretValue>> {
+    match secrets {
+        SecretMountSpec::Files { files, .. } => Some(files),
+        SecretMountSpec::Dotenv { .. } => None,
+    }
 }
 
 fn push_json<Value>(

@@ -91,7 +91,7 @@ impl TailscaleSystemResources {
                 environment,
                 user: None,
                 node_api: NodeApiAccess::Disabled,
-                secrets: Some(SecretMountSpec {
+                secrets: Some(SecretMountSpec::Dotenv {
                     mount_path: "/run/secrets/tailscale.env".to_owned(),
                     items: BTreeMap::from([("TS_AUTHKEY".to_owned(), config.auth_key.clone())]),
                 }),
@@ -167,7 +167,10 @@ impl TailscaleSystemResources {
             .secrets
             .as_mut()
             .ok_or(TailscaleResourceError::MissingAuthSecretMount)?;
-        secrets.items.insert("TS_AUTHKEY".to_owned(), auth_key);
+        let SecretMountSpec::Dotenv { items, .. } = secrets else {
+            return Err(TailscaleResourceError::MissingAuthSecretMount);
+        };
+        items.insert("TS_AUTHKEY".to_owned(), auth_key);
         Ok(self)
     }
 }

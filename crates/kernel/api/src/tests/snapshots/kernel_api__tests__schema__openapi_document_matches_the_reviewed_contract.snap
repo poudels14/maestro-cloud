@@ -4690,24 +4690,64 @@ expression: openapi_document()
         ]
       },
       "SecretMountSpec": {
-        "description": "Secret values rendered into one private, read-only workload file.",
-        "properties": {
-          "items": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/SecretValue"
+        "description": "Secret values rendered into one private, read-only workload mount.",
+        "oneOf": [
+          {
+            "description": "One dotenv-compatible file containing environment-style keys.",
+            "properties": {
+              "format": {
+                "enum": [
+                  "dotenv"
+                ],
+                "type": "string"
+              },
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SecretValue"
+                },
+                "description": "Dotenv keys and plaintext values encrypted by the store boundary.",
+                "type": "object"
+              },
+              "mountPath": {
+                "description": "Absolute workload-visible file path.",
+                "type": "string"
+              }
             },
-            "description": "Dotenv keys and plaintext values encrypted by the store boundary.",
+            "required": [
+              "format",
+              "mountPath"
+            ],
             "type": "object"
           },
-          "mountPath": {
-            "description": "Absolute workload-visible file path.",
-            "type": "string"
+          {
+            "description": "One directory containing named files with exact secret bytes.",
+            "properties": {
+              "files": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SecretValue"
+                },
+                "description": "Single-component file names and plaintext contents encrypted by the store boundary.",
+                "type": "object"
+              },
+              "format": {
+                "enum": [
+                  "files"
+                ],
+                "type": "string"
+              },
+              "mountPath": {
+                "description": "Absolute workload-visible directory path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "format",
+              "mountPath",
+              "files"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "mountPath"
-        ],
-        "type": "object"
+        ]
       },
       "SecretValue": {
         "description": "A secret-bearing wire value whose debug representation is always redacted.",

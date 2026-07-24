@@ -392,7 +392,7 @@ async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
     let mut deployment = deployment();
-    deployment.spec.service.secrets = Some(SecretMountSpec {
+    deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
         items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("sensitive"))]),
     });

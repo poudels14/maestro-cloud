@@ -66,9 +66,12 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
     );
     assert!(!service.spec.environment.contains_key("TS_AUTHKEY"));
     let secrets = required(service.spec.secrets, "gateway secret mount")?;
-    assert_eq!(secrets.mount_path, "/run/secrets/tailscale.env");
+    let kernel_api::SecretMountSpec::Dotenv { mount_path, items } = secrets else {
+        return Err("gateway secret mount is not dotenv".into());
+    };
+    assert_eq!(mount_path, "/run/secrets/tailscale.env");
     assert_eq!(
-        secrets.items.get("TS_AUTHKEY").map(SecretValue::expose),
+        items.get("TS_AUTHKEY").map(SecretValue::expose),
         Some("tskey-auth-reusable-test-secret")
     );
     assert!(matches!(
@@ -447,7 +450,10 @@ fn gateway_auth_key(service: &Service) -> &str {
         .spec
         .secrets
         .as_ref()
-        .and_then(|secrets| secrets.items.get("TS_AUTHKEY"))
+        .and_then(|secrets| match secrets {
+            kernel_api::SecretMountSpec::Dotenv { items, .. } => items.get("TS_AUTHKEY"),
+            kernel_api::SecretMountSpec::Files { .. } => None,
+        })
         .map(SecretValue::expose)
         .unwrap_or("")
 }

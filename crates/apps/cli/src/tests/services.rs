@@ -283,6 +283,7 @@ fn service(
             "replicas": replicas,
             "environment": {},
             "secrets": {
+                "format": "dotenv",
                 "mountPath": "/run/secrets/service.env",
                 "items": {"DATABASE_PASSWORD": "database-password"}
             },
