@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Static bundle (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Validate release version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(nix eval --raw .#rewrite-static.version)
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Build static release bundle
+        run: nix build .#rewrite-static-bundle --print-build-logs
+
+      - name: Build daemon image bundle
+        run: >-
+          nix build .#rewrite-daemon-image-bundle
+          --out-link result-daemon-image
+          --print-build-logs
+
+      - name: Verify standalone executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist unpacked
+          cp -L result/* dist/
+          cp -L result-daemon-image/* dist/
+          (
+            cd dist
+            sha256sum --check -- *.sha256
+          )
+          archive=$(find dist -maxdepth 1 -type f \
+            -name 'maestro-rewrite-*.tar.gz' -print -quit)
+          test -n "$archive"
+          tar -xzf "$archive" -C unpacked
+          bundle=$(find unpacked -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$bundle"
+          "$bundle/bin/maestro" --help
+          "$bundle/bin/maestro-daemon" --help
+          "$bundle/bin/maestro-migrate" --help
+          "$bundle/bin/maestro-migrate" verify --help
+          version=$(nix eval --raw .#rewrite-static.version)
+          test "$("$bundle/bin/maestro" --version)" = "maestro $version"
+          test "$("$bundle/bin/maestro-daemon" --version)" = "daemon $version"
+          test "$("$bundle/bin/maestro-migrate" --version)" = "maestro-migrate $version"
+          test -s "$bundle/share/doc/maestro/cutover.md"
+          test -s "$bundle/share/doc/maestro/rehearsal-evidence.md"
+          test -s "$bundle/share/doc/maestro/multi-node.md"
+          test -s "$bundle/share/doc/maestro/nixos-rewrite.md"
+          test -s "$bundle/share/doc/maestro/tailscale.md"
+          test -s "$bundle/share/maestro-panel/index.html"
+          image_count=0
+          for image in dist/*.docker.tar.gz; do
+            test -f "$image"
+            gzip -dc "$image" | tar -tf - | grep -Fx manifest.json
+            image_count=$((image_count + 1))
+          done
+          test "$image_count" = 1
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: maestro-rewrite-${{ matrix.system }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release bundles
+        uses: actions/download-artifact@v7
+        with:
+          pattern: maestro-rewrite-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --generate-notes \
+            --verify-tag
