@@ -186,9 +186,6 @@ sudo maestro cluster prepare-join \
   --data-dir /var/lib/maestro
 ```
 
-The legacy `maestro cluster join --prepare` spelling performs the same local,
-idempotent preparation and remains available for existing automation.
-
 Approve the exact declared identity and fingerprint:
 
 ```sh
@@ -289,7 +286,7 @@ all-node batch:
 
 ```sh
 maestro cluster upgrade
-maestro cluster upgrade system --batch=all
+maestro cluster upgrade --batch=all
 ```
 
 The CLI confirms the exact target version and selection before creating the
