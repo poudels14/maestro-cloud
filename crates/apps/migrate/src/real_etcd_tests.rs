@@ -110,7 +110,7 @@ async fn real_cutover_restores_three_member_encrypted_store() -> TestResult {
     verify_plan(&plan, &keyspace, store.as_ref()).await?;
     let native_snapshot = directory.path().join("post-migration.db");
     save_native_snapshot(&mut raw, &native_snapshot).await?;
-    let restore_plan = plan_legacy_store_restore(&snapshot)?;
+    let restore_plan = plan_legacy_store_restore(&snapshot, ports.store_peer)?;
     assert_eq!(restore_plan.members().len(), 3);
 
     raw.put(

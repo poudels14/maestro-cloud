@@ -2,9 +2,10 @@ use std::fs;
 use std::path::Path;
 
 use kernel_api::NodeId;
+use serde_json::{Value, json};
 
 use crate::legacy_fixtures::cluster_state_for;
-use crate::legacy_node_tests::node_entries;
+use crate::legacy_node_tests::{json_entry, node_entries};
 use crate::{
     LegacySnapshot, LegacyStoreRestoreError, LegacyStoreRestoreOutcome, plan_legacy_store_restore,
     restore_legacy_store, verify_legacy_store_restore,
@@ -14,7 +15,8 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn store_plan_rekeys_validated_legacy_members_to_node_ids() -> TestResult {
-    let plan = three_member_plan()?;
+    let snapshot = three_member_snapshot()?;
+    let plan = plan_legacy_store_restore(&snapshot, 4_480)?;
 
     assert_eq!(
         plan.cluster_id().as_str(),
@@ -26,7 +28,34 @@ fn store_plan_rekeys_validated_legacy_members_to_node_ids() -> TestResult {
         .get(&NodeId::new("node-b")?)
         .ok_or("node-b is absent")?;
     assert_eq!(node_b.member_name(), "maestro-node-b");
-    assert_eq!(node_b.peer_url(), "https://10.0.0.11:2380");
+    assert_eq!(node_b.peer_url(), "https://10.0.0.11:4480");
+    Ok(())
+}
+
+#[test]
+fn store_plan_normalizes_different_legacy_member_ports() -> TestResult {
+    let legacy_ports = [
+        (10_u8, 30_002_u16, 32_379_u16, 32_380_u16),
+        (11, 31_002, 33_379, 33_380),
+        (12, 32_002, 34_379, 34_380),
+    ];
+    let mut entries = node_entries("node-a", "master", 10, 1);
+    entries.extend(node_entries("node-b", "voter", 11, 2));
+    entries.extend(node_entries("node-c", "voter", 12, 3));
+    for (host_octet, gateway, client, peer) in legacy_ports {
+        rewrite_node_ports(&mut entries, host_octet, gateway, client, peer)?;
+    }
+    let mut cluster_state = cluster_state_for(&[10, 11, 12]);
+    rewrite_cluster_state_ports(&mut cluster_state, &legacy_ports)?;
+    entries.extend(cluster_state);
+
+    let plan = plan_legacy_store_restore(&LegacySnapshot::new(entries)?, 4_480)?;
+    assert_eq!(plan.members().len(), 3);
+    assert!(
+        plan.members()
+            .values()
+            .all(|member| member.peer_url().ends_with(":4480"))
+    );
     Ok(())
 }
 
@@ -152,15 +181,91 @@ fn store_verify_rejects_another_native_snapshot() -> TestResult {
 fn one_member_plan() -> Result<crate::LegacyStoreRestorePlan, Box<dyn std::error::Error>> {
     let mut entries = node_entries("node-a", "master", 10, 1);
     entries.extend(cluster_state_for(&[10]));
-    Ok(plan_legacy_store_restore(&LegacySnapshot::new(entries)?)?)
+    Ok(plan_legacy_store_restore(
+        &LegacySnapshot::new(entries)?,
+        2_380,
+    )?)
 }
 
-fn three_member_plan() -> Result<crate::LegacyStoreRestorePlan, Box<dyn std::error::Error>> {
+fn three_member_snapshot() -> Result<LegacySnapshot, Box<dyn std::error::Error>> {
     let mut entries = node_entries("node-a", "master", 10, 1);
     entries.extend(node_entries("node-b", "voter", 11, 2));
     entries.extend(node_entries("node-c", "voter", 12, 3));
     entries.extend(cluster_state_for(&[10, 11, 12]));
-    Ok(plan_legacy_store_restore(&LegacySnapshot::new(entries)?)?)
+    Ok(LegacySnapshot::new(entries)?)
+}
+
+fn rewrite_node_ports(
+    entries: &mut [crate::LegacyEntry],
+    host_octet: u8,
+    gateway: u16,
+    client: u16,
+    peer: u16,
+) -> TestResult {
+    let host_ip = format!("10.0.0.{host_octet}");
+    for entry in entries {
+        let key = entry.key().to_owned();
+        let mut value: Value = serde_json::from_slice(entry.value())?;
+        if key.contains("/node-records/")
+            && value.pointer("/lastInfo/clusterHostIp") == Some(&json!(host_ip))
+        {
+            value["lastInfo"]["clusterGatewayPort"] = json!(gateway);
+        } else if key.contains("/control-addresses/")
+            && value.get("hostIp") == Some(&json!(host_ip))
+        {
+            value["gatewayPort"] = json!(gateway);
+            value["etcdClientPort"] = json!(client);
+            value["etcdPeerPort"] = json!(peer);
+        } else {
+            continue;
+        }
+        *entry = json_entry(&key, value);
+    }
+    Ok(())
+}
+
+fn rewrite_cluster_state_ports(
+    entries: &mut [crate::LegacyEntry],
+    ports: &[(u8, u16, u16, u16)],
+) -> TestResult {
+    for entry in entries {
+        let key = entry.key().to_owned();
+        let mut value: Value = serde_json::from_slice(entry.value())?;
+        if key == "/maetro/system/cluster-meta" {
+            let endpoints = value
+                .get_mut("initialVoterEndpoints")
+                .and_then(Value::as_array_mut)
+                .ok_or("cluster endpoints are absent")?;
+            for endpoint in endpoints {
+                let host = endpoint
+                    .get("hostIp")
+                    .and_then(Value::as_str)
+                    .ok_or("cluster endpoint host is absent")?;
+                let (_, gateway, client, peer) = ports
+                    .iter()
+                    .find(|(octet, _, _, _)| host == format!("10.0.0.{octet}"))
+                    .ok_or("cluster endpoint has no port fixture")?;
+                endpoint["gatewayPort"] = json!(gateway);
+                endpoint["etcdClientPort"] = json!(client);
+                endpoint["etcdPeerPort"] = json!(peer);
+            }
+        } else if key.contains("/cluster/voters/") {
+            let member = value
+                .get("memberId")
+                .and_then(Value::as_u64)
+                .ok_or("voter member ID is absent")?;
+            let (host_octet, _, client, peer) = ports
+                .iter()
+                .find(|(octet, _, _, _)| member == u64::from(*octet))
+                .ok_or("voter has no port fixture")?;
+            value["peerUrls"] = json!([format!("https://10.0.0.{host_octet}:{peer}")]);
+            value["clientUrls"] = json!([format!("https://10.0.0.{host_octet}:{client}")]);
+        } else {
+            continue;
+        }
+        *entry = json_entry(&key, value);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

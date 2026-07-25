@@ -21,6 +21,8 @@ use cutover_files::{
     write_new_private,
 };
 
+const DEFAULT_REWRITE_STORE_PEER_PORT: u16 = 2_380;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "maestro-migrate",
@@ -79,6 +81,9 @@ enum Command {
         /// Reviewed logical snapshot captured before schema conversion.
         #[arg(long)]
         snapshot: PathBuf,
+        /// Shared rewrite etcd peer port used by every restored member.
+        #[arg(long, default_value_t = DEFAULT_REWRITE_STORE_PEER_PORT)]
+        store_peer_port: u16,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -99,6 +104,9 @@ enum Command {
         /// Exact etcdutl executable used for snapshot restoration.
         #[arg(long)]
         etcdutl_binary: PathBuf,
+        /// Shared rewrite etcd peer port used by every restored member.
+        #[arg(long, default_value_t = DEFAULT_REWRITE_STORE_PEER_PORT)]
+        store_peer_port: u16,
     },
     /// Verifies one restored member against both reviewed snapshot artifacts.
     StoreVerify {
@@ -114,6 +122,9 @@ enum Command {
         /// Rewrite cluster data root on this node.
         #[arg(long)]
         data_directory: PathBuf,
+        /// Shared rewrite etcd peer port used by every restored member.
+        #[arg(long, default_value_t = DEFAULT_REWRITE_STORE_PEER_PORT)]
+        store_peer_port: u16,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -218,9 +229,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
         }
-        Command::StorePlan { snapshot, output } => {
+        Command::StorePlan {
+            snapshot,
+            store_peer_port,
+            output,
+        } => {
             let snapshot = load_snapshot(&snapshot)?;
-            let plan = plan_legacy_store_restore(&snapshot)?;
+            let plan = plan_legacy_store_restore(&snapshot, store_peer_port)?;
             write_json(&plan, output.as_deref())
         }
         Command::StoreRestore {
@@ -229,9 +244,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             node_id,
             data_directory,
             etcdutl_binary,
+            store_peer_port,
         } => {
             let snapshot = load_snapshot(&snapshot)?;
-            let plan = plan_legacy_store_restore(&snapshot)?;
+            let plan = plan_legacy_store_restore(&snapshot, store_peer_port)?;
             let node_id = parse_node_id(node_id)?;
             let report = restore_legacy_store(
                 &plan,
@@ -247,10 +263,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             native_snapshot,
             node_id,
             data_directory,
+            store_peer_port,
             output,
         } => {
             let snapshot = load_snapshot(&snapshot)?;
-            let plan = plan_legacy_store_restore(&snapshot)?;
+            let plan = plan_legacy_store_restore(&snapshot, store_peer_port)?;
             let node_id = parse_node_id(node_id)?;
             let report =
                 verify_legacy_store_restore(&plan, &node_id, &native_snapshot, &data_directory)?;

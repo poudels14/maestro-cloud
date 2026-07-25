@@ -113,7 +113,13 @@ impl LegacyStoreRestoreReport {
 /// Extracts and validates the exact store topology from a logical cutover snapshot.
 pub fn plan_legacy_store_restore(
     snapshot: &LegacySnapshot,
+    store_peer_port: u16,
 ) -> Result<LegacyStoreRestorePlan, LegacyStoreRestoreError> {
+    if store_peer_port == 0 {
+        return Err(invalid_legacy_state(
+            "rewrite store peer port must be non-zero".to_owned(),
+        ));
+    }
     let nodes = LegacyNodeCatalog::decode(snapshot.entries())
         .map_err(|error| invalid_legacy_state(error.to_string()))?;
     let identity = LegacyClusterIdentity::decode(&nodes.unclaimed, &nodes)
@@ -126,13 +132,13 @@ pub fn plan_legacy_store_restore(
         .into_iter()
         .map(|(node_id, endpoint)| {
             let member_name = format!("maestro-{node_id}");
-            let peer_url = format!("https://{}:{}", endpoint.host_ip, endpoint.etcd_peer_port);
+            let peer_url = format!("https://{}:{store_peer_port}", endpoint.host_ip);
             (
                 node_id.clone(),
                 LegacyStoreRestoreMember {
                     node_id,
                     host_address: endpoint.host_ip,
-                    peer_port: endpoint.etcd_peer_port,
+                    peer_port: store_peer_port,
                     member_name,
                     peer_url,
                 },

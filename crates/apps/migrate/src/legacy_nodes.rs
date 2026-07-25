@@ -27,13 +27,6 @@ pub(crate) struct NodeBundle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LegacyPorts {
-    gateway: u16,
-    store_client: u16,
-    store_peer: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LegacyControlEndpoint {
     pub(crate) host_ip: Ipv4Addr,
     pub(crate) api_port: u16,
@@ -344,14 +337,6 @@ fn validate_topology(nodes: &BTreeMap<NodeId, NodeBundle>) -> Result<(), LegacyN
             ),
         ));
     }
-    let Some(first) = nodes.values().next() else {
-        return Ok(());
-    };
-    let expected_ports = LegacyPorts {
-        gateway: first.control.gateway_port,
-        store_client: first.control.etcd_client_port,
-        store_peer: first.control.etcd_peer_port,
-    };
     let mut endpoints = BTreeSet::new();
     let mut subnets = Vec::<(&NodeId, Ipv4Net)>::new();
     for (node_id, node) in nodes {
@@ -369,17 +354,6 @@ fn validate_topology(nodes: &BTreeMap<NodeId, NodeBundle>) -> Result<(), LegacyN
             return Err(invalid(
                 node_id.to_string(),
                 "node control endpoint occurs more than once",
-            ));
-        }
-        let ports = LegacyPorts {
-            gateway: node.control.gateway_port,
-            store_client: node.control.etcd_client_port,
-            store_peer: node.control.etcd_peer_port,
-        };
-        if ports != expected_ports {
-            return Err(invalid(
-                node_id.to_string(),
-                "per-node gateway or etcd ports cannot map to cluster-wide ports",
             ));
         }
         let subnet = parse_workload_subnet(node_id.as_str(), &info.subnet)?;

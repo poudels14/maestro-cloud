@@ -63,13 +63,17 @@ substitute for staging evidence.
 
    maestro-migrate store-plan \
      --snapshot /var/lib/maestro/cutover/legacy-snapshot.json \
+     --store-peer-port 2380 \
      --output /var/lib/maestro/cutover/store-plan.json
    ```
 
    Planning validates every known legacy key family and fails if leadership,
    requests, maintenance, or node-lifecycle work is still in progress. Compare
    the store plan's cluster ID, control-plane node IDs, addresses, and peer
-   ports with the rewrite `maestro.jsonc` before proceeding.
+   ports with the rewrite `maestro.jsonc` before proceeding. Legacy nodes may
+   use different dynamically allocated etcd ports; `--store-peer-port`
+   deliberately normalizes every restored member onto the rewrite's shared
+   peer port.
 
 5. Apply and independently verify the exact reviewed logical artifact:
 
@@ -157,6 +161,7 @@ substitute for staging evidence.
      --native-snapshot /var/lib/maestro/cutover/post-migration.db \
      --node-id node-a \
      --data-directory /var/lib/maestro/production \
+     --store-peer-port 2380 \
      --etcdutl-binary /run/current-system/sw/bin/etcdutl
 
    maestro-migrate store-verify \
@@ -164,6 +169,7 @@ substitute for staging evidence.
      --native-snapshot /var/lib/maestro/cutover/post-migration.db \
      --node-id node-a \
      --data-directory /var/lib/maestro/production \
+     --store-peer-port 2380 \
      --output /var/lib/maestro/cutover/node-a-store-verification.json
    ```
 
