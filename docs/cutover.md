@@ -19,7 +19,11 @@ of cutover.
 ## Rehearsal
 
 Use the same paths, configuration, secrets, binary versions, and node count
-planned for production.
+planned for production. Copy
+[the production rehearsal evidence checklist](rehearsal-evidence.md), complete
+it during the run, and archive it with the snapshot and verification artifacts.
+Unchecked required items are a no-go; CI or local acceptance results do not
+substitute for staging evidence.
 
 1. Restore a verified production etcd snapshot into an isolated staging
    cluster. Keep all legacy and rewrite daemons stopped, start only legacy etcd,
@@ -197,8 +201,9 @@ planned for production.
 
     Verify cluster quorum, node readiness, assignment convergence, workload
     recreation, ingress, DNS, firewall, logs, metrics, and every service
-    lifecycle operation in the parity checklist. Flip external DNS or ingress
-    only after those checks pass.
+    lifecycle operation in the
+    [production rehearsal evidence checklist](rehearsal-evidence.md). Flip
+    external DNS or ingress only after those checks pass.
 
 ## Production and recovery
 

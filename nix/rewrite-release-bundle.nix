@@ -23,6 +23,8 @@ in
     install -m644 ${../LICENSE} "$bundle_root/LICENSE"
     install -m644 ${rewritePackage}/share/doc/maestro/cutover.md \
       "$bundle_root/share/doc/maestro/cutover.md"
+    install -m644 ${rewritePackage}/share/doc/maestro/rehearsal-evidence.md \
+      "$bundle_root/share/doc/maestro/rehearsal-evidence.md"
     install -m644 ${rewritePackage}/share/doc/maestro/multi-node.md \
       "$bundle_root/share/doc/maestro/multi-node.md"
     install -m644 ${rewritePackage}/share/doc/maestro/nixos-rewrite.md \

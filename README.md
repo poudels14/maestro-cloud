@@ -314,8 +314,9 @@ manifest control.
 
 Follow [Rewrite cutover migration](docs/cutover.md) for the exact rehearsal,
 apply, native-store restore, launch, verification, and evidence-retention
-procedure. Production cutover is not approved merely because the package
-builds.
+procedure. Record the result in the
+[production rehearsal evidence checklist](docs/rehearsal-evidence.md).
+Production cutover is not approved merely because the package builds.
 
 The cutover keeps the one-way data migration and does not preserve legacy API
 or runtime compatibility after migration. Migrated workloads are recreated
@@ -363,6 +364,7 @@ cutover gates.
 
 - [Multi-node rewrite operations](docs/multi-node.md)
 - [Rewrite cutover migration](docs/cutover.md)
+- [Production cutover rehearsal evidence](docs/rehearsal-evidence.md)
 - [Rewrite NixOS deployment](docs/nixos-rewrite.md)
 - [Tailscale operator access](docs/tailscale.md)
 - [Pull-request previews](docs/pr-previews.md)

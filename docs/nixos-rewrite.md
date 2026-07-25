@@ -103,12 +103,13 @@ tar -xzf result/*.tar.gz
 ```
 
 The archive contains standalone `maestro`, `maestro-daemon`, and
-`maestro-migrate` executables, the static panel, and the cutover, multi-node,
-NixOS, and Tailscale runbooks. The daemon serves the panel from its HTTPS API
-origin and exchanges operator tokens for HttpOnly session cookies. The daemon
-still requires the host runtime, network privileges, and external tools
-described by the NixOS module; the static bundle does not turn the daemon into
-an isolated container deployment.
+`maestro-migrate` executables, the static panel, the production rehearsal
+evidence checklist, and the cutover, multi-node, NixOS, and Tailscale runbooks.
+The daemon serves the panel from its HTTPS API origin and exchanges operator
+tokens for HttpOnly session cookies. The daemon still requires the host
+runtime, network privileges, and external tools described by the NixOS module;
+the static bundle does not turn the daemon into an isolated container
+deployment.
 
 Release builds also publish a minimal, deterministic daemon image archive for
 each Linux architecture. Build and verify it locally with:
@@ -131,4 +132,5 @@ supplied by the container orchestrator.
 
 Selecting this module does not approve production cutover. Complete the
 one-way store restore, planned workload-restart rehearsal, and evidence checks
-in `cutover.md` before enabling the service on a production node.
+in `cutover.md` and `rehearsal-evidence.md` before enabling the service on a
+production node.
