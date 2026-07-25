@@ -228,6 +228,7 @@ impl RealProcessCluster {
         command
             .args(["netns", "exec", &node.namespace])
             .arg(&self.daemon_binary)
+            .arg("start")
             .arg(&node.config_path)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))

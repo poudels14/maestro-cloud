@@ -1,6 +1,12 @@
 use std::fmt::{Debug, Formatter};
+#[cfg(target_os = "linux")]
+use std::fs::OpenOptions;
 use std::future::Future;
 use std::io;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -281,7 +287,7 @@ impl BoundWorkloadNodeApi {
                 socket_user_id: owner.user_id,
             });
         }
-        let listener = UnixListener::bind(&socket_path)
+        let listener = bind_listener(&socket_path)
             .map_err(|source| NodeApiServerError::io("bind", &socket_path, source))?;
         let metadata = std::fs::symlink_metadata(&socket_path)
             .map_err(|source| NodeApiServerError::io("inspect", &socket_path, source))?;
@@ -369,6 +375,35 @@ impl BoundWorkloadNodeApi {
         std::fs::remove_file(socket_path)
             .map_err(|source| NodeApiServerError::io("remove", socket_path, source))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn bind_listener(socket_path: &Path) -> io::Result<UnixListener> {
+    let parent = socket_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "node API socket path has no parent directory",
+        )
+    })?;
+    let file_name = socket_path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "node API socket path has no file name",
+        )
+    })?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(parent)?;
+    let bind_path = PathBuf::from("/proc/self/fd")
+        .join(directory.as_raw_fd().to_string())
+        .join(file_name);
+    UnixListener::bind(bind_path)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn bind_listener(socket_path: &Path) -> io::Result<UnixListener> {
+    UnixListener::bind(socket_path)
 }
 
 #[derive(Debug, Clone, Copy)]

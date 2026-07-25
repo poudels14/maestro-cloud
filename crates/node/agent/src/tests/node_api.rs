@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 
@@ -201,6 +203,41 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
     server
         .await
         .expect("server task")
+        .expect("clean server shutdown");
+    assert!(!socket_path.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn uds_server_binds_through_a_short_alias_for_long_host_paths() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let directory = temporary.path().join("n".repeat(96));
+    std::fs::create_dir(&directory).expect("long socket directory");
+    let socket_path = directory.join("node.sock");
+    assert!(socket_path.as_os_str().as_bytes().len() >= 108);
+    let metadata = std::fs::metadata(&directory).expect("directory metadata");
+    let handlers = Arc::new(RecordingHandlers::default());
+    let bound = BoundWorkloadNodeApi::bind(
+        &socket_path,
+        WorkloadAuthorization::new(WorkloadToken::from_bytes([7; 32]), metadata.uid(), claims()),
+        NodeApiSocketOwner {
+            user_id: metadata.uid(),
+            group_id: metadata.gid(),
+        },
+        WorkloadControlAccess::Denied,
+        NodeApiServices::new(
+            handlers.clone(),
+            handlers.clone(),
+            handlers.clone(),
+            handlers,
+        ),
+    )
+    .expect("bind node API through the parent directory descriptor");
+    assert!(socket_path.exists());
+
+    bound
+        .serve_with_shutdown(std::future::ready(()))
+        .await
         .expect("clean server shutdown");
     assert!(!socket_path.exists());
 }

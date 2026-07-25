@@ -242,13 +242,28 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .len(),
         1
     );
-    assert_eq!(
-        load_assignment(&store, &cluster.cluster_id)
-            .await?
-            .status
-            .phase,
-        AssignmentPhase::Running
-    );
+    let assignment = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let assignment = load_assignment(&store, &cluster.cluster_id).await?;
+            if assignment.status.phase == AssignmentPhase::Running {
+                return Ok::<_, Box<dyn std::error::Error>>(assignment);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let assignment = match assignment {
+        Ok(assignment) => assignment?,
+        Err(_) => {
+            let assignment = load_assignment(&store, &cluster.cluster_id).await?;
+            return Err(format!(
+                "assignment did not reach Running: phase={:?}, conditions={:?}",
+                assignment.status.phase, assignment.status.conditions
+            )
+            .into());
+        }
+    };
+    assert_eq!(assignment.status.phase, AssignmentPhase::Running);
     assert_eq!(
         workload_runtime
             .list(&cluster.cluster_id, &NodeId::new("master")?)
