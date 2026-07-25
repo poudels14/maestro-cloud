@@ -118,8 +118,8 @@ pub struct BackupStatsSnapshot {
 pub struct ClusterStatsResponse {
     /// Response generation time.
     pub generated_at_ms: i64,
-    /// Probe/API process health.
-    pub probe: ProbeStatsSnapshot,
+    /// Node agent/API process health.
+    pub agent: AgentStatsSnapshot,
     /// Latest controller report when one has arrived.
     pub controller: Option<ControllerStatsSnapshot>,
     /// Age of the latest controller report.
@@ -130,13 +130,13 @@ pub struct ClusterStatsResponse {
     pub warnings: Vec<StatsWarning>,
 }
 
-/// API-compatible probe process health.
+/// Node agent/API process health.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProbeStatsSnapshot {
-    /// Probe/API software version.
+pub struct AgentStatsSnapshot {
+    /// Agent/API software version.
     pub version: String,
-    /// Probe/API process uptime.
+    /// Agent/API process uptime.
     pub uptime_ms: u64,
 }
 

@@ -6,10 +6,10 @@ use std::time::Duration;
 use kernel_api::{ClusterId, NodeId, Timestamp};
 
 use crate::{
-    BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsProvider, DeadLetterStore,
-    InMemoryLogStore, IngestLogEntry, LiveControllerStats, LogBody, LogDeliveryStore, LogOrigin,
-    LogProducer, LogRecordId, LogSinkId, LogStore, LogStream, OriginCursor, ProbeStatsSnapshot,
-    SinkDeadLetter, SinkRuntimeClock, SinkRuntimeRegistry, StatsWarning, UptimeClock,
+    AgentStatsSnapshot, BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsProvider,
+    DeadLetterStore, InMemoryLogStore, IngestLogEntry, LiveControllerStats, LogBody,
+    LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogSinkId, LogStore, LogStream,
+    OriginCursor, SinkDeadLetter, SinkRuntimeClock, SinkRuntimeRegistry, StatsWarning, UptimeClock,
     collect_controller_stats, derive_stats_warnings,
 };
 
@@ -141,7 +141,7 @@ fn cluster_and_backup_stats_preserve_defaults_metrics_and_wire_shape()
 
     let response = ClusterStatsResponse {
         generated_at_ms: 10,
-        probe: ProbeStatsSnapshot {
+        agent: AgentStatsSnapshot {
             version: "2.0.0".to_owned(),
             uptime_ms: 20,
         },
@@ -158,7 +158,7 @@ fn cluster_and_backup_stats_preserve_defaults_metrics_and_wire_shape()
         serde_json::to_value(response)?,
         serde_json::json!({
             "generatedAtMs": 10,
-            "probe": { "version": "2.0.0", "uptimeMs": 20 },
+            "agent": { "version": "2.0.0", "uptimeMs": 20 },
             "controller": null,
             "controllerHeartbeatAgeMs": null,
             "backup": {

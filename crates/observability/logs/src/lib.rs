@@ -44,8 +44,8 @@ pub use cluster_query::{
     NodeLogQueryStore,
 };
 pub use cluster_stats::{
-    BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsSnapshot, DeadLetterStatsSnapshot,
-    ProbeStatsSnapshot, SinkStatsSnapshot, SpoolStatsSnapshot, StatsMetricPoint, StatsWarning,
+    AgentStatsSnapshot, BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsSnapshot,
+    DeadLetterStatsSnapshot, SinkStatsSnapshot, SpoolStatsSnapshot, StatsMetricPoint, StatsWarning,
     collect_controller_stats,
 };
 pub use controller_stats_provider::{

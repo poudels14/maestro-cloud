@@ -1,6 +1,23 @@
 {
   "components": {
     "schemas": {
+      "AgentStatsSnapshot": {
+        "properties": {
+          "uptimeMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "uptimeMs"
+        ],
+        "type": "object"
+      },
       "ArtifactArchiveId": {
         "description": "Stable identity of one uploaded artifact source archive.",
         "type": "string"
@@ -787,6 +804,9 @@
       },
       "ClusterStatsResponse": {
         "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentStatsSnapshot"
+          },
           "backup": {
             "$ref": "#/components/schemas/BackupStatsSnapshot"
           },
@@ -808,9 +828,6 @@
             "format": "int64",
             "type": "integer"
           },
-          "probe": {
-            "$ref": "#/components/schemas/ProbeStatsSnapshot"
-          },
           "warnings": {
             "items": {
               "$ref": "#/components/schemas/StatsWarning"
@@ -820,7 +837,7 @@
         },
         "required": [
           "generatedAtMs",
-          "probe",
+          "agent",
           "controller",
           "controllerHeartbeatAgeMs",
           "backup",
@@ -5406,23 +5423,6 @@
         },
         "required": [
           "phase"
-        ],
-        "type": "object"
-      },
-      "ProbeStatsSnapshot": {
-        "properties": {
-          "uptimeMs": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "version": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "version",
-          "uptimeMs"
         ],
         "type": "object"
       },

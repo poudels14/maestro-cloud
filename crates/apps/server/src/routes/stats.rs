@@ -6,8 +6,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::future::try_join_all;
 use logs::{
-    BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsProvider, ControllerStatsSnapshot,
-    ProbeStatsSnapshot, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
+    AgentStatsSnapshot, BackupStatsSnapshot, ClusterStatsResponse, ControllerStatsProvider,
+    ControllerStatsSnapshot, StatsMetricPoint, StatsMetricQuery, StatsMetricStore,
     StatsMetricStoreError, derive_stats_warnings,
 };
 use serde::Deserialize;
@@ -61,7 +61,7 @@ async fn cluster_stats(
     );
     Ok(Json(ClusterStatsResponse {
         generated_at_ms: now,
-        probe: ProbeStatsSnapshot {
+        agent: AgentStatsSnapshot {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             uptime_ms: state
                 .uptime_clock

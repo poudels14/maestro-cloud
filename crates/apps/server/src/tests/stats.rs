@@ -64,7 +64,7 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
     let response = request(&server, "/api/cluster/stats", Some(&operator)).await?;
     assert_eq!(response.status(), StatusCode::OK);
     let stats: ClusterStatsResponse = decode(response).await?;
-    assert_eq!(stats.probe.uptime_ms, 42_000);
+    assert_eq!(stats.agent.uptime_ms, 42_000);
     let controller = stats.controller.ok_or("controller stats missing")?;
     assert_eq!(controller.uptime_ms, 42_000);
     assert_eq!(controller.sinks.len(), 1);

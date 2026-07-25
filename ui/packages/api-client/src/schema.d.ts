@@ -1304,6 +1304,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AgentStatsSnapshot: {
+            /** Format: int64 */
+            uptimeMs: number;
+            version: string;
+        };
         /** @description Stable identity of one uploaded artifact source archive. */
         ArtifactArchiveId: string;
         /** @description Result of accepting one content-addressed build context archive. */
@@ -1539,13 +1544,13 @@ export interface components {
             wireguard: number;
         };
         ClusterStatsResponse: {
+            agent: components["schemas"]["AgentStatsSnapshot"];
             backup: components["schemas"]["BackupStatsSnapshot"];
             controller: components["schemas"]["ControllerStatsSnapshot"] | null;
             /** Format: int64 */
             controllerHeartbeatAgeMs: number | null;
             /** Format: int64 */
             generatedAtMs: number;
-            probe: components["schemas"]["ProbeStatsSnapshot"];
             warnings: components["schemas"]["StatsWarning"][];
         };
         CommandRequest: {
@@ -2896,11 +2901,6 @@ export interface components {
             phase: components["schemas"]["PreviewPhase"];
             /** @description Time teardown may proceed after a close event. */
             teardownAt?: components["schemas"]["Timestamp"] | (null);
-        };
-        ProbeStatsSnapshot: {
-            /** Format: int64 */
-            uptimeMs: number;
-            version: string;
         };
         ReplicaState: components["schemas"]["Object8"];
         /** @description Stable identity of a deployment replica's observed state. */

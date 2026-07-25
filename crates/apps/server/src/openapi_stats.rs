@@ -117,7 +117,7 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
         }),
     );
     schemas.insert(
-        "ProbeStatsSnapshot".to_owned(),
+        "AgentStatsSnapshot".to_owned(),
         json!({
             "type": "object",
             "required": ["version", "uptimeMs"],
@@ -144,11 +144,11 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
         json!({
             "type": "object",
             "required": [
-                "generatedAtMs", "probe", "controller", "controllerHeartbeatAgeMs", "backup", "warnings"
+                "generatedAtMs", "agent", "controller", "controllerHeartbeatAgeMs", "backup", "warnings"
             ],
             "properties": {
                 "generatedAtMs": {"type": "integer", "format": "int64"},
-                "probe": {"$ref": "#/components/schemas/ProbeStatsSnapshot"},
+                "agent": {"$ref": "#/components/schemas/AgentStatsSnapshot"},
                 "controller": {
                     "allOf": [{"$ref": "#/components/schemas/ControllerStatsSnapshot"}],
                     "nullable": true

@@ -33,7 +33,7 @@ function ClusterStatsSection(props: { api: ClusterApi }) {
       <Show when={stats.data}>
         {(data) => {
           const controller = () => data().controller;
-          const probeSink = () => controller()?.sinks.find((sink) => sink.id === "controller");
+          const agentSink = () => controller()?.sinks.find((sink) => sink.id === "controller");
           const datadogSink = () => controller()?.sinks.find((sink) => sink.id === "datadog");
           const warnings = () =>
             data().warnings.filter((warning) => !ROW_COVERED_WARNING_CODES.has(warning.code));
@@ -51,18 +51,18 @@ function ClusterStatsSection(props: { api: ClusterApi }) {
                   detail={
                     controller()
                       ? `reported ${timeAgo(controller()!.reportedAtMs)}`
-                      : "The probe has not received a controller stats report"
+                      : "The agent has not received a controller stats report"
                   }
                 />
                 <HealthRow
-                  label="Probe"
+                  label="Agent"
                   level="healthy"
-                  value={`v${data().probe.version}`}
-                  detail={`uptime ${formatDuration(data().probe.uptimeMs)}`}
+                  value={`v${data().agent.version}`}
+                  detail={`uptime ${formatDuration(data().agent.uptimeMs)}`}
                 />
                 <SinkRow
-                  label="Probe log sync"
-                  sink={probeSink()}
+                  label="Agent log sync"
+                  sink={agentSink()}
                   controllerPresent={!!controller()}
                 />
                 <SinkRow
