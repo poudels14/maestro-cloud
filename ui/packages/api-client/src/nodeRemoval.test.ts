@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createApiClient, type ApiTransport, type TransportRequest } from "@maestro/api-client";
+import { createApiClient, type ApiTransport, type TransportRequest } from "./index";
 
 test("node removal confirms identity and carries its replay key", async () => {
   const requests: Array<{

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createApiClient, type ApiTransport, type TransportRequest } from "@maestro/api-client";
+import { createApiClient, type ApiTransport, type TransportRequest } from "./index";
 
 test("generated config helper uses the masked operator view", async () => {
   const requests: Array<{ method: string; path: string }> = [];

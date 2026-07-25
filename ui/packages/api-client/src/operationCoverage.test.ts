@@ -6,7 +6,7 @@ import {
   type ApiSchemas,
   type ApiTransport,
   type TransportRequest
-} from "@maestro/api-client";
+} from "./index";
 
 const nonPanelOperations = [
   "discoverClusterCa",
