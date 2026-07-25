@@ -100,5 +100,5 @@ crossterm = "0.29.0"
 prost-types = "0.14.4"
 
 [dev-dependencies]
-clustertest = { version = "0.1.0", path = "../crates/clustertest" }
+clustertest = { version = "0.5.0", path = "../crates/clustertest" }
 proptest = "1.11.0"

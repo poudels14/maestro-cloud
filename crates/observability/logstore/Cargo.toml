@@ -1,6 +1,6 @@
 [package]
 name = "logstore"
-version = "0.1.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -9,10 +9,10 @@ publish = false
 async-trait.workspace = true
 chrono.workspace = true
 duckdb = { version = "=1.4.1", features = ["bundled", "json", "parquet"] }
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
-logql = { version = "0.1.0", path = "../logql" }
-logs = { version = "0.1.0", path = "../logs" }
-metrics = { version = "0.1.0", path = "../metrics" }
+kernel-api = { version = "0.5.0", path = "../../kernel/api" }
+logql = { version = "0.5.0", path = "../logql" }
+logs = { version = "0.5.0", path = "../logs" }
+metrics = { version = "0.5.0", path = "../metrics" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -20,9 +20,9 @@ thiserror.workspace = true
 tokio = { version = "=1.52.3", features = ["rt", "sync"] }
 
 [dev-dependencies]
-logs = { version = "0.1.0", path = "../logs", features = ["test-util"] }
-metrics = { version = "0.1.0", path = "../metrics", features = ["test-util"] }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
+logs = { version = "0.5.0", path = "../logs", features = ["test-util"] }
+metrics = { version = "0.5.0", path = "../metrics", features = ["test-util"] }
+runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
 tempfile = "=3.27.0"
 tokio.workspace = true
 

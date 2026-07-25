@@ -518,7 +518,7 @@ fn node() -> Result<Node, kernel_api::InvalidIdentifier> {
         },
         status: NodeStatus {
             instance_id: NodeInstanceId::new("instance-1")?,
-            version: "0.1.0".to_string(),
+            version: "0.5.0".to_string(),
             last_seen: Timestamp(1_000),
             conditions: Vec::new(),
         },

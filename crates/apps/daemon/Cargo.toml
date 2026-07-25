@@ -1,6 +1,6 @@
 [package]
 name = "daemon"
-version = "0.1.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -23,26 +23,26 @@ aws-sdk-s3 = { version = "=1.138.0", default-features = false, features = [
 base64 = "=0.22.1"
 chrono.workspace = true
 clap.workspace = true
-cluster = { version = "0.1.0", path = "../../cluster" }
-build = { version = "0.1.0", path = "../../operators/build" }
-deployment = { version = "0.1.0", path = "../../operators/deployment" }
-dns = { version = "0.1.0", path = "../../operators/dns" }
-firewall = { version = "0.1.0", path = "../../operators/firewall" }
-ingress = { version = "0.1.0", path = "../../operators/ingress" }
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
-kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
-kernel-store = { version = "0.1.0", path = "../../kernel/store" }
-logs = { version = "0.1.0", path = "../../observability/logs" }
-logstore = { version = "0.1.0", path = "../../observability/logstore" }
-metrics = { version = "0.1.0", path = "../../observability/metrics" }
-node-agent = { version = "0.1.0", path = "../../node/agent" }
-preview = { version = "0.1.0", path = "../../operators/preview" }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
-scheduler = { version = "0.1.0", path = "../../operators/scheduler" }
+cluster = { version = "0.5.0", path = "../../cluster" }
+build = { version = "0.5.0", path = "../../operators/build" }
+deployment = { version = "0.5.0", path = "../../operators/deployment" }
+dns = { version = "0.5.0", path = "../../operators/dns" }
+firewall = { version = "0.5.0", path = "../../operators/firewall" }
+ingress = { version = "0.5.0", path = "../../operators/ingress" }
+kernel-api = { version = "0.5.0", path = "../../kernel/api" }
+kernel-controller = { version = "0.5.0", path = "../../kernel/controller" }
+kernel-store = { version = "0.5.0", path = "../../kernel/store" }
+logs = { version = "0.5.0", path = "../../observability/logs" }
+logstore = { version = "0.5.0", path = "../../observability/logstore" }
+metrics = { version = "0.5.0", path = "../../observability/metrics" }
+node-agent = { version = "0.5.0", path = "../../node/agent" }
+preview = { version = "0.5.0", path = "../../operators/preview" }
+runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
+scheduler = { version = "0.5.0", path = "../../operators/scheduler" }
 semver.workspace = true
-server = { version = "0.1.0", path = "../server" }
-upgrade = { version = "0.1.0", path = "../../operators/upgrade" }
-webhook = { version = "0.1.0", path = "../../operators/webhook" }
+server = { version = "0.5.0", path = "../server" }
+upgrade = { version = "0.5.0", path = "../../operators/upgrade" }
+webhook = { version = "0.5.0", path = "../../operators/webhook" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2.workspace = true
@@ -53,20 +53,20 @@ tokio = { version = "=1.52.3", features = ["fs", "io-std", "io-util", "macros", 
 workspace = true
 
 [dev-dependencies]
-clustertest = { version = "0.1.0", path = "../../clustertest" }
+clustertest = { version = "0.5.0", path = "../../clustertest" }
 jsonwebtoken.workspace = true
-logs = { version = "0.1.0", path = "../../observability/logs", features = ["test-util"] }
-metrics = { version = "0.1.0", path = "../../observability/metrics", features = ["test-util"] }
+logs = { version = "0.5.0", path = "../../observability/logs", features = ["test-util"] }
+metrics = { version = "0.5.0", path = "../../observability/metrics", features = ["test-util"] }
 reqwest.workspace = true
 rcgen = { version = "=0.14.8", features = ["pem"] }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.5.0", path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile = "=3.27.0"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt", "time"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
+runtime = { version = "0.5.0", path = "../../runtime", default-features = false, features = ["containerd"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["docker"] }
+runtime = { version = "0.5.0", path = "../../runtime", default-features = false, features = ["docker"] }
