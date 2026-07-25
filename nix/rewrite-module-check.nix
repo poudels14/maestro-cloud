@@ -5,7 +5,7 @@
 }: let
   inherit (pkgs) lib;
   buildkit = config.systemd.services.buildkitd;
-  daemon = config.systemd.services.maestro-rewrite;
+  daemon = config.systemd.services.maestro;
   daemonCommand = daemon.serviceConfig.ExecStart;
 in
   assert config.virtualisation.containerd.enable;
@@ -26,7 +26,8 @@ in
   assert lib.elem "multi-user.target" daemon.wantedBy;
   assert daemon.serviceConfig.UMask == "0077";
   assert daemon.serviceConfig.LimitNOFILE == 1048576;
-  assert config.services.maestro-rewrite.package == rewritePackage;
+  assert config.services.maestro.package == rewritePackage;
+  assert config.services.maestro.source != null;
   assert lib.any (package: lib.getName package == "depot") config.environment.systemPackages;
   assert lib.hasInfix "/bin/maestro-daemon" daemonCommand;
   assert lib.hasInfix "\"start\" \"/run/maestro/launch.json\"" daemonCommand;

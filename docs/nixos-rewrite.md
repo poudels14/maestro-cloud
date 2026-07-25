@@ -1,18 +1,20 @@
 # Rewrite NixOS deployment
 
-The flake exposes the rewrite without replacing the production legacy package
-or module before cutover:
+The flake exposes the rewrite through the established Maestro entry points:
 
-- `packages.<system>.rewrite` installs `maestro`, `maestro-daemon`,
-  `maestro-migrate`, and the static panel served by the daemon.
+- `packages.<system>.default` installs `maestro`, `maestro-daemon`,
+  `maestro-migrate`, and the static panel served by the daemon;
+- `packages.<system>.rewrite` is an explicit alias for the same package;
 - `packages.<system>.rewrite-panel` exposes the same static panel separately
   for packaging inspection.
-- `apps.<system>.rewrite`, `daemon`, and `migrate` run those binaries.
-- `nixosModules.rewrite` defines `services.maestro-rewrite`.
+- `apps.<system>.default`, `rewrite`, `daemon`, and `migrate` run those
+  binaries; and
+- `nixosModules.default` defines `services.maestro`.
 
-The rewrite module is for a rehearsal host or the cutover generation. Do not
-enable it together with the legacy `services.maestro` module: both own the same
-cluster endpoints and workload runtime.
+The explicit `rewrite` package and module aliases remain available for release
+inspection. `packages.<system>.legacy`, `apps.<system>.legacy`, and
+`nixosModules.legacy` are cutover-only escape hatches and are not supported
+after workloads restart under the rewrite.
 
 ## Host configuration
 
@@ -26,11 +28,11 @@ store:
   outputs = {nixpkgs, maestro, ...}: {
     nixosConfigurations.rehearsal = nixpkgs.lib.nixosSystem {
       modules = [
-        maestro.nixosModules.rewrite
+        maestro.nixosModules.default
         ({...}: {
-          services.maestro-rewrite = {
+          services.maestro = {
             enable = true;
-            launchConfig = "/run/maestro/launch.json";
+            config = "/run/maestro/launch.json";
           };
         })
       ];
@@ -39,7 +41,9 @@ store:
 }
 ```
 
-The launch document contains cluster private keys and application secrets. It
+`services.maestro.config` now names the protected rewrite launch document, not
+the legacy JSON/JSONC config source. The launch document contains cluster
+private keys and application secrets. It
 must be an absolute owner-only regular file such as
 `/run/maestro/launch.json`; placing its contents in a Nix expression would copy
 those secrets into the world-readable Nix store. The daemon validates the file
@@ -81,14 +85,17 @@ control-plane node. Bootstrap and join documents are create-only and
 owner-only; retrying the same completed operation verifies and reuses the
 existing document.
 
-Build or inspect the release bundle with:
+Build or inspect the canonical package with:
 
 ```sh
-nix build .#rewrite
+nix build
 nix flake check
-nix run .#rewrite -- --help
+nix run .# -- --help
 nix run .#migrate -- --help
 ```
+
+`nix build .#rewrite` and `nix run .#rewrite` select the same rewrite package
+explicitly.
 
 Linux release tags publish deterministic static-musl bundles for x86_64 and
 ARM64. Build the bundle for the current Linux architecture and verify it with:
@@ -121,7 +128,7 @@ docker run --rm "maestro-daemon:$version" --help
 
 The daemon image contains the static daemon and panel, with no Node runtime or
 shell. It is a packaging artifact, not a replacement for the host integration
-in `services.maestro-rewrite`: a real daemon still needs host networking,
+in `services.maestro`: a real daemon still needs host networking,
 containerd, privileged network access, the launch document, and the external
 adapter binaries selected by that document. Prefer the NixOS module for
 production and use the image only where those dependencies are explicitly

@@ -5,19 +5,25 @@
   utils,
   ...
 }: let
-  cfg = config.services.maestro-rewrite;
+  cfg = config.services.maestro;
   depotPackage = import ./depot-package.nix {inherit pkgs;};
 in {
-  options.services.maestro-rewrite = {
-    enable = lib.mkEnableOption "rewritten Maestro control plane";
+  options.services.maestro = {
+    enable = lib.mkEnableOption "Maestro control plane";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.rewrite;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       description = "Maestro rewrite package to run";
     };
 
-    launchConfig = lib.mkOption {
+    source = lib.mkOption {
+      type = lib.types.path;
+      default = self.outPath;
+      description = "Maestro source revision used by the NixOS upgrade adapter";
+    };
+
+    config = lib.mkOption {
       type = lib.types.str;
       description = "Absolute path to the owner-only daemon launch document outside the Nix store";
     };
@@ -38,8 +44,8 @@ in {
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = lib.hasPrefix "/" cfg.launchConfig;
-        message = "services.maestro-rewrite.launchConfig must be an absolute runtime path";
+        assertion = lib.hasPrefix "/" cfg.config;
+        message = "services.maestro.config must be an absolute runtime path";
       }
     ];
 
@@ -66,8 +72,8 @@ in {
 
     environment.systemPackages = [cfg.package cfg.etcdPackage depotPackage];
 
-    systemd.services.maestro-rewrite = {
-      description = "Rewritten Maestro control plane";
+    systemd.services.maestro = {
+      description = "Maestro control plane";
       after = [
         "network-online.target"
         "containerd.service"
@@ -101,7 +107,7 @@ in {
         ExecStart = utils.escapeSystemdExecArgs [
           "${cfg.package}/bin/maestro-daemon"
           "start"
-          cfg.launchConfig
+          cfg.config
         ];
         Restart = "on-failure";
         RestartSec = 5;

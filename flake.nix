@@ -39,7 +39,7 @@
           panel = rewritePanel;
         };
       in {
-        default = rustPlatform.buildRustPackage {
+        legacy = rustPlatform.buildRustPackage {
           pname = "maestro";
           version = maestroVersion;
           src = ./.;
@@ -59,6 +59,7 @@
             ];
         };
 
+        default = rewritePackage;
         rewrite = rewritePackage;
         rewrite-panel = rewritePanel;
       }
@@ -109,6 +110,7 @@
       };
     in {
       default = app self.packages.${system}.default "maestro";
+      legacy = app self.packages.${system}.legacy "maestro";
       rewrite = app self.packages.${system}.rewrite "maestro";
       daemon = app self.packages.${system}.rewrite "maestro-daemon";
       migrate = app self.packages.${system}.rewrite "maestro-migrate";
@@ -130,12 +132,12 @@
             config = (nixpkgs.lib.nixosSystem {
               inherit system;
               modules = [
-                self.nixosModules.rewrite
+                self.nixosModules.default
                 {
                   system.stateVersion = "24.11";
-                  services.maestro-rewrite = {
+                  services.maestro = {
                     enable = true;
-                    launchConfig = "/run/maestro/launch.json";
+                    config = "/run/maestro/launch.json";
                   };
                 }
               ];
@@ -161,7 +163,7 @@
       }
     );
 
-    nixosModules.default = {
+    nixosModules.legacy = {
       config,
       lib,
       pkgs,
@@ -178,7 +180,7 @@
 
         package = lib.mkOption {
           type = lib.types.package;
-          default = self.packages.${pkgs.system}.default;
+          default = self.packages.${pkgs.system}.legacy;
           description = "The maestro package to use";
         };
 
@@ -421,6 +423,7 @@
       };
     };
 
-    nixosModules.rewrite = import ./nix/rewrite-module.nix {inherit self;};
+    nixosModules.default = import ./nix/rewrite-module.nix {inherit self;};
+    nixosModules.rewrite = self.nixosModules.default;
   };
 }
