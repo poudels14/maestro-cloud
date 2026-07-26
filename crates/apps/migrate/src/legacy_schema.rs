@@ -253,7 +253,7 @@ pub(crate) struct LegacyDeploymentBuild {
     pub(crate) source_node_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum LegacyDeploymentStatus {
     Queued,
@@ -304,7 +304,7 @@ pub(crate) struct LegacyImageAssignment {
     pub(crate) source_node_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LegacyReplicaState {
     #[serde(default)]

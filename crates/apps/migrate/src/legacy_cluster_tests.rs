@@ -98,6 +98,72 @@ fn cutover_plan_rejects_orphan_and_mismatched_replica_state() -> TestResult {
 }
 
 #[test]
+fn cutover_plan_archives_an_exhausted_orphan_replica_on_its_deployment() -> TestResult {
+    let mut entries = vec![
+        service_info(),
+        history_counter(),
+        deployment_history(),
+        json_entry(
+            "/maetro/cluster/replica-states/node-a/assignment-old",
+            json!({
+                "serviceId": "api",
+                "deploymentId": "deploy-1",
+                "replicaIndex": 0,
+                "status": "CRASHED",
+                "healthcheckFailures": 0,
+                "restartAttempts": 10,
+                "nodeId": "node-a",
+                "assignmentId": "assignment-old",
+                "error": "restart budget exhausted"
+            }),
+        ),
+    ];
+    entries.extend(node_entries("node-a", "master", 10, 1));
+    entries.extend(cluster_state());
+    let snapshot = LegacySnapshot::new(entries)?;
+
+    let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
+    let deployment: Deployment = decode_write(&plan, BuiltinKind::Deployment)?;
+    let archived: serde_json::Value = serde_json::from_str(
+        deployment
+            .meta
+            .annotations
+            .get(&AnnotationKey(
+                "migration.maestro.dev/legacy-orphan-replica-states".to_owned(),
+            ))
+            .ok_or("orphan replica archive annotation is missing")?,
+    )?;
+    let record = archived
+        .as_array()
+        .and_then(|records| records.first())
+        .ok_or("orphan replica archive is empty")?;
+    assert_eq!(
+        record.get("legacyKey"),
+        Some(&json!(
+            "/maetro/cluster/replica-states/node-a/assignment-old"
+        ))
+    );
+    assert_eq!(record.pointer("/state/status"), Some(&json!("CRASHED")));
+    assert_eq!(
+        record.pointer("/state/error"),
+        Some(&json!("restart budget exhausted"))
+    );
+    assert!(
+        !plan
+            .writes()
+            .iter()
+            .any(|write| write.kind() == BuiltinKind::Assignment)
+    );
+    assert!(
+        !plan
+            .writes()
+            .iter()
+            .any(|write| write.kind() == BuiltinKind::ReplicaState)
+    );
+    Ok(())
+}
+
+#[test]
 fn cutover_plan_rejects_assignment_references_outside_service_history() -> TestResult {
     let mut entries = vec![
         service_info(),

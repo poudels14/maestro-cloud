@@ -22,12 +22,16 @@ use crate::legacy_services::LegacyServiceCatalog;
 const ASSIGNMENTS_PREFIX: &str = "/maetro/cluster/assignments/";
 const REPLICAS_PREFIX: &str = "/maetro/cluster/replica-states/";
 const LEGACY_IMAGE_ASSIGNMENTS_ANNOTATION: &str = "migration.maestro.dev/legacy-image-assignments";
+const LEGACY_ORPHAN_REPLICAS_ANNOTATION: &str =
+    "migration.maestro.dev/legacy-orphan-replica-states";
+const LEGACY_MAX_REPLICA_RESTART_ATTEMPTS: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LegacyClusterCatalog {
     manifest_nodes: BTreeSet<String>,
     assignments: BTreeMap<String, AssignmentRecord>,
     replicas: BTreeMap<String, ReplicaRecord>,
+    orphan_replicas: BTreeMap<String, ReplicaRecord>,
     images: Vec<ImageRecord>,
     pub(crate) unclaimed: Vec<LegacyEntry>,
 }
@@ -156,6 +160,22 @@ impl LegacyClusterCatalog {
                 None => unclaimed.push(entry.clone()),
             }
         }
+        let orphan_ids = replicas
+            .keys()
+            .filter(|assignment_id| !assignments.contains_key(*assignment_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut orphan_replicas = BTreeMap::new();
+        for assignment_id in orphan_ids {
+            let replica = replicas.remove(&assignment_id).ok_or_else(|| {
+                invalid(
+                    format!("{REPLICAS_PREFIX}<unknown>/{assignment_id}"),
+                    "orphan replica disappeared during validation",
+                )
+            })?;
+            validate_orphan_replica(&assignment_id, &replica)?;
+            orphan_replicas.insert(assignment_id, replica);
+        }
         for (assignment_id, replica) in &replicas {
             let assignment = assignments.get(assignment_id).ok_or_else(|| {
                 invalid(
@@ -174,6 +194,7 @@ impl LegacyClusterCatalog {
             manifest_nodes,
             assignments,
             replicas,
+            orphan_replicas,
             images,
             unclaimed,
         })
@@ -187,6 +208,7 @@ impl LegacyClusterCatalog {
     ) -> Result<Vec<BuiltinResource>, LegacyPlanError> {
         self.validate_node_references(nodes)?;
         self.annotate_image_assignments(services, resources)?;
+        self.annotate_orphan_replicas(services, resources)?;
         let mut converted = Vec::new();
         for (assignment_id, record) in &self.assignments {
             let deployment = find_deployment(services, &record.assignment)?;
@@ -289,6 +311,78 @@ impl LegacyClusterCatalog {
             ));
         }
         Ok(())
+    }
+
+    fn annotate_orphan_replicas(
+        &self,
+        services: &LegacyServiceCatalog,
+        resources: &mut [BuiltinResource],
+    ) -> Result<(), LegacyPlanError> {
+        let mut by_deployment = BTreeMap::<(String, String), Vec<serde_json::Value>>::new();
+        for (assignment_id, record) in &self.orphan_replicas {
+            let service_id = record.state.service_id.as_deref().ok_or_else(|| {
+                invalid_assignment(assignment_id, "orphan replica has no service identity")
+            })?;
+            let deployment_id = record.state.deployment_id.as_deref().ok_or_else(|| {
+                invalid_assignment(assignment_id, "orphan replica has no deployment identity")
+            })?;
+            find_deployment_by_id(services, service_id, deployment_id)?;
+            parse_assignment_id(assignment_id)?;
+            parse_node_id(&record.node_id, "orphan replica node id")?;
+            by_deployment
+                .entry((service_id.to_owned(), deployment_id.to_owned()))
+                .or_default()
+                .push(serde_json::json!({
+                    "legacyKey": format!(
+                        "{REPLICAS_PREFIX}{}/{assignment_id}",
+                        record.node_id
+                    ),
+                    "state": record.state,
+                }));
+        }
+        for resource in resources {
+            let BuiltinResource::Deployment(deployment) = resource else {
+                continue;
+            };
+            let key = (
+                deployment.spec.service_id.to_string(),
+                deployment.meta.id.to_string(),
+            );
+            if let Some(value) = by_deployment.remove(&key) {
+                deployment.meta.annotations.insert(
+                    AnnotationKey(LEGACY_ORPHAN_REPLICAS_ANNOTATION.to_owned()),
+                    serde_json::to_string(&value).map_err(|error| {
+                        invalid_assignment(
+                            &key.1,
+                            format!("could not preserve orphan replica states: {error}"),
+                        )
+                    })?,
+                );
+            }
+        }
+        if let Some(((service_id, deployment_id), _)) = by_deployment.first_key_value() {
+            return Err(invalid_assignment(
+                deployment_id,
+                format!("converted deployment for service `{service_id}` is missing"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_orphan_replica(
+    assignment_id: &str,
+    replica: &ReplicaRecord,
+) -> Result<(), LegacyClusterError> {
+    if replica.state.status == LegacyDeploymentStatus::Crashed
+        && replica.state.restart_attempts >= LEGACY_MAX_REPLICA_RESTART_ATTEMPTS
+    {
+        Ok(())
+    } else {
+        Err(invalid(
+            format!("{REPLICAS_PREFIX}{}/{assignment_id}", replica.node_id),
+            "replica state has no desired assignment",
+        ))
     }
 }
 

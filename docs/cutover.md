@@ -75,7 +75,11 @@ substitute for staging evidence.
    ports with the rewrite `maestro.jsonc` before proceeding. Legacy nodes may
    use different dynamically allocated etcd ports; `--store-peer-port`
    deliberately normalizes every restored member onto the rewrite's shared
-   peer port.
+   peer port. A replica state without a current assignment remains invalid
+   unless it is a restart-exhausted terminal failure. Those historical terminal
+   failures are archived on their owning Deployment under the
+   `migration.maestro.dev/legacy-orphan-replica-states` annotation rather than
+   being reintroduced as runnable assignments.
 
 5. Apply and independently verify the exact reviewed logical artifact:
 
