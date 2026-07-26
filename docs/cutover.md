@@ -14,7 +14,9 @@ Legacy telemetry does not share the rewrite's on-disk schema. Each node's probe
 owns three DuckDB files and a manifest-committed Parquet tree under
 `<cluster>/system/probe/data`; the rewrite owns versioned log and metric stores
 under `<cluster>/agent`. The telemetry conversion is therefore a required part
-of cutover.
+of cutover. A cleanly stopped DuckDB may retain an adjacent `.wal` for any of
+the three databases; planning fences that WAL and replays it read-only so its
+uncheckpointed rows are migrated without changing the legacy source.
 
 ## Rehearsal
 

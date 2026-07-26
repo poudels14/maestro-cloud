@@ -4,7 +4,7 @@ use duckdb::Connection;
 use kernel_api::{ClusterId, NodeId};
 use metrics::{HostMetricPoint, WorkloadMetricPoint};
 
-use super::telemetry_plan::{seed_databases, seed_service_partition};
+use super::telemetry_plan::{append_service_log_in_wal, seed_databases, seed_service_partition};
 use crate::{
     LegacyTelemetryApplyOutcome, LegacyTelemetryMigrationError, LegacyTelemetryPlan,
     apply_legacy_telemetry, verify_legacy_telemetry,
@@ -20,6 +20,7 @@ async fn apply_is_exact_verifiable_and_replay_safe() -> TestResult {
     seed_databases(&source)?;
     seed_service_partition(&source)?;
     append_metric_samples(&source)?;
+    append_service_log_in_wal(&source)?;
     let plan = LegacyTelemetryPlan::capture(
         &source,
         ClusterId::new("cluster-a")?,
@@ -29,7 +30,7 @@ async fn apply_is_exact_verifiable_and_replay_safe() -> TestResult {
     let first = apply_legacy_telemetry(&plan, &source, &destination).await?;
 
     assert_eq!(first.outcome, LegacyTelemetryApplyOutcome::Applied);
-    assert_eq!(first.verification.logs.records, 3);
+    assert_eq!(first.verification.logs.records, 4);
     assert_eq!(first.verification.workload_metrics.records, 2);
     assert_eq!(first.verification.host_metrics.records, 2);
     assert_eq!(first.verification.operational_metrics.records, 1);

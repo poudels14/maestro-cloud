@@ -59,6 +59,59 @@ fn plan_rejects_parquet_not_committed_by_a_manifest() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn plan_fences_and_replays_a_required_database_wal_without_mutating_it() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("probe-data");
+    seed_databases(&root)?;
+    let wal = append_service_log_in_wal(&root)?;
+    assert!(wal.is_file(), "fixture must leave a real DuckDB WAL");
+    let before = digest(&wal)?;
+
+    let plan =
+        LegacyTelemetryPlan::capture(&root, ClusterId::new("cluster-a")?, NodeId::new("node-a")?)?;
+
+    assert_eq!(plan.counts.service_logs, 2);
+    assert!(
+        plan.files
+            .iter()
+            .any(|file| file.path == "duckdb/service-logs.duckdb.wal")
+    );
+    assert_eq!(digest(&wal)?, before, "planning must not mutate the WAL");
+    Ok(())
+}
+
+#[test]
+fn plan_rejects_a_wal_not_owned_by_a_required_database() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("probe-data");
+    seed_databases(&root)?;
+    std::fs::write(root.join("duckdb/unknown.duckdb.wal"), b"not a known WAL")?;
+
+    let error =
+        LegacyTelemetryPlan::capture(&root, ClusterId::new("cluster-a")?, NodeId::new("node-a")?)
+            .expect_err("an unknown database WAL must fail");
+    assert!(matches!(
+        error,
+        LegacyTelemetryPlanError::UnexpectedEntry { .. }
+    ));
+    Ok(())
+}
+
+pub(super) fn append_service_log_in_wal(root: &Path) -> TestResult<std::path::PathBuf> {
+    let database_path = root.join("duckdb/service-logs.duckdb");
+    let database = Connection::open(&database_path)?;
+    database.execute_batch(
+        "PRAGMA disable_checkpoint_on_shutdown;
+         INSERT INTO logs VALUES (
+             3, 3000, DATE '2026-07-23', 'api', 'dep-c', 'api-c',
+             'service', 'info', 'stdout', 'wal', [], MAP([], [])
+         );",
+    )?;
+    drop(database);
+    Ok(database_path.with_extension("duckdb.wal"))
+}
+
 pub(super) fn seed_databases(root: &Path) -> TestResult {
     let databases = root.join("duckdb");
     std::fs::create_dir_all(&databases)?;

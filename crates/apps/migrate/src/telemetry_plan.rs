@@ -255,12 +255,19 @@ fn walk(
 fn allowed_file(path: &Path, tree: SourceTree) -> bool {
     let name = path.file_name().and_then(|name| name.to_str());
     match tree {
-        SourceTree::Databases => name.is_some_and(|name| REQUIRED_DATABASES.contains(&name)),
+        SourceTree::Databases => name.is_some_and(required_database_file),
         SourceTree::Partitions => {
             name == Some("manifest.json")
                 || name.is_some_and(|name| name.starts_with("part-") && name.ends_with(".parquet"))
         }
     }
+}
+
+fn required_database_file(name: &str) -> bool {
+    REQUIRED_DATABASES.contains(&name)
+        || name
+            .strip_suffix(".wal")
+            .is_some_and(|database| REQUIRED_DATABASES.contains(&database))
 }
 
 fn relative_path(root: &Path, path: &Path) -> Result<String, LegacyTelemetryPlanError> {
