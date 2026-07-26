@@ -77,7 +77,8 @@ substitute for staging evidence.
    deliberately normalizes every restored member onto the rewrite's shared
    peer port. A replica state without a current assignment remains invalid
    unless it is a superseded `CRASHED` placement. Those historical failures are
-   archived on their owning Deployment under the
+   archived on their owning Deployment, or on the Service when legacy history
+   already pruned that Deployment, under the
    `migration.maestro.dev/legacy-orphan-replica-states` annotation rather than
    being reintroduced as runnable assignments. Legacy replica DNS and placement
    hostnames are validated case-insensitively because deployment-derived labels

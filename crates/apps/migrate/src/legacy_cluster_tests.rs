@@ -1,6 +1,6 @@
 use kernel_api::{
     AnnotationKey, Assignment, AssignmentPhase, BuiltinKind, Deployment, DeploymentPhase,
-    ReplicaState,
+    ReplicaState, Service,
 };
 use serde_json::json;
 
@@ -159,6 +159,53 @@ fn cutover_plan_archives_a_superseded_crashed_replica_on_its_deployment() -> Tes
             .writes()
             .iter()
             .any(|write| write.kind() == BuiltinKind::ReplicaState)
+    );
+    Ok(())
+}
+
+#[test]
+fn cutover_plan_archives_a_crash_for_a_pruned_deployment_on_its_service() -> TestResult {
+    let mut entries = vec![
+        service_info(),
+        history_counter(),
+        deployment_history(),
+        json_entry(
+            "/maetro/cluster/replica-states/node-a/assignment-pruned",
+            json!({
+                "serviceId": "api",
+                "deploymentId": "deploy-pruned",
+                "replicaIndex": 0,
+                "status": "CRASHED",
+                "healthcheckFailures": 0,
+                "restartAttempts": 3,
+                "nodeId": "node-a",
+                "assignmentId": "assignment-pruned",
+                "error": "historical placement failed"
+            }),
+        ),
+    ];
+    entries.extend(node_entries("node-a", "master", 10, 1));
+    entries.extend(cluster_state());
+    let snapshot = LegacySnapshot::new(entries)?;
+
+    let plan = plan_legacy_snapshot(&snapshot, MASTER_SECRET)?;
+    let service: Service = decode_write(&plan, BuiltinKind::Service)?;
+    let archived: serde_json::Value = serde_json::from_str(
+        service
+            .meta
+            .annotations
+            .get(&AnnotationKey(
+                "migration.maestro.dev/legacy-orphan-replica-states".to_owned(),
+            ))
+            .ok_or("service orphan replica archive annotation is missing")?,
+    )?;
+    assert_eq!(
+        archived.pointer("/0/state/deploymentId"),
+        Some(&json!("deploy-pruned"))
+    );
+    assert_eq!(
+        archived.pointer("/0/state/restartAttempts"),
+        Some(&json!(3))
     );
     Ok(())
 }

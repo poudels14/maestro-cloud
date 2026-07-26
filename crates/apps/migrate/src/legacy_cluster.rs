@@ -318,6 +318,7 @@ impl LegacyClusterCatalog {
         resources: &mut [BuiltinResource],
     ) -> Result<(), LegacyPlanError> {
         let mut by_deployment = BTreeMap::<(String, String), Vec<serde_json::Value>>::new();
+        let mut by_service = BTreeMap::<String, Vec<serde_json::Value>>::new();
         for (assignment_id, record) in &self.orphan_replicas {
             let service_id = record.state.service_id.as_deref().ok_or_else(|| {
                 invalid_assignment(assignment_id, "orphan replica has no service identity")
@@ -325,39 +326,73 @@ impl LegacyClusterCatalog {
             let deployment_id = record.state.deployment_id.as_deref().ok_or_else(|| {
                 invalid_assignment(assignment_id, "orphan replica has no deployment identity")
             })?;
-            find_deployment_by_id(services, service_id, deployment_id)?;
+            let service = services.services.get(service_id).ok_or_else(|| {
+                invalid_assignment(
+                    assignment_id,
+                    format!("orphan replica references missing service `{service_id}`"),
+                )
+            })?;
             parse_assignment_id(assignment_id)?;
             parse_node_id(&record.node_id, "orphan replica node id")?;
-            by_deployment
-                .entry((service_id.to_owned(), deployment_id.to_owned()))
-                .or_default()
-                .push(serde_json::json!({
-                    "legacyKey": format!(
-                        "{REPLICAS_PREFIX}{}/{assignment_id}",
-                        record.node_id
-                    ),
-                    "state": record.state,
-                }));
+            let archived = serde_json::json!({
+                "legacyKey": format!(
+                    "{REPLICAS_PREFIX}{}/{assignment_id}",
+                    record.node_id
+                ),
+                "state": record.state,
+            });
+            if service
+                .deployments
+                .iter()
+                .any(|record| record.deployment.id == deployment_id)
+            {
+                by_deployment
+                    .entry((service_id.to_owned(), deployment_id.to_owned()))
+                    .or_default()
+                    .push(archived);
+            } else {
+                by_service
+                    .entry(service_id.to_owned())
+                    .or_default()
+                    .push(archived);
+            }
         }
         for resource in resources {
-            let BuiltinResource::Deployment(deployment) = resource else {
-                continue;
+            let key = match resource {
+                BuiltinResource::Deployment(deployment) => (
+                    deployment.spec.service_id.to_string(),
+                    deployment.meta.id.to_string(),
+                ),
+                BuiltinResource::Service(service) => {
+                    let service_id = service.meta.id.to_string();
+                    if let Some(value) = by_service.remove(&service_id) {
+                        service.meta.annotations.insert(
+                            AnnotationKey(LEGACY_ORPHAN_REPLICAS_ANNOTATION.to_owned()),
+                            encode_orphan_replicas(&service_id, &value)?,
+                        );
+                    }
+                    continue;
+                }
+                _ => continue,
             };
-            let key = (
-                deployment.spec.service_id.to_string(),
-                deployment.meta.id.to_string(),
-            );
             if let Some(value) = by_deployment.remove(&key) {
+                let BuiltinResource::Deployment(deployment) = resource else {
+                    return Err(invalid_assignment(
+                        &key.1,
+                        "orphan replica archive selected a non-deployment resource",
+                    ));
+                };
                 deployment.meta.annotations.insert(
                     AnnotationKey(LEGACY_ORPHAN_REPLICAS_ANNOTATION.to_owned()),
-                    serde_json::to_string(&value).map_err(|error| {
-                        invalid_assignment(
-                            &key.1,
-                            format!("could not preserve orphan replica states: {error}"),
-                        )
-                    })?,
+                    encode_orphan_replicas(&key.1, &value)?,
                 );
             }
+        }
+        if let Some((service_id, _)) = by_service.first_key_value() {
+            return Err(invalid_assignment(
+                service_id,
+                "converted service for orphan replica archive is missing",
+            ));
         }
         if let Some(((service_id, deployment_id), _)) = by_deployment.first_key_value() {
             return Err(invalid_assignment(
@@ -367,6 +402,18 @@ impl LegacyClusterCatalog {
         }
         Ok(())
     }
+}
+
+fn encode_orphan_replicas(
+    owner_id: &str,
+    replicas: &[serde_json::Value],
+) -> Result<String, LegacyPlanError> {
+    serde_json::to_string(replicas).map_err(|error| {
+        invalid_assignment(
+            owner_id,
+            format!("could not preserve orphan replica states: {error}"),
+        )
+    })
 }
 
 fn validate_orphan_replica(
