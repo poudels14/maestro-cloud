@@ -76,8 +76,8 @@ substitute for staging evidence.
    use different dynamically allocated etcd ports; `--store-peer-port`
    deliberately normalizes every restored member onto the rewrite's shared
    peer port. A replica state without a current assignment remains invalid
-   unless it is a restart-exhausted terminal failure. Those historical terminal
-   failures are archived on their owning Deployment under the
+   unless it is a superseded `CRASHED` placement. Those historical failures are
+   archived on their owning Deployment under the
    `migration.maestro.dev/legacy-orphan-replica-states` annotation rather than
    being reintroduced as runnable assignments.
 

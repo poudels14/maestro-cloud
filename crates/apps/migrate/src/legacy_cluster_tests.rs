@@ -98,7 +98,7 @@ fn cutover_plan_rejects_orphan_and_mismatched_replica_state() -> TestResult {
 }
 
 #[test]
-fn cutover_plan_archives_an_exhausted_orphan_replica_on_its_deployment() -> TestResult {
+fn cutover_plan_archives_a_superseded_crashed_replica_on_its_deployment() -> TestResult {
     let mut entries = vec![
         service_info(),
         history_counter(),
@@ -111,7 +111,7 @@ fn cutover_plan_archives_an_exhausted_orphan_replica_on_its_deployment() -> Test
                 "replicaIndex": 0,
                 "status": "CRASHED",
                 "healthcheckFailures": 0,
-                "restartAttempts": 10,
+                "restartAttempts": 0,
                 "nodeId": "node-a",
                 "assignmentId": "assignment-old",
                 "error": "restart budget exhausted"

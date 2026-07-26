@@ -24,7 +24,6 @@ const REPLICAS_PREFIX: &str = "/maetro/cluster/replica-states/";
 const LEGACY_IMAGE_ASSIGNMENTS_ANNOTATION: &str = "migration.maestro.dev/legacy-image-assignments";
 const LEGACY_ORPHAN_REPLICAS_ANNOTATION: &str =
     "migration.maestro.dev/legacy-orphan-replica-states";
-const LEGACY_MAX_REPLICA_RESTART_ATTEMPTS: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LegacyClusterCatalog {
@@ -374,9 +373,7 @@ fn validate_orphan_replica(
     assignment_id: &str,
     replica: &ReplicaRecord,
 ) -> Result<(), LegacyClusterError> {
-    if replica.state.status == LegacyDeploymentStatus::Crashed
-        && replica.state.restart_attempts >= LEGACY_MAX_REPLICA_RESTART_ATTEMPTS
-    {
+    if replica.state.status == LegacyDeploymentStatus::Crashed {
         Ok(())
     } else {
         Err(invalid(
