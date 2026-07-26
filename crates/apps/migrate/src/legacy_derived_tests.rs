@@ -72,7 +72,7 @@ fn cutover_validates_and_summarizes_regenerable_cluster_state() -> TestResult {
                 "stableFqdn": "api.test.maestro.internal",
                 "viaIngress": true,
                 "addresses": ["10.42.1.2"],
-                "replicaRecords": [["api-0.test.maestro.internal", "10.42.1.2"]]
+                "replicaRecords": [["api-DeployA-node-3000.test.maestro.internal", "10.42.1.2"]]
             }),
         ),
         json_entry(
