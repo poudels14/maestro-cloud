@@ -1,9 +1,10 @@
 ---
 source: crates/operators/firewall/src/tests/plan.rs
+assertion_line: 32
 expression: artifact
 ---
 node: node-1
-digest: 9247b3e3fc2b287b3c66d37a3070e64c5446bd5a0612ffa48f0243a0e65b538c
+digest: 8b996ad444c3aae1f227cc444a09b62beec7e052cf2389767f22c53285b092e3
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -22,6 +23,12 @@ table inet maestro_firewall {
         type ipv6_addr
         flags interval
         elements = { fd00::/8 }
+    }
+
+    set host_access_02eadcea31e567e9_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.250 }
     }
 
     set local_workloads_v4 {
@@ -79,6 +86,7 @@ table inet maestro_firewall {
         ct state established,related accept
         ip saddr @local_workloads_v4 ip daddr 10.42.1.1 tcp dport 53 accept
         ip saddr @local_workloads_v4 ip daddr 10.42.1.1 udp dport 53 accept
+        ip saddr @host_access_02eadcea31e567e9_v4 tcp dport 3000 accept
         ip saddr @control_allow_v4 tcp dport { 3000, 3001 } accept
         ip6 saddr @control_allow_v6 tcp dport { 3000, 3001 } accept
         tcp dport { 3000, 3001 } reject
@@ -117,7 +125,7 @@ table inet maestro_firewall {
 }
 
 node: node-2
-digest: c4ce4212463d6c72f6eb9955fb22275a4e440ffc33828d1b43878975231ad348
+digest: 134b763d4830c734b54837d7d842227e7a19f61203b24b281e660574c4793607
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -136,6 +144,12 @@ table inet maestro_firewall {
         type ipv6_addr
         flags interval
         elements = { fd00::/8 }
+    }
+
+    set host_access_02eadcea31e567e9_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.42.1.250 }
     }
 
     set local_workloads_v4 {
@@ -193,6 +207,7 @@ table inet maestro_firewall {
         ct state established,related accept
         ip saddr @local_workloads_v4 ip daddr 10.42.2.1 tcp dport 53 accept
         ip saddr @local_workloads_v4 ip daddr 10.42.2.1 udp dport 53 accept
+        ip saddr @host_access_02eadcea31e567e9_v4 tcp dport 3000 accept
         ip saddr @control_allow_v4 tcp dport { 3000, 3001 } accept
         ip6 saddr @control_allow_v6 tcp dport { 3000, 3001 } accept
         tcp dport { 3000, 3001 } reject

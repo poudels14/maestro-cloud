@@ -46,6 +46,7 @@ pub(super) fn settings() -> Result<OperatorSettings, Box<dyn std::error::Error +
             protected_host_ports: vec![3000, 3001],
             control_allow_cidrs: vec!["10.0.0.0/8".to_string()],
             system_services: BTreeSet::new(),
+            system_host_access: Vec::new(),
             host_port_routes: Vec::new(),
         },
         build_watch: build::BuildWatchSettings {

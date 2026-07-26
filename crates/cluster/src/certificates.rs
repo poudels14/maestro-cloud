@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use x509_parser::{parse_x509_certificate, pem::parse_x509_pem};
 
+use crate::NodeDefinition;
+
 /// Explicit validity interval supplied by the composition root's clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CertificateValidity {
@@ -159,6 +161,28 @@ impl ClusterCertificateAuthority {
         )
     }
 
+    /// Issues one node identity for both its control and workload-bridge addresses.
+    pub fn issue_node_certificate_for_definition(
+        &self,
+        node_id: &NodeId,
+        node: &NodeDefinition,
+        validity: CertificateValidity,
+    ) -> Result<NodeCertificateBundle, CertificateError> {
+        let bridge_address = node.workload_subnet.gateway_address().ok_or(
+            CertificateError::MissingWorkloadBridge {
+                network: node.workload_subnet.to_string(),
+            },
+        )?;
+        self.issue_node_certificate_with_ip_sans(
+            node_id,
+            &node.hostname,
+            node.endpoint.host_address,
+            &[bridge_address],
+            node.role,
+            validity,
+        )
+    }
+
     /// Issues one node identity with extra IP subject alternative names.
     ///
     /// The primary address remains required. Extra addresses support nodes
@@ -234,6 +258,9 @@ pub enum CertificateError {
     /// A DNS subject alternative name was not syntactically valid.
     #[error("invalid certificate hostname `{hostname}`")]
     InvalidHostname { hostname: String },
+    /// A declared workload subnet could not supply a bridge address.
+    #[error("workload subnet `{network}` has no certificate bridge address")]
+    MissingWorkloadBridge { network: String },
     /// Filesystem work failed at a certificate persistence boundary.
     #[error("failed to {action} certificate file `{}`: {source}", path.display())]
     Io {

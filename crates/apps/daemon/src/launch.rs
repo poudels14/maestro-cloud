@@ -250,6 +250,17 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             .system_services
             .insert(resources.service.meta.id.clone());
     }
+    if let Some(resources) = &tailscale_resources {
+        let service_id = resources.service.meta.id.clone();
+        operator_settings
+            .firewall
+            .system_services
+            .insert(service_id);
+        operator_settings
+            .firewall
+            .system_host_access
+            .push(resources.system_host_access.clone());
+    }
     operator_settings.preview = configured_preview
         .as_ref()
         .map(|preview| preview.settings.clone());
@@ -398,7 +409,7 @@ fn dns_plugin_settings(
     }
 }
 
-fn api_settings(
+pub(crate) fn api_settings(
     node: &cluster::NodeDefinition,
     security: &NodeCertificateBundle,
     operator_jwt_secret: SecretValue,
@@ -409,7 +420,7 @@ fn api_settings(
     );
     let settings = ServerSettings::new(
         SocketAddr::new(
-            IpAddr::V4(node.endpoint.host_address),
+            IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             node.endpoint.api_port,
         ),
         Some(operator_jwt_secret),

@@ -295,11 +295,15 @@ impl AdmissionCoordinator {
         request: &JoinRequest,
         certificate_validity: CertificateValidity,
     ) -> Result<JoinPayload, AdmissionCoordinatorError> {
-        let certificates = self.authority.issue_node_certificate(
+        let node = crate::NodeDefinition {
+            hostname: request.hostname.clone(),
+            endpoint: request.endpoint,
+            workload_subnet: request.workload_subnet,
+            role: request.role,
+        };
+        let certificates = self.authority.issue_node_certificate_for_definition(
             &request.node_id,
-            &request.hostname,
-            request.endpoint.host_address,
-            request.role,
+            &node,
             certificate_validity,
         )?;
         let store_join_ticket = if request.role.is_control_plane() {

@@ -170,6 +170,22 @@ They are not Tailscale `100.x` addresses and are not fixed `.254` proxy
 addresses. Configure more than one returned resolver so DNS remains available
 during a node failure.
 
+The daemon also serves its authenticated HTTPS API and panel on each returned
+bridge address. Node certificates include both the control-plane endpoint and
+the bridge address, and Maestro admits bridge-to-API traffic only from running
+managed Tailscale gateway replicas. To open the panel from an allowed tailnet
+client, use:
+
+```text
+https://<dnsNameserver>:<cluster API port>/
+```
+
+For example, a node whose bridge resolver is `172.22.1.1` and whose API port is
+`3000` serves the panel at `https://172.22.1.1:3000/`. Trust the private Maestro
+cluster CA in the operator browser and sign in with an operator token. The
+gateway's own workload address is only a subnet-router endpoint; it is not the
+panel address.
+
 In the Tailscale admin console, add each address as a custom nameserver and
 restrict it to `maestro.internal`. Do not make it a global nameserver unless
 that is an intentional tailnet-wide DNS policy. Tailscale documents this model

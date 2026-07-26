@@ -100,6 +100,21 @@ pub enum FirewallPlanError {
     /// A system-plane exemption references a service absent from the snapshot.
     #[error("system firewall exemption references missing Service `{service_id}`")]
     MissingSystemService { service_id: ServiceId },
+    /// Protected host access was granted to an ordinary workload.
+    #[error("protected host access references non-system Service `{service_id}`")]
+    SystemHostAccessNotSystem { service_id: ServiceId },
+    /// Protected host access omitted every destination port.
+    #[error("protected host access for Service `{service_id}` must include at least one port")]
+    EmptySystemHostAccess { service_id: ServiceId },
+    /// Port zero cannot identify a protected host destination.
+    #[error("protected host access for Service `{service_id}` contains port zero")]
+    ZeroSystemHostAccessPort { service_id: ServiceId },
+    /// A system workload may only be granted access to an already protected listener.
+    #[error("protected host access for Service `{service_id}` references unprotected port {port}")]
+    SystemHostAccessPortNotProtected { service_id: ServiceId, port: u16 },
+    /// The same protected host grant was declared more than once.
+    #[error("protected host access for Service `{service_id}` repeats port {port}")]
+    DuplicateSystemHostAccess { service_id: ServiceId, port: u16 },
     /// An assignment references a service absent from the snapshot.
     #[error("Assignment `{assignment_id}` references missing Service `{service_id}`")]
     MissingAssignmentService {

@@ -115,6 +115,7 @@ fn render_node(
             node.bridge_address, input.settings.dns_port
         ),
     ]);
+    render_system_host_access(input, renderer, &mut input_rules);
     render_control_protection(input, renderer, &mut input_rules);
     render_unrouted_host_port_guards(input, &mut input_rules);
     input_rules.push("ip saddr @all_workloads_v4 reject".to_string());
@@ -127,6 +128,45 @@ fn render_node(
         input_rules.push(format!("jump {chain}"));
     }
     renderer.add_hook_chain("input", "input", -50, "accept", input_rules);
+}
+
+fn render_system_host_access(
+    input: &ValidatedInput,
+    renderer: &mut Renderer,
+    rules: &mut Vec<String>,
+) {
+    for access in &input.settings.system_host_access {
+        let sources = input
+            .assignments
+            .iter()
+            .filter(|assignment| {
+                assignment.spec.service_id == access.service_id
+                    && assignment.status.phase == AssignmentPhase::Running
+            })
+            .filter_map(|assignment| assignment.spec.workload_address)
+            .map(|address| address.to_string())
+            .collect::<Vec<_>>();
+        if sources.is_empty() {
+            continue;
+        }
+        let source_set = format!(
+            "host_access_{}_v4",
+            short_hash(&[access.service_id.as_str()])
+        );
+        renderer.add_set(&source_set, AddressFamily::V4, sources);
+        let ports = access
+            .host_ports
+            .iter()
+            .map(|port| PortRange {
+                start: *port,
+                end: *port,
+            })
+            .collect::<Vec<_>>();
+        rules.push(format!(
+            "ip saddr @{source_set} tcp dport {} accept",
+            render_ports(&ports)
+        ));
+    }
 }
 
 fn host_port_rules(input: &ValidatedInput, node: &crate::validation::NodeContext) -> Vec<String> {

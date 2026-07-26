@@ -27,6 +27,15 @@ pub struct HostPortRoute {
     pub protocol: HostPortProtocol,
 }
 
+/// One system workload allowed to reach selected protected host listeners.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SystemHostAccess {
+    /// System service whose running assignment addresses are trusted.
+    pub service_id: ServiceId,
+    /// Protected TCP host ports reachable by that service.
+    pub host_ports: Vec<u16>,
+}
+
 /// Static cluster security settings compiled beside resource policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirewallSettings {
@@ -42,6 +51,8 @@ pub struct FirewallSettings {
     pub control_allow_cidrs: Vec<String>,
     /// Ordinary services exempt from user egress policies because they form the system plane.
     pub system_services: BTreeSet<ServiceId>,
+    /// Narrow protected-listener grants for selected system workloads.
+    pub system_host_access: Vec<SystemHostAccess>,
     /// Public endpoints translated to a ready local system workload.
     pub host_port_routes: Vec<HostPortRoute>,
 }

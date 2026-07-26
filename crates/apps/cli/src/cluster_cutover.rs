@@ -56,14 +56,7 @@ pub(crate) async fn prepare_cutover_bundle(
     writeln!(output, "CA SHA-256: {fingerprint}").map_err(output_error)?;
     for (node_id, node) in &loaded.cluster.nodes {
         let bundle_path = provisioning.join(format!("{node_id}.certificates.json"));
-        let security = load_or_issue_bundle(
-            &bundle_path,
-            node_id,
-            &node.hostname,
-            node.endpoint.host_address,
-            node.role,
-            &authority,
-        )?;
+        let security = load_or_issue_bundle(&bundle_path, node_id, node, &authority)?;
         let launch = DaemonLaunchDocument::cutover(
             loaded.cluster.clone(),
             node_id.clone(),
@@ -144,9 +137,7 @@ fn read_secret(path: &Path, description: &str) -> Result<SecretValue, CliError> 
 fn load_or_issue_bundle(
     path: &Path,
     node_id: &NodeId,
-    hostname: &str,
-    host_address: std::net::Ipv4Addr,
-    role: kernel_api::NodeRole,
+    node: &cluster::NodeDefinition,
     authority: &ClusterCertificateAuthority,
 ) -> Result<NodeCertificateBundle, CliError> {
     match read_private(path, "node certificate bundle") {
@@ -160,7 +151,7 @@ fn load_or_issue_bundle(
         }
         Err(CliError::NotFound { .. }) => {
             let bundle = authority
-                .issue_node_certificate(node_id, hostname, host_address, role, node_validity()?)
+                .issue_node_certificate_for_definition(node_id, node, node_validity()?)
                 .map_err(|error| {
                     CliError::cluster("failed to issue node certificate", error.to_string())
                 })?;

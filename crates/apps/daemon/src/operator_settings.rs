@@ -113,6 +113,7 @@ impl OperatorSettings {
                 protected_host_ports,
                 control_allow_cidrs: control_allow_cidrs.into_iter().collect(),
                 system_services: BTreeSet::new(),
+                system_host_access: Vec::new(),
                 host_port_routes: Vec::new(),
             },
             build_watch: BuildWatchSettings {

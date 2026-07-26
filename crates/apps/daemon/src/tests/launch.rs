@@ -5,7 +5,7 @@ use cluster::StoreJoinTicket;
 use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
-use crate::launch::panel_directory;
+use crate::launch::{api_settings, panel_directory};
 use crate::{
     DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
     DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
@@ -157,6 +157,22 @@ fn packaged_panel_is_discovered_only_when_the_spa_shell_exists()
     std::fs::create_dir_all(&directory)?;
     std::fs::write(directory.join("index.html"), "<main>Maestro</main>")?;
     assert_eq!(panel_directory(package.path()), Some(directory));
+    Ok(())
+}
+
+#[test]
+fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std::error::Error>> {
+    let launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    let node = launch
+        .cluster
+        .nodes
+        .get(&launch.node_id)
+        .ok_or("local node missing")?;
+    let settings = api_settings(node, &launch.security, launch.operator_jwt_secret);
+    assert_eq!(
+        settings.bind_address,
+        std::net::SocketAddr::from(([0, 0, 0, 0], node.endpoint.api_port))
+    );
     Ok(())
 }
 

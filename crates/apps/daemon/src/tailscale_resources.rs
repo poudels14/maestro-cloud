@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cluster::ClusterConfig;
+use firewall::SystemHostAccess;
 use kernel_api::{
     AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, FirewallDirection, FirewallPolicy,
     FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject,
@@ -26,6 +27,8 @@ pub(crate) struct TailscaleSystemResources {
     pub(crate) service: Service,
     /// Workload egress policy attached to the subnet routers.
     pub(crate) firewall_policy: FirewallPolicy,
+    /// Protected daemon API access granted only to running gateway replicas.
+    pub(crate) system_host_access: SystemHostAccess,
 }
 
 impl TailscaleSystemResources {
@@ -60,6 +63,17 @@ impl TailscaleSystemResources {
             ("TS_USERSPACE".to_owned(), "true".to_owned()),
         ]);
         let annotations = BTreeMap::from([(managed_annotation(), MANAGED_VALUE.to_owned())]);
+        let mut api_ports = cluster
+            .nodes
+            .values()
+            .map(|node| node.endpoint.api_port)
+            .collect::<Vec<_>>();
+        api_ports.sort_unstable();
+        api_ports.dedup();
+        let system_host_access = SystemHostAccess {
+            service_id: service_id.clone(),
+            host_ports: api_ports,
+        };
         let service = Object {
             meta: ObjectMeta {
                 id: service_id.clone(),
@@ -159,6 +173,7 @@ impl TailscaleSystemResources {
         Ok(Some(Self {
             service,
             firewall_policy,
+            system_host_access,
         }))
     }
 

@@ -38,6 +38,11 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         TailscaleSystemResources::from_cluster(&cluster)?,
         "Tailscale resources",
     )?;
+    assert_eq!(
+        resources.system_host_access.service_id.as_str(),
+        "maestro-system-tailscale-gateway"
+    );
+    assert_eq!(resources.system_host_access.host_ports, [3011, 3012]);
     let service = resources.service;
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.exec, ExecPolicy::Denied);

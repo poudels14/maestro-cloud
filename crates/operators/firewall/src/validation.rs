@@ -61,6 +61,13 @@ pub(crate) fn validate(input: FirewallInput) -> Result<ValidatedInput, FirewallP
             });
         }
     }
+    for access in &settings.system_host_access {
+        if !settings.system_services.contains(&access.service_id) {
+            return Err(FirewallPlanError::SystemHostAccessNotSystem {
+                service_id: access.service_id.clone(),
+            });
+        }
+    }
     let nodes = index_nodes(input.node_networks)?;
     let assignments = validate_assignments(input.assignments, &services, &nodes)?;
     let control_cidrs = settings
@@ -114,6 +121,35 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
     if settings.protected_host_ports.contains(&0) {
         return Err(FirewallPlanError::ZeroProtectedHostPort);
     }
+    let mut system_host_endpoints = BTreeSet::new();
+    for access in &mut settings.system_host_access {
+        if access.host_ports.is_empty() {
+            return Err(FirewallPlanError::EmptySystemHostAccess {
+                service_id: access.service_id.clone(),
+            });
+        }
+        for port in &access.host_ports {
+            if *port == 0 {
+                return Err(FirewallPlanError::ZeroSystemHostAccessPort {
+                    service_id: access.service_id.clone(),
+                });
+            }
+            if !settings.protected_host_ports.contains(port) {
+                return Err(FirewallPlanError::SystemHostAccessPortNotProtected {
+                    service_id: access.service_id.clone(),
+                    port: *port,
+                });
+            }
+            if !system_host_endpoints.insert((access.service_id.clone(), *port)) {
+                return Err(FirewallPlanError::DuplicateSystemHostAccess {
+                    service_id: access.service_id.clone(),
+                    port: *port,
+                });
+            }
+        }
+        access.host_ports.sort_unstable();
+    }
+    settings.system_host_access.sort();
     if settings
         .host_port_routes
         .iter()

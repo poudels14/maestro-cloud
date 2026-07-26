@@ -11,7 +11,8 @@ use kernel_api::{
 };
 
 use crate::{
-    FirewallInput, FirewallPlanError, FirewallSettings, HostPortProtocol, HostPortRoute, plan,
+    FirewallInput, FirewallPlanError, FirewallSettings, HostPortProtocol, HostPortRoute,
+    SystemHostAccess, plan,
 };
 
 #[test]
@@ -42,6 +43,7 @@ fn compilation_is_independent_of_resource_and_set_input_order() {
     reversed.node_networks.reverse();
     reversed.settings.protected_host_ports.reverse();
     reversed.settings.control_allow_cidrs.reverse();
+    reversed.settings.system_host_access.reverse();
     assert_eq!(plan(reversed).unwrap(), first);
 }
 
@@ -110,6 +112,10 @@ fn system_dns_and_control_guards_precede_user_policy() {
     let control_allow = script.find("tcp dport { 3000, 3001 } accept").unwrap();
     let control_reject = script.find("tcp dport { 3000, 3001 } reject").unwrap();
     assert!(control_allow < control_reject);
+    let routed_admin = script
+        .find("ip saddr @host_access_")
+        .expect("system host access");
+    assert!(routed_admin < control_reject);
 }
 
 #[test]
@@ -216,6 +222,20 @@ fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
         plan(protected_route.input()),
         Err(FirewallPlanError::HostPortRouteConflictsProtected { port: 443 })
     ));
+
+    let mut ordinary_host_access = World::standard();
+    ordinary_host_access.settings.system_host_access[0].service_id = ServiceId::new("api").unwrap();
+    assert!(matches!(
+        plan(ordinary_host_access.input()),
+        Err(FirewallPlanError::SystemHostAccessNotSystem { .. })
+    ));
+
+    let mut unprotected_host_access = World::standard();
+    unprotected_host_access.settings.system_host_access[0].host_ports = vec![9_999];
+    assert!(matches!(
+        plan(unprotected_host_access.input()),
+        Err(FirewallPlanError::SystemHostAccessPortNotProtected { port: 9_999, .. })
+    ));
 }
 
 #[test]
@@ -256,6 +276,10 @@ impl World {
             protected_host_ports: vec![3001, 3000],
             control_allow_cidrs: vec!["fd00::/8".to_string(), "10.0.0.0/8".to_string()],
             system_services: BTreeSet::from([system.meta.id.clone(), ingress.meta.id.clone()]),
+            system_host_access: vec![SystemHostAccess {
+                service_id: system.meta.id.clone(),
+                host_ports: vec![3000],
+            }],
             host_port_routes: vec![HostPortRoute {
                 service_id: ingress.meta.id.clone(),
                 host_port: 443,

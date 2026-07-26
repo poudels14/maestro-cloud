@@ -69,13 +69,7 @@ pub(crate) async fn issue_node(
             CliError::cluster("failed to load initialized cluster CA", error.to_string())
         })?;
     let bundle = authority
-        .issue_node_certificate(
-            &node_id,
-            &node.hostname,
-            node.endpoint.host_address,
-            node.role,
-            validity(NODE_VALIDITY_DAYS)?,
-        )
+        .issue_node_certificate_for_definition(&node_id, node, validity(NODE_VALIDITY_DAYS)?)
         .map_err(|error| {
             CliError::cluster("failed to issue node certificate", error.to_string())
         })?;
@@ -189,11 +183,9 @@ pub(crate) async fn bootstrap(
         }
         Err(CliError::NotFound { .. }) => {
             let security = authority
-                .issue_node_certificate(
+                .issue_node_certificate_for_definition(
                     &loaded.node_id,
-                    &node.hostname,
-                    node.endpoint.host_address,
-                    node.role,
+                    node,
                     validity(NODE_VALIDITY_DAYS)?,
                 )
                 .map_err(|error| {

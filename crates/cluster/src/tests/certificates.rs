@@ -2,9 +2,12 @@ use std::net::Ipv4Addr;
 
 use kernel_api::{NodeId, NodeRole};
 use time::{Duration, OffsetDateTime};
-use x509_parser::{parse_x509_certificate, pem::parse_x509_pem};
+use x509_parser::{extensions::GeneralName, parse_x509_certificate, pem::parse_x509_pem};
 
-use crate::{CertificateValidity, ClusterCertificateAuthority, certificate_fingerprint};
+use crate::{
+    CertificateValidity, ClusterCertificateAuthority, Ipv4Cidr, NodeDefinition, NodeEndpoint,
+    certificate_fingerprint,
+};
 
 #[test]
 fn initializes_and_reloads_one_cluster_authority() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,11 +45,18 @@ fn initializes_and_reloads_one_cluster_authority() -> Result<(), Box<dyn std::er
 #[test]
 fn issues_a_node_identity_signed_by_the_cluster_root() -> Result<(), Box<dyn std::error::Error>> {
     let authority = ClusterCertificateAuthority::generate("test-cluster", validity()?)?;
-    let bundle = authority.issue_node_certificate(
+    let node = NodeDefinition {
+        hostname: "node-1.internal".to_owned(),
+        endpoint: NodeEndpoint {
+            host_address: Ipv4Addr::new(10, 20, 0, 11),
+            api_port: 3_000,
+        },
+        workload_subnet: Ipv4Cidr::new(Ipv4Addr::new(10, 42, 1, 0), 24)?,
+        role: NodeRole::Master,
+    };
+    let bundle = authority.issue_node_certificate_for_definition(
         &NodeId::new("node-1")?,
-        "node-1.internal",
-        Ipv4Addr::new(10, 20, 0, 11),
-        NodeRole::Master,
+        &node,
         validity()?,
     )?;
 
@@ -60,6 +70,19 @@ fn issues_a_node_identity_signed_by_the_cluster_root() -> Result<(), Box<dyn std
         leaf.validity()
             .is_valid_at((OffsetDateTime::UNIX_EPOCH + Duration::days(20_100)).into())
     );
+    let ip_sans = leaf
+        .subject_alternative_name()?
+        .ok_or("node certificate SAN is missing")?
+        .value
+        .general_names
+        .iter()
+        .filter_map(|name| match name {
+            GeneralName::IPAddress(address) => Some(*address),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(ip_sans.contains(&Ipv4Addr::new(10, 20, 0, 11).octets().as_slice()));
+    assert!(ip_sans.contains(&Ipv4Addr::new(10, 42, 1, 1).octets().as_slice()));
     assert!(!format!("{:?}", bundle.identity).contains("PRIVATE KEY"));
     Ok(())
 }
