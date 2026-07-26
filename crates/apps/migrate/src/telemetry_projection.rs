@@ -14,6 +14,8 @@ use crate::telemetry_conversion::{
 };
 
 const BATCH_SIZE: usize = 512;
+/// A missing value records that legacy deployments reused one unit name.
+type LegacyOwners = BTreeMap<String, Option<LegacyOwner>>;
 
 pub(crate) enum ProjectionBatch {
     Logs(Vec<IngestLogEntry>),
@@ -73,7 +75,7 @@ fn project_service_logs(
     plan: &LegacyTelemetryPlan,
     source: &Path,
     connection: &Connection,
-    owners: &mut BTreeMap<String, LegacyOwner>,
+    owners: &mut LegacyOwners,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     project_service_query(
@@ -110,7 +112,7 @@ fn project_service_query(
     connection: &Connection,
     sql: &str,
     parameter: Option<&str>,
-    owners: &mut BTreeMap<String, LegacyOwner>,
+    owners: &mut LegacyOwners,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     let mut statement = connection.prepare(sql).map_err(database)?;
@@ -123,19 +125,7 @@ fn project_service_query(
     for row in rows {
         let row = row.map_err(database)?;
         let owner = LegacyOwner::new(&row.service_id, &row.deployment_id)?;
-        match owners.get(&row.unit) {
-            Some(existing) if existing != &owner => {
-                return Err(TelemetryProjectionError::AmbiguousUnit {
-                    unit: row.unit,
-                    first: existing.to_string(),
-                    second: owner.to_string(),
-                });
-            }
-            Some(_) => {}
-            None => {
-                owners.insert(row.unit.clone(), owner.clone());
-            }
-        }
+        record_owner(owners, &row.unit, &owner);
         batch.push(service_entry(plan, row, owner)?);
         send_full(&mut batch, sender, ProjectionBatch::Logs)?;
     }
@@ -199,7 +189,7 @@ fn project_system_query(
 fn project_workload_metrics(
     plan: &LegacyTelemetryPlan,
     connection: &Connection,
-    owners: &BTreeMap<String, LegacyOwner>,
+    owners: &LegacyOwners,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     let mut statement = connection
@@ -223,10 +213,10 @@ fn project_workload_metrics(
                 metric_source: row.source.clone(),
                 message: "container source prefix is missing".to_owned(),
             })?;
-        let owner = match owners.get(&unit) {
-            Some(owner) => owner.clone(),
-            None => LegacyOwner::inferred(&unit)?,
-        };
+        let owner = owners
+            .get(&unit)
+            .and_then(Clone::clone)
+            .map_or_else(|| LegacyOwner::inferred(&unit), Ok)?;
         let state = match previous.take() {
             Some(state) if state.unit == unit => state,
             Some(_) | None => WorkloadCounter::new(&unit),
@@ -237,6 +227,17 @@ fn project_workload_metrics(
         send_full(&mut batch, sender, ProjectionBatch::WorkloadMetrics)?;
     }
     send_remaining(batch, sender, ProjectionBatch::WorkloadMetrics)
+}
+
+fn record_owner(owners: &mut LegacyOwners, unit: &str, owner: &LegacyOwner) {
+    owners
+        .entry(unit.to_owned())
+        .and_modify(|existing| {
+            if existing.as_ref() != Some(owner) {
+                *existing = None;
+            }
+        })
+        .or_insert_with(|| Some(owner.clone()));
 }
 
 fn project_host_metrics(

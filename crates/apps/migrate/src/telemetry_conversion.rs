@@ -513,12 +513,6 @@ pub(crate) enum TelemetryProjectionError {
     Identifier(#[from] kernel_api::InvalidIdentifier),
     #[error("legacy telemetry numeric conversion failed: {0}")]
     Conversion(String),
-    #[error("legacy service unit `{unit}` maps to both `{first}` and `{second}`")]
-    AmbiguousUnit {
-        unit: String,
-        first: String,
-        second: String,
-    },
     #[error("legacy log cannot be normalized: {0}")]
     InvalidLog(String),
     #[error("legacy metric source `{metric_source}` is invalid: {message}")]

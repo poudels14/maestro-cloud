@@ -2,6 +2,7 @@ use std::path::Path;
 
 use duckdb::Connection;
 use kernel_api::{ClusterId, NodeId};
+use logs::{IngestLogEntry, LogOrigin};
 use metrics::{HostMetricPoint, WorkloadMetricPoint};
 
 use super::telemetry_plan::{append_service_log_in_wal, seed_databases, seed_service_partition};
@@ -93,6 +94,61 @@ async fn verification_requires_an_existing_destination_without_creating_it() -> 
         .expect_err("verification must require an existing destination");
 
     assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn reused_legacy_units_keep_log_owners_and_use_a_synthetic_metric_owner() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("probe-data");
+    let destination = directory.path().join("rewrite-data");
+    seed_databases(&source)?;
+    let service = Connection::open(source.join("duckdb/service-logs.duckdb"))?;
+    service.execute_batch(
+        "INSERT INTO logs VALUES (
+             3, 3000, DATE '2026-07-23', 'worker', 'dep-c', 'api-b',
+             'service', 'info', 'stdout', 'reused', [], MAP([], [])
+         );",
+    )?;
+    drop(service);
+    let plan = LegacyTelemetryPlan::capture(
+        &source,
+        ClusterId::new("cluster-a")?,
+        NodeId::new("node-a")?,
+    )?;
+
+    let report = apply_legacy_telemetry(&plan, &source, &destination).await?;
+
+    assert_eq!(report.verification.logs.records, 3);
+    assert_eq!(report.verification.workload_metrics.records, 1);
+    let logs = Connection::open_with_flags(
+        destination.join("agent/logs.duckdb"),
+        duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly)?,
+    )?;
+    let mut statement = logs.prepare("SELECT entry_json FROM normalized_logs ORDER BY sequence")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut owners = Vec::new();
+    for row in rows {
+        let entry: IngestLogEntry = serde_json::from_str(&row?)?;
+        if let LogOrigin::Workload { metadata } = entry.origin {
+            owners.push(format!(
+                "{}/{}",
+                metadata.service_id, metadata.deployment_id
+            ));
+        }
+    }
+    assert_eq!(owners, ["api/dep-b", "worker/dep-c"]);
+    let metrics = Connection::open_with_flags(
+        destination.join("agent/metrics.duckdb"),
+        duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly)?,
+    )?;
+    let point: WorkloadMetricPoint = serde_json::from_str(&metrics.query_row(
+        "SELECT point_json FROM normalized_metrics",
+        [],
+        |row| row.get::<_, String>(0),
+    )?)?;
+    assert_eq!(point.metadata.service_id.as_str(), "api-b");
+    assert!(point.metadata.deployment_id.as_str().starts_with("legacy-"));
     Ok(())
 }
 
