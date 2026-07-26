@@ -209,13 +209,21 @@ fn rewrite_node_ports(
         if key.contains("/node-records/")
             && value.pointer("/lastInfo/clusterHostIp") == Some(&json!(host_ip))
         {
-            value["lastInfo"]["clusterGatewayPort"] = json!(gateway);
+            *value
+                .pointer_mut("/lastInfo/clusterGatewayPort")
+                .ok_or("node gateway port is absent")? = json!(gateway);
         } else if key.contains("/control-addresses/")
             && value.get("hostIp") == Some(&json!(host_ip))
         {
-            value["gatewayPort"] = json!(gateway);
-            value["etcdClientPort"] = json!(client);
-            value["etcdPeerPort"] = json!(peer);
+            *value
+                .get_mut("gatewayPort")
+                .ok_or("control gateway port is absent")? = json!(gateway);
+            *value
+                .get_mut("etcdClientPort")
+                .ok_or("control client port is absent")? = json!(client);
+            *value
+                .get_mut("etcdPeerPort")
+                .ok_or("control peer port is absent")? = json!(peer);
         } else {
             continue;
         }
@@ -245,9 +253,15 @@ fn rewrite_cluster_state_ports(
                     .iter()
                     .find(|(octet, _, _, _)| host == format!("10.0.0.{octet}"))
                     .ok_or("cluster endpoint has no port fixture")?;
-                endpoint["gatewayPort"] = json!(gateway);
-                endpoint["etcdClientPort"] = json!(client);
-                endpoint["etcdPeerPort"] = json!(peer);
+                *endpoint
+                    .get_mut("gatewayPort")
+                    .ok_or("cluster endpoint gateway port is absent")? = json!(gateway);
+                *endpoint
+                    .get_mut("etcdClientPort")
+                    .ok_or("cluster endpoint client port is absent")? = json!(client);
+                *endpoint
+                    .get_mut("etcdPeerPort")
+                    .ok_or("cluster endpoint peer port is absent")? = json!(peer);
             }
         } else if key.contains("/cluster/voters/") {
             let member = value
@@ -258,8 +272,14 @@ fn rewrite_cluster_state_ports(
                 .iter()
                 .find(|(octet, _, _, _)| member == u64::from(*octet))
                 .ok_or("voter has no port fixture")?;
-            value["peerUrls"] = json!([format!("https://10.0.0.{host_octet}:{peer}")]);
-            value["clientUrls"] = json!([format!("https://10.0.0.{host_octet}:{client}")]);
+            *value
+                .get_mut("peerUrls")
+                .ok_or("voter peer URLs are absent")? =
+                json!([format!("https://10.0.0.{host_octet}:{peer}")]);
+            *value
+                .get_mut("clientUrls")
+                .ok_or("voter client URLs are absent")? =
+                json!([format!("https://10.0.0.{host_octet}:{client}")]);
         } else {
             continue;
         }
