@@ -117,7 +117,7 @@ fn placement_value(
         "nodeId": "node-a",
         "clusterHostIp": "10.0.0.10",
         "clusterApiPort": 3000,
-        "containerHostname": format!("api-{replica_index}"),
+        "containerHostname": format!("api-DeployA-{replica_index}"),
         "startedAtMs": 2_000,
         "endedAtMs": ended_at_ms
     })

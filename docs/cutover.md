@@ -79,9 +79,9 @@ substitute for staging evidence.
    unless it is a superseded `CRASHED` placement. Those historical failures are
    archived on their owning Deployment under the
    `migration.maestro.dev/legacy-orphan-replica-states` annotation rather than
-   being reintroduced as runnable assignments. Legacy replica DNS names are
-   validated case-insensitively because deployment-derived labels may contain
-   uppercase ASCII; the rewrite regenerates this derived projection.
+   being reintroduced as runnable assignments. Legacy replica DNS and placement
+   hostnames are validated case-insensitively because deployment-derived labels
+   may contain uppercase ASCII; the rewrite regenerates the DNS projection.
 
 5. Apply and independently verify the exact reviewed logical artifact:
 
