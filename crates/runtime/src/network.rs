@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use async_trait::async_trait;
@@ -213,6 +214,13 @@ pub trait NetworkProvider: Send + Sync {
         &self,
         spec: &NetworkSpec,
     ) -> Result<NetworkHandle, NetworkProviderError>;
+
+    /// Drops provider-owned reservations absent from one complete desired workload snapshot.
+    async fn reconcile_address_owners(
+        &self,
+        network: &NetworkHandle,
+        active_workload_ids: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, NetworkProviderError>;
 
     /// Reserves one address for a stable workload identity.
     async fn allocate_address(

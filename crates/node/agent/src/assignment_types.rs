@@ -66,6 +66,8 @@ pub struct AssignmentReconcileReport {
     pub unresolved: usize,
     /// Runtime workloads removed because no active local assignment owned them.
     pub garbage_collected: usize,
+    /// Orphaned provider-owned address reservations reclaimed from the desired snapshot.
+    pub address_reservations_collected: usize,
     /// Stale per-workload secret directories zeroized and removed.
     pub secret_mounts_collected: usize,
     /// Stale per-workload node API credentials and listeners removed.

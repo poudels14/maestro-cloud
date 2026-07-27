@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 
 use kernel_api::WorkloadId;
@@ -91,6 +92,46 @@ async fn fake_network_reports_addresses_selected_during_delegated_attachment() {
         .unwrap();
     assert_eq!(first, second);
     assert_eq!(first.address, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)));
+}
+
+#[tokio::test]
+async fn fake_network_reclaims_only_reservations_absent_from_the_desired_snapshot() {
+    let provider = FakeNetworkProvider::default();
+    let spec = NetworkSpec {
+        name: "maestro0".to_owned(),
+        addressing: NetworkAddressing::Managed {
+            range: NetworkCidr::new(address(0), 24).unwrap(),
+            gateway: address(1),
+        },
+        mtu_bytes: 1_420,
+    };
+    let network = provider.ensure_network(&spec).await.unwrap();
+    let active = WorkloadId::new("workload-active").unwrap();
+    let orphaned = WorkloadId::new("workload-orphaned").unwrap();
+    provider
+        .allocate_address(&network, &active, AddressRequest::Exact(address(2)))
+        .await
+        .unwrap();
+    provider
+        .allocate_address(&network, &orphaned, AddressRequest::Exact(address(3)))
+        .await
+        .unwrap();
+
+    let reclaimed = provider
+        .reconcile_address_owners(&network, &BTreeSet::from([active]))
+        .await
+        .unwrap();
+
+    assert_eq!(reclaimed, 1);
+    assert_eq!(provider.lease_count(), 1);
+    provider
+        .allocate_address(
+            &network,
+            &WorkloadId::new("workload-replacement").unwrap(),
+            AddressRequest::Exact(address(3)),
+        )
+        .await
+        .unwrap();
 }
 
 fn address(last_octet: u8) -> IpAddr {

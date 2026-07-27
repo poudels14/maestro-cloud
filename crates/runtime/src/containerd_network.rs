@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 
 use async_trait::async_trait;
@@ -59,6 +59,20 @@ impl NetworkProvider for ContainerdRuntime {
                 NetworkHandle::new(&spec.name)
             }
         }
+    }
+
+    async fn reconcile_address_owners(
+        &self,
+        network: &NetworkHandle,
+        active_workload_ids: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, NetworkProviderError> {
+        let mut state = self.network_state.lock().await;
+        matching_spec(&state, network)?;
+        let previous = state.owners.len();
+        state
+            .owners
+            .retain(|_, owner| active_workload_ids.contains(owner));
+        Ok(previous.saturating_sub(state.owners.len()))
     }
 
     async fn allocate_address(

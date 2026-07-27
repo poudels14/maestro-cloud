@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Mutex, MutexGuard};
 
@@ -67,6 +67,20 @@ impl NetworkProvider for FakeNetworkProvider {
             None => state.network = Some(spec.clone()),
         }
         NetworkHandle::new(&spec.name)
+    }
+
+    async fn reconcile_address_owners(
+        &self,
+        network: &NetworkHandle,
+        active_workload_ids: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, NetworkProviderError> {
+        let mut state = self.lock()?;
+        validate_network(&state, network)?;
+        let previous = state.leases.len();
+        state
+            .leases
+            .retain(|owner, _| active_workload_ids.contains(owner));
+        Ok(previous.saturating_sub(state.leases.len()))
     }
 
     async fn allocate_address(

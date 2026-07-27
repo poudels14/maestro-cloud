@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use kernel_api::{
-    Assignment, AssignmentId, Deployment, DeploymentId, DeploymentPhase, ReplicaState,
+    Assignment, AssignmentId, Deployment, DeploymentId, DeploymentPhase, ReplicaState, WorkloadId,
 };
 use kernel_store::WatchCursor;
 use runtime::NetworkHandle;
@@ -81,8 +81,6 @@ impl AssignmentAgent {
             malformed_replicas,
             network: &network,
         };
-        self.reconcile_active(&active, &resources, &mut report)
-            .await?;
 
         if malformed_assignments == 0 {
             let active_ids = active
@@ -95,10 +93,18 @@ impl AssignmentAgent {
                 .await?;
             for workload in observed {
                 if !active_ids.contains(&workload.metadata.assignment_id) {
-                    self.remove_workload(&workload.handle).await?;
+                    self.remove_workload(&workload.handle, &network).await?;
                     report.garbage_collected = report.garbage_collected.saturating_add(1);
                 }
             }
+            let active_workload_ids = active
+                .iter()
+                .map(|assignment| WorkloadId::new(assignment.meta.id.as_str()))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            report.address_reservations_collected = self
+                .network
+                .reconcile_address_owners(&network, &active_workload_ids)
+                .await?;
             let active_workloads = active
                 .iter()
                 .map(|assignment| assignment.meta.id.to_string())
@@ -113,6 +119,8 @@ impl AssignmentAgent {
                     .await?;
             }
         }
+        self.reconcile_active(&active, &resources, &mut report)
+            .await?;
         for assignment in local
             .iter()
             .filter(|assignment| assignment.meta.deletion_timestamp.is_some())

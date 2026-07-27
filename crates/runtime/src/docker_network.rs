@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use async_trait::async_trait;
 use docker::errors::Error as DockerError;
@@ -50,6 +50,18 @@ impl NetworkProvider for DockerRuntime {
         };
         validate_existing_network(&inspect, spec)?;
         NetworkHandle::new(spec.name.clone())
+    }
+
+    async fn reconcile_address_owners(
+        &self,
+        network: &NetworkHandle,
+        _active_workload_ids: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, NetworkProviderError> {
+        self.client
+            .inspect_network(network.name(), None)
+            .await
+            .map(|_| 0)
+            .map_err(|error| network_error(error, network.name()))
     }
 
     async fn allocate_address(

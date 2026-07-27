@@ -367,20 +367,21 @@ async fn assignment_run_retries_a_transient_whole_snapshot_failure()
     world.monotonic_clock.advance(Duration::from_secs(1));
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            let lists = world
-                .runtime
-                .calls()
-                .unwrap()
-                .into_iter()
-                .filter(|call| call.operation == FakeRuntimeOperation::List)
-                .count();
-            if lists >= 2 {
+            let assignment = world.load_assignment().await.unwrap();
+            if assignment.status.phase == AssignmentPhase::Running {
                 return;
             }
             tokio::task::yield_now().await;
         }
     })
     .await?;
+    let lists = world
+        .runtime
+        .calls()?
+        .into_iter()
+        .filter(|call| call.operation == FakeRuntimeOperation::List)
+        .count();
+    assert!(lists >= 2);
     assert_running(&world).await?;
 
     shutdown_tx.send(true)?;

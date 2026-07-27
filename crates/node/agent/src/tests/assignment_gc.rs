@@ -1,6 +1,8 @@
-use kernel_api::{AssignmentId, ResourceKind, ResourceName};
+use kernel_api::{AssignmentId, ResourceKind, ResourceName, WorkloadId};
 use kernel_store::{CasOutcome, DeleteRequest, ExpectedVersion, Keyspace, PutRequest, Store};
-use runtime::WorkloadRuntime;
+use runtime::{
+    AddressRequest, NetworkAddressing, NetworkCidr, NetworkProvider, NetworkSpec, WorkloadRuntime,
+};
 
 use super::assignment::{World, assignment, cluster_id, deployment, node_id, put_resource};
 
@@ -10,6 +12,25 @@ async fn assignment_reconcile_garbage_collects_workloads_after_assignment_loss()
     let world = World::new();
     world.seed(&deployment(), &assignment()).await?;
     world.agent().reconcile_once().await?;
+    let handle = world
+        .runtime
+        .list(&cluster_id(), &node_id("node-1"))
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("workload missing")?
+        .handle;
+    let attachment = world
+        .network
+        .inspect(&handle)
+        .await?
+        .attachments
+        .into_iter()
+        .next()
+        .ok_or("attachment missing")?;
+    world.network.detach(&handle, &attachment.network).await?;
+    assert_eq!(world.network.attachment_count(), 0);
+    assert_eq!(world.network.lease_count(), 1);
     let key = world.assignment_key();
     let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
     world
@@ -30,6 +51,40 @@ async fn assignment_reconcile_garbage_collects_workloads_after_assignment_loss()
             .is_empty()
     );
     assert_eq!(world.network.lease_count(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_reconcile_reclaims_an_orphaned_exact_address_before_convergence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    let network = world
+        .network
+        .ensure_network(&NetworkSpec {
+            name: "maestro-node-1".to_owned(),
+            addressing: NetworkAddressing::Managed {
+                range: NetworkCidr::new("10.42.1.0".parse()?, 24)?,
+                gateway: "10.42.1.1".parse()?,
+            },
+            mtu_bytes: 1_420,
+        })
+        .await?;
+    world
+        .network
+        .allocate_address(
+            &network,
+            &WorkloadId::new("orphaned-assignment")?,
+            AddressRequest::Exact("10.42.1.8".parse()?),
+        )
+        .await?;
+
+    let report = world.agent().reconcile_once().await?;
+
+    assert_eq!(report.running, 1);
+    assert_eq!(report.unresolved, 0);
+    assert_eq!(report.address_reservations_collected, 1);
+    assert_eq!(world.network.lease_count(), 1);
     Ok(())
 }
 

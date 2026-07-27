@@ -282,7 +282,11 @@ impl AssignmentAgent {
         }
     }
 
-    async fn remove_workload(&self, handle: &WorkloadHandle) -> Result<(), AssignmentAgentError> {
+    async fn remove_workload(
+        &self,
+        handle: &WorkloadHandle,
+        network: &NetworkHandle,
+    ) -> Result<(), AssignmentAgentError> {
         let attachments = self.network.inspect(handle).await?.attachments;
         let stop = self
             .runtime
@@ -298,11 +302,19 @@ impl AssignmentAgent {
         } else {
             stop?;
         }
+        let mut configured_network_cleaned = false;
         for attachment in attachments {
+            self.network.detach(handle, &attachment.network).await?;
             self.network
                 .release_address(&attachment.network, handle.workload_id())
                 .await?;
-            self.network.detach(handle, &attachment.network).await?;
+            configured_network_cleaned |= attachment.network == *network;
+        }
+        if !configured_network_cleaned {
+            self.network.detach(handle, network).await?;
+            self.network
+                .release_address(network, handle.workload_id())
+                .await?;
         }
         self.runtime.remove(handle).await?;
         self.secrets.cleanup(handle.workload_id()).await?;
