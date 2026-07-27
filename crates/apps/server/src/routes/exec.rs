@@ -133,10 +133,8 @@ async fn relay(
                 idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
                 match apply_client_message(&mut writer, session.as_mut(), incoming).await {
                     RelayControl::Continue => {}
-                    RelayControl::Stop { kill } => {
-                        if kill {
-                            terminate(session.as_mut()).await;
-                        }
+                    RelayControl::Stop => {
+                        terminate(session.as_mut()).await;
                         break;
                     }
                 }
@@ -198,13 +196,13 @@ where
         },
         Some(Ok(Message::Ping(payload))) => {
             if writer.send(Message::Pong(payload)).await.is_err() {
-                return RelayControl::Stop { kill: true };
+                return RelayControl::Stop;
             }
             return RelayControl::Continue;
         }
         Some(Ok(Message::Pong(_))) => return RelayControl::Continue,
         Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
-            return RelayControl::Stop { kill: true };
+            return RelayControl::Stop;
         }
         Some(Ok(Message::Text(_))) => {
             return protocol_stop(writer, "exec accepts binary messages only").await;
@@ -239,7 +237,7 @@ where
     Writer: futures_util::Sink<Message, Error = axum::Error> + Unpin,
 {
     let _ = send_split_frame(writer, ExecStreamFrame::Error(message.to_owned())).await;
-    RelayControl::Stop { kill: true }
+    RelayControl::Stop
 }
 
 async fn send_frame(socket: &mut WebSocket, frame: ExecStreamFrame) -> Result<(), axum::Error> {
@@ -345,5 +343,5 @@ enum OpenTarget {
 
 enum RelayControl {
     Continue,
-    Stop { kill: bool },
+    Stop,
 }
