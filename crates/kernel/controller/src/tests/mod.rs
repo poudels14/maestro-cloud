@@ -7,4 +7,5 @@ mod elector;
 mod etcd_failover;
 mod fencing;
 mod runtime;
+mod store_fault;
 mod timestamp;

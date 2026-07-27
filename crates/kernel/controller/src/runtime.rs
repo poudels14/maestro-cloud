@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kernel_store::{
-    Clock, MonotonicTime, StoreKey, StorePrefix, StoredValue, WatchCursor, WatchEventKind,
-    WatchStart,
+    Clock, MonotonicTime, StoreError, StoreKey, StorePrefix, StoredValue, WatchCursor,
+    WatchEventKind, WatchStart,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -145,6 +145,38 @@ where
     /// processing is serialized by key; this implementation deliberately uses
     /// one executor, which also bounds total concurrency for a controller.
     pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), ControllerError> {
+        let mut failure_attempt = 0_u32;
+        loop {
+            match self.run_until_interrupted(&mut shutdown).await {
+                Ok(()) => return Ok(()),
+                Err(error) if retryable_runtime_error(&error) => {
+                    let delay = self.config.retry_backoff.delay(failure_attempt);
+                    failure_attempt = failure_attempt.saturating_add(1);
+                    tracing::warn!(
+                        kind = R::KIND,
+                        error = %error,
+                        retry_delay_ms = delay.as_millis(),
+                        "transient controller store failure; rebuilding snapshot"
+                    );
+                    let retry_at = self.clock.now().saturating_add(delay);
+                    tokio::select! {
+                        changed = shutdown.changed() => {
+                            if changed.is_err() || *shutdown.borrow() {
+                                return Ok(());
+                            }
+                        }
+                        () = self.clock.sleep_until(retry_at) => {}
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn run_until_interrupted(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+    ) -> Result<(), ControllerError> {
         let (trigger_cursor, resources) = self.snapshot_inputs().await?;
         let mut queue = WorkQueue::default();
         let now = self.clock.now();
@@ -185,7 +217,6 @@ where
                 () = self.clock.sleep_until(wake_at) => {
                     let now = self.clock.now();
                     if now >= resync_at {
-                        self.fenced_store.verify_leadership().await?;
                         let (trigger_cursor, resources) = self.snapshot_inputs().await?;
                         queue.replace_with(&resources, now);
                         stream = self.fenced_store.raw_store().watch(
@@ -203,6 +234,7 @@ where
     }
 
     async fn snapshot_inputs(&self) -> Result<(WatchCursor, Vec<StoredValue>), ControllerError> {
+        self.fenced_store.verify_leadership().await?;
         let trigger_snapshot = self
             .fenced_store
             .raw_store()
@@ -272,4 +304,11 @@ where
         }
         Ok(())
     }
+}
+
+fn retryable_runtime_error(error: &ControllerError) -> bool {
+    matches!(
+        error,
+        ControllerError::Store(StoreError::CursorExpired { .. } | StoreError::Unavailable { .. })
+    )
 }

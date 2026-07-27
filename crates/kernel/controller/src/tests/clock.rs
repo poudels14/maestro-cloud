@@ -1,4 +1,5 @@
 use std::future::pending;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ pub(super) struct ManualClock {
 
 struct ManualClockInner {
     now: Mutex<MonotonicTime>,
+    sleeps: AtomicUsize,
     changes: watch::Sender<u64>,
 }
 
@@ -35,6 +37,7 @@ impl ManualClock {
         Self {
             inner: Arc::new(ManualClockInner {
                 now: Mutex::new(MonotonicTime::default()),
+                sleeps: AtomicUsize::new(0),
                 changes,
             }),
         }
@@ -51,6 +54,10 @@ impl ManualClock {
             .changes
             .send_replace(now.as_duration().as_nanos() as u64);
     }
+
+    pub(super) fn sleep_count(&self) -> usize {
+        self.inner.sleeps.load(Ordering::SeqCst)
+    }
 }
 
 #[async_trait]
@@ -64,6 +71,7 @@ impl Clock for ManualClock {
     }
 
     async fn sleep_until(&self, deadline: MonotonicTime) {
+        self.inner.sleeps.fetch_add(1, Ordering::SeqCst);
         let mut changes = self.inner.changes.subscribe();
         loop {
             if self.now() >= deadline {

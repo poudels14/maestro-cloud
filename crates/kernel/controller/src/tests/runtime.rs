@@ -9,14 +9,16 @@ use kernel_api::{
     Timestamp,
 };
 use kernel_store::{
-    CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, SessionBinding, Store,
+    CasOutcome, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, PutRequest,
+    SessionBinding, Store,
 };
 use serde::{Deserialize, Serialize};
 
 use super::clock::{ManualClock, NoopClock};
+use super::store_fault::FailFirstListStore;
 use crate::{
-    Action, Backoff, ControllerRuntime, FencedStore, LeaderIdentity, LeadershipToken,
-    ReconcileContext, ReconcileError, Reconciler, RuntimeConfig,
+    Action, Backoff, ControllerError, ControllerRuntime, FencedStore, LeaderIdentity,
+    LeadershipToken, ReconcileContext, ReconcileError, Reconciler, RuntimeConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,6 +299,149 @@ async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
 }
 
 #[tokio::test]
+async fn runtime_rebuilds_snapshot_after_store_unavailability()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(ManualClock::new());
+    let inner = Arc::new(InMemoryStore::new(clock.clone()));
+    let keys = Keyspace::new(&ClusterId::new("runtime-recovery")?);
+    let session = inner.session(Duration::from_secs(300)).await?;
+    let leader = inner
+        .put_cas(PutRequest {
+            key: keys.leader(),
+            value: b"leader".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: Some(SessionBinding {
+                session_id: session.id(),
+            }),
+        })
+        .await?;
+    let CasOutcome::Applied(leader) = leader else {
+        return Err("leader should be created".into());
+    };
+    let kind = ResourceKind::new("Toy")?;
+    assert!(matches!(
+        inner
+            .put_cas(PutRequest {
+                key: keys.resource(&kind, &ResourceName::new("sample")?),
+                value: serde_json::to_vec(&toy_resource_named("sample", None)?)?,
+                expected: ExpectedVersion::Missing,
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let unavailable = Arc::new(FailFirstListStore::new(inner));
+    let store: Arc<dyn Store> = unavailable.clone();
+    let fenced = Arc::new(FencedStore::new(
+        store,
+        keys.leader(),
+        LeadershipToken::from_campaign(
+            LeaderIdentity {
+                node_id: kernel_api::NodeId::new("node-1")?,
+                instance_id: kernel_api::NodeInstanceId::new("instance-1")?,
+            },
+            session.id(),
+            leader.version,
+        ),
+    ));
+    let reconciler = Arc::new(ToyReconciler {
+        reconciles: AtomicUsize::new(0),
+        finalizes: AtomicUsize::new(0),
+        terminal: AtomicBool::new(false),
+    });
+    let runtime = Arc::new(ControllerRuntime::new(
+        reconciler.clone(),
+        keys.resource_kind(&kind),
+        fenced,
+        clock.clone(),
+        RuntimeConfig::new(
+            Duration::from_secs(30),
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(8))?,
+        )?,
+    ));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let running_runtime = runtime.clone();
+    let runtime_task = tokio::spawn(async move { running_runtime.run(shutdown_rx).await });
+
+    wait_for_sleeps(clock.as_ref(), 1).await?;
+    assert!(!runtime_task.is_finished());
+    assert_eq!(unavailable.list_calls(), 1);
+    assert_eq!(reconciler.reconciles.load(Ordering::SeqCst), 0);
+
+    clock.advance(Duration::from_secs(1));
+    wait_for_count(&reconciler.reconciles, 1).await?;
+    assert!(unavailable.list_calls() >= 2);
+
+    shutdown_tx.send_replace(true);
+    runtime_task.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_does_not_retry_lost_leadership() -> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(NoopClock);
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let keys = Keyspace::new(&ClusterId::new("runtime-fence-loss")?);
+    let session = store.session(Duration::from_secs(30)).await?;
+    let leader = store
+        .put_cas(PutRequest {
+            key: keys.leader(),
+            value: b"leader".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: Some(SessionBinding {
+                session_id: session.id(),
+            }),
+        })
+        .await?;
+    let CasOutcome::Applied(leader) = leader else {
+        return Err("leader should be created".into());
+    };
+    let fenced = Arc::new(FencedStore::new(
+        store.clone(),
+        keys.leader(),
+        LeadershipToken::from_campaign(
+            LeaderIdentity {
+                node_id: kernel_api::NodeId::new("node-1")?,
+                instance_id: kernel_api::NodeInstanceId::new("instance-1")?,
+            },
+            session.id(),
+            leader.version,
+        ),
+    ));
+    assert!(matches!(
+        store
+            .delete_cas(DeleteRequest {
+                key: keys.leader(),
+                expected: leader.version,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let kind = ResourceKind::new("Toy")?;
+    let runtime = ControllerRuntime::new(
+        Arc::new(ToyReconciler {
+            reconciles: AtomicUsize::new(0),
+            finalizes: AtomicUsize::new(0),
+            terminal: AtomicBool::new(false),
+        }),
+        keys.resource_kind(&kind),
+        fenced,
+        clock,
+        RuntimeConfig::new(
+            Duration::from_secs(30),
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(8))?,
+        )?,
+    );
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    assert_eq!(
+        runtime.run(shutdown_rx).await,
+        Err(ControllerError::LeadershipLost)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn snapshot_skips_malformed_and_misidentified_resources_until_repaired()
 -> Result<(), Box<dyn std::error::Error>> {
     let clock = Arc::new(NoopClock);
@@ -407,6 +552,23 @@ async fn wait_for_count(
     Err(format!(
         "counter did not reach {minimum}; observed {}",
         counter.load(Ordering::SeqCst)
+    )
+    .into())
+}
+
+async fn wait_for_sleeps(
+    clock: &ManualClock,
+    minimum: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _ in 0..100 {
+        if clock.sleep_count() >= minimum {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!(
+        "clock did not begin {minimum} sleep(s); observed {}",
+        clock.sleep_count()
     )
     .into())
 }
