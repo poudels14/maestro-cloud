@@ -178,6 +178,10 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
 
     let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
     tailscale.replicas = 2;
+    tailscale.tags.clear();
+    config.preflight()?;
+
+    let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
     tailscale.tags = vec!["maestro-gateway".to_owned()];
     assert!(matches!(
         config.preflight(),

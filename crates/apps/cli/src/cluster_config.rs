@@ -327,7 +327,6 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
             | TailscaleConfigError::DuplicateRoute { index, .. } => {
                 format!("tailscale.advertise-routes[{index}]")
             }
-            TailscaleConfigError::NoTags => "tailscale.tags".to_string(),
             TailscaleConfigError::InvalidTag { index, .. }
             | TailscaleConfigError::DuplicateTag { index, .. } => {
                 format!("tailscale.tags[{index}]")

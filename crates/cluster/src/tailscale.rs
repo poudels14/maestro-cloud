@@ -101,9 +101,6 @@ impl TailscaleGatewayConfig {
             return Err(TailscaleConfigError::NoReachableDnsResolver);
         }
 
-        if self.tags.is_empty() {
-            return Err(TailscaleConfigError::NoTags);
-        }
         let mut tags = BTreeSet::new();
         for (index, tag) in self.tags.iter().enumerate() {
             if !valid_tag(tag) {
@@ -202,8 +199,6 @@ pub enum TailscaleConfigError {
     DuplicateRoute { index: usize, route: Ipv4Cidr },
     #[error("Tailscale advertise routes must include at least one workload bridge DNS resolver")]
     NoReachableDnsResolver,
-    #[error("Tailscale must configure at least one device tag")]
-    NoTags,
     #[error("Tailscale tag {index} `{tag}` must use the form `tag:<lowercase-dns-label>`")]
     InvalidTag { index: usize, tag: String },
     #[error("Tailscale tag {index} duplicates `{tag}`")]

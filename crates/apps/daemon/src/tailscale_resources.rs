@@ -18,7 +18,7 @@ const MANAGED_VALUE: &str = "tailscale-gateway";
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
 pub(crate) const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f";
 const TAILSCALE_VERSION: &str = "tailscale-1.98.8";
-pub(crate) const AUTH_SCRIPT: &str = "export PATH=/usr/local/bin:/usr/bin:/bin\nif [ ! -s /state/tailscaled.state ]; then\n  set -a\n  . /run/secrets/tailscale.env\n  set +a\nfi\nexec /usr/local/bin/containerboot";
+pub(crate) const AUTH_SCRIPT: &str = "export PATH=/usr/local/bin:/usr/bin:/bin\nset -a\n. /run/secrets/tailscale.env\nset +a\nexec /usr/local/bin/containerboot";
 
 /// Ordinary resources that provide optional operator access through Tailscale.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,14 +44,16 @@ impl TailscaleSystemResources {
             .into_iter()
             .map(|route| route.to_string())
             .collect::<Vec<_>>();
+        let extra_args = if config.tags.is_empty() {
+            "--accept-routes".to_owned()
+        } else {
+            format!("--accept-routes --advertise-tags={}", config.tags.join(","))
+        };
         let environment = BTreeMap::from([
             ("TS_ACCEPT_DNS".to_owned(), "false".to_owned()),
             ("TS_AUTH_ONCE".to_owned(), "true".to_owned()),
             ("TS_ENABLE_HEALTH_CHECK".to_owned(), "true".to_owned()),
-            (
-                "TS_EXTRA_ARGS".to_owned(),
-                format!("--accept-routes --advertise-tags={}", config.tags.join(",")),
-            ),
+            ("TS_EXTRA_ARGS".to_owned(), extra_args),
             ("TS_KUBE_SECRET".to_owned(), String::new()),
             ("TS_LOCAL_ADDR_PORT".to_owned(), "0.0.0.0:9002".to_owned()),
             ("TS_ROUTES".to_owned(), routes.join(",")),

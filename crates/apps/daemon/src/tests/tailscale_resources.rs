@@ -73,6 +73,14 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         AUTH_SCRIPT.starts_with("export PATH=/usr/local/bin:/usr/bin:/bin\n"),
         "containerboot must be able to locate tailscaled in the image"
     );
+    assert!(
+        AUTH_SCRIPT.contains(". /run/secrets/tailscale.env\n"),
+        "every launch must load the auth key even when an unauthenticated state file exists"
+    );
+    assert!(
+        !AUTH_SCRIPT.contains("tailscaled.state"),
+        "an unauthenticated state file must not suppress auth-key loading"
+    );
     assert_eq!(
         service
             .spec
@@ -127,6 +135,34 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
                 && rule.ports.is_empty()
                 && rule.verdict == FirewallVerdict::Allow
     ));
+    Ok(())
+}
+
+#[test]
+fn untagged_gateway_omits_the_advertise_tags_argument() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cluster =
+        cluster_with_nodes(&[("node-a", NodeRole::Master), ("node-b", NodeRole::Worker)])?;
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        replicas: 2,
+        tags: Vec::new(),
+        cross_cluster_dns: Vec::new(),
+    });
+
+    let resources = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+    assert_eq!(
+        resources
+            .service
+            .spec
+            .environment
+            .get("TS_EXTRA_ARGS")
+            .map(String::as_str),
+        Some("--accept-routes")
+    );
     Ok(())
 }
 

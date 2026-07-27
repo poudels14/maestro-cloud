@@ -120,7 +120,8 @@ The defaults are:
 Every explicit advertised route must be unique, canonical, contained by the
 cluster CIDR, and include at least one workload bridge resolver. Replica count
 cannot exceed the number of workload-capable nodes. Set `replicas` to `1` for a
-single-node cluster.
+single-node cluster. Set `tags` to `[]` when the auth key is intentionally
+untagged; tagged gateways remain the recommended production configuration.
 
 Validate the merged config before bootstrap:
 
@@ -227,8 +228,9 @@ a Maestro allow rule does not grant a tailnet identity access to the subnet.
 ## Rotation and recovery
 
 Each active rollout replica owns an isolated `tailscale-state` volume. The auth
-key is sourced only when `/state/tailscaled.state` is absent; ordinary restarts
-reuse the existing node identity.
+key is loaded on every launch so an incomplete state file cannot suppress
+authentication. `TS_AUTH_ONCE` makes ordinary restarts reuse the existing node
+identity instead of authenticating it again.
 
 For auth-key rotation:
 
