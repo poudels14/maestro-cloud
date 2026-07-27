@@ -423,6 +423,7 @@ pretend to replace those cutover gates.
 
 - [Multi-node rewrite operations](docs/multi-node.md)
 - [Rewrite cutover migration](docs/cutover.md)
+- [Rewrite parity evidence](docs/parity-evidence.md)
 - [Production cutover rehearsal evidence](docs/rehearsal-evidence.md)
 - [Rewrite NixOS deployment](docs/nixos-rewrite.md)
 - [Tailscale operator access](docs/tailscale.md)
