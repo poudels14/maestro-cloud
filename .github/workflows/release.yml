@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  merge_group:
   pull_request:
     branches: ["release"]
   push:
@@ -19,7 +20,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Rewrite quality gates
+    name: Quality gates
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -58,9 +59,16 @@ jobs:
             cargo clippy \
               --workspace \
               --all-targets \
+              -- \
+              -D warnings
+            cargo clippy \
+              --workspace \
+              --all-targets \
               --all-features \
               -- \
               -D warnings
+            cargo nextest run \
+              --workspace
             cargo nextest run \
               --workspace \
               --all-features
@@ -121,7 +129,7 @@ jobs:
 
   build:
     name: Static bundle (${{ matrix.system }})
-    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:

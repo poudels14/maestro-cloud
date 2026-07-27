@@ -347,7 +347,9 @@ The repository gates are:
 ```sh
 cargo fmt --all -- --check
 cargo deny check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+INSTA_UPDATE=no cargo nextest run --workspace
 INSTA_UPDATE=no cargo nextest run --workspace --all-features
 cargo test --doc --workspace --all-features
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
