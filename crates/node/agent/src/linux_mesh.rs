@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use netlink_packet_route::route::{
 };
 use rtnetlink::{Handle, LinkUnspec, RouteMessageBuilder};
 use tokio::task::JoinHandle;
-use wireguard_control::{Backend, DeviceUpdate, InterfaceName, Key, PeerConfigBuilder};
+use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfigBuilder};
 
 use crate::{
     MESH_INTERFACE_NAME, MESH_MTU_BYTES, MeshBackend, MeshBackendError, MeshConfiguration,
@@ -57,18 +57,54 @@ async fn apply_wireguard(desired: &MeshConfiguration) -> Result<(), MeshBackendE
     let peers = desired.peers.clone();
 
     tokio::task::spawn_blocking(move || {
-        let update = peers.iter().fold(
-            DeviceUpdate::new()
-                .set_private_key(Key(*private_key.expose_bytes()))
-                .set_listen_port(listen_port)
-                .replace_peers(),
-            |update, peer| update.add_peer(peer_update(peer)),
-        );
-        update.apply(&interface, Backend::Kernel)
+        let backend = Backend::Kernel;
+        let existing = match Device::get(&interface, backend) {
+            Ok(device) => Some(device),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let desired_private_key = Key(*private_key.expose_bytes());
+        let mut update = DeviceUpdate::new();
+        if existing
+            .as_ref()
+            .and_then(|device| device.private_key.as_ref())
+            != Some(&desired_private_key)
+        {
+            update = update.set_private_key(desired_private_key);
+        }
+        if existing.as_ref().and_then(|device| device.listen_port) != Some(listen_port) {
+            update = update.set_listen_port(listen_port);
+        }
+        let existing_keys = existing
+            .as_ref()
+            .into_iter()
+            .flat_map(|device| device.peers.iter())
+            .map(|peer| peer.config.public_key.clone());
+        for stale in stale_peer_keys(existing_keys, &peers) {
+            update = update.remove_peer_by_key(&stale);
+        }
+        for peer in &peers {
+            update = update.add_peer(peer_update(peer));
+        }
+        update.apply(&interface, backend)
     })
     .await
     .map_err(|error| backend_error("join WireGuard kernel update", error))?
     .map_err(|error| backend_error("apply WireGuard kernel update", error))
+}
+
+pub(crate) fn stale_peer_keys(
+    existing: impl IntoIterator<Item = Key>,
+    desired: &[MeshPeer],
+) -> Vec<Key> {
+    let desired_keys = desired
+        .iter()
+        .map(|peer| *peer.public_key.as_bytes())
+        .collect::<HashSet<_>>();
+    existing
+        .into_iter()
+        .filter(|key| !desired_keys.contains(key.as_bytes()))
+        .collect()
 }
 
 fn peer_update(peer: &MeshPeer) -> PeerConfigBuilder {
