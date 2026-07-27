@@ -35,6 +35,8 @@ jobs:
       - name: Check repository structure
         shell: bash
         run: |
+          # The single-quoted program is evaluated by the inner Nix-shell Bash.
+          # shellcheck disable=SC2016
           nix develop --command bash -euo pipefail -c '
             git diff --check
             python3 scripts/check-source-layout.py
