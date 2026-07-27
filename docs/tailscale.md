@@ -172,11 +172,25 @@ They are not Tailscale `100.x` addresses and are not fixed `.254` proxy
 addresses. Configure more than one returned resolver so DNS remains available
 during a node failure.
 
-The daemon also serves its authenticated HTTPS API and panel on each returned
-bridge address. Node certificates include both the control-plane endpoint and
-the bridge address, and Maestro admits bridge-to-API traffic only from running
-managed Tailscale gateway replicas. To open the panel from an allowed tailnet
-client, use:
+Each managed gateway also exposes the authenticated HTTPS API and panel
+directly on its Tailscale identity with Tailscale Serve. This is the preferred
+operator path because it does not depend on client subnet-route settings and
+uses a certificate valid for the gateway's MagicDNS name. Find either online
+`maestro-<cluster-name>-gateway-<replica>` device in Tailscale and open:
+
+```text
+https://<gateway MagicDNS name>/
+```
+
+For example, the first replica of cluster `production` requests the hostname
+`maestro-production-gateway-0`. Tailscale may append a collision suffix when a
+retired device still owns that name, so use the actual MagicDNS name shown for
+the online device. Sign in with a Maestro operator token.
+
+The daemon also serves the same panel on each returned bridge address. Node
+certificates include both the control-plane endpoint and the bridge address,
+and Maestro admits bridge-to-API traffic only from running managed Tailscale
+gateway replicas. This subnet-routed fallback is:
 
 ```text
 https://<dnsNameserver>:<cluster API port>/
@@ -184,9 +198,7 @@ https://<dnsNameserver>:<cluster API port>/
 
 For example, a node whose bridge resolver is `172.22.1.1` and whose API port is
 `3000` serves the panel at `https://172.22.1.1:3000/`. Trust the private Maestro
-cluster CA in the operator browser and sign in with an operator token. The
-gateway's own workload address is only a subnet-router endpoint; it is not the
-panel address.
+cluster CA in the operator browser when using this fallback.
 
 In the Tailscale admin console, add each address as a custom nameserver and
 restrict it to `maestro.internal`. Do not make it a global nameserver unless

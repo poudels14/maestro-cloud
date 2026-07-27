@@ -86,6 +86,14 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "gateway identities must include the cluster name and replica ordinal"
     );
     assert!(
+        AUTH_SCRIPT.contains("serve --bg --yes"),
+        "each gateway must expose the node API directly on its tailnet identity"
+    );
+    assert!(
+        AUTH_SCRIPT.contains("\"https+insecure://${gateway}:${api_port}\""),
+        "the direct tailnet endpoint must proxy the node-local HTTPS API"
+    );
+    assert!(
         !AUTH_SCRIPT.contains("tailscaled.state"),
         "an unauthenticated state file must not suppress auth-key loading"
     );
@@ -104,6 +112,14 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
             .get("MAESTRO_TAILSCALE_HOSTNAME_PREFIX")
             .map(String::as_str),
         Some("maestro-daemon-test-gateway")
+    );
+    assert_eq!(
+        service
+            .spec
+            .environment
+            .get("MAESTRO_NODE_API_PORTS")
+            .map(String::as_str),
+        Some("3011,3012")
     );
     assert_eq!(
         service

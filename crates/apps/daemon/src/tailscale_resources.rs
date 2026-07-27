@@ -19,7 +19,66 @@ const TAILSCALE_SOCKS_PORT: u16 = 1_055;
 const TAILSCALE_HOSTNAME_PREFIX_MAX_LEN: usize = 52;
 pub(crate) const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f";
 const TAILSCALE_VERSION: &str = "tailscale-1.98.8";
-pub(crate) const AUTH_SCRIPT: &str = "export PATH=/usr/local/bin:/usr/bin:/bin\nreplica=\"${HOSTNAME##*-}\"\nexport TS_HOSTNAME=\"${MAESTRO_TAILSCALE_HOSTNAME_PREFIX}-${replica}\"\nset -a\n. /run/secrets/tailscale.env\nset +a\nexec /usr/local/bin/containerboot";
+pub(crate) const AUTH_SCRIPT: &str = r#"export PATH=/usr/local/bin:/usr/bin:/bin
+replica="${HOSTNAME##*-}"
+export TS_HOSTNAME="${MAESTRO_TAILSCALE_HOSTNAME_PREFIX}-${replica}"
+set -a
+. /run/secrets/tailscale.env
+set +a
+
+/usr/local/bin/containerboot &
+containerboot_pid="$!"
+
+stop_containerboot() {
+  kill -TERM "$containerboot_pid" 2>/dev/null || true
+}
+
+fail_gateway() {
+  echo "maestro Tailscale gateway: $1" >&2
+  stop_containerboot
+  wait "$containerboot_pid" 2>/dev/null || true
+  exit 1
+}
+
+trap stop_containerboot HUP INT TERM
+
+ready=false
+attempt=0
+while [ "$attempt" -lt 60 ]; do
+  if /usr/local/bin/tailscale --socket=/tmp/tailscaled.sock status --json 2>/dev/null \
+    | grep -q '"BackendState": "Running"'
+  then
+    ready=true
+    break
+  fi
+  kill -0 "$containerboot_pid" 2>/dev/null \
+    || fail_gateway "containerboot exited before Tailscale became ready"
+  attempt=$((attempt + 1))
+  sleep 1
+done
+[ "$ready" = true ] || fail_gateway "Tailscale did not become ready within 60 seconds"
+
+gateway="$(ip -4 route show default | awk '$1 == "default" { print $3; exit }')"
+[ -n "$gateway" ] || fail_gateway "could not discover the node workload gateway"
+
+api_port=""
+previous_ifs="$IFS"
+IFS=,
+for port in $MAESTRO_NODE_API_PORTS; do
+  if nc -z -w 1 "$gateway" "$port"; then
+    api_port="$port"
+    break
+  fi
+done
+IFS="$previous_ifs"
+[ -n "$api_port" ] || fail_gateway "could not discover the node API listener"
+
+/usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve --bg --yes \
+  "https+insecure://${gateway}:${api_port}" \
+  || fail_gateway "could not expose the node API with Tailscale Serve"
+
+wait "$containerboot_pid"
+"#;
 
 /// Ordinary resources that provide optional operator access through Tailscale.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +122,14 @@ impl TailscaleSystemResources {
                 tailscale_hostname_prefix(&cluster.name),
             ),
             (
+                "MAESTRO_NODE_API_PORTS".to_owned(),
+                api_ports(&cluster.nodes)
+                    .into_iter()
+                    .map(|port| port.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            (
                 "TS_SOCKS5_SERVER".to_owned(),
                 format!(":{TAILSCALE_SOCKS_PORT}"),
             ),
@@ -70,16 +137,9 @@ impl TailscaleSystemResources {
             ("TS_USERSPACE".to_owned(), "true".to_owned()),
         ]);
         let annotations = BTreeMap::from([(managed_annotation(), MANAGED_VALUE.to_owned())]);
-        let mut api_ports = cluster
-            .nodes
-            .values()
-            .map(|node| node.endpoint.api_port)
-            .collect::<Vec<_>>();
-        api_ports.sort_unstable();
-        api_ports.dedup();
         let system_host_access = SystemHostAccess {
             service_id: service_id.clone(),
-            host_ports: api_ports,
+            host_ports: api_ports(&cluster.nodes),
         };
         let service = Object {
             meta: ObjectMeta {
@@ -212,6 +272,16 @@ fn tailscale_hostname_prefix(cluster_name: &str) -> String {
     let available = TAILSCALE_HOSTNAME_PREFIX_MAX_LEN - LEADING.len() - TRAILING.len();
     let cluster_name = cluster_name[..cluster_name.len().min(available)].trim_end_matches('-');
     format!("{LEADING}{cluster_name}{TRAILING}")
+}
+
+fn api_ports(nodes: &BTreeMap<kernel_api::NodeId, cluster::NodeDefinition>) -> Vec<u16> {
+    let mut ports = nodes
+        .values()
+        .map(|node| node.endpoint.api_port)
+        .collect::<Vec<_>>();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
 }
 
 pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool {
