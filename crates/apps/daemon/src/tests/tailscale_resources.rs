@@ -51,6 +51,10 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         service.spec.environment.get("TS_SOCKS5_SERVER"),
         Some(&":1055".to_owned())
     );
+    assert_eq!(
+        service.spec.environment.get("TS_LOCAL_ADDR_PORT"),
+        Some(&"0.0.0.0:9002".to_owned())
+    );
     assert!(
         service
             .spec

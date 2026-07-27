@@ -53,7 +53,7 @@ impl TailscaleSystemResources {
                 format!("--accept-routes --advertise-tags={}", config.tags.join(",")),
             ),
             ("TS_KUBE_SECRET".to_owned(), String::new()),
-            ("TS_LOCAL_ADDR_PORT".to_owned(), ":9002".to_owned()),
+            ("TS_LOCAL_ADDR_PORT".to_owned(), "0.0.0.0:9002".to_owned()),
             ("TS_ROUTES".to_owned(), routes.join(",")),
             (
                 "TS_SOCKS5_SERVER".to_owned(),
