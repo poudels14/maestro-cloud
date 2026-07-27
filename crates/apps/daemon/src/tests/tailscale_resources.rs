@@ -69,6 +69,10 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
     let command = required(service.spec.command, "gateway command")?;
     assert_eq!(command.executable, "/bin/sh");
     assert_eq!(command.arguments, vec!["-ceu", AUTH_SCRIPT]);
+    assert!(
+        AUTH_SCRIPT.starts_with("export PATH=/usr/local/bin:/usr/bin:/bin\n"),
+        "containerboot must be able to locate tailscaled in the image"
+    );
     assert_eq!(
         service
             .spec
