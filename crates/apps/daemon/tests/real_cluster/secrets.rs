@@ -27,7 +27,7 @@ impl LocalSecretsManager {
         let port = listener.local_addr()?.port();
         let task = tokio::spawn(async move {
             while let Ok((stream, _peer)) = listener.accept().await {
-                tokio::spawn(serve_secret(stream));
+                serve_secret(stream).await;
             }
         });
         Ok(Self {
