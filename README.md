@@ -361,13 +361,17 @@ pnpm --dir ui typecheck
 pnpm --dir ui build
 pnpm check:api-drift
 nix flake check
+scripts/run-docker-acceptance.sh
 scripts/run-containerd-acceptance.sh
 scripts/run-real-cluster-acceptance.sh
+scripts/run-cutover-acceptance.sh
+scripts/run-minio-acceptance.sh
 ```
 
-Real etcd/runtime conformance and one-node/three-node cluster scenarios are
-separate acceptance tiers; default unit tests do not pretend to replace those
-cutover gates.
+The single release workflow runs real Docker and containerd conformance,
+one-node/three-node cluster scenarios, an encrypted three-member etcd cutover,
+and SSE-KMS uploads against local MinIO/KES services. Default unit tests do not
+pretend to replace those cutover gates.
 
 ## Operator documentation
 

@@ -1,13 +1,21 @@
 name: Release
 
 on:
+  pull_request:
+    branches: ["release"]
   push:
     branches: ["release"]
     tags: ["v*"]
+  schedule:
+    - cron: "23 8 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   quality:
@@ -71,14 +79,30 @@ jobs:
       - name: Evaluate Nix checks
         run: nix flake check --no-build
 
+      - name: Start pinned Docker daemon
+        uses: docker/setup-docker-action@v5.3.0
+        with:
+          version: v29.6.2
+          set-host: true
+
+      - name: Run real Docker acceptance
+        run: nix develop --command scripts/run-docker-acceptance.sh
+
       - name: Run real containerd acceptance
         run: nix develop --command scripts/run-containerd-acceptance.sh
 
       - name: Run one-node and three-node acceptance
         run: nix develop --command scripts/run-real-cluster-acceptance.sh
 
+      - name: Rehearse encrypted three-member cutover
+        run: nix develop --command scripts/run-cutover-acceptance.sh
+
+      - name: Run MinIO SSE-KMS acceptance
+        run: nix develop --command scripts/run-minio-acceptance.sh
+
   build:
     name: Static bundle (${{ matrix.system }})
+    if: github.event_name != 'pull_request' && github.event_name != 'schedule'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
