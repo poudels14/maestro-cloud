@@ -86,8 +86,9 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "gateway identities must include the cluster name and replica ordinal"
     );
     assert!(
-        AUTH_SCRIPT.contains("serve --bg --yes"),
-        "each gateway must expose the node API directly on its tailnet identity"
+        AUTH_SCRIPT.contains("serve --bg --yes --http=80"),
+        "each gateway must expose the node API over its encrypted tailnet transport without \
+         depending on Tailscale certificate issuance"
     );
     assert!(
         AUTH_SCRIPT.contains("set \\\n  --hostname=\"$TS_HOSTNAME\""),

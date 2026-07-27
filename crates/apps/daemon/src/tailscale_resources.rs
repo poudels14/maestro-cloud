@@ -79,7 +79,7 @@ IFS="$previous_ifs"
 
 /usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve reset \
   || fail_gateway "could not reset stale Tailscale Serve configuration"
-/usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve --bg --yes \
+/usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve --bg --yes --http=80 \
   "https+insecure://${gateway}:${api_port}" \
   || fail_gateway "could not expose the node API with Tailscale Serve"
 
