@@ -206,7 +206,8 @@ maestro auth token \
 The command prints only the JWT. Paste it into the panel login form. Use
 `--access-level operator` only when the session needs to change cluster state
 or open an exec session. The API enforces the access level after the panel
-exchanges the JWT for its secure browser cookie.
+exchanges the JWT for its secure browser cookie. That browser session expires
+with the source token or after eight hours, whichever comes first.
 
 The daemon also serves the same panel on each returned bridge address. Node
 certificates include both the control-plane endpoint and the bridge address,

@@ -35,6 +35,7 @@ enum OperatorAccess {
 struct AuthenticatedOperator {
     subject: String,
     access: OperatorAccess,
+    expires_at: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -74,6 +75,7 @@ pub(crate) async fn require_operator(
         None => AuthenticatedOperator {
             subject: "loopback-operator".to_string(),
             access: OperatorAccess::Operator,
+            expires_at: None,
         },
         Some(secret) => authenticate_operator(&request, secret)?,
     };
@@ -152,9 +154,14 @@ fn authenticate_operator_bearer(
     let access = operator_access(scopes).ok_or_else(|| {
         ApiError::forbidden("token does not grant the `operator` or `read-only` scope")
     })?;
+    let expires_at = claims
+        .get("exp")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ApiError::unauthorized("operator token has no valid expiration"))?;
     Ok(AuthenticatedOperator {
         subject: token_subject(&claims)?,
         access,
+        expires_at: Some(expires_at),
     })
 }
 
@@ -226,6 +233,16 @@ fn issue_browser_session(
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| ApiError::internal("system clock is before the Unix epoch"))?
         .as_secs();
+    let maximum_expires_at = issued_at.saturating_add(BROWSER_SESSION_SECONDS);
+    let expires_at = operator
+        .expires_at
+        .map_or(maximum_expires_at, |source| source.min(maximum_expires_at));
+    let max_age = expires_at.saturating_sub(issued_at);
+    if max_age == 0 {
+        return Err(ApiError::unauthorized(
+            "operator token expires before a browser session can be issued",
+        ));
+    }
     let claims = BrowserSessionClaims {
         subject: operator.subject.clone(),
         scope: match operator.access {
@@ -234,7 +251,7 @@ fn issue_browser_session(
         }
         .to_string(),
         issued_at,
-        expires_at: issued_at.saturating_add(BROWSER_SESSION_SECONDS),
+        expires_at,
         audience: BROWSER_SESSION_AUDIENCE.to_string(),
         token_kind: BROWSER_SESSION_KIND.to_string(),
     };
@@ -245,7 +262,7 @@ fn issue_browser_session(
     )
     .map_err(|_| ApiError::internal("failed to issue browser session"))?;
     Ok(format!(
-        "{BROWSER_SESSION_COOKIE}={token}; Path=/; Max-Age={BROWSER_SESSION_SECONDS}; \
+        "{BROWSER_SESSION_COOKIE}={token}; Path=/; Max-Age={max_age}; \
          HttpOnly; Secure; SameSite=Strict"
     ))
 }
@@ -276,6 +293,7 @@ fn authenticate_browser_session(
     Ok(AuthenticatedOperator {
         subject: claims.subject,
         access,
+        expires_at: Some(claims.expires_at),
     })
 }
 

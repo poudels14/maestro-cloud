@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use kernel_api::SecretValue;
 use kernel_store::{InMemoryStore, TokioClock};
+use serde_json::Value;
 use tower::ServiceExt;
 
 use super::{seeded_store, token};
@@ -40,14 +42,24 @@ async fn bearer_exchange_issues_a_scoped_secure_browser_session()
         .ok_or("session response did not set a cookie")?;
     assert!(set_cookie.starts_with(&format!("{BROWSER_SESSION_COOKIE}=")));
     assert!(set_cookie.contains("; Path=/;"));
-    assert!(set_cookie.contains("; Max-Age=28800;"));
     assert!(set_cookie.contains("; HttpOnly;"));
     assert!(set_cookie.contains("; Secure;"));
     assert!(set_cookie.ends_with("; SameSite=Strict"));
+    let max_age = set_cookie
+        .split(';')
+        .find_map(|attribute| attribute.trim().strip_prefix("Max-Age="))
+        .ok_or("session cookie has no maximum age")?
+        .parse::<u64>()?;
+    assert!((1..=300).contains(&max_age));
     let cookie = set_cookie
         .split(';')
         .next()
         .ok_or("session cookie has no value")?;
+    let session_token = cookie
+        .split_once('=')
+        .map(|(_, value)| value)
+        .ok_or("cookie has no token")?;
+    assert!(jwt_expiration(session_token, secret)? <= jwt_expiration(&operator, secret)?);
 
     let authenticated = server
         .router()
@@ -212,4 +224,20 @@ async fn read_only_bearers_create_read_only_browser_sessions()
         .await?;
     assert_eq!(mutation.status(), StatusCode::FORBIDDEN);
     Ok(())
+}
+
+fn jwt_expiration(token: &str, secret: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = false;
+    validation.validate_aud = false;
+    let claims = jsonwebtoken::decode::<Value>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )?
+    .claims;
+    claims
+        .get("exp")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "token has no numeric expiration".into())
 }

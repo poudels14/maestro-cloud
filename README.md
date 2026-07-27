@@ -164,7 +164,8 @@ maestro auth token \
 
 This prints only the short-lived JWT. `read-only` tokens can use API and panel
 views but cannot mutate cluster state or open exec sessions; `operator` tokens
-retain full access.
+retain full access. A panel session never outlives the source token and is
+always capped at eight hours.
 
 To rotate the signing key without reading it locally, create a new secret
 version and restart all nodes against it:
