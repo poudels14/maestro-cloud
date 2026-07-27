@@ -220,7 +220,6 @@ pub(super) fn cluster_document() -> String {
             "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
-                "cluster-cidr": "172.22.0.0/16",
                 nodes: {
                     "node-1": {
                         hostname: "node-1.internal",

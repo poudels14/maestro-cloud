@@ -10,9 +10,8 @@ cross-node workload correctness.
 Keep these address spaces separate:
 
 - node endpoints are stable, private host addresses such as VPC addresses;
-- `cluster-cidr` is a private, non-overlapping pool reserved for Maestro;
-- each workload-capable node owns one subnet from that pool; and
-- the low end of the pool is reserved for stable mesh identities.
+- each workload-capable node owns one explicit, private `/24`; and
+- workload subnets do not overlap each other or any control network.
 
 Each workload subnet uses its first host address as the `maestro0` bridge and
 authoritative DNS resolver. For example, node subnet `172.22.1.0/24` uses
@@ -24,18 +23,9 @@ and workload subnet. Their node agents converge the exact peer and route set.
 Cross-node workload packets therefore route directly between node subnets
 through WireGuard. The private key never enters the cluster store.
 
-The default pool settings are:
-
-- `node-limit`: `254`;
-- `node-prefix`: `24`; and
-- `wireguard` port: UDP `51820`.
-
-A `172.22.0.0/16` cluster pool can hold the default tunnel reservation and 254
-`/24` node allocations. With those defaults, `172.22.0.0/24` is reserved and
-workload subnets begin at `172.22.1.0/24`.
-
-Choose the pool once. Changing the pool, node limit, node prefix, node
-allocations, or cluster ports after bootstrap is not an online operation.
+The default `wireguard` port is UDP `51820`. Choose each node subnet once.
+Changing node subnet allocations or cluster ports after bootstrap is not an
+online operation.
 
 ## Configuration contract
 
@@ -47,9 +37,6 @@ document is identical on every host except for the top-level `node` selector.
   "jwt-secret-key": "<at-least-32-bytes>",
   "cluster": {
     "name": "prod",
-    "cluster-cidr": "172.22.0.0/16",
-    "node-limit": 254,
-    "node-prefix": 24,
     "nodes": {
       "node-1": {
         "hostname": "node-1.internal",

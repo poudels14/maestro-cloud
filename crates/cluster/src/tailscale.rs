@@ -34,7 +34,7 @@ impl TailscaleAuthKeyRecord {
 pub struct TailscaleGatewayConfig {
     /// Credential used only when a gateway replica has no persisted identity.
     pub auth_key: SecretValue,
-    /// Private cluster routes advertised to the tailnet, or the cluster CIDR by default.
+    /// Private workload routes advertised to the tailnet, or every node subnet by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advertise_routes: Option<Vec<Ipv4Cidr>>,
     /// Desired high-availability gateway replicas.
@@ -62,7 +62,6 @@ impl TailscaleGatewayConfig {
     pub(crate) fn validate(
         &self,
         local_cluster_id: &ClusterId,
-        cluster_cidr: Ipv4Cidr,
         workload_subnets: &[Ipv4Cidr],
     ) -> Result<(), TailscaleConfigError> {
         validate_auth_key(&self.auth_key)?;
@@ -80,13 +79,16 @@ impl TailscaleGatewayConfig {
             return Err(TailscaleConfigError::EmptyAdvertiseRoutes);
         }
         let mut routes = BTreeSet::new();
-        for (index, route) in self.advertised_routes(cluster_cidr).into_iter().enumerate() {
-            if !cluster_cidr.contains_network(route) {
-                return Err(TailscaleConfigError::RouteOutsideCluster {
-                    index,
-                    route,
-                    cluster_cidr,
-                });
+        for (index, route) in self
+            .advertised_routes(workload_subnets)
+            .into_iter()
+            .enumerate()
+        {
+            if !workload_subnets
+                .iter()
+                .any(|subnet| subnet.contains_network(route))
+            {
+                return Err(TailscaleConfigError::RouteOutsideWorkloadSubnets { index, route });
             }
             if !routes.insert(route) {
                 return Err(TailscaleConfigError::DuplicateRoute { index, route });
@@ -116,21 +118,21 @@ impl TailscaleGatewayConfig {
                 });
             }
         }
-        self.validate_dns_routes(local_cluster_id, cluster_cidr)?;
+        self.validate_dns_routes(local_cluster_id, workload_subnets)?;
         Ok(())
     }
 
-    /// Returns the configured routes or the complete cluster address pool.
-    pub fn advertised_routes(&self, cluster_cidr: Ipv4Cidr) -> Vec<Ipv4Cidr> {
+    /// Returns the configured routes or every explicit workload subnet.
+    pub fn advertised_routes(&self, workload_subnets: &[Ipv4Cidr]) -> Vec<Ipv4Cidr> {
         self.advertise_routes
             .clone()
-            .unwrap_or_else(|| vec![cluster_cidr])
+            .unwrap_or_else(|| workload_subnets.to_vec())
     }
 
     fn validate_dns_routes(
         &self,
         local_cluster_id: &ClusterId,
-        cluster_cidr: Ipv4Cidr,
+        workload_subnets: &[Ipv4Cidr],
     ) -> Result<(), TailscaleConfigError> {
         let mut cluster_ids = BTreeSet::new();
         for (route_index, route) in self.cross_cluster_dns.iter().enumerate() {
@@ -152,7 +154,9 @@ impl TailscaleGatewayConfig {
                     || nameserver.is_loopback()
                     || nameserver.is_multicast()
                     || nameserver == &Ipv4Addr::BROADCAST
-                    || cluster_cidr.contains(*nameserver)
+                    || workload_subnets
+                        .iter()
+                        .any(|subnet| subnet.contains(*nameserver))
                 {
                     return Err(TailscaleConfigError::UnsafeDnsNameserver {
                         route_index,
@@ -189,12 +193,8 @@ pub enum TailscaleConfigError {
     },
     #[error("Tailscale advertise routes must not be an empty list")]
     EmptyAdvertiseRoutes,
-    #[error("Tailscale advertise route {index} `{route}` is outside cluster CIDR `{cluster_cidr}`")]
-    RouteOutsideCluster {
-        index: usize,
-        route: Ipv4Cidr,
-        cluster_cidr: Ipv4Cidr,
-    },
+    #[error("Tailscale advertise route {index} `{route}` is outside every workload subnet")]
+    RouteOutsideWorkloadSubnets { index: usize, route: Ipv4Cidr },
     #[error("Tailscale advertise route {index} duplicates `{route}`")]
     DuplicateRoute { index: usize, route: Ipv4Cidr },
     #[error("Tailscale advertise routes must include at least one workload bridge DNS resolver")]
@@ -225,7 +225,7 @@ pub enum TailscaleConfigError {
         /// Position of the empty route.
         route_index: usize,
     },
-    /// A remote resolver address was public, unsafe, or part of the local cluster pool.
+    /// A remote resolver address was public, unsafe, or part of a local workload subnet.
     #[error(
         "Tailscale cross-cluster DNS route {route_index} nameserver {nameserver_index} `{nameserver}` is not a remote private bridge address"
     )]

@@ -1988,8 +1988,6 @@ export interface components {
         MaskedClusterConfig: {
             /** @description Optional Cloudflare Tunnel settings with the connector token omitted. */
             cloudflare?: components["schemas"]["MaskedCloudflareConfig"] | (null);
-            /** @description Fixed private address pool for tunnels and workload networks. */
-            clusterCidr: string;
             /** @description Stable cluster identity. */
             clusterId: components["schemas"]["ClusterId"];
             /** @description Private networks allowed to initiate control-plane traffic. */
@@ -1998,16 +1996,6 @@ export interface components {
             localNodeId: components["schemas"]["NodeId"];
             /** @description Human-readable DNS-safe cluster name. */
             name: string;
-            /**
-             * Format: uint32
-             * @description Maximum stable node indexes supported by the address pool.
-             */
-            nodeLimit: number;
-            /**
-             * Format: uint8
-             * @description Prefix allocated to each node workload network.
-             */
-            nodePrefix: number;
             /** @description Declared cluster members in stable node-ID order. */
             nodes: components["schemas"]["MaskedClusterConfigNode"][];
             /** @description Cluster-wide service ports. */

@@ -32,12 +32,6 @@ pub struct JoinPayload {
     pub cluster_id: ClusterId,
     /// Operator-facing cluster name.
     pub cluster_name: String,
-    /// Fixed private address pool for tunnels and workload networks.
-    pub cluster_cidr: Ipv4Cidr,
-    /// Maximum stable node indexes supported by the address pool.
-    pub node_limit: u32,
-    /// Prefix allocated to each node workload network.
-    pub node_prefix: u8,
     /// Authoritative node topology at admission time.
     pub nodes: BTreeMap<NodeId, NodeDefinition>,
     /// Authoritative private networks allowed to initiate control traffic.

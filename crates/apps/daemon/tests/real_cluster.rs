@@ -431,9 +431,6 @@ impl RealProcessCluster {
         let payload = JoinPayload {
             cluster_id: self.cluster.cluster_id.clone(),
             cluster_name: self.cluster.name.clone(),
-            cluster_cidr: self.cluster.cluster_cidr,
-            node_limit: self.cluster.node_limit,
-            node_prefix: self.cluster.node_prefix,
             nodes: self.cluster.nodes.clone(),
             control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
             ports: self.cluster.ports,
@@ -600,9 +597,6 @@ fn topology(
     Ok(ClusterConfig {
         cluster_id: ClusterId::new(name.clone())?,
         name,
-        cluster_cidr: "172.22.0.0/16".parse()?,
-        node_limit: 254,
-        node_prefix: 24,
         nodes,
         control_allow_cidrs: vec![format!("10.203.{segment}.0/24").parse()?],
         ports: ClusterPorts::new(

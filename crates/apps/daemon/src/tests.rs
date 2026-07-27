@@ -74,9 +74,6 @@ fn cluster_with_nodes(
     Ok(ClusterConfig {
         cluster_id: ClusterId::new("daemon-test")?,
         name: "daemon-test".to_owned(),
-        cluster_cidr: "172.20.0.0/14".parse()?,
-        node_limit: 254,
-        node_prefix: 24,
         nodes,
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,

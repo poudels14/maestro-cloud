@@ -9,12 +9,15 @@ pub(crate) fn masked_cluster_config(
     cluster: &ClusterConfig,
     local_node_id: &NodeId,
 ) -> MaskedClusterConfig {
+    let workload_subnets = cluster
+        .nodes
+        .values()
+        .filter(|node| node.role.runs_workloads())
+        .map(|node| node.workload_subnet)
+        .collect::<Vec<_>>();
     MaskedClusterConfig {
         cluster_id: cluster.cluster_id.clone(),
         name: cluster.name.clone(),
-        cluster_cidr: cluster.cluster_cidr.to_string(),
-        node_limit: cluster.node_limit,
-        node_prefix: cluster.node_prefix,
         local_node_id: local_node_id.clone(),
         nodes: cluster
             .nodes
@@ -40,7 +43,7 @@ pub(crate) fn masked_cluster_config(
             wireguard: cluster.ports.wireguard,
         },
         tailscale: cluster.tailscale.as_ref().map(|tailscale| {
-            let routes = tailscale.advertised_routes(cluster.cluster_cidr);
+            let routes = tailscale.advertised_routes(&workload_subnets);
             MaskedTailscaleConfig {
                 advertise_routes: routes.iter().map(ToString::to_string).collect(),
                 dns_nameservers: cluster

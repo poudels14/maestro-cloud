@@ -112,7 +112,7 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
             .environment
             .get("TS_ROUTES")
             .map(String::as_str),
-        Some("172.20.0.0/14")
+        Some("172.22.0.0/24,172.22.1.0/24")
     );
     assert_eq!(
         service
@@ -168,14 +168,20 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         FirewallSubject::Service(service.meta.id)
     );
     assert_eq!(policy.spec.default_verdict, FirewallVerdict::Allow);
-    assert!(matches!(
-        policy.spec.rules.as_slice(),
-        [rule]
-            if rule.cidr == "172.20.0.0/14"
-                && rule.protocol == TransportProtocol::Any
-                && rule.ports.is_empty()
-                && rule.verdict == FirewallVerdict::Allow
-    ));
+    assert_eq!(
+        policy
+            .spec
+            .rules
+            .iter()
+            .map(|rule| rule.cidr.as_str())
+            .collect::<Vec<_>>(),
+        ["172.22.0.0/24", "172.22.1.0/24"]
+    );
+    assert!(policy.spec.rules.iter().all(|rule| {
+        rule.protocol == TransportProtocol::Any
+            && rule.ports.is_empty()
+            && rule.verdict == FirewallVerdict::Allow
+    }));
     Ok(())
 }
 

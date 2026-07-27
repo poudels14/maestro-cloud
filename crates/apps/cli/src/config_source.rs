@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use aws_sdk_secretsmanager::error::DisplayErrorContext;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -40,7 +41,8 @@ impl ConfigSourceReader for SystemConfigSourceReader {
             .await
             .map_err(|error| {
                 CliError::invalid_input(format!(
-                    "failed to fetch AWS secret `{reference}`: {error}"
+                    "failed to fetch AWS secret `{reference}`: {}",
+                    DisplayErrorContext(error)
                 ))
             })?;
         response

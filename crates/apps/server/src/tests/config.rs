@@ -24,9 +24,6 @@ async fn config_view_is_explicitly_configured_and_secret_free()
     let expected = MaskedClusterConfig {
         cluster_id: cluster_id.clone(),
         name: "server-test".to_string(),
-        cluster_cidr: "10.42.0.0/16".to_string(),
-        node_limit: 254,
-        node_prefix: 24,
         local_node_id: NodeId::new("node-1")?,
         nodes: vec![MaskedClusterConfigNode {
             node_id: NodeId::new("node-1")?,

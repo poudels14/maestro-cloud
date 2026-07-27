@@ -193,11 +193,6 @@ pub(crate) struct ClusterInput {
     #[serde(default)]
     pub(crate) cluster_id: Option<String>,
     pub(crate) name: String,
-    pub(crate) cluster_cidr: String,
-    #[serde(default = "default_node_limit")]
-    pub(crate) node_limit: u32,
-    #[serde(default = "default_node_prefix")]
-    pub(crate) node_prefix: u8,
     #[serde(default)]
     pub(crate) nodes: BTreeMap<String, NodeInput>,
     #[serde(default)]
@@ -206,14 +201,6 @@ pub(crate) struct ClusterInput {
     pub(crate) ports: PortsInput,
     #[serde(default)]
     pub(crate) join_secret: Option<String>,
-}
-
-const fn default_node_limit() -> u32 {
-    254
-}
-
-const fn default_node_prefix() -> u8 {
-    24
 }
 
 #[derive(Debug, Deserialize)]

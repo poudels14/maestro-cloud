@@ -12,7 +12,7 @@ The gateway service:
 - uses a digest-pinned Tailscale image;
 - best-effort spreads replica-managed state across workload-capable nodes,
   including rebalancing co-located replicas after a node joins or returns;
-- advertises only routes inside the cluster CIDR; and
+- advertises only routes contained by explicit workload-node subnets; and
 - is created, updated, or removed with its scoped firewall policy under the
   active controller leadership fence.
 
@@ -23,8 +23,8 @@ east-west traffic continue independently.
 ## Prepare the tailnet
 
 Define the gateway tag before generating a tagged key. The following HuJSON
-fragment lets tagged gateways auto-approve one cluster pool and grants a
-specific operator group access to that pool:
+fragment lets tagged gateways auto-approve the explicit node subnets and
+grants a specific operator group access to them:
 
 ```json
 {
@@ -39,7 +39,8 @@ specific operator group access to that pool:
   },
   "autoApprovers": {
     "routes": {
-      "172.22.0.0/16": ["tag:maestro-gateway"],
+      "172.22.1.0/24": ["tag:maestro-gateway"],
+      "172.22.2.0/24": ["tag:maestro-gateway"],
     },
   },
   "grants": [
@@ -50,20 +51,20 @@ specific operator group access to that pool:
     },
     {
       "src": ["group:maestro-operators"],
-      "dst": ["172.22.0.0/16"],
+      "dst": ["172.22.1.0/24", "172.22.2.0/24"],
       "ip": ["*"],
     },
   ],
 }
 ```
 
-Use the cluster's exact CIDR instead of the example. Tailnet access policy is
-evaluated against the actual destination: direct API and panel access through
-Tailscale Serve requires TCP 80 access to the gateway tag, while routed
-workload and DNS traffic requires access to the advertised cluster CIDR. The
-direct grant also makes the gateway identities visible in allowed Tailscale
-clients. Grant only the source identities and destination ports that operators
-need. Tailscale recommends grants for new network access rules.
+Use the cluster's exact workload subnets instead of the examples. Tailnet
+access policy is evaluated against the actual destination: direct API and panel
+access through Tailscale Serve requires TCP 80 access to the gateway tag, while
+routed workload and DNS traffic requires access to the advertised node
+subnets. The direct grant also makes the gateway identities visible in allowed
+Tailscale clients. Grant only the source identities and destination ports that
+operators need. Tailscale recommends grants for new network access rules.
 
 If you omit `autoApprovers`, approve the advertised routes for every active
 gateway in the Tailscale admin console. Adding an auto-approver later does not
@@ -97,7 +98,6 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
   "jwt-secret-key": "<at-least-32-bytes>",
   "cluster": {
     "name": "prod",
-    "cluster-cidr": "172.22.0.0/16",
     // nodes, ports, allowlists, and join-secret omitted
   },
   "tailscale": {
@@ -122,16 +122,17 @@ documents and is never returned by the cluster config API.
 
 The defaults are:
 
-- `advertise-routes: null`, which advertises the complete cluster CIDR;
+- `advertise-routes: null`, which advertises every workload-node subnet;
 - `replicas: 2`; and
 - `tags: ["tag:maestro-gateway"]`; and
 - `cross-cluster-dns: []`, which disables remote suffix forwarding.
 
-Every explicit advertised route must be unique, canonical, contained by the
-cluster CIDR, and include at least one workload bridge resolver. Replica count
-cannot exceed the number of workload-capable nodes. Set `replicas` to `1` for a
-single-node cluster. Set `tags` to `[]` when the auth key is intentionally
-untagged; tagged gateways remain the recommended production configuration.
+Every explicit advertised route must be unique, canonical, contained by an
+explicit workload-node subnet, and the route set must include at least one
+workload bridge resolver. Replica count cannot exceed the number of
+workload-capable nodes. Set `replicas` to `1` for a single-node cluster. Set
+`tags` to `[]` when the auth key is intentionally untagged; tagged gateways
+remain the recommended production configuration.
 
 Validate the merged config before bootstrap:
 
@@ -248,8 +249,8 @@ gateway's SOCKS5 listener. It still refuses every undeclared suffix and never
 performs general recursion.
 
 Use resolver addresses returned by `maestro cluster config` on the remote
-cluster. They must be private addresses outside the local cluster CIDR. Add at
-least two addresses when the remote cluster has multiple workload nodes.
+cluster. They must be private addresses outside every local workload subnet.
+Add at least two addresses when the remote cluster has multiple workload nodes.
 Tailscale gateways accept remote subnet routes automatically; the routes must
 also be approved in the tailnet policy.
 

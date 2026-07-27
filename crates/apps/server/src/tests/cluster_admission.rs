@@ -264,9 +264,6 @@ fn cluster_config() -> Result<(ClusterConfig, NodeId), Box<dyn std::error::Error
         ClusterConfig {
             cluster_id: ClusterId::new("server-test")?,
             name: "server-test".to_string(),
-            cluster_cidr: "172.22.0.0/16".parse()?,
-            node_limit: 254,
-            node_prefix: 24,
             nodes,
             control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
             ports: ClusterPorts::new(3_001, 2_379, 2_380, 51_820)?,

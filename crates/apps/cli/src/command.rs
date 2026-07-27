@@ -158,12 +158,11 @@ pub async fn run(
                 let jwt_secret_key = match jwt_secret_key {
                     Some(secret) => SecretValue::new(secret),
                     None => {
-                        config::load_cluster(
+                        config::load_jwt_secret_key(
                             &config,
                             &crate::config_source::SystemConfigSourceReader,
                         )
                         .await?
-                        .jwt_secret_key
                     }
                 };
                 let token = mint_token(&jwt_secret_key, expires_in, access_level, &subject)?;

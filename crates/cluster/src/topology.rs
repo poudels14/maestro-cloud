@@ -46,12 +46,6 @@ pub struct ClusterConfig {
     pub cluster_id: ClusterId,
     /// Lowercase DNS label used in certificates and discovery.
     pub name: String,
-    /// Private address pool containing the tunnel region and every workload subnet.
-    pub cluster_cidr: Ipv4Cidr,
-    /// Maximum stable node indexes supported by this fixed address pool.
-    pub node_limit: u32,
-    /// Prefix allocated to each node's workload network.
-    pub node_prefix: u8,
     /// Desired members keyed by stable node identity.
     pub nodes: BTreeMap<NodeId, NodeDefinition>,
     /// Optional private networks allowed to initiate control traffic.
@@ -99,32 +93,6 @@ pub enum ClusterPreflightError {
         /// Rejected value.
         value: String,
     },
-    /// The fixed address pool must remain within RFC 1918 space.
-    #[error("cluster CIDR `{network}` must be private IPv4 space")]
-    InvalidClusterCidr { network: Ipv4Cidr },
-    /// At least one node index must be allocatable.
-    #[error("node limit must be greater than zero")]
-    ZeroNodeLimit,
-    /// Per-node networks cannot be wider than the cluster or narrower than `/24`.
-    #[error(
-        "node prefix /{node_prefix} must be narrower than cluster CIDR `{cluster_cidr}` and no narrower than /24"
-    )]
-    InvalidNodePrefix {
-        node_prefix: u8,
-        cluster_cidr: Ipv4Cidr,
-    },
-    /// The fixed address pool must fit its tunnel reservation and node allocations.
-    #[error(
-        "cluster CIDR `{network}` cannot fit node limit {node_limit} with /{node_prefix} workload networks"
-    )]
-    InsufficientClusterCapacity {
-        network: Ipv4Cidr,
-        node_limit: u32,
-        node_prefix: u8,
-    },
-    /// Static topology cannot declare more members than the fixed address pool supports.
-    #[error("cluster declares {count} nodes but node limit is {limit}")]
-    NodeLimitExceeded { count: usize, limit: u32 },
     /// Node identifiers have a narrower topology constraint than resource IDs.
     #[error("node ID `{node_id}` must be a lowercase DNS label")]
     InvalidNodeName { node_id: NodeId },
@@ -154,29 +122,9 @@ pub enum ClusterPreflightError {
     /// An API endpoint must unambiguously identify one node.
     #[error("endpoint `{address}:{port}` is assigned to more than one node")]
     DuplicateEndpoint { address: Ipv4Addr, port: u16 },
-    /// Node workload allocations use the init-fixed prefix for deterministic IPAM.
-    #[error(
-        "node `{node_id}` workload network `{network}` must be a private IPv4 /{expected_prefix}"
-    )]
-    InvalidWorkloadSubnet {
-        node_id: NodeId,
-        network: Ipv4Cidr,
-        expected_prefix: u8,
-    },
-    /// Explicit workload pins must stay inside the fixed cluster address pool.
-    #[error(
-        "node `{node_id}` workload network `{network}` is outside cluster CIDR `{cluster_cidr}`"
-    )]
-    WorkloadSubnetOutsideCluster {
-        node_id: NodeId,
-        network: Ipv4Cidr,
-        cluster_cidr: Ipv4Cidr,
-    },
-    /// The low address region is reserved for stable WireGuard tunnel identities.
-    #[error(
-        "node `{node_id}` workload network `{network}` overlaps the cluster tunnel reservation"
-    )]
-    WorkloadSubnetInsideTunnelRegion { node_id: NodeId, network: Ipv4Cidr },
+    /// Node workload allocations use a fixed prefix for predictable bridge addressing.
+    #[error("node `{node_id}` workload network `{network}` must be a private IPv4 /24")]
+    InvalidWorkloadSubnet { node_id: NodeId, network: Ipv4Cidr },
     /// Per-node workload address spaces cannot collide.
     #[error("workload networks for nodes `{first}` and `{second}` overlap")]
     OverlappingWorkloadSubnets { first: NodeId, second: NodeId },
@@ -189,23 +137,12 @@ pub enum ClusterPreflightError {
         endpoint_node: NodeId,
         address: Ipv4Addr,
     },
-    /// Host endpoints must remain outside the entire future workload address pool.
-    #[error("node `{node_id}` endpoint `{address}` is inside cluster CIDR `{network}`")]
-    EndpointInsideClusterCidr {
-        node_id: NodeId,
-        address: Ipv4Addr,
-        network: Ipv4Cidr,
-    },
     /// Control allowlists are restricted to private address space.
     #[error("control network {index} `{network}` must be private IPv4 space")]
     NonPrivateControlNetwork { index: usize, network: Ipv4Cidr },
-    /// Control and workload traffic use disjoint fixed address spaces.
-    #[error("control network {index} `{network}` overlaps cluster CIDR `{cluster_cidr}`")]
-    ControlNetworkOverlapsCluster {
-        index: usize,
-        network: Ipv4Cidr,
-        cluster_cidr: Ipv4Cidr,
-    },
+    /// Control and workload traffic use disjoint address spaces.
+    #[error("control network {index} overlaps the workload network for node `{node_id}`")]
+    ControlNetworkOverlapsWorkload { index: usize, node_id: NodeId },
     /// A non-empty allowlist must admit all declared members.
     #[error("node `{node_id}` endpoint `{address}` is absent from the control allowlist")]
     EndpointOutsideControlNetworks { node_id: NodeId, address: Ipv4Addr },

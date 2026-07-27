@@ -1712,10 +1712,6 @@ expression: openapi_document()
             ],
             "description": "Optional Cloudflare Tunnel settings with the connector token omitted."
           },
-          "clusterCidr": {
-            "description": "Fixed private address pool for tunnels and workload networks.",
-            "type": "string"
-          },
           "clusterId": {
             "allOf": [
               {
@@ -1742,19 +1738,6 @@ expression: openapi_document()
           "name": {
             "description": "Human-readable DNS-safe cluster name.",
             "type": "string"
-          },
-          "nodeLimit": {
-            "description": "Maximum stable node indexes supported by the address pool.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "nodePrefix": {
-            "description": "Prefix allocated to each node workload network.",
-            "format": "uint8",
-            "maximum": 255,
-            "minimum": 0,
-            "type": "integer"
           },
           "nodes": {
             "description": "Declared cluster members in stable node-ID order.",
@@ -1789,9 +1772,6 @@ expression: openapi_document()
         "required": [
           "clusterId",
           "name",
-          "clusterCidr",
-          "nodeLimit",
-          "nodePrefix",
           "localNodeId",
           "nodes",
           "controlAllowCidrs",

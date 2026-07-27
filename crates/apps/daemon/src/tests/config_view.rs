@@ -18,9 +18,6 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
     let cluster = ClusterConfig {
         cluster_id: ClusterId::new("config-view-test")?,
         name: "config-view-test".to_string(),
-        cluster_cidr: "172.22.0.0/16".parse()?,
-        node_limit: 254,
-        node_prefix: 24,
         nodes: BTreeMap::from([(
             node_id.clone(),
             NodeDefinition {
@@ -57,7 +54,7 @@ fn operator_view_cannot_serialize_the_join_secret() -> Result<(), Box<dyn std::e
     assert!(!encoded.contains(tailscale_secret));
     assert!(!encoded.contains(cloudflare_secret));
     assert!(encoded.contains("node-a.internal"));
-    assert!(encoded.contains("\"advertiseRoutes\":[\"172.22.0.0/16\"]"));
+    assert!(encoded.contains("\"advertiseRoutes\":[\"172.22.1.0/24\"]"));
     assert!(encoded.contains("\"dnsNameservers\":[\"172.22.1.1\"]"));
     assert!(encoded.contains(
         "\"crossClusterDns\":[{\"clusterId\":\"remote\",\"nameservers\":[\"172.23.1.1\"]}]"

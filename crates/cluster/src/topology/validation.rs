@@ -12,16 +12,9 @@ impl ClusterConfig {
         validate_dns_label("cluster name", &self.name)?;
         self.ports.validate()?;
         validate_join_secret(&self.join_secret)?;
-        let address_pool = validate_address_pool(self)?;
 
         if self.nodes.is_empty() {
             return Err(ClusterPreflightError::NoNodes);
-        }
-        if self.nodes.len() > self.node_limit as usize {
-            return Err(ClusterPreflightError::NodeLimitExceeded {
-                count: self.nodes.len(),
-                limit: self.node_limit,
-            });
         }
 
         let mut master = None;
@@ -53,13 +46,7 @@ impl ClusterConfig {
                 });
             }
 
-            validate_workload_subnet(
-                node_id,
-                node.workload_subnet,
-                self.node_prefix,
-                self.cluster_cidr,
-                address_pool.container_start,
-            )?;
+            validate_workload_subnet(node_id, node.workload_subnet)?;
             if let Some((other_node, _)) = subnets
                 .iter()
                 .find(|(_, subnet)| subnet.overlaps(node.workload_subnet))
@@ -90,17 +77,7 @@ impl ClusterConfig {
                 }
             }
         }
-        for (node_id, node) in &self.nodes {
-            if self.cluster_cidr.contains(node.endpoint.host_address) {
-                return Err(ClusterPreflightError::EndpointInsideClusterCidr {
-                    node_id: node_id.clone(),
-                    address: node.endpoint.host_address,
-                    network: self.cluster_cidr,
-                });
-            }
-        }
-
-        self.validate_control_allowlist()?;
+        self.validate_control_allowlist(&subnets)?;
         if let Some(tailscale) = &self.tailscale {
             let workload_subnets = self
                 .nodes
@@ -108,7 +85,7 @@ impl ClusterConfig {
                 .filter(|node| node.role.runs_workloads())
                 .map(|node| node.workload_subnet)
                 .collect::<Vec<_>>();
-            tailscale.validate(&self.cluster_id, self.cluster_cidr, &workload_subnets)?;
+            tailscale.validate(&self.cluster_id, &workload_subnets)?;
         }
         if let Some(cloudflare) = &self.cloudflare {
             cloudflare.validate()?;
@@ -121,7 +98,10 @@ impl ClusterConfig {
         })
     }
 
-    fn validate_control_allowlist(&self) -> Result<(), ClusterPreflightError> {
+    fn validate_control_allowlist(
+        &self,
+        subnets: &[(&NodeId, Ipv4Cidr)],
+    ) -> Result<(), ClusterPreflightError> {
         for (index, control) in self.control_allow_cidrs.iter().copied().enumerate() {
             if !control.is_private() {
                 return Err(ClusterPreflightError::NonPrivateControlNetwork {
@@ -129,11 +109,11 @@ impl ClusterConfig {
                     network: control,
                 });
             }
-            if self.cluster_cidr.overlaps(control) {
-                return Err(ClusterPreflightError::ControlNetworkOverlapsCluster {
+            if let Some((node_id, _)) = subnets.iter().find(|(_, subnet)| subnet.overlaps(control))
+            {
+                return Err(ClusterPreflightError::ControlNetworkOverlapsWorkload {
                     index,
-                    network: control,
-                    cluster_cidr: self.cluster_cidr,
+                    node_id: (*node_id).clone(),
                 });
             }
         }
@@ -187,73 +167,14 @@ fn validate_endpoint(
 fn validate_workload_subnet(
     node_id: &NodeId,
     network: Ipv4Cidr,
-    expected_prefix: u8,
-    cluster_cidr: Ipv4Cidr,
-    container_start: u64,
 ) -> Result<(), ClusterPreflightError> {
-    if network.prefix() != expected_prefix || !network.is_private() {
+    if network.prefix() != 24 || !network.is_private() {
         return Err(ClusterPreflightError::InvalidWorkloadSubnet {
-            node_id: node_id.clone(),
-            network,
-            expected_prefix,
-        });
-    }
-    if !cluster_cidr.contains_network(network) {
-        return Err(ClusterPreflightError::WorkloadSubnetOutsideCluster {
-            node_id: node_id.clone(),
-            network,
-            cluster_cidr,
-        });
-    }
-    if u64::from(u32::from(network.network_address())) < container_start {
-        return Err(ClusterPreflightError::WorkloadSubnetInsideTunnelRegion {
             node_id: node_id.clone(),
             network,
         });
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AddressPool {
-    container_start: u64,
-}
-
-fn validate_address_pool(config: &ClusterConfig) -> Result<AddressPool, ClusterPreflightError> {
-    if !config.cluster_cidr.is_private() {
-        return Err(ClusterPreflightError::InvalidClusterCidr {
-            network: config.cluster_cidr,
-        });
-    }
-    if config.node_limit == 0 {
-        return Err(ClusterPreflightError::ZeroNodeLimit);
-    }
-    if config.node_prefix <= config.cluster_cidr.prefix() || config.node_prefix > 24 {
-        return Err(ClusterPreflightError::InvalidNodePrefix {
-            node_prefix: config.node_prefix,
-            cluster_cidr: config.cluster_cidr,
-        });
-    }
-
-    let subnet_size = 1_u64 << (32 - config.node_prefix);
-    let tunnel_blocks = u64::from(config.node_limit).div_ceil(254);
-    let tunnel_size = tunnel_blocks.saturating_mul(256);
-    let container_offset = tunnel_size
-        .div_ceil(subnet_size)
-        .saturating_mul(subnet_size);
-    let required =
-        container_offset.saturating_add(u64::from(config.node_limit).saturating_mul(subnet_size));
-    if required > config.cluster_cidr.address_count() {
-        return Err(ClusterPreflightError::InsufficientClusterCapacity {
-            network: config.cluster_cidr,
-            node_limit: config.node_limit,
-            node_prefix: config.node_prefix,
-        });
-    }
-    Ok(AddressPool {
-        container_start: u64::from(u32::from(config.cluster_cidr.network_address()))
-            + container_offset,
-    })
 }
 
 fn validate_hostname(node_id: &NodeId, hostname: &str) -> Result<(), ClusterPreflightError> {

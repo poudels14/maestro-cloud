@@ -4,11 +4,34 @@ use std::net::Ipv4Addr;
 use kernel_api::ClusterId;
 
 use crate::CliError;
-use crate::config::{ConfigKind, init, load_cluster, validate};
+use crate::config::{ConfigKind, init, load_cluster, load_jwt_secret_key, validate};
 use crate::config_source::{ConfigSourceReader, SystemConfigSourceReader};
 
 struct MemoryReader {
     sources: BTreeMap<String, String>,
+}
+
+#[tokio::test]
+async fn token_secret_loading_does_not_require_a_cluster_document()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "aws-secret://maestro/test/config";
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(
+            source.to_owned(),
+            r#"{
+                "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
+                "legacy-cluster-shape": true
+            }"#
+            .to_owned(),
+        )]),
+    };
+
+    let secret = load_jwt_secret_key(source, &reader).await?;
+    assert_eq!(
+        secret.expose(),
+        "operator-test-secret-with-at-least-32-characters"
+    );
+    Ok(())
 }
 
 impl ConfigSourceReader for MemoryReader {
@@ -212,7 +235,7 @@ async fn validate_rejects_a_service_without_the_services_envelope()
 }
 
 #[tokio::test]
-async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_route()
+async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_workload_routes()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.jsonc";
     let document = cluster_document("172.22.1.0/24").replace(
@@ -246,8 +269,16 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_cluster_rout
         "tskey-auth-reusable-test-secret"
     );
     assert_eq!(
-        tailscale.advertised_routes(loaded.cluster.cluster_cidr),
-        ["172.22.0.0/16".parse()?]
+        tailscale.advertised_routes(
+            &loaded
+                .cluster
+                .nodes
+                .values()
+                .filter(|node| node.role.runs_workloads())
+                .map(|node| node.workload_subnet)
+                .collect::<Vec<_>>()
+        ),
+        ["172.22.1.0/24".parse()?]
     );
     assert_eq!(tailscale.tags, ["tag:maestro-gateway"]);
     let route = tailscale
@@ -484,9 +515,7 @@ async fn production_launch_policy_rejects_invalid_settings_before_writing_launch
 async fn cluster_config_rejects_removed_camel_case_aliases()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.jsonc";
-    let document = cluster_document("172.22.1.0/24")
-        .replace("\"cluster-cidr\"", "clusterCidr")
-        .replace("\"join-secret\"", "joinSecret");
+    let document = cluster_document("172.22.1.0/24").replace("\"join-secret\"", "joinSecret");
     let reader = MemoryReader {
         sources: BTreeMap::from([(source.to_owned(), document)]),
     };
@@ -494,7 +523,11 @@ async fn cluster_config_rejects_removed_camel_case_aliases()
     let error = load_cluster(source, &reader)
         .await
         .expect_err("camelCase cluster aliases must be rejected");
-    assert!(error.to_string().contains("missing field `cluster-cidr`"));
+    assert!(
+        error
+            .to_string()
+            .contains("cluster.join-secret: is required")
+    );
     Ok(())
 }
 
@@ -536,7 +569,6 @@ fn cluster_document(subnet: &str) -> String {
             "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
             cluster: {{
                 name: "test-cluster",
-                "cluster-cidr": "172.22.0.0/16",
                 nodes: {{
                     "node-1": {{
                         endpoint: "10.20.0.11",

@@ -142,6 +142,19 @@ pub(crate) async fn load_cluster(
     decode_cluster(source, load_merged(source, reader).await?, reader).await
 }
 
+pub(crate) async fn load_jwt_secret_key(
+    source: &str,
+    reader: &impl ConfigSourceReader,
+) -> Result<kernel_api::SecretValue, CliError> {
+    let value = load_merged(source, reader).await?;
+    let secret = value
+        .get("jwt-secret-key")
+        .ok_or_else(|| CliError::invalid_input("jwt-secret-key is required"))?
+        .as_str()
+        .ok_or_else(|| CliError::invalid_input("jwt-secret-key must be a string"))?;
+    crate::cluster_config::convert_jwt_secret_key(secret.to_owned())
+}
+
 fn write_ignored(fields: &[String], output: &mut dyn Write) -> Result<(), CliError> {
     if fields.is_empty() {
         writeln!(output, "[maestro]: ignored fields: none").map_err(output_error)?;
@@ -179,7 +192,6 @@ const CLUSTER_TEMPLATE: &str = r#"{
   "jwt-secret-key": "__JWT_SECRET_KEY__",
   "cluster": {
     "name": "my-cluster",
-    "cluster-cidr": "10.42.0.0/16",
     "nodes": {
       "node-1": {
         "hostname": "node-1.internal",

@@ -105,8 +105,14 @@ impl TailscaleSystemResources {
             return Ok(None);
         };
         let service_id = ServiceId::new(GATEWAY_SERVICE_ID)?;
+        let workload_subnets = cluster
+            .nodes
+            .values()
+            .filter(|node| node.role.runs_workloads())
+            .map(|node| node.workload_subnet)
+            .collect::<Vec<_>>();
         let routes = config
-            .advertised_routes(cluster.cluster_cidr)
+            .advertised_routes(&workload_subnets)
             .into_iter()
             .map(|route| route.to_string())
             .collect::<Vec<_>>();
@@ -230,12 +236,15 @@ impl TailscaleSystemResources {
             spec: FirewallPolicySpec {
                 direction: FirewallDirection::Egress,
                 subject: FirewallSubject::Service(service_id),
-                rules: vec![FirewallRule {
-                    cidr: cluster.cluster_cidr.to_string(),
-                    protocol: TransportProtocol::Any,
-                    ports: Vec::new(),
-                    verdict: FirewallVerdict::Allow,
-                }],
+                rules: routes
+                    .iter()
+                    .map(|route| FirewallRule {
+                        cidr: route.clone(),
+                        protocol: TransportProtocol::Any,
+                        ports: Vec::new(),
+                        verdict: FirewallVerdict::Allow,
+                    })
+                    .collect(),
                 // Tailscale coordination, DERP, STUN, and direct peers use a
                 // changing public endpoint set, so the remaining egress stays open.
                 default_verdict: FirewallVerdict::Allow,

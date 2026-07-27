@@ -185,9 +185,6 @@ fn config(
     Ok(MaskedClusterConfig {
         cluster_id,
         name: "server-test".to_owned(),
-        cluster_cidr: "10.42.0.0/16".to_owned(),
-        node_limit: 254,
-        node_prefix: 24,
         local_node_id: NodeId::new("node-1")?,
         nodes: vec![MaskedClusterConfigNode {
             node_id: NodeId::new("node-1")?,

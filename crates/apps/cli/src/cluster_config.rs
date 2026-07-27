@@ -50,7 +50,7 @@ pub(crate) async fn decode_cluster(
     })
 }
 
-fn convert_jwt_secret_key(value: String) -> Result<SecretValue, CliError> {
+pub(crate) fn convert_jwt_secret_key(value: String) -> Result<SecretValue, CliError> {
     let value = required("jwt-secret-key", value)?;
     if value.len() < 32 || value.contains('\0') {
         return Err(invalid(
@@ -70,10 +70,6 @@ fn convert_cluster(
     let cluster_id = input.cluster_id.unwrap_or_else(|| name.clone());
     let cluster_id = ClusterId::new(cluster_id)
         .map_err(|error| invalid("cluster.cluster-id", error.to_string()))?;
-    let cluster_cidr = input
-        .cluster_cidr
-        .parse::<Ipv4Cidr>()
-        .map_err(|error| invalid("cluster.cluster-cidr", error.to_string()))?;
     let nodes = input
         .nodes
         .into_iter()
@@ -107,9 +103,6 @@ fn convert_cluster(
     Ok(ClusterConfig {
         cluster_id,
         name,
-        cluster_cidr,
-        node_limit: input.node_limit,
-        node_prefix: input.node_prefix,
         nodes,
         control_allow_cidrs,
         ports,
@@ -285,14 +278,6 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
     let detail = error.to_string();
     let path = match &error {
         ClusterPreflightError::InvalidDnsLabel { .. } => "cluster.name".to_string(),
-        ClusterPreflightError::InvalidClusterCidr { .. }
-        | ClusterPreflightError::InsufficientClusterCapacity { .. } => {
-            "cluster.cluster-cidr".to_string()
-        }
-        ClusterPreflightError::ZeroNodeLimit | ClusterPreflightError::NodeLimitExceeded { .. } => {
-            "cluster.node-limit".to_string()
-        }
-        ClusterPreflightError::InvalidNodePrefix { .. } => "cluster.node-prefix".to_string(),
         ClusterPreflightError::InvalidNodeName { node_id } => {
             format!("cluster.nodes.{node_id}")
         }
@@ -305,19 +290,16 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
         | ClusterPreflightError::InvalidControlPlaneCount { .. }
         | ClusterPreflightError::DuplicateEndpoint { .. }
         | ClusterPreflightError::OverlappingWorkloadSubnets { .. }
-        | ClusterPreflightError::EndpointInsideWorkloadSubnet { .. }
-        | ClusterPreflightError::EndpointInsideClusterCidr { .. } => "cluster.nodes".to_string(),
+        | ClusterPreflightError::EndpointInsideWorkloadSubnet { .. } => "cluster.nodes".to_string(),
         ClusterPreflightError::InvalidEndpointAddress { node_id, .. }
         | ClusterPreflightError::ZeroApiPort { node_id } => {
             format!("cluster.nodes.{node_id}.endpoint")
         }
-        ClusterPreflightError::InvalidWorkloadSubnet { node_id, .. }
-        | ClusterPreflightError::WorkloadSubnetOutsideCluster { node_id, .. }
-        | ClusterPreflightError::WorkloadSubnetInsideTunnelRegion { node_id, .. } => {
+        ClusterPreflightError::InvalidWorkloadSubnet { node_id, .. } => {
             format!("cluster.nodes.{node_id}.subnet")
         }
         ClusterPreflightError::NonPrivateControlNetwork { index, .. }
-        | ClusterPreflightError::ControlNetworkOverlapsCluster { index, .. } => {
+        | ClusterPreflightError::ControlNetworkOverlapsWorkload { index, .. } => {
             format!("cluster.control-allow-cidrs[{index}]")
         }
         ClusterPreflightError::EndpointOutsideControlNetworks { .. } => {
@@ -337,7 +319,7 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
             | TailscaleConfigError::NoReachableDnsResolver => {
                 "tailscale.advertise-routes".to_string()
             }
-            TailscaleConfigError::RouteOutsideCluster { index, .. }
+            TailscaleConfigError::RouteOutsideWorkloadSubnets { index, .. }
             | TailscaleConfigError::DuplicateRoute { index, .. } => {
                 format!("tailscale.advertise-routes[{index}]")
             }

@@ -97,9 +97,6 @@ impl DaemonLaunchDocument {
         let cluster = ClusterConfig {
             cluster_id: payload.cluster_id,
             name: payload.cluster_name,
-            cluster_cidr: payload.cluster_cidr,
-            node_limit: payload.node_limit,
-            node_prefix: payload.node_prefix,
             nodes: payload.nodes,
             control_allow_cidrs: payload.control_allow_cidrs,
             ports: payload.ports,

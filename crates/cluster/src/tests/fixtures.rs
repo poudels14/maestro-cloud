@@ -50,9 +50,6 @@ pub(crate) fn valid_config() -> Result<ClusterConfig, Box<dyn std::error::Error>
     Ok(ClusterConfig {
         cluster_id: ClusterId::new("test-cluster")?,
         name: "test-cluster".to_owned(),
-        cluster_cidr: "172.22.0.0/16".parse()?,
-        node_limit: 254,
-        node_prefix: 24,
         nodes,
         control_allow_cidrs: vec!["10.20.0.0/24".parse()?],
         ports: ClusterPorts::new(3_001, 23_79, 23_80, DEFAULT_WIREGUARD_PORT)?,
