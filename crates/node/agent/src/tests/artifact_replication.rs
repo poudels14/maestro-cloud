@@ -109,6 +109,93 @@ async fn replication_imports_from_a_live_holder_and_publishes_the_copy()
     Ok(())
 }
 
+#[tokio::test]
+async fn malformed_retention_snapshot_preserves_artifacts_until_repaired()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(TokioClock::new());
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let cluster_id = ClusterId::new("replication-malformed")?;
+    let node_id = NodeId::new("node-target")?;
+    let session = store.session(Duration::from_secs(30)).await?;
+    let deployment_key = Keyspace::new(&cluster_id).resource(
+        &ResourceKind::new("Deployment")?,
+        &ResourceName::new("deployment-1")?,
+    );
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: deployment_key.clone(),
+                value: b"not-json".to_vec(),
+                expected: ExpectedVersion::Missing,
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    put_resource(
+        &store,
+        &cluster_id,
+        "Node",
+        node_id.as_str(),
+        &node(node_id.clone())?,
+    )
+    .await?;
+    put_liveness(&store, &cluster_id, &node_id, session.id()).await?;
+    let retained = ArtifactDigest::new("sha256:retained")?;
+    let stale = ArtifactDigest::new("sha256:stale")?;
+    let artifacts = Arc::new(TestArtifacts::default());
+    lock(&artifacts.local).extend([retained.clone(), stale.clone()]);
+    let agent = ArtifactReplicationAgent::new(
+        store.clone(),
+        artifacts.clone(),
+        Arc::new(TestPeers),
+        ArtifactHolderRegistry::new(store.clone(), &cluster_id, node_id.clone(), session.id()),
+        ArtifactReplicationSettings {
+            cluster_id: cluster_id.clone(),
+            node_id,
+            resync_interval: Duration::from_secs(30),
+        },
+        clock,
+        Arc::new(FixedStatusClock),
+    )?;
+
+    let rejected = agent.reconcile_once().await?;
+    assert!(rejected.snapshot_rejected);
+    assert_eq!(rejected.malformed_resources, 1);
+    assert_eq!(rejected.pruned, 0);
+    assert!(lock(&artifacts.prune_policies).is_empty());
+    assert!(artifacts.contains(&retained).await?);
+    assert!(artifacts.contains(&stale).await?);
+
+    let malformed = store
+        .get(&deployment_key)
+        .await?
+        .ok_or("malformed deployment missing")?;
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: deployment_key,
+                value: serde_json::to_vec(&deployment(
+                    "deployment-1",
+                    1,
+                    DeploymentPhase::Ready,
+                    Some(retained.as_str()),
+                )?)?,
+                expected: ExpectedVersion::Exact(malformed.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let recovered = agent.reconcile_once().await?;
+    assert!(!recovered.snapshot_rejected);
+    assert_eq!(recovered.malformed_resources, 0);
+    assert_eq!(recovered.pruned, 1);
+    assert!(artifacts.contains(&retained).await?);
+    assert!(!artifacts.contains(&stale).await?);
+    Ok(())
+}
+
 #[test]
 fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dyn std::error::Error>>
 {

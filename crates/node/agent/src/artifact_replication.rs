@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kernel_api::{ClusterId, ConditionState, Deployment, Node, NodeId, ResourceKind};
-use kernel_store::{Clock, Keyspace, Store, StoreError};
+use kernel_api::{ClusterId, ConditionState, Deployment, Node, NodeId, ResourceKind, ResourceName};
+use kernel_store::{Clock, Keyspace, Store, StoreError, StoredValue};
 use runtime::{
     ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy, ArtifactStore, ArtifactStoreError,
 };
@@ -151,22 +151,39 @@ impl ArtifactReplicationAgent {
     pub async fn reconcile_once(
         &self,
     ) -> Result<ArtifactReplicationReport, ArtifactReplicationError> {
-        let deployments = self
+        let deployment_snapshot = self
             .store
             .list(&self.keyspace.resource_kind(&self.deployment_kind))
-            .await?
-            .values
-            .iter()
-            .map(decode_resource::<Deployment>)
-            .collect::<Result<Vec<_>, _>>()?;
-        let nodes = self
+            .await?;
+        let node_snapshot = self
             .store
             .list(&self.keyspace.resource_kind(&self.node_kind))
-            .await?
-            .values
-            .iter()
-            .map(decode_resource::<Node>)
-            .collect::<Result<Vec<_>, _>>()?;
+            .await?;
+        let (deployments, malformed_deployments) = decode_resources(
+            &deployment_snapshot.values,
+            &self.keyspace,
+            &self.deployment_kind,
+            &self.settings.node_id,
+            |deployment: &Deployment| deployment.meta.id.as_str(),
+        );
+        let (nodes, malformed_nodes) = decode_resources(
+            &node_snapshot.values,
+            &self.keyspace,
+            &self.node_kind,
+            &self.settings.node_id,
+            |node: &Node| node.meta.id.as_str(),
+        );
+        let malformed_resources = malformed_deployments.saturating_add(malformed_nodes);
+        if malformed_resources > 0 {
+            return Ok(self.reject_snapshot(
+                ArtifactReplicationReport::default(),
+                malformed_resources,
+                format!(
+                    "{malformed_resources} malformed deployment or node resources preserved \
+                     existing artifacts"
+                ),
+            ));
+        }
         let live_keys = self
             .store
             .list(&self.keyspace.node_liveness_records())
@@ -196,14 +213,39 @@ impl ArtifactReplicationAgent {
             })
             .map(|node| node.meta.id.clone())
             .collect::<BTreeSet<_>>();
-        let retained = retained_digests(&deployments)?;
-        let preserved = preserved_digests(&deployments)?;
+        let retained = match retained_digests(&deployments) {
+            Ok(retained) => retained,
+            Err(error) => {
+                return Ok(self.reject_snapshot(
+                    ArtifactReplicationReport::default(),
+                    0,
+                    error.to_string(),
+                ));
+            }
+        };
+        let preserved = match preserved_digests(&deployments) {
+            Ok(preserved) => preserved,
+            Err(error) => {
+                return Ok(self.reject_snapshot(
+                    ArtifactReplicationReport::default(),
+                    0,
+                    error.to_string(),
+                ));
+            }
+        };
         let mut report = ArtifactReplicationReport {
             retained: retained.len(),
             eligible_nodes: eligible.len(),
             ..ArtifactReplicationReport::default()
         };
-        for holder in self.holders.local_holders().await? {
+        let local_holders = match self.holders.local_holders().await {
+            Ok(holders) => holders,
+            Err(error) if error.is_malformed_store_data() => {
+                return Ok(self.reject_snapshot(report, 1, error.to_string()));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        for holder in local_holders {
             let present = self.artifacts.contains(&holder.digest).await;
             if !retained.contains(&holder.digest) || matches!(present, Ok(false)) {
                 self.holders.remove(&holder.digest).await?;
@@ -250,23 +292,36 @@ impl ArtifactReplicationAgent {
         } else {
             PeerCopyPolicy::LocalCopySufficient
         };
-        let readiness = ArtifactDrainReadiness::inspect(
+        let readiness = match ArtifactDrainReadiness::inspect(
             &retained,
             &self.holders,
             &self.settings.node_id,
             peer_copy_policy,
         )
-        .await?;
+        .await
+        {
+            Ok(readiness) => readiness,
+            Err(error) if error.is_malformed_store_data() => {
+                return Ok(self.reject_snapshot(report, 1, error.to_string()));
+            }
+            Err(error) => return Err(error),
+        };
         report.drain_ready = readiness.ready();
         report.missing_peer_copies = readiness.missing_peer_copies();
-        update_artifact_drain_status(
+        if let Err(error) = update_artifact_drain_status(
             self.store.as_ref(),
             &self.keyspace,
             &self.settings.node_id,
             &readiness,
             self.status_clock.now(),
         )
-        .await?;
+        .await
+        {
+            if error.is_malformed_store_data() {
+                return Ok(self.reject_snapshot(report, 1, error.to_string()));
+            }
+            return Err(error);
+        }
         match self
             .artifacts
             .prune(&ArtifactPrunePolicy::Preserve(
@@ -278,6 +333,27 @@ impl ArtifactReplicationAgent {
             Err(error) => report.prune_failure = Some(error.to_string()),
         }
         Ok(report)
+    }
+
+    fn reject_snapshot(
+        &self,
+        mut report: ArtifactReplicationReport,
+        malformed_resources: usize,
+        message: String,
+    ) -> ArtifactReplicationReport {
+        tracing::warn!(
+            kind = "ArtifactReplicationSnapshot",
+            node_id = %self.settings.node_id,
+            malformed_resources,
+            error = %message,
+            "artifact replication snapshot was rejected without pruning local state"
+        );
+        report.malformed_resources = report
+            .malformed_resources
+            .saturating_add(malformed_resources);
+        report.snapshot_rejected = true;
+        report.snapshot_failure = Some(message);
+        report
     }
 
     /// Reconciles immediately and periodically until shutdown.
@@ -326,9 +402,54 @@ fn is_draining(node: &Node) -> bool {
     })
 }
 
-fn decode_resource<Resource>(
-    stored: &kernel_store::StoredValue,
-) -> Result<Resource, ArtifactReplicationError>
+fn decode_resources<Resource>(
+    values: &[StoredValue],
+    keyspace: &Keyspace,
+    kind: &ResourceKind,
+    node_id: &NodeId,
+    resource_id: fn(&Resource) -> &str,
+) -> (Vec<Resource>, usize)
+where
+    Resource: serde::de::DeserializeOwned,
+{
+    let mut decoded = Vec::new();
+    let mut malformed = 0_usize;
+    for stored in values {
+        let resource = match decode_resource(stored) {
+            Ok(resource) => resource,
+            Err(error) => {
+                malformed = malformed.saturating_add(1);
+                warn_malformed(kind, node_id, stored, &error);
+                continue;
+            }
+        };
+        let id = resource_id(&resource);
+        let expected_key = match ResourceName::new(id) {
+            Ok(name) => keyspace.resource(kind, &name),
+            Err(error) => {
+                malformed = malformed.saturating_add(1);
+                warn_malformed(kind, node_id, stored, &error);
+                continue;
+            }
+        };
+        if stored.key != expected_key {
+            malformed = malformed.saturating_add(1);
+            tracing::warn!(
+                kind = %kind,
+                node_id = %node_id,
+                resource_key = %stored.key,
+                resource_id = id,
+                expected_key = %expected_key,
+                "misidentified artifact retention resource was skipped"
+            );
+            continue;
+        }
+        decoded.push(resource);
+    }
+    (decoded, malformed)
+}
+
+fn decode_resource<Resource>(stored: &StoredValue) -> Result<Resource, ArtifactReplicationError>
 where
     Resource: serde::de::DeserializeOwned,
 {
@@ -344,6 +465,21 @@ where
             message: error.to_string(),
         }
     })
+}
+
+fn warn_malformed(
+    kind: &ResourceKind,
+    node_id: &NodeId,
+    stored: &StoredValue,
+    error: &dyn std::fmt::Display,
+) {
+    tracing::warn!(
+        kind = %kind,
+        node_id = %node_id,
+        resource_key = %stored.key,
+        error = %error,
+        "malformed artifact retention resource was skipped"
+    );
 }
 
 /// Result of ensuring one immutable artifact locally.
@@ -367,6 +503,12 @@ pub struct ArtifactReplicationFailure {
 /// Observable result of one replication reconciliation pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArtifactReplicationReport {
+    /// Deployment, node, or holder resources rejected during this pass.
+    pub malformed_resources: usize,
+    /// Whether an incomplete snapshot prevented every destructive cleanup step.
+    pub snapshot_rejected: bool,
+    /// Bounded reason the complete retention snapshot was rejected.
+    pub snapshot_failure: Option<String>,
     /// Registry-free digests selected by retention policy.
     pub retained: usize,
     /// Live, schedulable workload nodes targeted for copies.
@@ -431,4 +573,16 @@ pub enum ArtifactReplicationError {
     /// Bounded compare-and-swap retries could not publish local drain readiness.
     #[error("artifact drain status for Node `{node_id}` remained contended")]
     DrainStatusContention { node_id: NodeId },
+}
+
+impl ArtifactReplicationError {
+    fn is_malformed_store_data(&self) -> bool {
+        matches!(
+            self,
+            Self::MalformedResource { .. } | Self::LocalNodeIdentityMismatch { .. }
+        ) || matches!(
+            self,
+            Self::Holders(error) if error.is_malformed_store_data()
+        )
+    }
 }

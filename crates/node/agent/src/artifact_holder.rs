@@ -217,3 +217,12 @@ pub enum ArtifactHolderRegistryError {
     #[error(transparent)]
     Store(#[from] StoreError),
 }
+
+impl ArtifactHolderRegistryError {
+    pub(crate) fn is_malformed_store_data(&self) -> bool {
+        matches!(
+            self,
+            Self::MalformedHolder { .. } | Self::IndexMismatch { .. }
+        )
+    }
+}
