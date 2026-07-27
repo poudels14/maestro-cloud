@@ -23,6 +23,8 @@ jobs:
     name: Quality gates
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
@@ -50,35 +52,54 @@ jobs:
             shellcheck scripts/*.sh
           '
 
-      - name: Check Rust
+      - name: Check Rust formatting
+        run: nix develop --command cargo fmt --all -- --check
+
+      - name: Check Rust dependency policy
+        run: nix develop --command cargo deny check
+
+      - name: Check Rust lints
+        shell: bash
+        run: |
+          nix develop --command cargo clippy \
+            --workspace \
+            --all-targets \
+            -- \
+            -D warnings
+
+      - name: Check Rust all-feature lints
+        shell: bash
+        run: |
+          nix develop --command cargo clippy \
+            --workspace \
+            --all-targets \
+            --all-features \
+            -- \
+            -D warnings
+
+      - name: Test Rust
         shell: bash
         env:
           INSTA_UPDATE: "no"
         run: |
-          nix develop --command bash -euo pipefail -c '
-            cargo fmt --all -- --check
-            cargo deny check
-            cargo clippy \
-              --workspace \
-              --all-targets \
-              -- \
-              -D warnings
-            cargo clippy \
-              --workspace \
-              --all-targets \
-              --all-features \
-              -- \
-              -D warnings
-            cargo nextest run \
-              --workspace
-            cargo nextest run \
-              --workspace \
-              --all-features
-            cargo test \
-              --doc \
-              --workspace \
-              --all-features
-          '
+          nix develop --command cargo nextest run \
+            --workspace
+
+      - name: Test Rust all features
+        shell: bash
+        env:
+          INSTA_UPDATE: "no"
+        run: |
+          nix develop --command cargo nextest run \
+            --workspace \
+            --all-features
+
+      - name: Test Rust documentation
+        run: |
+          nix develop --command cargo test \
+            --doc \
+            --workspace \
+            --all-features
 
       - name: Check public API documentation
         shell: bash
