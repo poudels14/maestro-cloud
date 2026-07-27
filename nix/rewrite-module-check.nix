@@ -11,6 +11,7 @@ in
   assert config.virtualisation.containerd.enable;
   assert config.virtualisation.containerd.settings.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup;
   assert config.boot.kernel.sysctl."net.ipv4.ip_forward" == 1;
+  assert lib.elem 51820 config.networking.firewall.allowedUDPPorts;
   assert lib.elem "containerd.service" buildkit.after;
   assert lib.elem "containerd.service" buildkit.requires;
   assert lib.elem "multi-user.target" buildkit.wantedBy;

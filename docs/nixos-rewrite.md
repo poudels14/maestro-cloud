@@ -33,6 +33,7 @@ store:
           services.maestro = {
             enable = true;
             config = "/run/maestro/launch.json";
+            wireguardPort = 51820;
           };
         })
       ];
@@ -48,6 +49,10 @@ must be an absolute owner-only regular file such as
 `/run/maestro/launch.json`; placing its contents in a Nix expression would copy
 those secrets into the world-readable Nix store. The daemon validates the file
 before starting.
+
+`services.maestro.wireguardPort` defaults to UDP `51820` and opens that port in
+the NixOS host firewall. Set it to the same value as
+`cluster.ports.wireguard` when the cluster uses a non-default mesh port.
 
 Control-plane launch documents should use
 `/run/current-system/sw/bin/etcd` for `etcdBinary`. The module installs the

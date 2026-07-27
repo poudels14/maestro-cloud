@@ -28,6 +28,12 @@ in {
       description = "Absolute path to the owner-only daemon launch document outside the Nix store";
     };
 
+    wireguardPort = lib.mkOption {
+      type = lib.types.port;
+      default = 51820;
+      description = "UDP mesh port; must match cluster.ports.wireguard in the launch document";
+    };
+
     etcdPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.etcd;
@@ -54,6 +60,7 @@ in {
       plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
     };
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
+    networking.firewall.allowedUDPPorts = [cfg.wireguardPort];
 
     systemd.services.buildkitd = {
       description = "BuildKit daemon for Maestro";
