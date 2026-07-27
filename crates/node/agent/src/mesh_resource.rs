@@ -13,6 +13,7 @@ use kernel_store::{
 };
 use tokio::sync::watch;
 
+use crate::retry::{retryable_store_error, wait_for_store_retry_or_shutdown};
 use crate::{MeshBackend, MeshConfiguration, MeshError, MeshPlanner, MeshReconciler};
 
 const NODE_NETWORK_KIND: &str = "NodeNetwork";
@@ -124,15 +125,63 @@ where
             .monotonic_clock
             .now()
             .saturating_add(self.resync_interval);
-        loop {
+        'reconcile: loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let (_report, cursor) = self.reconcile_with_cursor().await?;
-            let mut events = self.store.watch(
+            let cursor = match self.reconcile_with_cursor().await {
+                Ok((_report, cursor)) => cursor,
+                Err(error) if error.retryable() => {
+                    tracing::warn!(
+                        kind = NODE_NETWORK_KIND,
+                        node_id = %self.local_publication.node_id,
+                        error = %error,
+                        "transient mesh reconciliation failure; retrying"
+                    );
+                    if wait_for_store_retry_or_shutdown(
+                        self.monotonic_clock.as_ref(),
+                        &mut shutdown,
+                    )
+                    .await
+                    {
+                        return Ok(());
+                    }
+                    resync_at = self
+                        .monotonic_clock
+                        .now()
+                        .saturating_add(self.resync_interval);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let mut events = match self.store.watch(
                 self.keyspace.resource_kind(&self.kind),
                 WatchStart::After(cursor),
-            )?;
+            ) {
+                Ok(events) => events,
+                Err(error) if retryable_store_error(&error) => {
+                    tracing::warn!(
+                        kind = NODE_NETWORK_KIND,
+                        node_id = %self.local_publication.node_id,
+                        error = %error,
+                        "transient mesh watch setup failure; retrying"
+                    );
+                    if wait_for_store_retry_or_shutdown(
+                        self.monotonic_clock.as_ref(),
+                        &mut shutdown,
+                    )
+                    .await
+                    {
+                        return Ok(());
+                    }
+                    resync_at = self
+                        .monotonic_clock
+                        .now()
+                        .saturating_add(self.resync_interval);
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
 
             loop {
                 tokio::select! {
@@ -144,6 +193,25 @@ where
                     event = events.next() => {
                         match event {
                             Ok(_) | Err(StoreError::CursorExpired { .. }) => break,
+                            Err(error) if retryable_store_error(&error) => {
+                                tracing::warn!(
+                                    kind = NODE_NETWORK_KIND,
+                                    node_id = %self.local_publication.node_id,
+                                    error = %error,
+                                    "transient mesh watch failure; retrying"
+                                );
+                                if wait_for_store_retry_or_shutdown(
+                                    self.monotonic_clock.as_ref(),
+                                    &mut shutdown,
+                                ).await {
+                                    return Ok(());
+                                }
+                                resync_at = self
+                                    .monotonic_clock
+                                    .now()
+                                    .saturating_add(self.resync_interval);
+                                continue 'reconcile;
+                            }
                             Err(error) => return Err(error.into()),
                         }
                     }
@@ -500,4 +568,14 @@ pub enum MeshResourceError {
         failure: String,
         status_error: String,
     },
+}
+
+impl MeshResourceError {
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Store(error) => retryable_store_error(error),
+            Self::LocalPublicationDisappeared | Self::Contention { .. } => true,
+            _ => false,
+        }
+    }
 }

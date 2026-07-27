@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::StatusClock;
+use crate::retry::{retryable_store_error, wait_for_store_retry_or_shutdown};
 
 const NODE_FIREWALL_KIND: &str = "NodeFirewall";
 const FIREWALL_READY: &str = "FirewallReady";
@@ -128,15 +129,63 @@ where
             .monotonic_clock
             .now()
             .saturating_add(self.resync_interval);
-        loop {
+        'reconcile: loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let (_report, cursor) = self.reconcile_with_cursor().await?;
-            let mut events = self.store.watch(
+            let cursor = match self.reconcile_with_cursor().await {
+                Ok((_report, cursor)) => cursor,
+                Err(error) if error.retryable() => {
+                    tracing::warn!(
+                        kind = NODE_FIREWALL_KIND,
+                        node_id = %self.node_id,
+                        error = %error,
+                        "transient firewall reconciliation failure; retrying"
+                    );
+                    if wait_for_store_retry_or_shutdown(
+                        self.monotonic_clock.as_ref(),
+                        &mut shutdown,
+                    )
+                    .await
+                    {
+                        return Ok(());
+                    }
+                    resync_at = self
+                        .monotonic_clock
+                        .now()
+                        .saturating_add(self.resync_interval);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let mut events = match self.store.watch(
                 self.keyspace.resource_kind(&self.kind),
                 WatchStart::After(cursor),
-            )?;
+            ) {
+                Ok(events) => events,
+                Err(error) if retryable_store_error(&error) => {
+                    tracing::warn!(
+                        kind = NODE_FIREWALL_KIND,
+                        node_id = %self.node_id,
+                        error = %error,
+                        "transient firewall watch setup failure; retrying"
+                    );
+                    if wait_for_store_retry_or_shutdown(
+                        self.monotonic_clock.as_ref(),
+                        &mut shutdown,
+                    )
+                    .await
+                    {
+                        return Ok(());
+                    }
+                    resync_at = self
+                        .monotonic_clock
+                        .now()
+                        .saturating_add(self.resync_interval);
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             loop {
                 tokio::select! {
                     changed = shutdown.changed() => {
@@ -147,6 +196,25 @@ where
                     event = events.next() => {
                         match event {
                             Ok(_) | Err(StoreError::CursorExpired { .. }) => break,
+                            Err(error) if retryable_store_error(&error) => {
+                                tracing::warn!(
+                                    kind = NODE_FIREWALL_KIND,
+                                    node_id = %self.node_id,
+                                    error = %error,
+                                    "transient firewall watch failure; retrying"
+                                );
+                                if wait_for_store_retry_or_shutdown(
+                                    self.monotonic_clock.as_ref(),
+                                    &mut shutdown,
+                                ).await {
+                                    return Ok(());
+                                }
+                                resync_at = self
+                                    .monotonic_clock
+                                    .now()
+                                    .saturating_add(self.resync_interval);
+                                continue 'reconcile;
+                            }
                             Err(error) => return Err(error.into()),
                         }
                     }
@@ -438,4 +506,14 @@ pub enum FirewallAgentError {
         failure: String,
         status_error: String,
     },
+}
+
+impl FirewallAgentError {
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Store(error) => retryable_store_error(error),
+            Self::Contention => true,
+            _ => false,
+        }
+    }
 }

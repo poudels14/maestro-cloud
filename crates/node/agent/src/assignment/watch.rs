@@ -1,12 +1,13 @@
 use std::time::Duration;
 
-use kernel_store::{StoreError, WatchStart};
+use kernel_store::WatchStart;
 use runtime::{EventCursor, EventRequest};
 use tokio::sync::watch;
 
 use super::AssignmentAgent;
 use crate::assignment_error::AssignmentAgentError;
 use crate::assignment_types::monotonic_deadline;
+use crate::retry::retryable_store_error;
 
 const RUNTIME_STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
@@ -72,7 +73,7 @@ impl AssignmentAgent {
                 .watch(self.keyspace.resources(), WatchStart::After(cursor))
             {
                 Ok(events) => events,
-                Err(error) if retryable_watch_error(&error) => {
+                Err(error) if retryable_store_error(&error) => {
                     if self.wait_for_retry_or_shutdown(&mut shutdown).await {
                         #[cfg(unix)]
                         self.node_api.shutdown_all().await?;
@@ -114,7 +115,7 @@ impl AssignmentAgent {
                     event = events.next() => {
                         match event {
                             Ok(_) => break,
-                            Err(error) if retryable_watch_error(&error) => {
+                            Err(error) if retryable_store_error(&error) => {
                                 if self.wait_for_retry_or_shutdown(&mut shutdown).await {
                                     #[cfg(unix)]
                                     self.node_api.shutdown_all().await?;
@@ -184,13 +185,4 @@ impl AssignmentAgent {
             }
         }
     }
-}
-
-fn retryable_watch_error(error: &StoreError) -> bool {
-    matches!(
-        error,
-        StoreError::CursorExpired { .. }
-            | StoreError::SessionExpired { .. }
-            | StoreError::Unavailable { .. }
-    )
 }

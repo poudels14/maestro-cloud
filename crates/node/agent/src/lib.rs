@@ -55,6 +55,7 @@ mod node_api_mount;
 #[cfg(unix)]
 mod node_control;
 mod node_registry;
+mod retry;
 mod secret_mount;
 mod secret_mount_files;
 mod stats;

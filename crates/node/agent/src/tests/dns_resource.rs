@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,8 +10,11 @@ use kernel_api::{
     NodeId, ObjectMeta, ResourceKind, ResourceName, ResourceRevision, Timestamp,
 };
 use kernel_store::{
-    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
+    CasOutcome, Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, ListResult,
+    MonotonicTime, PutRequest, Session, Store, StoreError, StoreKey, StorePrefix, StoreWatch,
+    StoredValue, Transaction, TransactionOutcome, Version, WatchStart,
 };
+use tokio::sync::{Notify, watch};
 
 use crate::{
     AuthoritativeDnsResolver, DnsQueryType, DnsResourceAgent, DnsResourceError, DnsResponseCode,
@@ -210,6 +214,53 @@ fn dns_resource_agent_rejects_zero_resync_interval() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+#[tokio::test]
+async fn dns_resource_run_recovers_after_store_unavailability()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(ManualClock::default());
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let cluster_id = cluster_id();
+    put_new(
+        store.as_ref(),
+        &cluster_id,
+        record("api", "api.maestro.internal.", Ipv4Addr::new(10, 42, 1, 11)),
+    )
+    .await?;
+    let unavailable = Arc::new(FailFirstListStore::new(store));
+    let resolver = AuthoritativeDnsResolver::new()?;
+    let store: Arc<dyn Store> = unavailable.clone();
+    let agent = Arc::new(DnsResourceAgent::new(
+        store,
+        &cluster_id,
+        NodeId::new("node-1")?,
+        resolver.clone(),
+        clock.clone(),
+        Duration::from_secs(30),
+    )?);
+    let (shutdown, shutdown_rx) = watch::channel(false);
+    let running_agent = agent.clone();
+    let task = tokio::spawn(async move { running_agent.run(shutdown_rx).await });
+
+    wait_for_sleeps(clock.as_ref(), 1).await?;
+    assert!(!task.is_finished());
+    assert_eq!(unavailable.list_calls(), 1);
+    assert_eq!(
+        resolver
+            .lookup("api.maestro.internal.", DnsQueryType::A)
+            .await?
+            .response_code,
+        DnsResponseCode::NameError
+    );
+
+    clock.advance(Duration::from_secs(1));
+    wait_for_dns_answer(&resolver, "api.maestro.internal.").await?;
+    assert!(unavailable.list_calls() >= 2);
+
+    shutdown.send(true)?;
+    task.await??;
+    Ok(())
+}
+
 fn agent(
     store: Arc<InMemoryStore>,
     cluster_id: &ClusterId,
@@ -327,4 +378,131 @@ impl Clock for TestClock {
     async fn sleep_until(&self, _deadline: MonotonicTime) {
         std::future::pending::<()>().await;
     }
+}
+
+struct FailFirstListStore {
+    inner: Arc<InMemoryStore>,
+    fail_next_list: AtomicBool,
+    list_calls: AtomicU64,
+}
+
+impl FailFirstListStore {
+    fn new(inner: Arc<InMemoryStore>) -> Self {
+        Self {
+            inner,
+            fail_next_list: AtomicBool::new(true),
+            list_calls: AtomicU64::new(0),
+        }
+    }
+
+    fn list_calls(&self) -> u64 {
+        self.list_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl Store for FailFirstListStore {
+    async fn get(&self, key: &StoreKey) -> Result<Option<StoredValue>, StoreError> {
+        self.inner.get(key).await
+    }
+
+    async fn list(&self, prefix: &StorePrefix) -> Result<ListResult, StoreError> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_next_list.swap(false, Ordering::SeqCst) {
+            return Err(StoreError::Unavailable {
+                message: "injected list outage".to_owned(),
+            });
+        }
+        self.inner.list(prefix).await
+    }
+
+    async fn put_cas(&self, request: PutRequest) -> Result<CasOutcome<StoredValue>, StoreError> {
+        self.inner.put_cas(request).await
+    }
+
+    async fn delete_cas(&self, request: DeleteRequest) -> Result<CasOutcome<Version>, StoreError> {
+        self.inner.delete_cas(request).await
+    }
+
+    async fn txn(&self, transaction: Transaction) -> Result<TransactionOutcome, StoreError> {
+        self.inner.txn(transaction).await
+    }
+
+    fn watch(
+        &self,
+        prefix: StorePrefix,
+        start: WatchStart,
+    ) -> Result<Box<dyn StoreWatch>, StoreError> {
+        self.inner.watch(prefix, start)
+    }
+
+    async fn session(&self, ttl: Duration) -> Result<Box<dyn Session>, StoreError> {
+        self.inner.session(ttl).await
+    }
+}
+
+#[derive(Default)]
+struct ManualClock {
+    milliseconds: AtomicU64,
+    sleeps: AtomicU64,
+    advanced: Notify,
+}
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        let milliseconds = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        self.milliseconds.fetch_add(milliseconds, Ordering::SeqCst);
+        self.advanced.notify_waiters();
+    }
+}
+
+#[async_trait]
+impl Clock for ManualClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::from_millis(
+            self.milliseconds.load(Ordering::SeqCst),
+        ))
+    }
+
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        self.sleeps.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let advanced = self.advanced.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            advanced.await;
+        }
+    }
+}
+
+async fn wait_for_sleeps(
+    clock: &ManualClock,
+    expected: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if clock.sleeps.load(Ordering::SeqCst) >= expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("DNS resource agent did not begin sleep {expected}").into())
+}
+
+async fn wait_for_dns_answer(
+    resolver: &AuthoritativeDnsResolver,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if !resolver
+            .lookup(name, DnsQueryType::A)
+            .await?
+            .answers
+            .is_empty()
+        {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("DNS resource agent did not publish `{name}` after recovery").into())
 }
