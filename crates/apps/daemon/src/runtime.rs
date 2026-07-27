@@ -1,16 +1,15 @@
 use async_trait::async_trait;
-use std::time::Duration;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use crate::{DaemonError, DaemonPlan, DaemonRole, RoleError, RoleFailure, RoleSpec};
 
 /// Owned lifetime of one started daemon role.
 #[async_trait]
 pub trait RoleRuntime: Send {
-    /// Reports whether a role-owned worker has terminated unexpectedly.
-    fn is_finished(&self) -> bool;
-
-    /// Collects one already-finished worker failure.
-    async fn take_failure(&mut self) -> RoleError;
+    /// Waits for and owns collection of the first unexpected worker exit.
+    ///
+    /// Canceling this wait must leave every worker owned by the runtime.
+    async fn wait_for_failure(&mut self) -> RoleError;
 
     /// Stops all role-owned work and waits for completion.
     ///
@@ -91,16 +90,15 @@ impl RunningDaemon {
     /// Waits until one role-owned worker terminates instead of silently
     /// leaving a partially functioning daemon alive.
     pub async fn wait_for_failure(&mut self) -> DaemonError {
-        loop {
-            for active in &mut self.roles {
-                if active.runtime.is_finished() {
-                    return DaemonError::Runtime {
-                        role: active.role,
-                        error: active.runtime.take_failure().await,
-                    };
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut pending = FuturesUnordered::new();
+        for active in &mut self.roles {
+            let role = active.role;
+            pending.push(async move { (role, active.runtime.wait_for_failure().await) });
+        }
+        match pending.next().await {
+            Some((role, error)) => DaemonError::Runtime { role, error },
+            // A validated daemon plan always contains its agent role.
+            None => std::future::pending().await,
         }
     }
 

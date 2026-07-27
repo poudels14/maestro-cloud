@@ -6,6 +6,24 @@ use tokio::task::JoinHandle;
 
 use crate::RoleError;
 
+pub(crate) async fn wait_for_role_task(
+    tasks: &mut Vec<JoinHandle<Result<(), RoleError>>>,
+) -> RoleError {
+    let mut pending = FuturesUnordered::new();
+    for (index, task) in tasks.iter_mut().enumerate() {
+        pending.push(async move { (index, task.await) });
+    }
+    let result = pending.next().await;
+    drop(pending);
+    match result {
+        Some((index, result)) => {
+            tasks.swap_remove(index);
+            task_failure(result)
+        }
+        None => RoleError::new("role runtime has no active worker"),
+    }
+}
+
 pub(crate) async fn shutdown_role_tasks(
     tasks: &mut Vec<JoinHandle<Result<(), RoleError>>>,
     clock: &dyn Clock,
@@ -52,5 +70,13 @@ fn record_result(
         Ok(Ok(())) => {}
         Ok(Err(error)) => failures.push(error.to_string()),
         Err(error) => failures.push(format!("role task failed: {error}")),
+    }
+}
+
+fn task_failure(result: Result<Result<(), RoleError>, tokio::task::JoinError>) -> RoleError {
+    match result {
+        Ok(Ok(())) => RoleError::new("role worker exited unexpectedly"),
+        Ok(Err(error)) => error,
+        Err(error) => RoleError::new(format!("role task failed: {error}")),
     }
 }

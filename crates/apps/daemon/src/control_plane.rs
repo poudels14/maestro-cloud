@@ -26,7 +26,7 @@ pub use self::settings::DaemonRoleSettings;
 use crate::admission::AdmissionDependencies;
 use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
-use crate::role_tasks::shutdown_role_tasks;
+use crate::role_tasks::{shutdown_role_tasks, wait_for_role_task};
 use crate::{
     DaemonPlan, DaemonRole, LogMaintenanceWorker, RoleError, RoleFactory, RoleRuntime, RoleSpec,
 };
@@ -344,7 +344,7 @@ where
         });
         Ok(Box::new(ControllerRoleRuntime {
             shutdown,
-            task: Some(task),
+            tasks: vec![task],
             clock,
             shutdown_grace: settings.role_shutdown_grace,
         }))
@@ -353,35 +353,21 @@ where
 
 struct ControllerRoleRuntime {
     shutdown: watch::Sender<bool>,
-    task: Option<JoinHandle<Result<(), RoleError>>>,
+    tasks: Vec<JoinHandle<Result<(), RoleError>>>,
     clock: Arc<dyn Clock>,
     shutdown_grace: Duration,
 }
 
 #[async_trait]
 impl RoleRuntime for ControllerRoleRuntime {
-    fn is_finished(&self) -> bool {
-        self.task.as_ref().is_some_and(JoinHandle::is_finished)
-    }
-
-    async fn take_failure(&mut self) -> RoleError {
-        let Some(task) = self.task.take() else {
-            return RoleError::new(
-                "controller runtime reported a failure without a leadership worker",
-            );
-        };
-        match task.await {
-            Ok(Ok(())) => RoleError::new("controller leadership worker exited unexpectedly"),
-            Ok(Err(error)) => error,
-            Err(error) => RoleError::new(format!("leadership task failed: {error}")),
-        }
+    async fn wait_for_failure(&mut self) -> RoleError {
+        wait_for_role_task(&mut self.tasks).await
     }
 
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
         let _ = self.shutdown.send(true);
-        let mut tasks = self.task.take().into_iter().collect();
         let failures =
-            shutdown_role_tasks(&mut tasks, self.clock.as_ref(), self.shutdown_grace).await;
+            shutdown_role_tasks(&mut self.tasks, self.clock.as_ref(), self.shutdown_grace).await;
         finish_shutdown(failures)
     }
 }
@@ -389,7 +375,7 @@ impl RoleRuntime for ControllerRoleRuntime {
 impl Drop for ControllerRoleRuntime {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
-        if let Some(task) = self.task.as_ref() {
+        for task in &self.tasks {
             task.abort();
         }
     }

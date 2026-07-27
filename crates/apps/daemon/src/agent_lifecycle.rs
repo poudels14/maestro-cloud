@@ -15,7 +15,7 @@ use metrics::{
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::role_tasks::shutdown_role_tasks;
+use crate::role_tasks::{shutdown_role_tasks, wait_for_role_task};
 use crate::{RoleError, RoleRuntime};
 
 pub(crate) struct AgentStartupRuntimes {
@@ -161,19 +161,8 @@ impl AgentRoleRuntime {
 
 #[async_trait]
 impl RoleRuntime for AgentRoleRuntime {
-    fn is_finished(&self) -> bool {
-        self.tasks.iter().any(JoinHandle::is_finished)
-    }
-
-    async fn take_failure(&mut self) -> RoleError {
-        let Some(index) = self.tasks.iter().position(JoinHandle::is_finished) else {
-            return RoleError::new("agent runtime reported a failure without a finished worker");
-        };
-        match self.tasks.swap_remove(index).await {
-            Ok(Ok(())) => RoleError::new("node agent worker exited unexpectedly"),
-            Ok(Err(error)) => error,
-            Err(error) => RoleError::new(format!("node agent task failed: {error}")),
-        }
+    async fn wait_for_failure(&mut self) -> RoleError {
+        wait_for_role_task(&mut self.tasks).await
     }
 
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {

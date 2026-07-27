@@ -152,12 +152,12 @@ struct RecordingRuntime {
 
 #[async_trait]
 impl RoleRuntime for RecordingRuntime {
-    fn is_finished(&self) -> bool {
-        self.fail_runtime
-    }
-
-    async fn take_failure(&mut self) -> RoleError {
-        RoleError::new("injected runtime failure")
+    async fn wait_for_failure(&mut self) -> RoleError {
+        if self.fail_runtime {
+            RoleError::new("injected runtime failure")
+        } else {
+            std::future::pending().await
+        }
     }
 
     async fn shutdown(self: Box<Self>) -> Result<(), RoleError> {

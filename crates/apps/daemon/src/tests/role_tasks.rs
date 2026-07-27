@@ -1,6 +1,7 @@
-use std::future;
+use std::future::{self, Future};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::Poll;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -8,7 +9,49 @@ use kernel_store::{Clock, MonotonicTime};
 use tokio::sync::Notify;
 
 use crate::RoleError;
-use crate::role_tasks::shutdown_role_tasks;
+use crate::role_tasks::{shutdown_role_tasks, wait_for_role_task};
+
+#[tokio::test]
+async fn role_failure_wait_collects_only_the_finished_worker() {
+    let pending = tokio::spawn(async {
+        future::pending::<()>().await;
+        Ok(())
+    });
+    let failed = tokio::spawn(async { Err(RoleError::new("worker stopped")) });
+    let mut tasks = vec![pending, failed];
+
+    let failure = wait_for_role_task(&mut tasks).await;
+
+    assert_eq!(failure.detail(), "worker stopped");
+    assert_eq!(tasks.len(), 1);
+    if let Some(task) = tasks.pop() {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+#[tokio::test]
+async fn canceled_role_failure_wait_keeps_the_worker_owned() {
+    let task = tokio::spawn(async {
+        future::pending::<()>().await;
+        Ok(())
+    });
+    let mut tasks = vec![task];
+    let mut wait = Box::pin(wait_for_role_task(&mut tasks));
+    future::poll_fn(|context| {
+        assert!(wait.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(wait);
+
+    assert_eq!(tasks.len(), 1);
+    if let Some(task) = tasks.pop() {
+        assert!(!task.is_finished());
+        task.abort();
+        assert!(task.await.is_err_and(|error| error.is_cancelled()));
+    }
+}
 
 #[tokio::test]
 async fn role_task_shutdown_aborts_and_reaps_workers_at_the_deadline()
