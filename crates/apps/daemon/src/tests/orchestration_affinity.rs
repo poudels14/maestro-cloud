@@ -14,6 +14,7 @@ async fn hard_node_affinity_places_every_replica_on_the_selected_node()
             .set_placement(PlacementConstraint {
                 node_id: Some(selected.clone()),
                 labels: BTreeMap::new(),
+                ..PlacementConstraint::default()
             })
             .await?;
         world.converge().await?;

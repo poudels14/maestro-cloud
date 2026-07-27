@@ -144,6 +144,7 @@ impl DnsResolverSystemResources {
                 placement: PlacementConstraint {
                     node_id: Some(node_id.clone()),
                     labels: BTreeMap::new(),
+                    ..PlacementConstraint::default()
                 },
                 exec: ExecPolicy::Denied,
             },

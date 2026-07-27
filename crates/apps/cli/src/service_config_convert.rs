@@ -177,6 +177,7 @@ pub(super) async fn convert_service(
         placement: PlacementConstraint {
             node_id,
             labels: template.deploy.node_affinity.labels,
+            replica_spread: template.deploy.replica_spread,
         },
         exec: if template.deploy.exec {
             ExecPolicy::Allowed

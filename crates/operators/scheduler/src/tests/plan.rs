@@ -3,8 +3,8 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, ClusterId,
-    DeploymentId, Generation, NodeId, NodeRole, ObjectMeta, PlacementConstraint, ResourceRevision,
-    ServiceId,
+    DeploymentId, Generation, NodeId, NodeRole, ObjectMeta, PlacementConstraint, ReplicaSpread,
+    ResourceRevision, ServiceId,
 };
 
 use crate::{
@@ -75,6 +75,67 @@ fn plan_preserves_existing_assignments_during_scale_changes() {
             .collect::<BTreeSet<_>>(),
         survivors
     );
+}
+
+#[test]
+fn best_effort_spread_rebalances_after_a_node_joins_and_then_stabilizes() {
+    let mut single_node = input(2);
+    single_node.nodes.truncate(1);
+    let colocated = plan(single_node).assignments;
+    assert_eq!(
+        colocated
+            .iter()
+            .map(|assignment| &assignment.spec.node_id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1
+    );
+
+    let mut stable = input(2);
+    stable.current = colocated.clone();
+    assert_eq!(plan(stable).assignments, colocated);
+
+    let mut spread = input(2);
+    spread.current = colocated.clone();
+    spread.services[0].placement.replica_spread = ReplicaSpread::BestEffort;
+    let balanced = plan(spread);
+    assert!(balanced.unschedulable.is_empty());
+    assert_eq!(
+        balanced
+            .assignments
+            .iter()
+            .map(|assignment| &assignment.spec.node_id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        2
+    );
+    let preserved = balanced
+        .assignments
+        .iter()
+        .filter(|assignment| {
+            colocated
+                .iter()
+                .any(|old| old.meta.id == assignment.meta.id)
+        })
+        .count();
+    assert_eq!(preserved, 1);
+    let replacement = balanced
+        .assignments
+        .iter()
+        .find(|assignment| assignment.spec.placement_epoch == 2)
+        .expect("one co-located assignment should move");
+    assert!(
+        replacement
+            .spec
+            .replaces_assignment_id
+            .as_ref()
+            .is_some_and(|id| colocated.iter().any(|old| &old.meta.id == id))
+    );
+
+    let mut reconciled = input(2);
+    reconciled.current = balanced.assignments.clone();
+    reconciled.services[0].placement.replica_spread = ReplicaSpread::BestEffort;
+    assert_eq!(plan(reconciled).assignments, balanced.assignments);
 }
 
 #[test]
@@ -188,6 +249,7 @@ fn plan_honors_affinity_and_prefers_workers_after_spreading() {
     value.services[0].placement = PlacementConstraint {
         node_id: None,
         labels: BTreeMap::from([("zone".to_owned(), "west".to_owned())]),
+        replica_spread: ReplicaSpread::Stable,
     };
     let output = plan(value);
     assert_eq!(output.assignments.len(), 2);

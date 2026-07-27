@@ -229,6 +229,11 @@ cancel, remove, service delete, freeze/unfreeze, and replica override commands.
 Use `maestro services --help` for their exact optimistic-concurrency and
 idempotency options.
 
+Set `deploy.replicaSpread` to `"bestEffort"` when replicas should rebalance
+across every eligible node after topology changes. The default `"stable"`
+preserves healthy assignments; hard `nodeAffinity` constraints still limit the
+nodes available to either policy.
+
 ## Exec
 
 Exec selects one running service replica, relays across nodes when necessary,

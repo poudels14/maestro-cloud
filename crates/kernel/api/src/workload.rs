@@ -285,7 +285,24 @@ pub struct VolumeMountSpec {
     pub access: VolumeAccess,
 }
 
-/// Hard node identity and label constraints used by the scheduler.
+/// How the scheduler treats healthy placements when more eligible nodes exist.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ReplicaSpread {
+    /// Preserve healthy assignments even when a later topology could balance them better.
+    #[default]
+    Stable,
+    /// Rebalance only enough healthy assignments to minimize replicas sharing a node.
+    BestEffort,
+}
+
+impl ReplicaSpread {
+    fn is_stable(&self) -> bool {
+        *self == Self::Stable
+    }
+}
+
+/// Node selection and replica-distribution constraints used by the scheduler.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PlacementConstraint {
@@ -295,6 +312,9 @@ pub struct PlacementConstraint {
     /// Labels every eligible node must match.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// Whether healthy replicas may move to improve their distribution.
+    #[serde(default, skip_serializing_if = "ReplicaSpread::is_stable")]
+    pub replica_spread: ReplicaSpread,
 }
 
 /// Declarative pull-request preview policy for a base service.
@@ -354,7 +374,7 @@ pub struct ServiceSpec {
     /// Filesystem mounts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<VolumeMountSpec>,
-    /// Hard scheduling constraints.
+    /// Scheduling constraints and replica-distribution policy.
     #[serde(default)]
     pub placement: PlacementConstraint,
     /// Interactive exec policy.

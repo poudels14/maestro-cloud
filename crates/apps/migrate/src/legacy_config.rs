@@ -301,6 +301,7 @@ fn convert_placement(config: &LegacyServiceConfig) -> Result<PlacementConstraint
             .map(|node_id| parse_node_id(&config.id, node_id))
             .transpose()?,
         labels: affinity.labels.clone(),
+        ..PlacementConstraint::default()
     })
 }
 

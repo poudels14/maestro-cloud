@@ -1,6 +1,5 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
-assertion_line: 33
 expression: openapi_document()
 ---
 {
@@ -4294,7 +4293,7 @@ expression: openapi_document()
         ]
       },
       "PlacementConstraint": {
-        "description": "Hard node identity and label constraints used by the scheduler.",
+        "description": "Node selection and replica-distribution constraints used by the scheduler.",
         "properties": {
           "labels": {
             "additionalProperties": {
@@ -4316,6 +4315,14 @@ expression: openapi_document()
               }
             ],
             "description": "Required node identity, when placement is pinned."
+          },
+          "replicaSpread": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReplicaSpread"
+              }
+            ],
+            "description": "Whether healthy replicas may move to improve their distribution."
           }
         },
         "type": "object"
@@ -4625,6 +4632,25 @@ expression: openapi_document()
           "phase"
         ],
         "type": "object"
+      },
+      "ReplicaSpread": {
+        "description": "How the scheduler treats healthy placements when more eligible nodes exist.",
+        "oneOf": [
+          {
+            "description": "Preserve healthy assignments even when a later topology could balance them better.",
+            "enum": [
+              "stable"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Rebalance only enough healthy assignments to minimize replicas sharing a node.",
+            "enum": [
+              "bestEffort"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ReplicaState": {
         "$ref": "#/components/schemas/Object8"
@@ -5419,7 +5445,7 @@ expression: openapi_document()
               }
             ],
             "default": {},
-            "description": "Hard scheduling constraints."
+            "description": "Scheduling constraints and replica-distribution policy."
           },
           "preview": {
             "anyOf": [

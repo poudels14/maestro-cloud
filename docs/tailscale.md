@@ -10,7 +10,8 @@ The gateway service:
 - runs in Tailscale userspace-networking mode without host networking or extra
   Linux capabilities;
 - uses a digest-pinned Tailscale image;
-- spreads replica-managed state across workload-capable nodes;
+- best-effort spreads replica-managed state across workload-capable nodes,
+  including rebalancing co-located replicas after a node joins or returns;
 - advertises only routes inside the cluster CIDR; and
 - is created, updated, or removed with its scoped firewall policy under the
   active controller leadership fence.

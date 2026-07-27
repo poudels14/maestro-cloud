@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, Generation,
-    NodeId, NodeRole, ObjectMeta, ResourceRevision,
+    NodeId, NodeRole, ObjectMeta, ReplicaSpread, ResourceRevision,
 };
 use sha2::{Digest, Sha256};
 
@@ -182,6 +182,14 @@ fn plan_service<'a>(
             if let Some(existing) = existing
                 && existing_is_eligible
                 && !unhealthy
+                && spread_allows_retention(
+                    service,
+                    &group.deployment_id,
+                    existing,
+                    &candidates,
+                    deployment_load,
+                    &input.held,
+                )
             {
                 retain(existing, planned, deployment_load, node_load);
                 if group_index == 0 {
@@ -203,16 +211,20 @@ fn plan_service<'a>(
                         || existing.is_none_or(|existing| node.node_id != existing.spec.node_id)
                 })
                 .min_by_key(|node| {
+                    let deployment_node_load = deployment_load
+                        .get(&(
+                            service.service_id.clone(),
+                            group.deployment_id.clone(),
+                            node.node_id.clone(),
+                        ))
+                        .copied()
+                        .unwrap_or_default();
+                    let spreads_replicas =
+                        service.placement.replica_spread == ReplicaSpread::BestEffort;
                     (
+                        spreads_replicas.then_some(deployment_node_load),
                         preferred_node != Some(&node.node_id),
-                        deployment_load
-                            .get(&(
-                                service.service_id.clone(),
-                                group.deployment_id.clone(),
-                                node.node_id.clone(),
-                            ))
-                            .copied()
-                            .unwrap_or_default(),
+                        deployment_node_load,
                         node_load.get(&node.node_id).copied().unwrap_or_default(),
                         node.role != NodeRole::Worker,
                         &node.node_id,
@@ -267,6 +279,36 @@ fn plan_service<'a>(
             }
         }
     }
+}
+
+fn spread_allows_retention(
+    service: &ServiceSchedule,
+    deployment_id: &kernel_api::DeploymentId,
+    existing: &Assignment,
+    candidates: &[&ScheduleNode],
+    deployment_load: &BTreeMap<(kernel_api::ServiceId, kernel_api::DeploymentId, NodeId), usize>,
+    held: &BTreeSet<AssignmentId>,
+) -> bool {
+    if service.placement.replica_spread == ReplicaSpread::Stable || held.contains(&existing.meta.id)
+    {
+        return true;
+    }
+    let load = |node_id: &NodeId| {
+        deployment_load
+            .get(&(
+                service.service_id.clone(),
+                deployment_id.clone(),
+                node_id.clone(),
+            ))
+            .copied()
+            .unwrap_or_default()
+    };
+    let existing_load = load(&existing.spec.node_id);
+    candidates
+        .iter()
+        .map(|candidate| load(&candidate.node_id))
+        .min()
+        .is_none_or(|minimum_load| existing_load <= minimum_load)
 }
 
 fn eligible_nodes<'a>(

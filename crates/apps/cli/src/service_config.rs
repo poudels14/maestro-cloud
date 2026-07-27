@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use kernel_api::{
     FirewallDirection, FirewallPolicySpec, FirewallRule, FirewallSubject, FirewallVerdict,
-    IngressRouteSpec, PortRange, ServiceId, ServiceRolloutSpec, ServiceSpec, SessionAffinity,
-    TransportProtocol,
+    IngressRouteSpec, PortRange, ReplicaSpread, ServiceId, ServiceRolloutSpec, ServiceSpec,
+    SessionAffinity, TransportProtocol,
 };
 use serde::Deserialize;
 
@@ -275,6 +275,8 @@ pub(super) struct DeployConfig {
     pub(super) healthcheck_interval: u32,
     #[serde(default = "default_replicas")]
     pub(super) replicas: u32,
+    #[serde(default)]
+    pub(super) replica_spread: ReplicaSpread,
     #[serde(default = "default_true")]
     pub(super) exec: bool,
     pub(super) max_restarts: Option<u32>,

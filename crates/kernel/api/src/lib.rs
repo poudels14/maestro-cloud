@@ -78,7 +78,7 @@ pub use workload::{
     BuildTemplate, CommandSpec, Deployment, DeploymentGoal, DeploymentPhase, DeploymentSpec,
     DeploymentStatus, DepotBuildConfig, ExecPolicy, HealthCheckSpec, HealthProbe, NodeApiAccess,
     PlacementConstraint, PlacementHistory, PlacementHistorySpec, PlacementHistoryStatus,
-    PreviewPolicy, ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState,
+    PreviewPolicy, ReplicaSpread, ReplicaState, ReplicaStateSpec, ReplicaStateStatus, RolloutState,
     SecretMountSpec, Service, ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec,
     VolumeSource, WorkloadUserSpec, assignment_workload_address, workload_hostname,
 };

@@ -129,6 +129,12 @@
           "minimum": 1,
           "default": 1
         },
+        "replicaSpread": {
+          "type": "string",
+          "enum": ["stable", "bestEffort"],
+          "description": "Whether healthy replicas remain on their current nodes or rebalance across eligible nodes after topology changes.",
+          "default": "stable"
+        },
         "exec": {
           "type": "boolean",
           "description": "Allow operator CLI exec sessions when allow-exec is enabled on the cluster.",

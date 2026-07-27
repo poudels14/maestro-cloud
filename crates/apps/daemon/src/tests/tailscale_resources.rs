@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use cluster::TailscaleAuthKeyRecord;
 use kernel_api::{
     ArtifactTemplate, ClusterId, ExecPolicy, FirewallDirection, FirewallPolicy, FirewallSubject,
-    FirewallVerdict, HealthProbe, NodeId, NodeInstanceId, NodeRole, ResourceKind, ResourceName,
-    SecretValue, Service, Timestamp, TransportProtocol, VolumeSource,
+    FirewallVerdict, HealthProbe, NodeId, NodeInstanceId, NodeRole, ReplicaSpread, ResourceKind,
+    ResourceName, SecretValue, Service, Timestamp, TransportProtocol, VolumeSource,
 };
 use kernel_controller::{
     ControllerError, FencedStore, LeaderIdentity, LeadershipToken, TimestampClock,
@@ -45,6 +45,10 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
     assert_eq!(resources.system_host_access.host_ports, [3011, 3012]);
     let service = resources.service;
     assert_eq!(service.spec.replicas, 2);
+    assert_eq!(
+        service.spec.placement.replica_spread,
+        ReplicaSpread::BestEffort
+    );
     assert_eq!(service.spec.exec, ExecPolicy::Denied);
     assert_eq!(service.spec.exposed_ports, vec![1_055, 9_002]);
     assert_eq!(

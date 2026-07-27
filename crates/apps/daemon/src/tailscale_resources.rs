@@ -6,9 +6,9 @@ use kernel_api::{
     AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, FirewallDirection, FirewallPolicy,
     FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject,
     FirewallVerdict, Generation, HealthCheckSpec, HealthProbe, NodeApiAccess, Object, ObjectMeta,
-    OwnerReference, Ownership, PlacementConstraint, ResourceId, ResourceKind, ResourceName,
-    ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec,
-    ServiceStatus, TransportProtocol, VolumeAccess, VolumeMountSpec, VolumeSource,
+    OwnerReference, Ownership, PlacementConstraint, ReplicaSpread, ResourceId, ResourceKind,
+    ResourceName, ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId,
+    ServiceSpec, ServiceStatus, TransportProtocol, VolumeAccess, VolumeMountSpec, VolumeSource,
 };
 
 const GATEWAY_SERVICE_ID: &str = "maestro-system-tailscale-gateway";
@@ -128,7 +128,10 @@ impl TailscaleSystemResources {
                     target: "/state".to_owned(),
                     access: VolumeAccess::ReadWrite,
                 }],
-                placement: PlacementConstraint::default(),
+                placement: PlacementConstraint {
+                    replica_spread: ReplicaSpread::BestEffort,
+                    ..PlacementConstraint::default()
+                },
                 exec: ExecPolicy::Denied,
             },
             status: ServiceStatus {

@@ -2787,7 +2787,7 @@ export interface components {
         };
         /** @description Whether an owner reference controls cascading deletion. */
         Ownership: "controller" | "informational";
-        /** @description Hard node identity and label constraints used by the scheduler. */
+        /** @description Node selection and replica-distribution constraints used by the scheduler. */
         PlacementConstraint: {
             /** @description Labels every eligible node must match. */
             labels?: {
@@ -2795,6 +2795,8 @@ export interface components {
             };
             /** @description Required node identity, when placement is pinned. */
             nodeId?: components["schemas"]["NodeId"] | (null);
+            /** @description Whether healthy replicas may move to improve their distribution. */
+            replicaSpread?: components["schemas"]["ReplicaSpread"];
         };
         PlacementHistory: components["schemas"]["Object7"];
         /** @description Immutable placement identity retained after an assignment stops. */
@@ -2902,6 +2904,8 @@ export interface components {
             /** @description Time teardown may proceed after a close event. */
             teardownAt?: components["schemas"]["Timestamp"] | (null);
         };
+        /** @description How the scheduler treats healthy placements when more eligible nodes exist. */
+        ReplicaSpread: "stable" | "bestEffort";
         ReplicaState: components["schemas"]["Object8"];
         /** @description Stable identity of a deployment replica's observed state. */
         ReplicaStateId: string;
@@ -3140,7 +3144,7 @@ export interface components {
              */
             nodeApi: components["schemas"]["NodeApiAccess"];
             /**
-             * @description Hard scheduling constraints.
+             * @description Scheduling constraints and replica-distribution policy.
              * @default {}
              */
             placement: components["schemas"]["PlacementConstraint"];

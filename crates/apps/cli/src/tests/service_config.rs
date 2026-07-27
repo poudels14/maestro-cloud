@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kernel_api::{
     ArtifactArchiveId, ArtifactTemplate, ExecPolicy, FirewallDirection, FirewallSubject,
-    FirewallVerdict, SecretValue, ServiceId, TransportProtocol, VolumeSource,
+    FirewallVerdict, ReplicaSpread, SecretValue, ServiceId, TransportProtocol, VolumeSource,
 };
 
 use crate::CliError;
@@ -41,6 +41,7 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
                         deploy: {
                             exposePorts: [8080],
                             replicas: 2,
+                            replicaSpread: "bestEffort",
                             exec: false,
                             healthcheckPath: "/health",
                             env: { items: { MODE: "production" } },
@@ -80,6 +81,10 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
         ArtifactTemplate::Image { .. }
     ));
     assert_eq!(desired.spec.replicas, 2);
+    assert_eq!(
+        desired.spec.placement.replica_spread,
+        ReplicaSpread::BestEffort
+    );
     assert_eq!(desired.spec.exec, ExecPolicy::Denied);
     assert_eq!(
         desired.spec.environment.get("MODE").map(String::as_str),

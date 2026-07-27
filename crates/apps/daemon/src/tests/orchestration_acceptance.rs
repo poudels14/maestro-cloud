@@ -213,6 +213,7 @@ impl ServiceLifecycleCluster for AcceptanceWorld {
                 service.spec.placement = PlacementConstraint {
                     node_id: Some(node_id),
                     labels: BTreeMap::new(),
+                    ..PlacementConstraint::default()
                 };
             })
             .await

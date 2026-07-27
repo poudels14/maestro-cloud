@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::{
     ArtifactArchiveId, ArtifactTemplate, BuildPhase, BuildSource, BuildTemplate, DeploymentGoal,
     DeploymentPhase, DepotBuildConfig, ExecPolicy, NodeApiAccess, NodeId, PlacementConstraint,
-    PreviewPolicy, SecretMountSpec, SecretValue, ServiceId, ServiceSpec, VolumeSource,
-    workload_hostname,
+    PreviewPolicy, ReplicaSpread, SecretMountSpec, SecretValue, ServiceId, ServiceSpec,
+    VolumeSource, workload_hostname,
 };
 
 #[test]
@@ -56,6 +56,29 @@ fn preview_policy_uses_explicit_lifecycle_units() {
             "replicas": 1,
             "environment": {"PREVIEW": "true"}
         })
+    );
+}
+
+#[test]
+fn replica_spread_defaults_to_stable_and_uses_an_explicit_wire_value() {
+    assert_eq!(
+        serde_json::to_value(PlacementConstraint::default()).expect("serialize default placement"),
+        serde_json::json!({})
+    );
+    let placement = PlacementConstraint {
+        replica_spread: ReplicaSpread::BestEffort,
+        ..PlacementConstraint::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&placement).expect("serialize spread placement"),
+        serde_json::json!({"replicaSpread": "bestEffort"})
+    );
+    assert_eq!(
+        serde_json::from_value::<PlacementConstraint>(serde_json::json!({
+            "replicaSpread": "bestEffort"
+        }))
+        .expect("deserialize spread placement"),
+        placement
     );
 }
 
