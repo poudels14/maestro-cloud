@@ -81,6 +81,12 @@ pub enum NodeRegistryAction {
     Renewed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeRemovalState {
+    Absent,
+    InProgress,
+}
+
 /// Active session ownership returned after the initial node publication.
 pub struct NodeRegistration {
     session: Box<dyn Session>,
@@ -148,7 +154,11 @@ impl NodeRegistryAgent {
             let current_node = self.store.get(&self.node_key).await?;
             let current_liveness = self.store.get(&self.liveness_key).await?;
             self.validate_liveness(current_liveness.as_ref())?;
-            let node = self.desired_node(current_node.as_ref(), current_removal.is_some())?;
+            let removal_state = match current_removal.as_ref() {
+                Some(_) => NodeRemovalState::InProgress,
+                None => NodeRemovalState::Absent,
+            };
+            let node = self.desired_node(current_node.as_ref(), removal_state)?;
             let action = if current_liveness.is_some() {
                 NodeRegistryAction::Renewed
             } else {
@@ -280,7 +290,7 @@ impl NodeRegistryAgent {
     fn desired_node(
         &self,
         stored: Option<&StoredValue>,
-        removal_in_progress: bool,
+        removal_state: NodeRemovalState,
     ) -> Result<Node, NodeRegistryError> {
         let now = self.status_clock.now();
         let mut node = match stored {
@@ -290,7 +300,7 @@ impl NodeRegistryAgent {
                     error @ (NodeRegistryError::MalformedNode { .. }
                     | NodeRegistryError::NodeIdentityMismatch { .. }),
                 ) => {
-                    if removal_in_progress {
+                    if removal_state == NodeRemovalState::InProgress {
                         return Err(NodeRegistryError::UnsafeRecoveryDuringRemoval {
                             message: error.to_string(),
                         });
