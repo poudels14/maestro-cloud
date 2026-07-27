@@ -11,10 +11,9 @@ The flake exposes the rewrite through the established Maestro entry points:
   binaries; and
 - `nixosModules.default` defines `services.maestro`.
 
-The explicit `rewrite` package and module aliases remain available for release
-inspection. `packages.<system>.legacy`, `apps.<system>.legacy`, and
-`nixosModules.legacy` are cutover-only escape hatches and are not supported
-after workloads restart under the rewrite.
+The explicit `rewrite` package and application aliases remain available for
+release inspection. The default package, application, and NixOS module are the
+canonical production entry points.
 
 ## Host configuration
 

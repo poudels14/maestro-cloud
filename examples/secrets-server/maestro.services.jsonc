@@ -1,5 +1,4 @@
 {
-  "$schema": "../../controller/maestro.schema.json",
   "services": {
     "secrets-server": {
       "name": "Secrets Server",

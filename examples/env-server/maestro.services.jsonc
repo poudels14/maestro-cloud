@@ -1,5 +1,4 @@
 {
-  "$schema": "../../controller/maestro.schema.json",
   "services": {
     "env-server": {
       "name": "Env Server",

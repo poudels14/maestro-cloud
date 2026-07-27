@@ -4,10 +4,10 @@ Maestro is a multi-node-native workload platform for declarative service
 rollouts, zero-downtime ingress cutovers, cluster operations, build and preview
 automation, and node-local observability.
 
-This branch contains the one-shot Maestro rewrite described in
-[REWRITE.md](REWRITE.md). The production legacy implementation remains under
-`controller/` and the legacy UI directories until cutover; rewrite code lives
-under `crates/` and `ui/apps|packages`.
+This repository contains the one-shot Maestro rewrite described in
+[REWRITE.md](REWRITE.md). The active implementation lives under `crates/` and
+`ui/apps|packages`; the retired controller, previous UI, DNS proxy, and
+container build paths have been removed.
 
 The rewritten system has no single-node mode. A one-node installation is a
 normal cluster topology with one master, and it grows through the same declared
@@ -56,14 +56,13 @@ For Rust development without packaging:
 
 ```sh
 cargo build --workspace
-cargo run -p maestro-cli --bin maestro-next -- --help
+cargo run -p maestro-cli --bin maestro -- --help
 cargo run -p daemon -- --help
 cargo run -p migrate -- --help
 ```
 
-The Cargo-only CLI binary is named `maestro-next` so it can coexist with the
-legacy workspace binary. Rewrite packages and release bundles install it
-publicly as `maestro`.
+Cargo, Nix packages, and release bundles all expose the operator CLI as
+`maestro`.
 
 The Nix development shell supplies Rust, Protocol Buffers, C/C++ build tools,
 Node, pnpm, actionlint, and shellcheck:
@@ -348,9 +347,9 @@ The repository gates are:
 ```sh
 cargo fmt --all -- --check
 cargo deny check
-cargo clippy --workspace --exclude controller --all-targets --all-features -- -D warnings
-INSTA_UPDATE=no cargo nextest run --workspace --exclude controller --all-features
-cargo test --doc --workspace --exclude controller --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+INSTA_UPDATE=no cargo nextest run --workspace --all-features
+cargo test --doc --workspace --all-features
 git diff --check
 python3 scripts/check-source-layout.py
 python3 scripts/check-crate-boundaries.py

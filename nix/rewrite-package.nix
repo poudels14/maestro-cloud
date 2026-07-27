@@ -51,12 +51,6 @@
     # construction build-only avoids rerunning the full workspace suite during
     # every node rollout.
     doCheck = false;
-    # Keep the legacy implementation in the development workspace without
-    # making rewrite releases depend on it.
-    postPatch = ''
-      substituteInPlace Cargo.toml \
-        --replace-fail 'members = ["controller", ' 'members = ['
-    '';
     env = pkgs.lib.optionalAttrs static {
       RUSTFLAGS = "-C target-feature=+crt-static";
     };
@@ -77,7 +71,7 @@
         release_directory=target/release
       fi
 
-      install -Dm755 "$release_directory/maestro-next" "$out/bin/maestro"
+      install -Dm755 "$release_directory/maestro" "$out/bin/maestro"
       install -Dm755 "$release_directory/daemon" "$out/bin/maestro-daemon"
       install -Dm755 "$release_directory/maestro-migrate" "$out/bin/maestro-migrate"
 

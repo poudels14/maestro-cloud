@@ -1,15 +1,18 @@
 {
-  "id": "my-service",
-  "name": "My Service",
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
-  "ingress": {
-    "host": "my-service.local",
-    "port": 80
-  },
-  "deploy": {
-    "healthcheckPath": "/health",
-    "replicas": 1
+  "services": {
+    "my-service": {
+      "name": "My Service",
+      "build": {
+        "dockerfile": "Dockerfile"
+      },
+      "ingress": {
+        "host": "my-service.local",
+        "port": 80
+      },
+      "deploy": {
+        "healthcheckPath": "/health",
+        "replicas": 1
+      }
+    }
   }
 }

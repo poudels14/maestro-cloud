@@ -39,8 +39,6 @@ ALLOWED_TARGETS = {
         "kernel",
         "test",
     },
-    # Remove this family with the legacy controller workspace member.
-    "legacy": {"test"},
 }
 
 
@@ -48,8 +46,6 @@ def family(manifest_path: Path) -> str:
     relative = manifest_path.relative_to(ROOT)
     parts = relative.parts
 
-    if parts[0] == "controller":
-        return "legacy"
     if parts[:2] == ("crates", "apps"):
         return "app"
     if parts[:2] == ("crates", "operators"):
@@ -144,8 +140,7 @@ def main() -> int:
     for package in by_name.values():
         manifest_path = Path(package["manifest_path"])
         source_family = family(manifest_path)
-        if source_family != "legacy":
-            failures.extend(dependency_inheritance_failures(manifest_path))
+        failures.extend(dependency_inheritance_failures(manifest_path))
         for dependency in package["dependencies"]:
             target = by_name.get(dependency["name"])
             if target is None:

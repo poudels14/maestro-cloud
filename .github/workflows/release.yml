@@ -44,19 +44,16 @@ jobs:
             cargo deny check
             cargo clippy \
               --workspace \
-              --exclude controller \
               --all-targets \
               --all-features \
               -- \
               -D warnings
             cargo nextest run \
               --workspace \
-              --exclude controller \
               --all-features
             cargo test \
               --doc \
               --workspace \
-              --exclude controller \
               --all-features
           '
 

@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [[bin]]
-name = "maestro-next"
+name = "maestro"
 path = "src/main.rs"
 
 [dependencies]
