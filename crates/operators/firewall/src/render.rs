@@ -65,11 +65,40 @@ fn render_node(
         })
         .collect::<Vec<_>>();
     renderer.add_set("system_sources_v4", AddressFamily::V4, system_sources);
+    let system_destinations = input
+        .assignments
+        .iter()
+        .filter(|assignment| {
+            input
+                .settings
+                .system_services
+                .contains(&assignment.spec.service_id)
+        })
+        .filter_map(|assignment| {
+            assignment
+                .spec
+                .workload_address
+                .map(|address| address.to_string())
+        })
+        .collect::<Vec<_>>();
+    renderer.add_set(
+        "system_destinations_v4",
+        AddressFamily::V4,
+        system_destinations,
+    );
 
-    let mut forward = vec!["ct state established,related accept".to_string()];
+    let mut forward = Vec::new();
     if renderer.has_set("system_sources_v4") {
         forward.push("ip saddr @system_sources_v4 accept".to_string());
     }
+    if renderer.has_set("system_destinations_v4") {
+        forward.push(
+            "ip saddr @local_workloads_v4 ip daddr @system_destinations_v4 \
+             ct direction original reject"
+                .to_string(),
+        );
+    }
+    forward.push("ct state established,related accept".to_string());
     for (key, policy) in &input.policies {
         let SubjectKey::EgressService(service_id) = key else {
             continue;
@@ -104,8 +133,7 @@ fn render_node(
         vec!["ip saddr @local_workloads_v4 ip daddr != @all_workloads_v4 masquerade".to_owned()],
     );
 
-    let mut input_rules = vec!["ct state established,related accept".to_string()];
-    input_rules.extend([
+    let mut input_rules = vec![
         format!(
             "ip saddr @local_workloads_v4 ip daddr {} tcp dport {} accept",
             node.bridge_address, input.settings.dns_port
@@ -114,11 +142,12 @@ fn render_node(
             "ip saddr @local_workloads_v4 ip daddr {} udp dport {} accept",
             node.bridge_address, input.settings.dns_port
         ),
-    ]);
+    ];
     render_system_host_access(input, renderer, &mut input_rules);
+    input_rules.push("ip saddr @all_workloads_v4 ct direction original reject".to_string());
+    input_rules.push("ct state established,related accept".to_string());
     render_control_protection(input, renderer, &mut input_rules);
     render_unrouted_host_port_guards(input, &mut input_rules);
-    input_rules.push("ip saddr @all_workloads_v4 reject".to_string());
     let host_policy = input
         .policies
         .get(&SubjectKey::HostNode(node.node_id.clone()))

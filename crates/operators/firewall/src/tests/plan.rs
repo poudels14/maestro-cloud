@@ -102,20 +102,47 @@ fn system_dns_and_control_guards_precede_user_policy() {
     let output = plan(World::standard().input()).unwrap();
     let script = &output.rulesets[0].script;
     let system = script.find("ip saddr @system_sources_v4 accept").unwrap();
+    let isolation = script
+        .find(
+            "ip saddr @local_workloads_v4 ip daddr @system_destinations_v4 \
+             ct direction original reject",
+        )
+        .unwrap();
+    let established = script.find("ct state established,related accept").unwrap();
     let global = script.find("iifname \"maestro0\" jump").unwrap();
-    assert!(system < global);
+    assert!(system < isolation);
+    assert!(isolation < established);
+    assert!(established < global);
     let dns = script
         .find("ip saddr @local_workloads_v4 ip daddr 10.42.1.1 tcp dport 53 accept")
         .unwrap();
-    let workload_reject = script.find("ip saddr @all_workloads_v4 reject").unwrap();
-    assert!(dns < workload_reject);
-    let control_allow = script.find("tcp dport { 3000, 3001 } accept").unwrap();
-    let control_reject = script.find("tcp dport { 3000, 3001 } reject").unwrap();
-    assert!(control_allow < control_reject);
     let routed_admin = script
         .find("ip saddr @host_access_")
         .expect("system host access");
-    assert!(routed_admin < control_reject);
+    let workload_reject = script
+        .find("ip saddr @all_workloads_v4 ct direction original reject")
+        .unwrap();
+    assert!(dns < workload_reject);
+    assert!(routed_admin < workload_reject);
+    let control_allow = script.find("tcp dport { 3000, 3001 } accept").unwrap();
+    let control_reject = script.find("tcp dport { 3000, 3001 } reject").unwrap();
+    assert!(workload_reject < control_allow);
+    assert!(control_allow < control_reject);
+}
+
+#[test]
+fn user_workloads_cannot_connect_to_local_or_remote_system_assignments() {
+    let output = plan(World::standard().input()).unwrap();
+    for ruleset in output.rulesets {
+        assert!(ruleset.script.contains(
+            "set system_destinations_v4 {\n        type ipv4_addr\n        flags interval\n        \
+             elements = { 10.42.1.20, 10.42.1.250, 10.42.2.20 }"
+        ));
+        assert!(ruleset.script.contains(
+            "ip saddr @local_workloads_v4 ip daddr @system_destinations_v4 \
+             ct direction original reject"
+        ));
+    }
 }
 
 #[test]

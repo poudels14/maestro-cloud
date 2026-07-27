@@ -137,7 +137,7 @@ async fn baseline_reconciler_publishes_host_guards_without_user_policies()
             resource
                 .spec
                 .script
-                .contains("ip saddr @all_workloads_v4 reject")
+                .contains("ip saddr @all_workloads_v4 ct direction original reject")
         );
     }
     Ok(())
