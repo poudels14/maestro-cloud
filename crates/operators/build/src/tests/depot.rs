@@ -12,8 +12,16 @@ use runtime::{
 };
 
 use super::support::TestResult;
-use crate::depot::{DepotInvocation, DepotRunner};
+use crate::depot::{DepotInvocation, DepotKeyKind, DepotRunner, validate_key};
 use crate::{DepotBuildBackend, DepotBuildSettings, ProcessDepotBuildBackend};
+
+#[test]
+fn depot_key_kinds_apply_distinct_delimiter_rules() {
+    assert!(validate_key(DepotKeyKind::Argument, "PROFILE,NAME").is_ok());
+    assert!(validate_key(DepotKeyKind::Secret, "PRIVATE,TOKEN").is_err());
+    assert!(validate_key(DepotKeyKind::Argument, "PROFILE=NAME").is_err());
+    assert!(validate_key(DepotKeyKind::Secret, "PRIVATE=TOKEN").is_err());
+}
 
 #[tokio::test]
 async fn depot_cli_keeps_credentials_out_of_argv_and_imports_output() -> TestResult {

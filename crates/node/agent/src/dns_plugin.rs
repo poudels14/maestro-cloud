@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use kernel_api::ClusterId;
 
 use crate::dns_socks::{DnsForwardClient, Socks5DnsForwardClient};
-use crate::{DnsAnswer, DnsLookup, DnsQueryType, DnsResponseCode, DnsZoneReader, MAESTRO_DNS_ZONE};
+use crate::{DnsLookup, DnsQueryType, DnsZoneReader, MAESTRO_DNS_ZONE};
 
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
 const REMOTE_DNS_PORT: u16 = 53;
@@ -253,17 +253,5 @@ impl DnsResolverPluginError {
         Self {
             detail: detail.into(),
         }
-    }
-}
-
-pub(crate) fn forwarded_lookup(
-    authoritative: bool,
-    response_code: DnsResponseCode,
-    answers: Vec<DnsAnswer>,
-) -> DnsLookup {
-    DnsLookup {
-        authoritative,
-        response_code,
-        answers,
     }
 }

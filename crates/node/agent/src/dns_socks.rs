@@ -9,7 +9,7 @@ use kernel_api::DnsRecordValue;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::dns_plugin::{DnsResolverPluginError, forwarded_lookup};
+use crate::dns_plugin::DnsResolverPluginError;
 use crate::{DnsAnswer, DnsLookup, DnsQueryType, DnsResponseCode};
 
 const SOCKS_VERSION: u8 = 5;
@@ -208,11 +208,11 @@ fn parse_response(query_id: u16, response: &[u8]) -> Result<DnsLookup, DnsResolv
         .filter(|record| record.dns_class == DNSClass::IN)
         .map(answer)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(forwarded_lookup(
-        message.metadata.authoritative,
+    Ok(DnsLookup {
+        authoritative: message.metadata.authoritative,
         response_code,
         answers,
-    ))
+    })
 }
 
 fn answer(record: &Record) -> Result<DnsAnswer, DnsResolverPluginError> {

@@ -296,7 +296,7 @@ fn validate_request(
         ));
     }
     for (key, value) in &request.arguments {
-        validate_key("argument", key, false)?;
+        validate_key(DepotKeyKind::Argument, key)?;
         if value.contains('\0') {
             return Err(rejected(format!(
                 "Depot argument `{key}` contains a null byte"
@@ -304,7 +304,7 @@ fn validate_request(
         }
     }
     for (key, value) in &request.secrets {
-        validate_key("secret", key, true)?;
+        validate_key(DepotKeyKind::Secret, key)?;
         if value.expose().contains('\0') {
             return Err(rejected(format!(
                 "Depot secret `{key}` contains a null byte"
@@ -319,13 +319,21 @@ fn validate_request(
     Ok(())
 }
 
-fn validate_key(kind: &str, key: &str, reject_comma: bool) -> Result<(), ArtifactStoreError> {
-    if key.is_empty()
-        || key.contains('=')
-        || (reject_comma && key.contains(','))
-        || key.chars().any(char::is_control)
-    {
-        Err(rejected(format!("Depot {kind} name `{key}` is invalid")))
+#[derive(Clone, Copy)]
+pub(crate) enum DepotKeyKind {
+    Argument,
+    Secret,
+}
+
+pub(crate) fn validate_key(kind: DepotKeyKind, key: &str) -> Result<(), ArtifactStoreError> {
+    let (kind_name, invalid_delimiter) = match kind {
+        DepotKeyKind::Argument => ("argument", key.contains('=')),
+        DepotKeyKind::Secret => ("secret", key.contains('=') || key.contains(',')),
+    };
+    if key.is_empty() || invalid_delimiter || key.chars().any(char::is_control) {
+        Err(rejected(format!(
+            "Depot {kind_name} name `{key}` is invalid"
+        )))
     } else {
         Ok(())
     }
