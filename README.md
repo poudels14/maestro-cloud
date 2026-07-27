@@ -350,9 +350,18 @@ cargo deny check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 INSTA_UPDATE=no cargo nextest run --workspace --all-features
 cargo test --doc --workspace --all-features
+RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
+  cargo doc --no-deps \
+    -p kernel-api \
+    -p kernel-store \
+    -p kernel-controller \
+    -p supervisor \
+    -p runtime \
+    -p node-fabric
 git diff --check
 python3 scripts/check-source-layout.py
 python3 scripts/check-crate-boundaries.py
+test -z "$(find crates -type f -name '*.snap.new' -print)"
 actionlint
 shellcheck scripts/*.sh
 pnpm exec oxfmt --check ui/apps/panel ui/packages

@@ -38,6 +38,11 @@ jobs:
             git diff --check
             python3 scripts/check-source-layout.py
             python3 scripts/check-crate-boundaries.py
+            pending_snapshots=$(find crates -type f -name "*.snap.new" -print)
+            if [[ -n "$pending_snapshots" ]]; then
+              printf "pending insta snapshots:\n%s\n" "$pending_snapshots"
+              exit 1
+            fi
             actionlint
             shellcheck scripts/*.sh
           '
@@ -64,6 +69,20 @@ jobs:
               --workspace \
               --all-features
           '
+
+      - name: Check public API documentation
+        shell: bash
+        env:
+          RUSTDOCFLAGS: -D missing_docs -D rustdoc::broken_intra_doc_links
+        run: |
+          nix develop --command cargo doc \
+            --no-deps \
+            -p kernel-api \
+            -p kernel-store \
+            -p kernel-controller \
+            -p supervisor \
+            -p runtime \
+            -p node-fabric
 
       - name: Check UI and generated API
         shell: bash
