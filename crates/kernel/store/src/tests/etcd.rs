@@ -187,6 +187,7 @@ async fn etcd_backend_preserves_cas_watch_transaction_and_session_contracts()
         assert_eq!(report.watch_events, 2);
         assert_eq!(report.conflicts, 1);
         assert_eq!(report.expired_session_keys, 1);
+        assert_eq!(report.snapshot_resources, 3);
     }
     Ok(())
 }

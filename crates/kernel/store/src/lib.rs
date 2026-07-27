@@ -15,6 +15,10 @@ mod etcd_watch;
 mod key;
 mod memory;
 mod model;
+#[cfg(feature = "test-util")]
+mod snapshot;
+#[cfg(feature = "test-util")]
+mod snapshot_normalize;
 mod store;
 
 pub use clock::{Clock, MonotonicTime, TokioClock};
@@ -31,6 +35,10 @@ pub use model::{
     PutRequest, SessionBinding, SessionId, StoredValue, Transaction, TransactionOutcome, Version,
     WatchCursor, WatchEvent, WatchEventKind, WatchStart,
 };
+#[cfg(feature = "test-util")]
+pub use snapshot::{ClusterSnapshot, SnapshotError, StoreSnapshotExt, UnregisteredResource};
+#[cfg(feature = "test-util")]
+pub use snapshot_normalize::{NormalizedClusterSnapshot, NormalizedUnregisteredResource};
 pub use store::{Session, Store, StoreWatch};
 
 #[cfg(feature = "test-util")]

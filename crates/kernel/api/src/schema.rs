@@ -211,6 +211,57 @@ impl BuiltinResource {
             Self::Webhook(_) => BuiltinKind::Webhook,
         }
     }
+
+    /// Returns the kind-specific resource identity as canonical text.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Node(resource) => resource.meta.id.as_str(),
+            Self::NodeTombstone(resource) => resource.meta.id.as_str(),
+            Self::NodeNetwork(resource) => resource.meta.id.as_str(),
+            Self::NodeFirewall(resource) => resource.meta.id.as_str(),
+            Self::Service(resource) => resource.meta.id.as_str(),
+            Self::Deployment(resource) => resource.meta.id.as_str(),
+            Self::Assignment(resource) => resource.meta.id.as_str(),
+            Self::PlacementHistory(resource) => resource.meta.id.as_str(),
+            Self::ReplicaState(resource) => resource.meta.id.as_str(),
+            Self::IngressRoute(resource) => resource.meta.id.as_str(),
+            Self::IngressBlocklist(resource) => resource.meta.id.as_str(),
+            Self::TrafficGeneration(resource) => resource.meta.id.as_str(),
+            Self::FirewallPolicy(resource) => resource.meta.id.as_str(),
+            Self::DnsRecord(resource) => resource.meta.id.as_str(),
+            Self::Build(resource) => resource.meta.id.as_str(),
+            Self::Preview(resource) => resource.meta.id.as_str(),
+            Self::UpgradeRun(resource) => resource.meta.id.as_str(),
+            Self::Webhook(resource) => resource.meta.id.as_str(),
+        }
+    }
+
+    /// Applies the store revision observed while reading this resource.
+    ///
+    /// Persisted payloads contain the revision known before their last write;
+    /// store adapters replace it with the version attached to the read.
+    pub fn set_observed_revision(&mut self, revision: crate::ResourceRevision) {
+        match self {
+            Self::Node(resource) => resource.meta.revision = revision,
+            Self::NodeTombstone(resource) => resource.meta.revision = revision,
+            Self::NodeNetwork(resource) => resource.meta.revision = revision,
+            Self::NodeFirewall(resource) => resource.meta.revision = revision,
+            Self::Service(resource) => resource.meta.revision = revision,
+            Self::Deployment(resource) => resource.meta.revision = revision,
+            Self::Assignment(resource) => resource.meta.revision = revision,
+            Self::PlacementHistory(resource) => resource.meta.revision = revision,
+            Self::ReplicaState(resource) => resource.meta.revision = revision,
+            Self::IngressRoute(resource) => resource.meta.revision = revision,
+            Self::IngressBlocklist(resource) => resource.meta.revision = revision,
+            Self::TrafficGeneration(resource) => resource.meta.revision = revision,
+            Self::FirewallPolicy(resource) => resource.meta.revision = revision,
+            Self::DnsRecord(resource) => resource.meta.revision = revision,
+            Self::Build(resource) => resource.meta.revision = revision,
+            Self::Preview(resource) => resource.meta.revision = revision,
+            Self::UpgradeRun(resource) => resource.meta.revision = revision,
+            Self::Webhook(resource) => resource.meta.revision = revision,
+        }
+    }
 }
 
 /// Failure to resolve an open resource kind through the built-in registry.

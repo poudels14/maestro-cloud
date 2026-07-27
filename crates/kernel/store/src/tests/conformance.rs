@@ -16,6 +16,7 @@ async fn memory_backend_passes_the_exported_conformance_battery()
             watch_events: 2,
             conflicts: 1,
             expired_session_keys: 1,
+            snapshot_resources: 3,
         }
     );
     Ok(())

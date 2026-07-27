@@ -8,3 +8,5 @@ mod memory;
 
 #[cfg(feature = "test-util")]
 mod conformance;
+#[cfg(feature = "test-util")]
+mod snapshot;

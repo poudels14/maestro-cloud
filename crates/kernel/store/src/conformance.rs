@@ -8,7 +8,8 @@ use kernel_api::{ClusterId, InvalidIdentifier, ResourceKind, ResourceName};
 
 use crate::{
     CasOutcome, Compare, DeleteRequest, ExpectedVersion, Keyspace, Mutation, PutRequest,
-    SessionBinding, Store, StoreError, StoreKey, Transaction, TransactionOutcome, WatchStart,
+    SessionBinding, Store, StoreError, StoreKey, StoreSnapshotExt, Transaction, TransactionOutcome,
+    WatchStart,
 };
 
 macro_rules! require {
@@ -30,6 +31,8 @@ pub struct ConformanceReport {
     pub conflicts: usize,
     /// Session-bound keys proven to disappear on close.
     pub expired_session_keys: usize,
+    /// Typed and open resources proven to survive a point-in-time dump.
+    pub snapshot_resources: usize,
 }
 
 /// Matchable failure from the reusable backend conformance battery.
@@ -38,6 +41,9 @@ pub enum ConformanceError {
     /// The backend returned an operational or contract error.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// The backend could not produce the required typed resource dump.
+    #[error(transparent)]
+    Snapshot(#[from] crate::SnapshotError),
     /// The isolated test namespace could not be represented safely.
     #[error(transparent)]
     Identifier(#[from] InvalidIdentifier),
@@ -64,7 +70,9 @@ pub async fn run(
     let first_key = keys.resource(&kind, &ResourceName::new("first")?);
     let second_key = keys.resource(&kind, &ResourceName::new("second")?);
     let leased_key = keys.resource(&kind, &ResourceName::new("leased")?);
-    for key in [&first_key, &second_key, &leased_key] {
+    let tombstone_kind = ResourceKind::new("NodeTombstone")?;
+    let tombstone_key = keys.resource(&tombstone_kind, &ResourceName::new("retired-node")?);
+    for key in [&first_key, &second_key, &leased_key, &tombstone_key] {
         delete_if_present(store.as_ref(), key).await?;
     }
 
@@ -92,12 +100,12 @@ pub async fn run(
             mutations: vec![
                 Mutation::Put {
                     key: first_key.clone(),
-                    value: b"first".to_vec(),
+                    value: br#"{"value":"first"}"#.to_vec(),
                     session: None,
                 },
                 Mutation::Put {
                     key: second_key.clone(),
-                    value: b"second".to_vec(),
+                    value: br#"{"value":"second"}"#.to_vec(),
                     session: None,
                 },
             ],
@@ -146,6 +154,51 @@ pub async fn run(
         listed.values.len() == 2,
         "linearizable prefix list returned the wrong key count",
     )?;
+    let tombstone = serde_json::to_vec(&serde_json::json!({
+        "meta": {
+            "id": "retired-node",
+            "revision": 1,
+            "generation": 1
+        },
+        "spec": {
+            "hostAddress": "10.1.0.10",
+            "role": "worker",
+            "requestedAt": 1_721_500_000_000_i64
+        },
+        "status": {
+            "removedAt": 1_721_500_001_000_i64
+        }
+    }))
+    .map_err(|error| ConformanceError::Violation {
+        message: format!("failed to encode the typed snapshot fixture: {error}"),
+    })?;
+    let inserted = store
+        .put_cas(PutRequest {
+            key: tombstone_key.clone(),
+            value: tombstone,
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    require!(
+        matches!(inserted, CasOutcome::Applied(_)),
+        "typed snapshot fixture unexpectedly conflicted",
+    )?;
+    let dump = store.dump(&cluster_id).await?;
+    require!(
+        dump.resource_count() == 3,
+        "cluster dump returned the wrong resource count",
+    )?;
+    require!(
+        dump.node_tombstones
+            .first()
+            .is_some_and(|resource| resource.meta.id.as_str() == "retired-node"),
+        "cluster dump did not decode the built-in resource",
+    )?;
+    require!(
+        dump.unregistered_resources.len() == 2,
+        "cluster dump did not preserve open resource kinds",
+    )?;
 
     let session = store.session(Duration::from_secs(5)).await?;
     let leased = store
@@ -171,10 +224,12 @@ pub async fn run(
 
     delete_if_present(store.as_ref(), &first_key).await?;
     delete_if_present(store.as_ref(), &second_key).await?;
+    delete_if_present(store.as_ref(), &tombstone_key).await?;
     Ok(ConformanceReport {
         watch_events: 2,
         conflicts: 1,
         expired_session_keys: 1,
+        snapshot_resources: 3,
     })
 }
 
