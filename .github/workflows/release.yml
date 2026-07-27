@@ -142,6 +142,7 @@ jobs:
           "$bundle/bin/maestro-migrate" verify --help
           version=$(nix eval --raw .#rewrite-static.version)
           test "$("$bundle/bin/maestro" --version)" = "maestro $version"
+          test "$("$bundle/bin/maestro" daemon --version)" = "daemon $version"
           test "$("$bundle/bin/maestro-daemon" --version)" = "daemon $version"
           test "$("$bundle/bin/maestro-migrate" --version)" = "maestro-migrate $version"
           test -s "$bundle/share/doc/maestro/cutover.md"

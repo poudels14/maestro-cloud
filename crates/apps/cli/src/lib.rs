@@ -21,6 +21,7 @@ mod command;
 mod config;
 mod config_source;
 mod contexts;
+mod daemon_command;
 mod deployments;
 mod error;
 mod exec_command;

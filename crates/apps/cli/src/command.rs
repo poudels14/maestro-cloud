@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
@@ -26,6 +27,13 @@ enum Command {
     Cluster {
         #[command(subcommand)]
         command: ClusterCommand,
+    },
+    /// Run node-local daemon administration commands.
+    #[command(disable_help_flag = true)]
+    Daemon {
+        /// Arguments passed unchanged to the packaged maestro-daemon binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<OsString>,
     },
     /// Create and validate Maestro configuration files.
     Config {
@@ -112,6 +120,7 @@ pub async fn run(
 ) -> Result<(), CliError> {
     match cli.command {
         Command::Cluster { command } => crate::cluster_command::run(command, input, output).await,
+        Command::Daemon { arguments } => crate::daemon_command::run(arguments).await,
         Command::Config { command } => match command {
             ConfigCommand::Init { kind, output: path } => {
                 let kind = match kind {

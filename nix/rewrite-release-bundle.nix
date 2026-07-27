@@ -37,6 +37,7 @@ in
     test -f "$bundle_root/share/maestro-panel/index.html"
     strip --strip-all "$bundle_root"/bin/*
     test "$("$bundle_root/bin/maestro" --version)" = "maestro ${version}"
+    test "$("$bundle_root/bin/maestro" daemon --version)" = "daemon ${version}"
     test "$("$bundle_root/bin/maestro-daemon" --version)" = "daemon ${version}"
     test "$("$bundle_root/bin/maestro-migrate" --version)" = "maestro-migrate ${version}"
     "$bundle_root/bin/maestro-migrate" verify --help >/dev/null

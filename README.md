@@ -48,7 +48,7 @@ nix flake check
 
 `result/bin` contains:
 
-- `maestro` — operator CLI;
+- `maestro` — operator CLI, including the `daemon` compatibility command;
 - `maestro-daemon` — host daemon and node-local administration; and
 - `maestro-migrate` — reviewed legacy-to-rewrite cutover migration.
 
@@ -275,9 +275,9 @@ Inspect one node without an operator context by authenticating with its
 protected launch document:
 
 ```sh
-sudo maestro-daemon logs /run/maestro/launch.json --tail 100
-sudo maestro-daemon logs /run/maestro/launch.json --source daemon
-sudo maestro-daemon logs /run/maestro/launch.json \
+sudo maestro daemon logs /run/maestro/launch.json --tail 100
+sudo maestro daemon logs /run/maestro/launch.json --source daemon
+sudo maestro daemon logs /run/maestro/launch.json \
   --source api/deployment-1/workload-1 --follow
 ```
 
@@ -288,10 +288,10 @@ Node-local sink dead letters are bounded and require explicit export or purge
 selection:
 
 ```sh
-sudo maestro-daemon dead-letters /run/maestro/launch.json list
-sudo maestro-daemon dead-letters /run/maestro/launch.json \
+sudo maestro daemon dead-letters /run/maestro/launch.json list
+sudo maestro daemon dead-letters /run/maestro/launch.json \
   export --output dead-letters.jsonl
-sudo maestro-daemon dead-letters /run/maestro/launch.json purge --all
+sudo maestro daemon dead-letters /run/maestro/launch.json purge --all
 ```
 
 ## Panel
