@@ -41,9 +41,24 @@ impl AssignmentAgent {
             .store
             .list(&self.keyspace.resource_kind(&self.replica_kind))
             .await?;
-        let (assignments, malformed_assignments) = decode_assignments(&assignment_snapshot.values);
-        let (deployments, malformed_deployments) = decode_deployments(&deployment_snapshot.values);
-        let (replicas, malformed_replicas) = decode_replicas(&replica_snapshot.values);
+        let (assignments, malformed_assignments) = decode_assignments(
+            &assignment_snapshot.values,
+            &self.keyspace,
+            &self.assignment_kind,
+            &self.settings.node_id,
+        );
+        let (deployments, malformed_deployments) = decode_deployments(
+            &deployment_snapshot.values,
+            &self.keyspace,
+            &self.deployment_kind,
+            &self.settings.node_id,
+        );
+        let (replicas, malformed_replicas) = decode_replicas(
+            &replica_snapshot.values,
+            &self.keyspace,
+            &self.replica_kind,
+            &self.settings.node_id,
+        );
         let local = assignments
             .into_iter()
             .filter(|assignment| assignment.spec.node_id == self.settings.node_id)
@@ -90,7 +105,7 @@ impl AssignmentAgent {
                 .collect::<BTreeSet<_>>();
             report.secret_mounts_collected = self.secrets.cleanup_stale(&active_workloads).await?;
             #[cfg(unix)]
-            {
+            if malformed_deployments == 0 {
                 let active_node_api_workloads = active_node_api_workloads(&active, &deployments);
                 report.node_api_mounts_collected = self
                     .node_api
