@@ -1,7 +1,9 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use kernel_api::{ClusterId, SecretValue};
@@ -38,6 +40,24 @@ async fn panel_assets_and_spa_routes_share_the_api_origin() -> Result<(), Box<dy
         let body = response.into_body().collect().await?.to_bytes();
         assert!(!String::from_utf8(body.to_vec())?.contains("panel shell"));
     }
+
+    let mut outside = Request::builder().uri("/").body(Body::empty())?;
+    outside
+        .extensions_mut()
+        .insert(ConnectInfo("10.1.0.20:40000".parse::<SocketAddr>()?));
+    assert_eq!(
+        server.router().oneshot(outside).await?.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let mut tailnet_proxy = Request::builder().uri("/").body(Body::empty())?;
+    tailnet_proxy
+        .extensions_mut()
+        .insert(ConnectInfo("10.42.1.4:40000".parse::<SocketAddr>()?));
+    assert_eq!(
+        server.router().oneshot(tailnet_proxy).await?.status(),
+        StatusCode::OK
+    );
     Ok(())
 }
 
@@ -63,6 +83,7 @@ fn test_server(directory: PathBuf) -> Result<ApiServer, Box<dyn std::error::Erro
             "127.0.0.1:3000".parse()?,
             Some(SecretValue::new("s".repeat(32))),
         )
+        .with_operator_proxy_cidrs(["10.42.0.0/16".parse()?])
         .with_panel_directory(directory),
     )?)
 }

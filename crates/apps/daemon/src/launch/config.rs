@@ -244,8 +244,13 @@ impl DaemonLaunchConfig {
             .nodes
             .get(&self.node_id)
             .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
-        super::api_settings(node, &self.security, self.operator_jwt_secret.value.clone())
-            .validate()?;
+        super::api_settings(
+            &self.cluster,
+            node,
+            &self.security,
+            self.operator_jwt_secret.value.clone(),
+        )
+        .validate()?;
         Ok(())
     }
 }

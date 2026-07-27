@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use cluster::Ipv4Cidr;
 use kernel_api::SecretValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,8 @@ pub struct ServerSettings {
     pub cluster_trust_root_pem: Option<String>,
     /// Node identity presented only by internal mutual-TLS clients.
     pub cluster_client_identity: Option<TlsIdentity>,
+    /// Workload networks containing the managed Tailscale gateway proxies.
+    pub operator_proxy_cidrs: Vec<Ipv4Cidr>,
     /// Optional static panel directory served from the API origin.
     pub panel_directory: Option<PathBuf>,
 }
@@ -54,6 +57,7 @@ impl ServerSettings {
             tls_identity: None,
             cluster_trust_root_pem: None,
             cluster_client_identity: None,
+            operator_proxy_cidrs: Vec::new(),
             panel_directory: None,
         }
     }
@@ -76,6 +80,14 @@ impl ServerSettings {
         self
     }
 
+    /// Restricts operator APIs and panel assets to managed proxy source networks.
+    pub fn with_operator_proxy_cidrs(mut self, cidrs: impl IntoIterator<Item = Ipv4Cidr>) -> Self {
+        self.operator_proxy_cidrs = cidrs.into_iter().collect();
+        self.operator_proxy_cidrs.sort();
+        self.operator_proxy_cidrs.dedup();
+        self
+    }
+
     /// Serves a packaged static panel from the API origin.
     pub fn with_panel_directory(mut self, directory: PathBuf) -> Self {
         self.panel_directory = Some(directory);
@@ -91,6 +103,11 @@ impl ServerSettings {
         }
         if !self.bind_address.ip().is_loopback() && self.tls_identity.is_none() {
             return Err(ServerSettingsError::PlaintextNonLoopback {
+                address: self.bind_address,
+            });
+        }
+        if !self.bind_address.ip().is_loopback() && self.operator_proxy_cidrs.is_empty() {
+            return Err(ServerSettingsError::MissingOperatorProxyCidrs {
                 address: self.bind_address,
             });
         }
@@ -140,6 +157,9 @@ pub enum ServerSettingsError {
     /// Network-reachable operator credentials must never cross plaintext HTTP.
     #[error("non-loopback API listener `{address}` requires a TLS identity")]
     PlaintextNonLoopback { address: SocketAddr },
+    /// Network-reachable operator routes must be pinned to managed proxy networks.
+    #[error("non-loopback API listener `{address}` requires operator proxy CIDRs")]
+    MissingOperatorProxyCidrs { address: SocketAddr },
     /// Short symmetric keys do not provide the expected HS256 security margin.
     #[error("JWT secret key must contain at least 32 bytes")]
     WeakJwtSecret,

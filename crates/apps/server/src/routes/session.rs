@@ -4,7 +4,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 
-use crate::auth::{AuthPolicy, clear_browser_session};
+use crate::auth::AuthPolicy;
 use crate::{ApiError, AppState};
 
 pub(super) fn router(auth: AuthPolicy) -> Router<AppState> {
@@ -26,8 +26,11 @@ async fn create_session(
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())
 }
 
-async fn delete_session() -> Result<Response, ApiError> {
-    let cookie = HeaderValue::from_str(&clear_browser_session())
+async fn delete_session(
+    Extension(auth): Extension<AuthPolicy>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let cookie = HeaderValue::from_str(&auth.clear_browser_session(&request)?)
         .map_err(|_| ApiError::internal("failed to encode browser session cookie"))?;
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())
 }

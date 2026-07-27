@@ -1,9 +1,11 @@
+use std::net::{IpAddr, SocketAddr};
 use std::time::SystemTime;
 
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, Uri, header};
 use axum::middleware::Next;
 use axum::response::Response;
+use cluster::Ipv4Cidr;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use kernel_api::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,7 @@ const BROWSER_SESSION_KIND: &str = "browser-session";
 const BROWSER_SESSION_SECONDS: u64 = 8 * 60 * 60;
 
 pub(crate) const BROWSER_SESSION_COOKIE: &str = "__Host-maestro-session";
+pub(crate) const TAILNET_BROWSER_SESSION_COOKIE: &str = "maestro-session";
 
 /// Authenticated operator identity attached to protected requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +32,12 @@ pub struct OperatorIdentity(pub String);
 enum OperatorAccess {
     ReadOnly,
     Operator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatorChannel {
+    Local,
+    TailnetProxy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,27 +51,62 @@ struct AuthenticatedOperator {
 pub(crate) struct AuthPolicy {
     secret: Option<SecretValue>,
     node_certificate_requirement: NodeCertificateRequirement,
+    operator_proxy_cidrs: Vec<Ipv4Cidr>,
+    local_operator_access: bool,
 }
 
 impl AuthPolicy {
     pub(crate) fn new(
         secret: Option<SecretValue>,
         node_certificate_requirement: NodeCertificateRequirement,
+        operator_proxy_cidrs: Vec<Ipv4Cidr>,
+        local_operator_access: bool,
     ) -> Self {
         Self {
             secret,
             node_certificate_requirement,
+            operator_proxy_cidrs,
+            local_operator_access,
         }
     }
 
     pub(crate) fn create_browser_session(&self, request: &Request) -> Result<String, ApiError> {
+        let channel = self.operator_channel(request)?;
         let secret = self.secret.as_ref().ok_or_else(|| {
             ApiError::service_unavailable(
                 "browser sessions are unavailable when loopback authentication is disabled",
             )
         })?;
         let operator = authenticate_operator_bearer(request, secret)?;
-        issue_browser_session(secret, &operator)
+        issue_browser_session(secret, &operator, channel)
+    }
+
+    pub(crate) fn clear_browser_session(&self, request: &Request) -> Result<String, ApiError> {
+        let channel = self.operator_channel(request)?;
+        Ok(clear_browser_session(channel))
+    }
+
+    fn operator_channel(&self, request: &Request) -> Result<OperatorChannel, ApiError> {
+        let source = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|source| source.0.ip());
+        if self.local_operator_access && source.is_none_or(|source| source.is_loopback()) {
+            return Ok(OperatorChannel::Local);
+        }
+        if source.is_some_and(|source| {
+            let IpAddr::V4(source) = source else {
+                return false;
+            };
+            self.operator_proxy_cidrs
+                .iter()
+                .any(|network| network.contains(source))
+        }) {
+            return Ok(OperatorChannel::TailnetProxy);
+        }
+        Err(ApiError::forbidden(
+            "operator endpoints are available only through a managed Tailscale gateway",
+        ))
     }
 }
 
@@ -71,6 +115,7 @@ pub(crate) async fn require_operator(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    policy.operator_channel(&request)?;
     let operator = match &policy.secret {
         None => AuthenticatedOperator {
             subject: "loopback-operator".to_string(),
@@ -82,6 +127,15 @@ pub(crate) async fn require_operator(
     authorize_operator_request(&request, operator.access)?;
     let identity = OperatorIdentity(operator.subject);
     request.extensions_mut().insert(identity);
+    Ok(next.run(request).await)
+}
+
+pub(crate) async fn require_operator_source(
+    State(policy): State<AuthPolicy>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    policy.operator_channel(&request)?;
     Ok(next.run(request).await)
 }
 
@@ -116,6 +170,7 @@ fn authenticate_operator(
         return authenticate_operator_bearer(request, secret);
     }
     let token = cookie(request, BROWSER_SESSION_COOKIE)
+        .or_else(|| cookie(request, TAILNET_BROWSER_SESSION_COOKIE))
         .ok_or_else(|| ApiError::unauthorized("missing operator authorization"))?;
     validate_cookie_origin(request)?;
     authenticate_browser_session(token, secret)
@@ -228,6 +283,7 @@ fn authorize_operator_request(request: &Request, access: OperatorAccess) -> Resu
 fn issue_browser_session(
     secret: &SecretValue,
     operator: &AuthenticatedOperator,
+    channel: OperatorChannel,
 ) -> Result<String, ApiError> {
     let issued_at = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -261,9 +317,13 @@ fn issue_browser_session(
         &EncodingKey::from_secret(secret.expose().as_bytes()),
     )
     .map_err(|_| ApiError::internal("failed to issue browser session"))?;
+    let cookie = browser_session_cookie(channel);
+    let secure = match channel {
+        OperatorChannel::Local => "; Secure",
+        OperatorChannel::TailnetProxy => "",
+    };
     Ok(format!(
-        "{BROWSER_SESSION_COOKIE}={token}; Path=/; Max-Age={max_age}; \
-         HttpOnly; Secure; SameSite=Strict"
+        "{cookie}={token}; Path=/; Max-Age={max_age}; HttpOnly{secure}; SameSite=Strict"
     ))
 }
 
@@ -352,9 +412,21 @@ struct BrowserSessionClaims {
     token_kind: String,
 }
 
-pub(crate) fn clear_browser_session() -> String {
+fn browser_session_cookie(channel: OperatorChannel) -> &'static str {
+    match channel {
+        OperatorChannel::Local => BROWSER_SESSION_COOKIE,
+        OperatorChannel::TailnetProxy => TAILNET_BROWSER_SESSION_COOKIE,
+    }
+}
+
+fn clear_browser_session(channel: OperatorChannel) -> String {
+    let cookie = browser_session_cookie(channel);
+    let secure = match channel {
+        OperatorChannel::Local => "; Secure",
+        OperatorChannel::TailnetProxy => "",
+    };
     format!(
-        "{BROWSER_SESSION_COOKIE}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; \
-         HttpOnly; Secure; SameSite=Strict"
+        "{cookie}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; \
+         HttpOnly{secure}; SameSite=Strict"
     )
 }

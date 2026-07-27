@@ -80,5 +80,5 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy, panel_directory: Option<
         .merge(protected)
         .merge(node)
         .with_state(state);
-    crate::panel::serve(router, panel_directory)
+    crate::panel::serve(router, panel_directory, auth)
 }

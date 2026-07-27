@@ -88,7 +88,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
     let configured_datadog =
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
-    let api_settings = api_settings(local_node, &security, operator_jwt_secret.clone());
+    let api_settings = api_settings(&cluster, local_node, &security, operator_jwt_secret.clone());
     let launch_policy = ClusterLaunchPolicy {
         datadog: datadog.clone(),
         depot: depot.clone(),
@@ -418,6 +418,7 @@ fn dns_plugin_settings(
 }
 
 pub(crate) fn api_settings(
+    cluster: &ClusterConfig,
     node: &cluster::NodeDefinition,
     security: &NodeCertificateBundle,
     operator_jwt_secret: SecretValue,
@@ -435,7 +436,8 @@ pub(crate) fn api_settings(
     )
     .with_tls_identity(identity.clone())
     .with_cluster_trust_root(security.trust_root_pem.clone())
-    .with_cluster_client_identity(identity);
+    .with_cluster_client_identity(identity)
+    .with_operator_proxy_cidrs(cluster.nodes.values().map(|node| node.workload_subnet));
     match packaged_panel_directory() {
         Some(directory) => settings.with_panel_directory(directory),
         None => settings,

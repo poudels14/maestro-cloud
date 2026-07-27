@@ -253,5 +253,7 @@ fn auth_policy(settings: &ServerSettings) -> AuthPolicy {
     AuthPolicy::new(
         settings.jwt_secret_key.clone(),
         settings.node_certificate_requirement(),
+        settings.operator_proxy_cidrs.clone(),
+        settings.bind_address.ip().is_loopback(),
     )
 }

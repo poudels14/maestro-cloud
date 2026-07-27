@@ -87,6 +87,21 @@ fn settings_fail_closed_for_exposed_or_weakly_authenticated_listeners()
         )
         .is_err()
     );
+    let exposed = ServerSettings::new(
+        "0.0.0.0:3000".parse()?,
+        Some(SecretValue::new("s".repeat(32))),
+    )
+    .with_tls_identity(TlsIdentity::new(
+        "server certificate",
+        SecretValue::new("server private key"),
+    ));
+    assert!(exposed.clone().validate().is_err());
+    assert!(
+        exposed
+            .with_operator_proxy_cidrs(["10.42.0.0/16".parse()?])
+            .validate()
+            .is_ok()
+    );
     Ok(())
 }
 

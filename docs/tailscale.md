@@ -206,8 +206,18 @@ maestro auth token \
 The command prints only the JWT. Paste it into the panel login form. Use
 `--access-level operator` only when the session needs to change cluster state
 or open an exec session. The API enforces the access level after the panel
-exchanges the JWT for its secure browser cookie. That browser session expires
-with the source token or after eight hours, whichever comes first.
+exchanges the JWT for an HttpOnly, same-site browser cookie. That browser
+session expires with the source token or after eight hours, whichever comes
+first.
+
+The HTTP origin is reachable only through the tailnet. Production listeners
+accept panel assets, browser-session exchange, and operator API requests only
+when the connection originates in a declared workload network. The host
+firewall narrows that further to the running managed gateway assignments.
+Direct requests to a node's private control address therefore cannot use
+operator credentials or load the panel, while mutual-TLS node endpoints remain
+available to cluster peers. Ordinary user services are also denied from
+initiating traffic to system assignments or host control listeners.
 
 The daemon also serves the same panel on each returned bridge address. Node
 certificates include both the control-plane endpoint and the bridge address,

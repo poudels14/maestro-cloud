@@ -176,6 +176,7 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
         .get(&launch.node_id)
         .ok_or("local node missing")?;
     let settings = api_settings(
+        &launch.cluster,
         node,
         &launch.security,
         launch.operator_jwt_secret.secret().clone(),
@@ -183,6 +184,15 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
     assert_eq!(
         settings.bind_address,
         std::net::SocketAddr::from(([0, 0, 0, 0], node.endpoint.api_port))
+    );
+    assert_eq!(
+        settings.operator_proxy_cidrs,
+        launch
+            .cluster
+            .nodes
+            .values()
+            .map(|node| node.workload_subnet)
+            .collect::<Vec<_>>()
     );
     Ok(())
 }
