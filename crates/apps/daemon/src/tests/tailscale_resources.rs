@@ -78,6 +78,10 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "every launch must load the auth key even when an unauthenticated state file exists"
     );
     assert!(
+        AUTH_SCRIPT.contains("TS_HOSTNAME=\"${MAESTRO_TAILSCALE_HOSTNAME_PREFIX}-${replica}\""),
+        "gateway identities must include the cluster name and replica ordinal"
+    );
+    assert!(
         !AUTH_SCRIPT.contains("tailscaled.state"),
         "an unauthenticated state file must not suppress auth-key loading"
     );
@@ -88,6 +92,14 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
             .get("TS_ROUTES")
             .map(String::as_str),
         Some("172.20.0.0/14")
+    );
+    assert_eq!(
+        service
+            .spec
+            .environment
+            .get("MAESTRO_TAILSCALE_HOSTNAME_PREFIX")
+            .map(String::as_str),
+        Some("maestro-daemon-test-gateway")
     );
     assert_eq!(
         service

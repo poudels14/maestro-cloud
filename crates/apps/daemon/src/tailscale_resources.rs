@@ -16,9 +16,10 @@ const GATEWAY_POLICY_ID: &str = "maestro-system-tailscale-egress";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "tailscale-gateway";
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
+const TAILSCALE_HOSTNAME_PREFIX_MAX_LEN: usize = 52;
 pub(crate) const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f";
 const TAILSCALE_VERSION: &str = "tailscale-1.98.8";
-pub(crate) const AUTH_SCRIPT: &str = "export PATH=/usr/local/bin:/usr/bin:/bin\nset -a\n. /run/secrets/tailscale.env\nset +a\nexec /usr/local/bin/containerboot";
+pub(crate) const AUTH_SCRIPT: &str = "export PATH=/usr/local/bin:/usr/bin:/bin\nreplica=\"${HOSTNAME##*-}\"\nexport TS_HOSTNAME=\"${MAESTRO_TAILSCALE_HOSTNAME_PREFIX}-${replica}\"\nset -a\n. /run/secrets/tailscale.env\nset +a\nexec /usr/local/bin/containerboot";
 
 /// Ordinary resources that provide optional operator access through Tailscale.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,10 @@ impl TailscaleSystemResources {
             ("TS_KUBE_SECRET".to_owned(), String::new()),
             ("TS_LOCAL_ADDR_PORT".to_owned(), "0.0.0.0:9002".to_owned()),
             ("TS_ROUTES".to_owned(), routes.join(",")),
+            (
+                "MAESTRO_TAILSCALE_HOSTNAME_PREFIX".to_owned(),
+                tailscale_hostname_prefix(&cluster.name),
+            ),
             (
                 "TS_SOCKS5_SERVER".to_owned(),
                 format!(":{TAILSCALE_SOCKS_PORT}"),
@@ -195,6 +200,15 @@ impl TailscaleSystemResources {
         items.insert("TS_AUTHKEY".to_owned(), auth_key);
         Ok(self)
     }
+}
+
+fn tailscale_hostname_prefix(cluster_name: &str) -> String {
+    const LEADING: &str = "maestro-";
+    const TRAILING: &str = "-gateway";
+
+    let available = TAILSCALE_HOSTNAME_PREFIX_MAX_LEN - LEADING.len() - TRAILING.len();
+    let cluster_name = cluster_name[..cluster_name.len().min(available)].trim_end_matches('-');
+    format!("{LEADING}{cluster_name}{TRAILING}")
 }
 
 pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool {
