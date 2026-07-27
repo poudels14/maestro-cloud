@@ -263,22 +263,20 @@ where
     if let Some(agent) = log_agent.as_ref()
         && let Err(error) = agent.collect_once().await
     {
-        return runtimes
-            .fail(role_error(
-                "establish initial runtime log collection",
-                error,
-            ))
-            .await;
+        tracing::warn!(
+            node_id = %spec.node_id,
+            error = %error,
+            "initial runtime log snapshot failed; background collection will retry"
+        );
     }
     if let Some(agent) = stats_agent.as_ref()
         && let Err(error) = agent.collect().await
     {
-        return runtimes
-            .fail(role_error(
-                "establish initial workload stats collection",
-                error,
-            ))
-            .await;
+        tracing::warn!(
+            node_id = %spec.node_id,
+            error = %error,
+            "initial workload stats snapshot failed; background collection will retry"
+        );
     }
     let node_registration = match node_registry_agent.register().await {
         Ok(registration) => registration,

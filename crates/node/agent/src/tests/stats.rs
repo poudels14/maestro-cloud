@@ -257,6 +257,44 @@ async fn stats_agent_runs_immediately_then_on_each_injected_deadline()
     Ok(())
 }
 
+#[tokio::test]
+async fn stats_agent_run_retries_a_transient_runtime_snapshot_failure()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    runtime.fail_next(
+        FakeRuntimeOperation::List,
+        RuntimeError::Unavailable {
+            message: "injected snapshot outage".to_owned(),
+        },
+    )?;
+    let sink = Arc::new(RecordingSink::default());
+    let clock = Arc::new(ManualClock::default());
+    let agent = WorkloadStatsAgent::new(
+        runtime,
+        Arc::new(SelectiveReader { rejected: None }),
+        Arc::new(FixedNetworkReader::default()),
+        sink.clone(),
+        settings(),
+        Arc::new(FixedClock(Timestamp(1))),
+        clock.clone(),
+    )?;
+    let (shutdown, receiver) = watch::channel(false);
+    let task = tokio::spawn(async move { agent.run(receiver).await });
+
+    wait_for_sleeps(&clock, 1).await?;
+    assert!(!task.is_finished());
+    assert!(sink.batches.lock().await.is_empty());
+    let delivered = sink.delivered.notified();
+    clock.advance(Duration::from_secs(5));
+    delivered.await;
+    assert_eq!(sink.batches.lock().await.len(), 1);
+
+    shutdown.send(true)?;
+    task.await??;
+    Ok(())
+}
+
 #[test]
 fn stats_agent_rejects_a_zero_poll_interval() {
     let mut settings = settings();
@@ -299,6 +337,7 @@ impl WorkloadStatsSink for RecordingSink {
 #[derive(Default)]
 struct ManualClock {
     now_millis: AtomicU64,
+    sleeps: AtomicU64,
     advanced: Notify,
 }
 
@@ -319,6 +358,7 @@ impl Clock for ManualClock {
     }
 
     async fn sleep_until(&self, deadline: MonotonicTime) {
+        self.sleeps.fetch_add(1, Ordering::AcqRel);
         loop {
             let advanced = self.advanced.notified();
             if self.now() >= deadline {
@@ -327,6 +367,19 @@ impl Clock for ManualClock {
             advanced.await;
         }
     }
+}
+
+async fn wait_for_sleeps(
+    clock: &ManualClock,
+    expected: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if clock.sleeps.load(Ordering::Acquire) >= expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("workload stats agent did not begin sleep {expected}").into())
 }
 
 struct SelectiveReader {

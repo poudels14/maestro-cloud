@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -41,6 +41,56 @@ async fn log_agent_run_collects_immediately_and_owns_shutdown()
 
     sink.wait_for_entry().await;
     assert_eq!(sink.entries().len(), 1);
+    shutdown.send(true)?;
+    task.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn log_agent_run_retries_a_transient_runtime_snapshot_failure()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let runtime = Arc::new(FakeRuntime::new());
+    create_and_start(runtime.as_ref(), "workload-1").await?;
+    runtime.append_log(
+        &workload_id("workload-1"),
+        LogSource::Stdout,
+        b"after recovery\n".to_vec(),
+    )?;
+    runtime.fail_next(
+        FakeRuntimeOperation::List,
+        RuntimeError::Unavailable {
+            message: "injected snapshot outage".to_owned(),
+        },
+    )?;
+    let sink = Arc::new(RecordingSink::default());
+    let clock = Arc::new(ManualClock::default());
+    let agent = RuntimeLogAgent::new(
+        runtime,
+        Arc::new(FileLogCheckpointStore::new(
+            temporary.path().join("checkpoints"),
+        )?),
+        sink.clone(),
+        RuntimeLogAgentSettings {
+            cluster_id: cluster_id(),
+            node_id: node_id(),
+            max_frames_per_workload: 16,
+            poll_interval: Duration::from_secs(1),
+        },
+        Arc::new(FixedClock),
+        clock.clone(),
+    )?;
+    let (shutdown, receiver) = watch::channel(false);
+    let task = tokio::spawn(async move { agent.run(receiver).await });
+
+    wait_for_sleeps(&clock, 1).await?;
+    assert!(!task.is_finished());
+    assert!(sink.entries().is_empty());
+    let delivered = sink.delivered.notified();
+    clock.advance(Duration::from_secs(1));
+    delivered.await;
+    assert_eq!(sink.entries().len(), 1);
+
     shutdown.send(true)?;
     task.await??;
     Ok(())
@@ -303,6 +353,54 @@ impl Clock for PausedClock {
     async fn sleep_until(&self, _deadline: MonotonicTime) {
         std::future::pending::<()>().await;
     }
+}
+
+#[derive(Default)]
+struct ManualClock {
+    milliseconds: AtomicU64,
+    sleeps: AtomicU64,
+    advanced: Notify,
+}
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        let milliseconds = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        self.milliseconds.fetch_add(milliseconds, Ordering::SeqCst);
+        self.advanced.notify_waiters();
+    }
+}
+
+#[async_trait]
+impl Clock for ManualClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::from_millis(
+            self.milliseconds.load(Ordering::SeqCst),
+        ))
+    }
+
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        self.sleeps.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let advanced = self.advanced.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            advanced.await;
+        }
+    }
+}
+
+async fn wait_for_sleeps(
+    clock: &ManualClock,
+    expected: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if clock.sleeps.load(Ordering::SeqCst) >= expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("runtime log agent did not begin sleep {expected}").into())
 }
 
 fn agent(

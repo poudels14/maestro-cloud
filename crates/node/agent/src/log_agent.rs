@@ -152,7 +152,14 @@ impl RuntimeLogAgent {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let _report = self.collect_once().await?;
+            if let Err(error) = self.collect_once().await {
+                tracing::warn!(
+                    cluster_id = %self.settings.cluster_id,
+                    node_id = %self.settings.node_id,
+                    error = %error,
+                    "runtime log snapshot failed; collection will retry"
+                );
+            }
             let next_poll = self
                 .monotonic_clock
                 .now()
@@ -294,7 +301,7 @@ fn push_failure(
     });
 }
 
-/// Fatal configuration or node-wide snapshot/checkpoint failure.
+/// Invalid configuration or one failed node-wide snapshot/checkpoint pass.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeLogAgentError {
     /// A zero frame bound could never make progress.

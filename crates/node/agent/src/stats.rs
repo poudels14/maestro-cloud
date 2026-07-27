@@ -143,7 +143,14 @@ impl WorkloadStatsAgent {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let _report = self.collect().await?;
+            if let Err(error) = self.collect().await {
+                tracing::warn!(
+                    cluster_id = %self.settings.cluster_id,
+                    node_id = %self.settings.node_id,
+                    error = %error,
+                    "workload stats snapshot failed; collection will retry"
+                );
+            }
             let next_poll = self
                 .monotonic_clock
                 .now()
