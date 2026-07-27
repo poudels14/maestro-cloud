@@ -3,12 +3,33 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use kernel_api::NodeId;
 use netlink_packet_route::route::{RouteMessage, RouteScope};
-use wireguard_control::Key;
+use wireguard_control::{Key, PeerConfigBuilder};
 
 use crate::{
     MeshPeer, MeshSubnet, WireGuardPrivateKey,
-    linux_mesh::{managed_subnet, route_delta, route_message, stale_peer_keys},
+    linux_mesh::{managed_subnet, peer_matches, route_delta, route_message, stale_peer_keys},
 };
+
+#[test]
+fn wireguard_peer_match_ignores_empty_kernel_defaults() -> Result<(), Box<dyn std::error::Error>> {
+    let public_key = WireGuardPrivateKey::from_bytes([1; 32]).public_key();
+    let peer = MeshPeer {
+        node_id: NodeId::new("node-2")?,
+        public_key: public_key.clone(),
+        endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 20, 0, 12), 51_820),
+        allowed_subnet: "172.22.2.0/24".parse()?,
+    };
+    let current = PeerConfigBuilder::new(&Key(*public_key.as_bytes()))
+        .unset_preshared_key()
+        .set_endpoint(peer.endpoint.into())
+        .unset_persistent_keepalive()
+        .replace_allowed_ips()
+        .add_allowed_ip(Ipv4Addr::new(172, 22, 2, 0).into(), 24)
+        .into_peer_config();
+
+    assert!(peer_matches(&current, &peer));
+    Ok(())
+}
 
 #[test]
 fn wireguard_peer_delta_removes_only_stale_keys() -> Result<(), Box<dyn std::error::Error>> {

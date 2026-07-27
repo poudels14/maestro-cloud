@@ -9,7 +9,9 @@ use netlink_packet_route::route::{
 };
 use rtnetlink::{Handle, LinkUnspec, RouteMessageBuilder};
 use tokio::task::JoinHandle;
-use wireguard_control::{Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfigBuilder};
+use wireguard_control::{
+    AllowedIp, Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfig, PeerConfigBuilder,
+};
 
 use crate::{
     MESH_INTERFACE_NAME, MESH_MTU_BYTES, MeshBackend, MeshBackendError, MeshConfiguration,
@@ -64,11 +66,17 @@ async fn apply_wireguard(desired: &MeshConfiguration) -> Result<(), MeshBackendE
             Err(error) => return Err(error),
         };
         let desired_private_key = Key(*private_key.expose_bytes());
+        if existing
+            .as_ref()
+            .is_some_and(|device| device_matches(device, &desired_private_key, listen_port, &peers))
+        {
+            return Ok(());
+        }
         let mut update = DeviceUpdate::new();
         if existing
             .as_ref()
-            .and_then(|device| device.private_key.as_ref())
-            != Some(&desired_private_key)
+            .and_then(|device| device.public_key.as_ref())
+            != Some(&desired_private_key.get_public())
         {
             update = update.set_private_key(desired_private_key);
         }
@@ -84,13 +92,53 @@ async fn apply_wireguard(desired: &MeshConfiguration) -> Result<(), MeshBackendE
             update = update.remove_peer_by_key(&stale);
         }
         for peer in &peers {
-            update = update.add_peer(peer_update(peer));
+            let current = existing.as_ref().and_then(|device| {
+                device.peers.iter().find(|current| {
+                    current.config.public_key.as_bytes() == peer.public_key.as_bytes()
+                })
+            });
+            if !current.is_some_and(|current| peer_matches(&current.config, peer)) {
+                update = update.add_peer(peer_update(peer));
+            }
         }
         update.apply(&interface, backend)
     })
     .await
     .map_err(|error| backend_error("join WireGuard kernel update", error))?
     .map_err(|error| backend_error("apply WireGuard kernel update", error))
+}
+
+fn device_matches(
+    current: &Device,
+    private_key: &Key,
+    listen_port: u16,
+    peers: &[MeshPeer],
+) -> bool {
+    current.public_key.as_ref() == Some(&private_key.get_public())
+        && current.listen_port == Some(listen_port)
+        && current.peers.len() == peers.len()
+        && peers.iter().all(|desired| {
+            current
+                .peers
+                .iter()
+                .find(|peer| peer.config.public_key.as_bytes() == desired.public_key.as_bytes())
+                .is_some_and(|peer| peer_matches(&peer.config, desired))
+        })
+}
+
+pub(crate) fn peer_matches(current: &PeerConfig, desired: &MeshPeer) -> bool {
+    current.public_key.as_bytes() == desired.public_key.as_bytes()
+        && current.endpoint == Some(SocketAddr::V4(desired.endpoint))
+        && current.persistent_keepalive_interval.unwrap_or_default() == 0
+        && current
+            .preshared_key
+            .as_ref()
+            .is_none_or(|key| key == &Key::zero())
+        && current.allowed_ips.as_slice()
+            == [AllowedIp {
+                address: IpAddr::V4(desired.allowed_subnet.network_address()),
+                cidr: IPV4_SUBNET_PREFIX_LENGTH,
+            }]
 }
 
 pub(crate) fn stale_peer_keys(
@@ -109,6 +157,8 @@ pub(crate) fn stale_peer_keys(
 
 fn peer_update(peer: &MeshPeer) -> PeerConfigBuilder {
     PeerConfigBuilder::new(&Key(*peer.public_key.as_bytes()))
+        .unset_preshared_key()
+        .unset_persistent_keepalive()
         .set_endpoint(SocketAddr::V4(peer.endpoint))
         .replace_allowed_ips()
         .add_allowed_ip(
