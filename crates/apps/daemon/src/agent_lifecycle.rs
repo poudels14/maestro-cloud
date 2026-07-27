@@ -15,6 +15,7 @@ use metrics::{
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::role_tasks::shutdown_role_tasks;
 use crate::{RoleError, RoleRuntime};
 
 pub(crate) struct AgentStartupRuntimes {
@@ -177,14 +178,8 @@ impl RoleRuntime for AgentRoleRuntime {
 
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
         let _ = self.shutdown.send(true);
-        let mut failures = Vec::new();
-        for task in self.tasks.drain(..) {
-            match task.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => failures.push(error.to_string()),
-                Err(error) => failures.push(format!("node agent task failed: {error}")),
-            }
-        }
+        let mut failures =
+            shutdown_role_tasks(&mut self.tasks, self.clock.as_ref(), self.shutdown_grace).await;
         if let Some(runtime) = self.metric_store_runtime.take()
             && let Err(error) = runtime.shutdown().await
         {

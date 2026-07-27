@@ -6,7 +6,7 @@ use metrics::MetricSinkWorkerSettings;
 use crate::RoleError;
 use crate::join_activation::JoinActivationSettings;
 
-/// Time bounds for node resync, leadership, and graceful store shutdown.
+/// Time bounds for node resync, leadership, and graceful role shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DaemonRoleSettings {
     pub(crate) bridge_resync_interval: Duration,
@@ -32,7 +32,7 @@ pub struct DaemonRoleSettings {
     pub(crate) leadership_ttl: Duration,
     pub(crate) leadership_keepalive_interval: Duration,
     pub(crate) campaign_retry_interval: Duration,
-    pub(crate) store_shutdown_grace: Duration,
+    pub(crate) role_shutdown_grace: Duration,
     pub(crate) join_activation: JoinActivationSettings,
 }
 
@@ -50,7 +50,7 @@ impl DaemonRoleSettings {
         leadership_ttl: Duration,
         leadership_keepalive_interval: Duration,
         campaign_retry_interval: Duration,
-        store_shutdown_grace: Duration,
+        role_shutdown_grace: Duration,
     ) -> Result<Self, RoleError> {
         if bridge_resync_interval.is_zero()
             || mesh_resync_interval.is_zero()
@@ -63,7 +63,7 @@ impl DaemonRoleSettings {
             || leadership_ttl.is_zero()
             || leadership_keepalive_interval.is_zero()
             || campaign_retry_interval.is_zero()
-            || store_shutdown_grace.is_zero()
+            || role_shutdown_grace.is_zero()
             || leadership_keepalive_interval >= leadership_ttl
         {
             return Err(RoleError::new(
@@ -94,7 +94,7 @@ impl DaemonRoleSettings {
             leadership_ttl,
             leadership_keepalive_interval,
             campaign_retry_interval,
-            store_shutdown_grace,
+            role_shutdown_grace,
             join_activation: JoinActivationSettings::default(),
         })
     }
@@ -148,7 +148,7 @@ impl Default for DaemonRoleSettings {
             leadership_ttl: Duration::from_secs(15),
             leadership_keepalive_interval: Duration::from_secs(5),
             campaign_retry_interval: Duration::from_secs(1),
-            store_shutdown_grace: Duration::from_secs(10),
+            role_shutdown_grace: Duration::from_secs(10),
             join_activation: JoinActivationSettings::default(),
         }
     }

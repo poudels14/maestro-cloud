@@ -355,7 +355,7 @@ where
         tasks,
         owned_runtimes,
         factory.monotonic_clock.clone(),
-        factory.settings.store_shutdown_grace,
+        factory.settings.role_shutdown_grace,
     )))
 }
 

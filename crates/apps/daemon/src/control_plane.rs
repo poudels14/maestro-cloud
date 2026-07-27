@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use cluster::{StoreProvider, StoreStartMode};
@@ -25,6 +26,7 @@ pub use self::settings::DaemonRoleSettings;
 use crate::admission::AdmissionDependencies;
 use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
+use crate::role_tasks::shutdown_role_tasks;
 use crate::{
     DaemonPlan, DaemonRole, LogMaintenanceWorker, RoleError, RoleFactory, RoleRuntime, RoleSpec,
 };
@@ -323,6 +325,7 @@ where
             .map_err(|error| role_error("campaign for initial controller leadership", error))?;
         let (shutdown, shutdown_receiver) = watch::channel(false);
         let clock = self.monotonic_clock.clone();
+        let task_clock = clock.clone();
         let settings = self.settings;
         let workload = self.leader_workload.clone();
         let task = tokio::spawn(async move {
@@ -333,7 +336,7 @@ where
                 identity,
                 lease,
                 workload,
-                clock,
+                task_clock,
                 settings,
                 shutdown_receiver,
             )
@@ -342,6 +345,8 @@ where
         Ok(Box::new(ControllerRoleRuntime {
             shutdown,
             task: Some(task),
+            clock,
+            shutdown_grace: settings.role_shutdown_grace,
         }))
     }
 }
@@ -349,6 +354,8 @@ where
 struct ControllerRoleRuntime {
     shutdown: watch::Sender<bool>,
     task: Option<JoinHandle<Result<(), RoleError>>>,
+    clock: Arc<dyn Clock>,
+    shutdown_grace: Duration,
 }
 
 #[async_trait]
@@ -372,14 +379,9 @@ impl RoleRuntime for ControllerRoleRuntime {
 
     async fn shutdown(mut self: Box<Self>) -> Result<(), RoleError> {
         let _ = self.shutdown.send(true);
-        let failures = match self.task.take() {
-            Some(task) => match task.await {
-                Ok(Ok(())) => Vec::new(),
-                Ok(Err(error)) => vec![error.to_string()],
-                Err(error) => vec![format!("leadership task failed: {error}")],
-            },
-            None => Vec::new(),
-        };
+        let mut tasks = self.task.take().into_iter().collect();
+        let failures =
+            shutdown_role_tasks(&mut tasks, self.clock.as_ref(), self.shutdown_grace).await;
         finish_shutdown(failures)
     }
 }

@@ -30,6 +30,7 @@ build = { version = "0.5.0", path = "../../operators/build" }
 deployment = { version = "0.5.0", path = "../../operators/deployment" }
 dns = { version = "0.5.0", path = "../../operators/dns" }
 firewall = { version = "0.5.0", path = "../../operators/firewall" }
+futures-util.workspace = true
 ingress = { version = "0.5.0", path = "../../operators/ingress" }
 kernel-api = { version = "0.5.0", path = "../../kernel/api" }
 kernel-controller = { version = "0.5.0", path = "../../kernel/controller" }

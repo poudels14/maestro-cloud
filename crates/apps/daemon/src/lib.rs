@@ -39,6 +39,7 @@ mod plan;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
 mod platform;
 mod preview_config;
+mod role_tasks;
 mod runtime;
 mod s3_backup;
 mod stats_metric_sampler;

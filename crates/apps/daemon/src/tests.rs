@@ -37,6 +37,7 @@ mod orchestration_service;
 mod orchestration_upgrade_acceptance;
 mod orchestration_upgrade_backend;
 mod plan;
+mod role_tasks;
 mod runtime;
 mod s3_backup;
 mod stats_metric_sampler;
