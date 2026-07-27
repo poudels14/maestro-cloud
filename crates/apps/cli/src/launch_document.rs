@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use cluster::{
     ClusterCertificateAuthority, ClusterConfig, ClusterLaunchPolicy, DatadogLaunchConfig,
     DepotLaunchConfig, JoinPayload, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
-    NodeCertificateBundle, PreviewLaunchConfig, StoreJoinTicket, certificate_fingerprint,
+    NodeCertificateBundle, OperatorJwtSecretSource, PreviewLaunchConfig, StoreJoinTicket,
+    certificate_fingerprint,
 };
 use kernel_api::{NodeId, NodeRole, SecretValue};
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ pub(crate) struct DaemonLaunchDocument {
     security: NodeCertificateBundle,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     certificate_issuer: Option<ClusterCertificateAuthority>,
-    operator_jwt_secret: SecretValue,
+    operator_jwt_secret: OperatorJwtSecretSource,
     store_encryption_secret: SecretValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     datadog: Option<DatadogLaunchConfig>,
@@ -46,7 +47,7 @@ impl DaemonLaunchDocument {
         etcd_binary: PathBuf,
         security: NodeCertificateBundle,
         certificate_issuer: ClusterCertificateAuthority,
-        operator_jwt_secret: SecretValue,
+        operator_jwt_secret: OperatorJwtSecretSource,
         store_encryption_secret: SecretValue,
         launch_policy: ClusterLaunchPolicy,
     ) -> Result<Self, CliError> {
@@ -84,6 +85,7 @@ impl DaemonLaunchDocument {
         data_directory: PathBuf,
         containerd_socket: PathBuf,
         etcd_binary: Option<PathBuf>,
+        operator_jwt_secret: OperatorJwtSecretSource,
         payload: JoinPayload,
     ) -> Result<Self, CliError> {
         let ClusterLaunchPolicy {
@@ -121,7 +123,7 @@ impl DaemonLaunchDocument {
             store_mode,
             security: payload.certificates,
             certificate_issuer: payload.certificate_issuer,
-            operator_jwt_secret: payload.operator_jwt_secret,
+            operator_jwt_secret,
             store_encryption_secret: payload.store_encryption_secret,
             datadog,
             depot,
@@ -141,7 +143,7 @@ impl DaemonLaunchDocument {
         etcd_binary: PathBuf,
         security: NodeCertificateBundle,
         certificate_issuer: ClusterCertificateAuthority,
-        operator_jwt_secret: SecretValue,
+        operator_jwt_secret: OperatorJwtSecretSource,
         store_encryption_secret: SecretValue,
         launch_policy: ClusterLaunchPolicy,
     ) -> Result<Self, CliError> {
@@ -199,11 +201,6 @@ impl DaemonLaunchDocument {
         })?;
         validate_etcd_binary(node.role, self.etcd_binary.as_deref())?;
         self.store_mode.validate(&self.node_id, node.role)?;
-        if self.operator_jwt_secret.expose().len() < 32 {
-            return Err(CliError::invalid_input(
-                "operator JWT secret must contain at least 32 bytes",
-            ));
-        }
         if self.store_encryption_secret.expose().chars().count() < 32 {
             return Err(CliError::invalid_input(
                 "store encryption secret must contain at least 32 characters",
@@ -248,6 +245,7 @@ impl DaemonLaunchDocument {
         containerd_socket: &Path,
         etcd_binary: &Path,
         authority: &ClusterCertificateAuthority,
+        operator_jwt_secret: &OperatorJwtSecretSource,
         launch_policy: &ClusterLaunchPolicy,
     ) -> bool {
         self.cluster == *cluster
@@ -257,6 +255,7 @@ impl DaemonLaunchDocument {
             && self.etcd_binary.as_deref() == Some(etcd_binary)
             && self.store_mode == StoreLaunchDocument::Bootstrap
             && self.certificate_issuer.as_ref() == Some(authority)
+            && &self.operator_jwt_secret == operator_jwt_secret
             && self.datadog == launch_policy.datadog
             && self.depot == launch_policy.depot
             && self.log_backup == launch_policy.log_backup

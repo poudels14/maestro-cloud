@@ -95,7 +95,6 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             &cluster.name,
             CertificateValidity::new(now - TimeDuration::days(1), now + TimeDuration::days(3_650))?,
         )?,
-        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new(
             "storage-test-secret-with-at-least-32-characters",
         ),

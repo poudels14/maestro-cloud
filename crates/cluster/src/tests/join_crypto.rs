@@ -34,7 +34,6 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         cloudflare: config.cloudflare.clone(),
         launch_policy: crate::ClusterLaunchPolicy::default(),
         certificates,
-        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new("store-test-secret-with-at-least-32-characters"),
         store_join_ticket: Some(StoreJoinTicket::from_provider_data(
             node_id.clone(),
@@ -89,7 +88,7 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
     ));
 
     let mut weak_secrets = payload;
-    weak_secrets.operator_jwt_secret = SecretValue::new("too-short");
+    weak_secrets.store_encryption_secret = SecretValue::new("too-short");
     assert!(matches!(
         encrypt_join_response(
             &config.join_secret,
@@ -97,7 +96,7 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
             &weak_secrets,
             JoinResponseStatus::ACCEPTED,
         ),
-        Err(JoinProtocolError::ResponseSecretGrantMismatch)
+        Err(JoinProtocolError::ResponseStoreSecretGrantMismatch)
     ));
     Ok(())
 }

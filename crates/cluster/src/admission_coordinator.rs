@@ -26,7 +26,6 @@ const MAXIMUM_APPROVAL_CAS_ATTEMPTS: usize = 8;
 pub struct AdmissionCoordinator {
     config: ClusterConfig,
     authority: ClusterCertificateAuthority,
-    operator_jwt_secret: SecretValue,
     store_encryption_secret: SecretValue,
     launch_policy: ClusterLaunchPolicy,
     provider: Arc<dyn StoreProvider>,
@@ -39,16 +38,12 @@ impl AdmissionCoordinator {
     pub fn new(
         config: ClusterConfig,
         authority: ClusterCertificateAuthority,
-        operator_jwt_secret: SecretValue,
         store_encryption_secret: SecretValue,
         launch_policy: ClusterLaunchPolicy,
         provider: Arc<dyn StoreProvider>,
         store: Arc<dyn Store>,
     ) -> Result<Self, AdmissionCoordinatorError> {
         config.preflight()?;
-        if operator_jwt_secret.expose().len() < 32 {
-            return Err(AdmissionCoordinatorError::WeakOperatorSecret);
-        }
         if store_encryption_secret.expose().chars().count() < 32 {
             return Err(AdmissionCoordinatorError::WeakStoreSecret);
         }
@@ -56,7 +51,6 @@ impl AdmissionCoordinator {
         Ok(Self {
             config,
             authority,
-            operator_jwt_secret,
             store_encryption_secret,
             launch_policy,
             provider,
@@ -332,7 +326,6 @@ impl AdmissionCoordinator {
             cloudflare: self.config.cloudflare.clone(),
             launch_policy: self.launch_policy.clone(),
             certificates,
-            operator_jwt_secret: self.operator_jwt_secret.clone(),
             store_encryption_secret: self.store_encryption_secret.clone(),
             store_join_ticket,
             certificate_issuer: request
@@ -387,9 +380,6 @@ pub enum AdmissionCoordinatorError {
     /// Static cluster topology was invalid.
     #[error(transparent)]
     InvalidTopology(#[from] ClusterPreflightError),
-    /// The API authentication secret cannot safely start an admitted node.
-    #[error("operator JWT secret must contain at least 32 bytes")]
-    WeakOperatorSecret,
     /// The value-encryption secret cannot safely start an admitted node.
     #[error("store encryption secret must contain at least 32 characters")]
     WeakStoreSecret,

@@ -12,8 +12,6 @@ use kernel_store::Store;
 pub struct AdmissionDependencies {
     /// Cluster trust-root signer delivered during bootstrap or control-plane join.
     pub authority: ClusterCertificateAuthority,
-    /// Cluster-wide operator authentication key delivered to every node.
-    pub operator_jwt_secret: SecretValue,
     /// Cluster-wide at-rest encryption key delivered to every node.
     pub store_encryption_secret: SecretValue,
     /// Optional production integrations delivered through encrypted join grants.
@@ -30,7 +28,6 @@ impl AdmissionDependencies {
         AdmissionCoordinator::new(
             config,
             self.authority.clone(),
-            self.operator_jwt_secret.clone(),
             self.store_encryption_secret.clone(),
             self.launch_policy.clone(),
             provider,

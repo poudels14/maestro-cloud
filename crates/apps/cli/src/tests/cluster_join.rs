@@ -13,6 +13,8 @@ use crate::cluster_join::{AdmissionResponse, JoinOptions, JoinTransport, join_wi
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
 
+const OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
+
 struct MemoryReader {
     source: String,
 }
@@ -125,7 +127,6 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
             node.role,
             validity,
         )?,
-        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new(
             "storage-test-secret-with-at-least-32-characters",
         ),
@@ -143,6 +144,7 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
             "https://10.20.0.11:3000".to_string(),
             "maestro.jsonc".to_string(),
             directory.path().to_path_buf(),
+            OPERATOR_SECRET_SOURCE.to_owned(),
         )
     };
 
@@ -169,7 +171,10 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
         Some(&"10.20.0.0/24".into())
     );
     assert!(launch.pointer("/security/identity/privateKeyPem").is_some());
-    assert!(launch.pointer("/operatorJwtSecret").is_some());
+    assert_eq!(
+        launch.pointer("/operatorJwtSecret"),
+        Some(&OPERATOR_SECRET_SOURCE.into())
+    );
     assert_eq!(
         launch.pointer("/depot/token"),
         Some(&"joined-depot-secret".into())
@@ -219,6 +224,7 @@ async fn join_rejects_non_https_leader_before_transport() -> Result<(), Box<dyn 
             "http://10.20.0.11:3000".to_string(),
             "maestro.jsonc".to_string(),
             directory.path().to_path_buf(),
+            OPERATOR_SECRET_SOURCE.to_owned(),
         ),
         &mut Vec::new(),
         &reader,
@@ -272,7 +278,6 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
             node.role,
             validity,
         )?,
-        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new(
             "storage-test-secret-with-at-least-32-characters",
         ),
@@ -292,6 +297,7 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
         "https://10.20.0.11:3000".to_string(),
         "maestro.jsonc".to_string(),
         directory.path().to_path_buf(),
+        OPERATOR_SECRET_SOURCE.to_owned(),
     );
     options.etcd_binary = Some("/run/current-system/sw/bin/etcd".into());
 
@@ -346,7 +352,6 @@ fn unusable_payload(
             node.role,
             validity,
         )?,
-        operator_jwt_secret: SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         store_encryption_secret: SecretValue::new(
             "storage-test-secret-with-at-least-32-characters",
         ),

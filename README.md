@@ -121,12 +121,17 @@ sudo maestro cluster bootstrap \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \
   --etcd-binary /run/current-system/sw/bin/etcd \
+  --operator-secret-source \
+    aws-secret://maestro/production/operator-jwt-secret \
   --output /run/maestro/launch.json
 ```
 
-The launch document contains private keys and cluster secrets. It must remain
-an owner-only regular file outside the Nix store. Start it through the NixOS
-rewrite module, or directly while developing:
+The launch document contains private keys, cluster secrets, and the AWS
+Secrets Manager reference for the operator signing key. It must remain an
+owner-only regular file outside the Nix store. Every node resolves that same
+reference through its AWS credential chain at startup, so its instance role
+needs `secretsmanager:GetSecretValue` for that exact secret. Start it through
+the NixOS rewrite module, or directly while developing:
 
 ```sh
 sudo maestro-daemon start /run/maestro/launch.json
@@ -136,8 +141,9 @@ Optional top-level `datadog`, `depot`, `log-backup`, `preview`, and
 `nixos-upgrade` settings are validated with the cluster config and copied into
 the protected launch document. Credential fields accept literal values,
 `file://` sources, or `aws-secret://` sources. Node admission carries the same
-policy inside the encrypted join response, so worker-local config never needs
-another copy of those credentials.
+policy inside the encrypted join response. The operator signing key is
+deliberately excluded from join grants; bootstrap and join commands receive its
+shared AWS source explicitly.
 
 For multi-node admission, network requirements, join preparation, approval,
 verification, drain, restart, upgrade, and removal procedures, follow
@@ -159,6 +165,25 @@ maestro auth token \
 This prints only the short-lived JWT. `read-only` tokens can use API and panel
 views but cannot mutate cluster state or open exec sessions; `operator` tokens
 retain full access.
+
+To rotate the signing key without reading it locally, create a new secret
+version and restart all nodes against it:
+
+```sh
+aws secretsmanager get-random-password \
+  --password-length 64 \
+  --exclude-punctuation \
+  --query RandomPassword \
+  --output text |
+  tr -d '\n' |
+  aws secretsmanager put-secret-value \
+    --secret-id maestro/production/operator-jwt-secret \
+    --secret-string file:///dev/stdin
+```
+
+Maestro currently accepts one HS256 signing key at a time. Coordinate the
+restart across all nodes; existing tokens stop working once requests reach a
+node using the new key. Mint replacement tokens after the restart.
 
 Create a context for one declared HTTPS endpoint. Supply the cluster CA when it
 is not already in the workstation trust store:

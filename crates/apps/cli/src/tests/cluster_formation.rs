@@ -147,6 +147,7 @@ async fn join_preparation_persists_one_private_key_and_prints_approval_command()
 #[tokio::test]
 async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
 -> Result<(), Box<dyn std::error::Error>> {
+    const OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
     let directory = tempfile::tempdir()?;
     let reader = MemoryReader {
         source: cluster_document(),
@@ -159,6 +160,7 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
         directory.path(),
         containerd_socket,
         etcd_binary,
+        OPERATOR_SECRET_SOURCE,
         None,
         &mut first_output,
         &reader,
@@ -172,6 +174,7 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
         directory.path(),
         containerd_socket,
         etcd_binary,
+        OPERATOR_SECRET_SOURCE,
         None,
         &mut second_output,
         &reader,
@@ -186,7 +189,10 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
         Some(&"/run/current-system/sw/bin/etcd".into())
     );
     assert!(launch.pointer("/certificateIssuer/privateKeyPem").is_some());
-    assert!(launch.pointer("/operatorJwtSecret").is_some());
+    assert_eq!(
+        launch.pointer("/operatorJwtSecret"),
+        Some(&OPERATOR_SECRET_SOURCE.into())
+    );
     assert!(launch.pointer("/storeEncryptionSecret").is_some());
     assert_eq!(
         launch.pointer("/depot/token"),

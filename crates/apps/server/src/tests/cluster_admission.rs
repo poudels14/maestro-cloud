@@ -36,7 +36,6 @@ async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_jo
     let coordinator = Arc::new(AdmissionCoordinator::new(
         config.clone(),
         authority,
-        operator_secret.clone(),
         store_secret.clone(),
         cluster::ClusterLaunchPolicy::default(),
         Arc::new(UnusedProvider),
@@ -124,7 +123,6 @@ async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_jo
         &encrypted,
         JoinResponseStatus::ACCEPTED,
     )?;
-    assert_eq!(payload.operator_jwt_secret, operator_secret);
     assert_eq!(payload.store_encryption_secret, store_secret);
     assert!(payload.store_join_ticket.is_none());
     assert!(payload.certificate_issuer.is_none());
@@ -173,7 +171,6 @@ async fn join_rejects_a_transport_source_other_than_the_signed_endpoint()
     let coordinator = Arc::new(AdmissionCoordinator::new(
         config.clone(),
         ClusterCertificateAuthority::generate(&config.name, authority_validity()?)?,
-        operator_secret.clone(),
         SecretValue::new("storage-test-secret-with-at-least-32-characters"),
         cluster::ClusterLaunchPolicy::default(),
         Arc::new(UnusedProvider),

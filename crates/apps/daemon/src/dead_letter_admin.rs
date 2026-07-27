@@ -10,7 +10,7 @@ use logstore::{DuckLogStoreRuntime, DuckStoreError, DuckStoreSettings};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::{DaemonLaunchError, load_launch_config};
+use crate::{DaemonLaunchError, load_launch_document};
 
 const ADMIN_QUEUE_CAPACITY: usize = 32;
 const EXPORT_PAGE_SIZE: usize = 256;
@@ -50,12 +50,7 @@ pub async fn administer_dead_letters(
     launch_config: &Path,
     command: DeadLetterAdminCommand,
 ) -> Result<DeadLetterAdminOutput, DeadLetterAdminError> {
-    let launch_config = launch_config.to_path_buf();
-    let config = tokio::task::spawn_blocking(move || load_launch_config(&launch_config))
-        .await
-        .map_err(|error| DeadLetterAdminError::ConfigTask {
-            message: error.to_string(),
-        })??;
+    let config = load_launch_document(launch_config)?;
     let database = config.data_directory.join("agent").join("logs.duckdb");
     administer_database(&database, command).await
 }
@@ -302,9 +297,6 @@ pub enum DeadLetterAdminError {
     /// Protected launch configuration could not be loaded or validated.
     #[error(transparent)]
     Launch(#[from] DaemonLaunchError),
-    /// The bounded blocking config loader could not be joined.
-    #[error("dead-letter config loader failed: {message}")]
-    ConfigTask { message: String },
     /// The node-local log store does not exist and must not be created by an admin command.
     #[error("node-local log store does not exist at `{}`", path.display())]
     DatabaseMissing { path: PathBuf },

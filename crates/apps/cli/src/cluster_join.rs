@@ -4,9 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cluster::{
     CaDiscoveryRequest, CaDiscoveryResponse, ClusterConfig, EncryptedJoinResponse, JoinPayload,
-    JoinPrivateKey, JoinRequest, JoinResponseStatus, SignedJoinRequest, decrypt_join_response,
-    load_or_create_join_key, sign_join_request, verify_ca_discovery_response,
-    verify_join_request_signature,
+    JoinPrivateKey, JoinRequest, JoinResponseStatus, OperatorJwtSecretSource, SignedJoinRequest,
+    decrypt_join_response, load_or_create_join_key, sign_join_request,
+    verify_ca_discovery_response, verify_join_request_signature,
 };
 use kernel_api::{NodeId, NodeRole};
 
@@ -26,17 +26,24 @@ pub(crate) struct JoinOptions {
     pub(crate) data_directory: PathBuf,
     pub(crate) containerd_socket: PathBuf,
     pub(crate) etcd_binary: Option<PathBuf>,
+    pub(crate) operator_secret_source: String,
     pub(crate) output: Option<PathBuf>,
 }
 
 impl JoinOptions {
-    pub(crate) fn new(leader: String, config_source: String, data_directory: PathBuf) -> Self {
+    pub(crate) fn new(
+        leader: String,
+        config_source: String,
+        data_directory: PathBuf,
+        operator_secret_source: String,
+    ) -> Self {
         Self {
             leader,
             config_source,
             data_directory,
             containerd_socket: PathBuf::from(DEFAULT_CONTAINERD_SOCKET),
             etcd_binary: None,
+            operator_secret_source,
             output: None,
         }
     }
@@ -57,6 +64,8 @@ pub(crate) async fn join_with_transport(
     transport: &impl JoinTransport,
 ) -> Result<(), CliError> {
     validate_paths(&options)?;
+    let operator_jwt_secret = OperatorJwtSecretSource::new(options.operator_secret_source.clone())
+        .map_err(|error| CliError::invalid_input(error.to_string()))?;
     let origin = parse_leader_origin(&options.leader)?;
     let loaded = load_cluster(&options.config_source, reader).await?;
     let node =
@@ -120,6 +129,7 @@ pub(crate) async fn join_with_transport(
         options.data_directory.clone(),
         options.containerd_socket.clone(),
         options.etcd_binary.clone(),
+        operator_jwt_secret,
         payload,
     )?;
     let destination = options

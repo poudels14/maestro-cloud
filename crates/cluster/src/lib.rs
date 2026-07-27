@@ -20,6 +20,7 @@ mod join_key;
 mod launch_policy;
 mod network;
 mod node_lifecycle;
+mod operator_secret;
 mod ports;
 mod provider;
 mod removal;
@@ -57,6 +58,7 @@ pub use launch_policy::{
 };
 pub use network::{CidrError, Ipv4Cidr};
 pub use node_lifecycle::{NodeSchedulingAction, set_node_scheduling};
+pub use operator_secret::{OperatorJwtSecretSource, OperatorJwtSecretSourceError};
 pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};
 pub use provider::{
     MemberActivation, MemberState, StoreJoinTicket, StoreMember, StoreProvider,

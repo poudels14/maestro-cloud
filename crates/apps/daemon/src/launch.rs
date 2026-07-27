@@ -52,7 +52,10 @@ use crate::{
 
 mod config;
 
-pub use config::{DaemonLaunchConfig, StoreLaunchMode, load_launch_config};
+pub use config::{
+    DaemonLaunchConfig, DaemonLaunchDocument, ResolvedOperatorJwtSecret, StoreLaunchMode,
+    load_launch_config, load_launch_document,
+};
 
 /// Builds production adapters and starts one daemon instance for its declared node role.
 pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, DaemonLaunchError> {
@@ -75,6 +78,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         preview,
         nixos_upgrade,
     } = config;
+    let operator_jwt_secret = operator_jwt_secret.into_secret();
     let known_members = control_plane_members(&cluster);
     let dns_plugin_settings = dns_plugin_settings(&cluster)?;
     let clock = Arc::new(TokioClock::new());
@@ -94,7 +98,6 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     };
     let admission = certificate_issuer.map(|authority| AdmissionDependencies {
         authority,
-        operator_jwt_secret,
         store_encryption_secret: store_encryption_secret.clone(),
         launch_policy,
     });

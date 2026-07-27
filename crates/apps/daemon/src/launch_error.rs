@@ -33,6 +33,9 @@ pub enum DaemonLaunchError {
         #[source]
         source: serde_json::Error,
     },
+    /// AWS Secrets Manager did not return a usable operator signing key.
+    #[error("failed to resolve operator JWT secret `{source_uri}`: {message}")]
+    OperatorSecret { source_uri: String, message: String },
     /// Datadog log delivery configuration was unsafe or incomplete.
     #[error(transparent)]
     DatadogSettings(#[from] logs::DatadogLogSinkSettingsError),

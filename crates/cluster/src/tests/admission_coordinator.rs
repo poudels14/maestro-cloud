@@ -83,7 +83,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
     let provider = Arc::new(RecordingProvider {
         staged: Mutex::new(Vec::new()),
     });
-    let operator_secret = SecretValue::new("operator-test-secret-with-at-least-32-characters");
     let storage_secret = SecretValue::new("storage-test-secret-with-at-least-32-characters");
     let launch_policy = crate::ClusterLaunchPolicy {
         depot: Some(crate::DepotLaunchConfig {
@@ -96,7 +95,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
     let coordinator = AdmissionCoordinator::new(
         config.clone(),
         authority,
-        operator_secret.clone(),
         storage_secret.clone(),
         launch_policy.clone(),
         provider.clone(),
@@ -157,7 +155,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
         &first,
         JoinResponseStatus::ACCEPTED,
     )?;
-    assert_eq!(first_payload.operator_jwt_secret, operator_secret);
     assert_eq!(first_payload.store_encryption_secret, storage_secret);
     assert_eq!(first_payload.launch_policy, launch_policy);
     assert!(first_payload.store_join_ticket.is_some());
@@ -197,7 +194,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
         Some(NodeJoinApprovalState::Admitted)
     );
     let public_json = serde_json::to_string(&approvals)?;
-    assert!(!public_json.contains(operator_secret.expose()));
     assert!(!public_json.contains(storage_secret.expose()));
 
     let changed_request = JoinRequest::from_config(&join_key, &config, &node_id, 1_002)?;
@@ -300,7 +296,6 @@ async fn approval_rejects_unknown_master_and_conflicting_keys()
     let coordinator = AdmissionCoordinator::new(
         config.clone(),
         authority,
-        SecretValue::new("operator-test-secret-with-at-least-32-characters"),
         SecretValue::new("storage-test-secret-with-at-least-32-characters"),
         crate::ClusterLaunchPolicy::default(),
         Arc::new(RecordingProvider {

@@ -54,7 +54,7 @@ pub async fn stream_local_logs(
         BTreeMap::from([(config.node_id.clone(), endpoint)]),
         &config.security.trust_root_pem,
         &identity,
-        &config.operator_jwt_secret,
+        config.operator_jwt_secret.secret(),
     )?;
     stream_from(&client, &config.node_id, options, output, POLL_INTERVAL).await
 }

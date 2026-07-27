@@ -66,7 +66,10 @@ pub use dns_launch::{
     DEFAULT_DNS_RESOLVER_PORT, DnsResolverLaunchConfig, DnsResolverLaunchError, run_dns_resolver,
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
-pub use launch::{DaemonLaunchConfig, StoreLaunchMode, launch_daemon, load_launch_config};
+pub use launch::{
+    DaemonLaunchConfig, DaemonLaunchDocument, ResolvedOperatorJwtSecret, StoreLaunchMode,
+    launch_daemon, load_launch_config, load_launch_document,
+};
 pub use launch_error::DaemonLaunchError;
 pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};
 pub use log_maintenance::{

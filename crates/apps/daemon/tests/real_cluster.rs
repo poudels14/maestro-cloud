@@ -14,11 +14,12 @@ use cluster::{
     CertificateValidity, ClusterCertificateAuthority, ClusterConfig, ClusterPorts,
     EmbeddedEtcdProvider, EmbeddedEtcdSettings, Ipv4Cidr, JoinPayload, JoinPrivateKey, JoinRequest,
     JoinResponseStatus, MemberState, NodeCertificateBundle, NodeDefinition, NodeEndpoint,
-    StoreJoinTicket, StoreMember, StoreProvider, StoreProviderConfig, StoreProviderError,
-    admit_join_request, decrypt_join_response, encrypt_join_response, sign_join_request,
+    OperatorJwtSecretSource, StoreJoinTicket, StoreMember, StoreProvider, StoreProviderConfig,
+    StoreProviderError, admit_join_request, decrypt_join_response, encrypt_join_response,
+    sign_join_request,
 };
 use clustertest::{FixtureNodeName, scenarios::cluster_bootstraps_joins_meshes_and_recovers};
-use daemon::{DaemonLaunchConfig, StoreLaunchMode};
+use daemon::{DaemonLaunchDocument, StoreLaunchMode};
 use kernel_api::{ClusterId, NodeId, NodeInstanceId, NodeRole, SecretValue};
 use kernel_store::{EtcdStore, EtcdTlsConfig, Keyspace, Store, TokioClock, derive_key};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -192,7 +193,7 @@ impl RealProcessCluster {
             .nodes
             .get(&node.node_id)
             .is_some_and(|definition| definition.role.is_control_plane());
-        let config = DaemonLaunchConfig {
+        let config = DaemonLaunchDocument {
             cluster: self.cluster.clone(),
             node_id: node.node_id.clone(),
             data_directory: node.data_directory.clone(),
@@ -205,9 +206,10 @@ impl RealProcessCluster {
             } else {
                 None
             },
-            operator_jwt_secret: kernel_api::SecretValue::new(
-                "real-cluster-operator-secret-with-32-characters",
-            ),
+            operator_jwt_secret: OperatorJwtSecretSource::new(
+                "aws-secret://maestro/test/operator-jwt-secret",
+            )
+            .map_err(RealClusterError::from_display)?,
             store_encryption_secret: SecretValue::new(
                 "real-cluster-store-secret-with-32-characters",
             ),
@@ -435,9 +437,6 @@ impl RealProcessCluster {
             cloudflare: self.cluster.cloudflare.clone(),
             launch_policy: cluster::ClusterLaunchPolicy::default(),
             certificates,
-            operator_jwt_secret: SecretValue::new(
-                "real-cluster-operator-secret-with-32-characters",
-            ),
             store_encryption_secret: SecretValue::new(
                 "real-cluster-store-secret-with-32-characters",
             ),

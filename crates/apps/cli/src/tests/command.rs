@@ -38,8 +38,8 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/run/current-system/sw/bin/etcd",
             "--store-secret-file",
             "/run/maestro/store-secret",
-            "--operator-secret-file",
-            "/run/maestro/operator-secret",
+            "--operator-secret-source",
+            "aws-secret://maestro/production/operator-jwt-secret",
             "--output-dir",
             "/run/maestro/cutover-launches",
         ])
@@ -57,6 +57,8 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
             "--etcd-binary",
             "/run/current-system/sw/bin/etcd",
+            "--operator-secret-source",
+            "aws-secret://maestro/production/operator-jwt-secret",
             "--output",
             "/var/lib/maestro/launch.json",
         ])
@@ -74,6 +76,8 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
             "--etcd-binary",
             "/run/current-system/sw/bin/etcd",
+            "--operator-secret-source",
+            "aws-secret://maestro/production/operator-jwt-secret",
             "--output",
             "/var/lib/maestro/launch.json",
         ])

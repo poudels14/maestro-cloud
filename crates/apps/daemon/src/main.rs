@@ -164,7 +164,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             tail,
             follow,
         } => {
-            let config = load_launch_config(&config)?;
+            let config = load_launch_config(&config).await?;
             let mut output = std::io::stdout().lock();
             stream_local_logs(
                 &config,
@@ -235,7 +235,7 @@ async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::
 }
 
 async fn start(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let config = tokio::task::spawn_blocking(move || load_launch_config(&path)).await??;
+    let config = load_launch_config(&path).await?;
     let cluster_id = config.cluster.cluster_id.clone();
     let node_id = config.node_id.clone();
     tracing::info!(%cluster_id, %node_id, "starting maestro daemon");

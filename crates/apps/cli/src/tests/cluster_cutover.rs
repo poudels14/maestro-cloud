@@ -7,6 +7,7 @@ use crate::cluster_formation::init_ca;
 use crate::config_source::ConfigSourceReader;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+const OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
 
 struct MemoryReader {
     source: String,
@@ -32,14 +33,9 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
     };
     init_ca("maestro.jsonc", &authority_data, &mut Vec::new(), &reader).await?;
     let store_secret = directory.path().join("store-secret");
-    let operator_secret = directory.path().join("operator-secret");
     private_file(
         &store_secret,
         b"exact-migrated-store-secret-at-least-32-characters",
-    )?;
-    private_file(
-        &operator_secret,
-        b"new-operator-jwt-secret-at-least-32-characters",
     )?;
     let output_directory = directory.path().join("launches");
     let options = || CutoverBundleOptions {
@@ -49,7 +45,7 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
         containerd_socket: Path::new("/run/containerd/containerd.sock").to_path_buf(),
         etcd_binary: Path::new("/run/current-system/sw/bin/etcd").to_path_buf(),
         store_secret_file: store_secret.clone(),
-        operator_secret_file: operator_secret.clone(),
+        operator_secret_source: OPERATOR_SECRET_SOURCE.to_owned(),
         output_directory: output_directory.clone(),
     };
 
@@ -76,7 +72,7 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
     );
     assert_eq!(
         master.pointer("/operatorJwtSecret"),
-        Some(&"new-operator-jwt-secret-at-least-32-characters".into())
+        Some(&OPERATOR_SECRET_SOURCE.into())
     );
     assert_eq!(
         master.pointer("/depot/token"),
@@ -120,10 +116,8 @@ async fn cutover_bundle_rejects_public_secret_files() -> TestResult {
     };
     init_ca("maestro.jsonc", &authority_data, &mut Vec::new(), &reader).await?;
     let store_secret = directory.path().join("store-secret");
-    let operator_secret = directory.path().join("operator-secret");
-    private_file(&store_secret, b"s".repeat(40).as_slice())?;
-    fs::write(&operator_secret, "o".repeat(40))?;
-    fs::set_permissions(&operator_secret, fs::Permissions::from_mode(0o644))?;
+    fs::write(&store_secret, "s".repeat(40))?;
+    fs::set_permissions(&store_secret, fs::Permissions::from_mode(0o644))?;
 
     let error = prepare_cutover_bundle(
         CutoverBundleOptions {
@@ -133,7 +127,7 @@ async fn cutover_bundle_rejects_public_secret_files() -> TestResult {
             containerd_socket: Path::new("/run/containerd/containerd.sock").to_path_buf(),
             etcd_binary: Path::new("/run/current-system/sw/bin/etcd").to_path_buf(),
             store_secret_file: store_secret,
-            operator_secret_file: operator_secret,
+            operator_secret_source: OPERATOR_SECRET_SOURCE.to_owned(),
             output_directory: directory.path().join("launches"),
         },
         &mut Vec::new(),

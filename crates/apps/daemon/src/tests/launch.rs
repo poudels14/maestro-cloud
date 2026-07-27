@@ -2,17 +2,21 @@ use std::path::PathBuf;
 
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use cluster::StoreJoinTicket;
-use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
+use cluster::{
+    CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle, OperatorJwtSecretSource,
+};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::launch::{api_settings, panel_directory};
 use crate::{
-    DaemonLaunchConfig, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
-    DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
-    StoreLaunchMode, load_launch_config,
+    DaemonLaunchConfig, DaemonLaunchDocument, DatadogLaunchConfig, DatadogLogsLaunchConfig,
+    DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
+    PreviewLaunchConfig, ResolvedOperatorJwtSecret, StoreLaunchMode, load_launch_document,
 };
 
 use super::cluster_with_nodes;
+
+const TEST_OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
 
 #[test]
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
@@ -69,16 +73,16 @@ fn launch_validation_binds_store_mode_to_local_role_and_ticket()
 fn launch_document_requires_owner_only_permissions() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("launch.json");
-    let config = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    let config = document("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))?;
-        assert!(load_launch_config(&path).is_err());
+        assert!(load_launch_document(&path).is_err());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
-    assert_eq!(load_launch_config(&path)?, config);
+    assert_eq!(load_launch_document(&path)?, config);
     Ok(())
 }
 
@@ -139,11 +143,14 @@ fn launch_validation_requires_a_strong_redacted_operator_key()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     let secret = "operator-production-secret-with-32-characters";
-    launch.operator_jwt_secret = SecretValue::new(secret);
+    launch.operator_jwt_secret = resolved_operator_secret(secret)?;
     launch.validate()?;
     assert!(!format!("{launch:?}").contains(secret));
+    let serialized = serde_json::to_string(&launch)?;
+    assert!(!serialized.contains(secret));
+    assert!(serialized.contains(TEST_OPERATOR_SECRET_SOURCE));
 
-    launch.operator_jwt_secret = SecretValue::new("too-short");
+    launch.operator_jwt_secret = resolved_operator_secret("too-short")?;
     assert!(launch.validate().is_err());
     Ok(())
 }
@@ -168,7 +175,11 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
         .nodes
         .get(&launch.node_id)
         .ok_or("local node missing")?;
-    let settings = api_settings(node, &launch.security, launch.operator_jwt_secret);
+    let settings = api_settings(
+        node,
+        &launch.security,
+        launch.operator_jwt_secret.secret().clone(),
+    );
     assert_eq!(
         settings.bind_address,
         std::net::SocketAddr::from(([0, 0, 0, 0], node.endpoint.api_port))
@@ -342,6 +353,28 @@ fn config(
     role: NodeRole,
     store_mode: StoreLaunchMode,
 ) -> Result<DaemonLaunchConfig, Box<dyn std::error::Error>> {
+    config_with_operator_secret(
+        node_id,
+        role,
+        store_mode,
+        resolved_operator_secret("operator-test-secret-with-32-characters")?,
+    )
+}
+
+fn document(
+    node_id: &str,
+    role: NodeRole,
+    store_mode: StoreLaunchMode,
+) -> Result<DaemonLaunchDocument, Box<dyn std::error::Error>> {
+    config_with_operator_secret(node_id, role, store_mode, operator_secret_source()?)
+}
+
+fn config_with_operator_secret<OperatorSecret>(
+    node_id: &str,
+    role: NodeRole,
+    store_mode: StoreLaunchMode,
+    operator_jwt_secret: OperatorSecret,
+) -> Result<DaemonLaunchConfig<OperatorSecret>, Box<dyn std::error::Error>> {
     Ok(DaemonLaunchConfig {
         cluster: cluster_with_nodes(&[(node_id, role)])?,
         node_id: NodeId::new(node_id)?,
@@ -360,7 +393,7 @@ fn config(
             certificate_pem: "test-root".to_owned(),
             private_key_pem: SecretValue::new("test-ca-private-key"),
         }),
-        operator_jwt_secret: SecretValue::new("operator-test-secret-with-32-characters"),
+        operator_jwt_secret,
         store_encryption_secret: SecretValue::new(
             "store-encryption-test-secret-with-32-characters",
         ),
@@ -371,4 +404,17 @@ fn config(
         preview: None,
         nixos_upgrade: None,
     })
+}
+
+fn resolved_operator_secret(
+    value: impl Into<String>,
+) -> Result<ResolvedOperatorJwtSecret, Box<dyn std::error::Error>> {
+    Ok(ResolvedOperatorJwtSecret::new(
+        operator_secret_source()?,
+        SecretValue::new(value),
+    ))
+}
+
+fn operator_secret_source() -> Result<OperatorJwtSecretSource, Box<dyn std::error::Error>> {
+    Ok(OperatorJwtSecretSource::new(TEST_OPERATOR_SECRET_SOURCE)?)
 }

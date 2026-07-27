@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use cluster::{
     CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
-    certificate_fingerprint, load_or_create_join_key, public_key_fingerprint,
+    OperatorJwtSecretSource, certificate_fingerprint, load_or_create_join_key,
+    public_key_fingerprint,
 };
 use kernel_api::{NodeId, NodeRole, SecretValue};
 use time::{Duration, OffsetDateTime};
@@ -124,6 +125,7 @@ pub(crate) async fn bootstrap(
     data_directory: &Path,
     containerd_socket: &Path,
     etcd_binary: &Path,
+    operator_secret_source: &str,
     destination: Option<&Path>,
     output: &mut dyn Write,
     reader: &impl ConfigSourceReader,
@@ -137,6 +139,8 @@ pub(crate) async fn bootstrap(
         ));
     }
     let loaded = load_cluster(config_source, reader).await?;
+    let operator_jwt_secret = OperatorJwtSecretSource::new(operator_secret_source)
+        .map_err(|error| CliError::invalid_input(error.to_string()))?;
     let node =
         loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
             CliError::invalid_input("selected node disappeared from the topology")
@@ -172,6 +176,7 @@ pub(crate) async fn bootstrap(
                 containerd_socket,
                 etcd_binary,
                 &authority,
+                &operator_jwt_secret,
                 &loaded.launch_policy,
             ) {
                 return Err(CliError::invalid_input(format!(
@@ -199,7 +204,7 @@ pub(crate) async fn bootstrap(
                 etcd_binary.to_path_buf(),
                 security,
                 authority.clone(),
-                generated_secret(),
+                operator_jwt_secret,
                 generated_secret(),
                 loaded.launch_policy.clone(),
             )?;

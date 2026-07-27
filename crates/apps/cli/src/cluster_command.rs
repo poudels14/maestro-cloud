@@ -45,6 +45,9 @@ pub(crate) enum ClusterCommand {
         /// Absolute etcd executable used by the embedded store provider.
         #[arg(long, value_name = "PATH")]
         etcd_binary: PathBuf,
+        /// AWS Secrets Manager source for the shared operator JWT signing key.
+        #[arg(long, value_name = "AWS_SECRET_URI")]
+        operator_secret_source: String,
         /// Create the private daemon launch document at this path.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
@@ -73,9 +76,9 @@ pub(crate) enum ClusterCommand {
         /// Owner-only file containing the exact migration/store master secret.
         #[arg(long, value_name = "PATH")]
         store_secret_file: PathBuf,
-        /// Owner-only file containing the new shared operator JWT secret.
-        #[arg(long, value_name = "PATH")]
-        operator_secret_file: PathBuf,
+        /// AWS Secrets Manager source for the shared operator JWT signing key.
+        #[arg(long, value_name = "AWS_SECRET_URI")]
+        operator_secret_source: String,
         /// Protected directory receiving one private launch document per node.
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
@@ -131,6 +134,9 @@ pub(crate) enum ClusterCommand {
         /// Absolute etcd executable required for control-plane nodes.
         #[arg(long, value_name = "PATH")]
         etcd_binary: Option<PathBuf>,
+        /// AWS Secrets Manager source for the shared operator JWT signing key.
+        #[arg(long, value_name = "AWS_SECRET_URI")]
+        operator_secret_source: String,
         /// Create the private daemon launch document at this path.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
@@ -251,6 +257,7 @@ pub(crate) async fn run(
             data_dir,
             containerd_socket,
             etcd_binary,
+            operator_secret_source,
             output: destination,
         } => {
             cluster_formation::bootstrap(
@@ -258,6 +265,7 @@ pub(crate) async fn run(
                 &data_dir,
                 &containerd_socket,
                 &etcd_binary,
+                &operator_secret_source,
                 destination.as_deref(),
                 output,
                 &SystemConfigSourceReader,
@@ -271,7 +279,7 @@ pub(crate) async fn run(
             containerd_socket,
             etcd_binary,
             store_secret_file,
-            operator_secret_file,
+            operator_secret_source,
             output_dir,
         } => {
             cluster_cutover::prepare_cutover_bundle(
@@ -282,7 +290,7 @@ pub(crate) async fn run(
                     containerd_socket,
                     etcd_binary,
                     store_secret_file,
-                    operator_secret_file,
+                    operator_secret_source,
                     output_directory: output_dir,
                 },
                 output,
@@ -320,9 +328,10 @@ pub(crate) async fn run(
             data_dir,
             containerd_socket,
             etcd_binary,
+            operator_secret_source,
             output: destination,
         } => {
-            let mut options = JoinOptions::new(leader, config, data_dir);
+            let mut options = JoinOptions::new(leader, config, data_dir, operator_secret_source);
             options.containerd_socket = containerd_socket;
             options.etcd_binary = etcd_binary;
             options.output = destination;
