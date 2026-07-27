@@ -4,10 +4,14 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use netlink_packet_route::AddressFamily;
-use netlink_packet_route::route::{
-    RouteAddress, RouteAttribute, RouteHeader, RouteMessage, RouteProtocol, RouteScope, RouteType,
+use netlink_packet_route::{
+    link::{InfoKind, LinkAttribute, LinkInfo, LinkMessage},
+    route::{
+        RouteAddress, RouteAttribute, RouteHeader, RouteMessage, RouteProtocol, RouteScope,
+        RouteType,
+    },
 };
-use rtnetlink::{Handle, LinkUnspec, RouteMessageBuilder};
+use rtnetlink::{Handle, LinkUnspec, LinkWireguard, RouteMessageBuilder};
 use tokio::task::JoinHandle;
 use wireguard_control::{
     AllowedIp, Backend, Device, DeviceUpdate, InterfaceName, Key, PeerConfig, PeerConfigBuilder,
@@ -36,6 +40,13 @@ impl MeshBackend for LinuxMeshBackend {
     async fn apply(&self, desired: &MeshConfiguration) -> Result<(), MeshBackendError> {
         validate_desired(desired)?;
 
+        // Create the link through the current rtnetlink stack before handing
+        // its key material to wireguard-control. wireguard-control 2.0's
+        // bundled route-netlink encoder cannot create WireGuard links on all
+        // supported kernels, even though its generic-netlink configuration
+        // path works for an existing device.
+        ensure_wireguard_link(&desired.interface.name).await?;
+
         // WireGuard's control library is synchronous. The awaited blocking task
         // may finish its one kernel transaction after caller cancellation; a
         // subsequent complete replacement remains safe and convergent.
@@ -45,6 +56,70 @@ impl MeshBackend for LinuxMeshBackend {
         // not yet been admitted. Failure or cancellation can leave only an
         // intermediate subset, which the next full reconciliation repairs.
         apply_link_and_routes(desired).await
+    }
+}
+
+async fn ensure_wireguard_link(name: &str) -> Result<(), MeshBackendError> {
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|error| backend_error("open route netlink connection", error))?;
+    let mut connection_task = AbortOnDrop::new(tokio::spawn(connection));
+
+    let result = reconcile_wireguard_link(&handle, name).await;
+    drop(handle);
+    connection_task.abort_and_wait().await;
+    result
+}
+
+async fn reconcile_wireguard_link(handle: &Handle, name: &str) -> Result<(), MeshBackendError> {
+    if let Some(link) = find_link(handle, name).await? {
+        return validate_wireguard_link(&link, name);
+    }
+
+    handle
+        .link()
+        .add(LinkWireguard::new(name).build())
+        .execute()
+        .await
+        .map_err(|error| backend_error("create WireGuard link", error))?;
+    let link = find_link(handle, name)
+        .await?
+        .ok_or_else(|| MeshBackendError::new("WireGuard link disappeared after creation"))?;
+    validate_wireguard_link(&link, name)
+}
+
+async fn find_link(handle: &Handle, name: &str) -> Result<Option<LinkMessage>, MeshBackendError> {
+    let mut links = handle.link().get().execute();
+    while let Some(link) = links
+        .try_next()
+        .await
+        .map_err(|error| backend_error("list network links", error))?
+    {
+        let matches_name = link.attributes.iter().any(
+            |attribute| matches!(attribute, LinkAttribute::IfName(current) if current == name),
+        );
+        if matches_name {
+            return Ok(Some(link));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_wireguard_link(link: &LinkMessage, name: &str) -> Result<(), MeshBackendError> {
+    let is_wireguard = link.attributes.iter().any(|attribute| {
+        matches!(
+            attribute,
+            LinkAttribute::LinkInfo(info)
+                if info
+                    .iter()
+                    .any(|entry| matches!(entry, LinkInfo::Kind(InfoKind::Wireguard)))
+        )
+    });
+    if is_wireguard {
+        Ok(())
+    } else {
+        Err(MeshBackendError::new(format!(
+            "refusing non-WireGuard link `{name}`"
+        )))
     }
 }
 
