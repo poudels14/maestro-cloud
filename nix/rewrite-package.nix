@@ -47,8 +47,10 @@
 
     cargoLock.lockFile = ../Cargo.lock;
     cargoBuildFlags = packageFlags;
-    cargoTestFlags = packageFlags ++ ["--all-targets"];
-    doCheck = !static;
+    # CI and focused development commands own test execution. Keeping package
+    # construction build-only avoids rerunning the full workspace suite during
+    # every node rollout.
+    doCheck = false;
     # Keep the legacy implementation in the development workspace without
     # making rewrite releases depend on it.
     postPatch = ''
