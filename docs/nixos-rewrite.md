@@ -33,6 +33,9 @@ store:
           services.maestro = {
             enable = true;
             config = "/run/maestro/launch.json";
+            controlPlanePort = 3000;
+            storeClientPort = 2379;
+            storePeerPort = 2380;
             wireguardPort = 51820;
           };
         })
@@ -50,9 +53,12 @@ must be an absolute owner-only regular file such as
 those secrets into the world-readable Nix store. The daemon validates the file
 before starting.
 
-`services.maestro.wireguardPort` defaults to UDP `51820` and opens that port in
-the NixOS host firewall. Set it to the same value as
-`cluster.ports.wireguard` when the cluster uses a non-default mesh port.
+The module opens the control-plane API and embedded-store cluster ports in the
+NixOS host firewall. `services.maestro.controlPlanePort`,
+`services.maestro.storeClientPort`, and `services.maestro.storePeerPort`
+default to TCP `3000`, `2379`, and `2380`; `services.maestro.wireguardPort`
+defaults to UDP `51820`. Set them to the corresponding `cluster.ports` values
+when a launch document uses non-default ports.
 
 Control-plane launch documents should use
 `/run/current-system/sw/bin/etcd` for `etcdBinary`. The module installs the
