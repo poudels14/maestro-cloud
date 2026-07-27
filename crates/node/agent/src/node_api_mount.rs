@@ -83,14 +83,14 @@ impl NodeApiMountManager {
                         workload_id: workload_id.clone(),
                     });
                 }
-                if !existing.task.is_finished() {
+                if !existing.is_finished() {
                     return Ok(mount);
                 }
             }
             running.remove(workload_id)
         };
         if let Some(finished) = finished {
-            let _finished_result = finished.task.await;
+            let _finished_result = finished.shutdown().await;
         }
         let files = self.files.clone();
         let socket_path = prepared.socket_path.clone();
@@ -115,8 +115,8 @@ impl NodeApiMountManager {
             workload_id.clone(),
             RunningNodeApi {
                 binding,
-                shutdown,
-                task,
+                shutdown: Some(shutdown),
+                task: Some(task),
             },
         );
         Ok(mount)
@@ -127,10 +127,7 @@ impl NodeApiMountManager {
         let _operation = self.operation(workload_id).await?;
         let running = self.running.lock().await.remove(workload_id);
         let server_result = match running {
-            Some(running) => {
-                let _ = running.shutdown.send(());
-                Some(running.task.await.map_err(task_error)?)
-            }
+            Some(running) => Some(running.shutdown().await?),
             None => None,
         };
         let files = self.files.clone();
@@ -172,8 +169,7 @@ impl NodeApiMountManager {
                 .collect::<Vec<_>>()
         };
         for server in running {
-            let _ = server.shutdown.send(());
-            server.task.await.map_err(task_error)??;
+            server.shutdown().await??;
         }
         Ok(())
     }
@@ -211,8 +207,37 @@ struct NodeApiBinding {
 
 struct RunningNodeApi {
     binding: NodeApiBinding,
-    shutdown: oneshot::Sender<()>,
-    task: JoinHandle<Result<(), crate::NodeApiServerError>>,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<Result<(), crate::NodeApiServerError>>>,
+}
+
+impl RunningNodeApi {
+    fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    async fn shutdown(
+        mut self,
+    ) -> Result<Result<(), crate::NodeApiServerError>, NodeApiMountError> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        let task = self.task.as_mut().ok_or_else(|| NodeApiMountError::Task {
+            message: "node API server task ownership was lost".to_owned(),
+        })?;
+        let result = task.await.map_err(task_error);
+        self.task.take();
+        result
+    }
+}
+
+impl Drop for RunningNodeApi {
+    fn drop(&mut self) {
+        self.shutdown.take();
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
 }
 
 pub(crate) trait NodeApiFileSystem: Send + Sync {

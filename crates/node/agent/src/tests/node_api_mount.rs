@@ -182,6 +182,44 @@ async fn stale_cleanup_stops_only_inactive_workload_servers()
 }
 
 #[tokio::test]
+async fn dropping_manager_stops_owned_workload_servers() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path().join("node-api");
+    let owner = current_owner(temporary.path())?;
+    let workload_id = workload_id("workload-1");
+    let socket_path = root.join("workload-1/node.sock");
+    let manager = NodeApiMountManager::new(root, Some(node_api_services()))?;
+    manager
+        .ensure(
+            &workload_id,
+            owner,
+            claims("workload-1"),
+            WorkloadControlAccess::Denied,
+        )
+        .await?;
+    tokio::net::UnixStream::connect(&socket_path).await?;
+
+    drop(manager);
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if tokio::net::UnixStream::connect(&socket_path).await.is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "node API listener remained active after its manager was dropped",
+        )
+    })?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn slow_file_preparation_does_not_block_an_unrelated_workload()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
