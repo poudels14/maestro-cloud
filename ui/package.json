@@ -6,8 +6,7 @@
     "dev": "pnpm --dir apps/panel dev",
     "build": "pnpm --dir apps/panel build",
     "test": "pnpm --dir apps/panel test",
-    "typecheck": "pnpm --dir apps/panel typecheck",
-    "start": "pnpm --dir apps/panel start"
+    "typecheck": "pnpm --dir apps/panel typecheck"
   },
   "packageManager": "pnpm@10.11.1"
 }
