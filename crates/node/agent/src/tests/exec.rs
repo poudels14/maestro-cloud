@@ -21,7 +21,11 @@ async fn node_exec_resolves_one_running_owned_workload_and_holds_its_permit()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = ExecWorld::new(
         ExecPolicy::Allowed,
-        Capabilities::new([RuntimeCapability::Exec, RuntimeCapability::InteractiveExec]),
+        Capabilities::new([
+            RuntimeCapability::Exec,
+            RuntimeCapability::InteractiveExec,
+            RuntimeCapability::KillExec,
+        ]),
         1,
         "node-1",
     )
@@ -34,6 +38,7 @@ async fn node_exec_resolves_one_running_owned_workload_and_holds_its_permit()
         first.next().await?,
         Some(ExecOutput::Stdout(b"/bin/echo".to_vec()))
     );
+    assert!(first.killer().is_some());
     assert!(matches!(
         world
             .service
@@ -115,6 +120,11 @@ async fn node_exec_enforces_service_policy_node_ownership_and_runtime_capabiliti
             capability: RuntimeCapability::InteractiveExec
         })
     ));
+    let mut no_kill = no_terminal
+        .service
+        .open(&no_terminal.assignment.meta.id, request(ExecMode::Pipes))
+        .await?;
+    assert!(no_kill.killer().is_none());
     Ok(())
 }
 

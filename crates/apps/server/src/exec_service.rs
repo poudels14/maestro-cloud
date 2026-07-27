@@ -8,7 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use kernel_api::{AssignmentId, ExecStreamFrame, NodeId, SecretValue};
 use node_agent::{NodeExecError, NodeExecService};
-use runtime::{ExecInput, ExecOutput, ExecRequest, ExecSession, RuntimeError};
+use runtime::{ExecInput, ExecOutput, ExecRequest, ExecSession, ExecSessionKiller, RuntimeError};
 use serde::Serialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
@@ -246,6 +246,13 @@ impl ExecSession for RemoteExecSession {
         }
     }
 
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl ExecSessionKiller for RemoteExecSession {
     async fn kill(&mut self) -> Result<(), RuntimeError> {
         send_remote(&mut self.socket, ExecStreamFrame::Kill).await
     }

@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use kernel_api::{
     Assignment, AssignmentId, BuiltinKind, CommandSpec, DeploymentId, ExecStreamFrame, ServiceId,
 };
-use runtime::{ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession};
+use runtime::{ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, RuntimeError};
 use serde::Deserialize;
 use tokio::sync::OwnedSemaphorePermit;
 
@@ -169,7 +169,7 @@ async fn relay(
 }
 
 async fn terminate(session: &mut dyn ExecSession) {
-    if session.kill().await.is_err() {
+    if kill_session(session).await.is_err() {
         return;
     }
     let reaped = async {
@@ -216,12 +216,21 @@ where
             session.send(ExecInput::Resize { columns, rows }).await
         }
         ExecStreamFrame::CloseStdin => session.send(ExecInput::CloseStdin).await,
-        ExecStreamFrame::Kill => session.kill().await,
+        ExecStreamFrame::Kill => kill_session(session).await,
         _ => return protocol_stop(writer, "client sent an output exec frame").await,
     };
     match result {
         Ok(()) => RelayControl::Continue,
         Err(error) => protocol_stop(writer, &error.to_string()).await,
+    }
+}
+
+async fn kill_session(session: &mut dyn ExecSession) -> Result<(), RuntimeError> {
+    match session.killer() {
+        Some(killer) => killer.kill().await,
+        None => Err(RuntimeError::Unsupported {
+            capability: runtime::RuntimeCapability::KillExec,
+        }),
     }
 }
 

@@ -7,8 +7,8 @@ use kernel_api::{
 };
 use kernel_store::{Keyspace, Store, StoreError, StoreKey, Version};
 use runtime::{
-    ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, RuntimeCapability, RuntimeError,
-    WorkloadRuntime, WorkloadState,
+    ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, ExecSessionKiller,
+    RuntimeCapability, RuntimeError, WorkloadRuntime, WorkloadState,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -275,8 +275,8 @@ impl ExecSession for LimitedExecSession {
         self.session.next().await
     }
 
-    async fn kill(&mut self) -> Result<(), RuntimeError> {
-        self.session.kill().await
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller> {
+        self.session.killer()
     }
 }
 

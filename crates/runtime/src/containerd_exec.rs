@@ -18,7 +18,9 @@ use crate::containerd_exec_io::{
 use crate::containerd_io::path_text;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::namespaced;
-use crate::{ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, RuntimeError};
+use crate::{
+    ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, ExecSessionKiller, RuntimeError,
+};
 
 const PROCESS_SPEC_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Process";
 const READ_BYTES: usize = 16 * 1024;
@@ -239,6 +241,13 @@ impl ExecSession for ContainerdExecSession {
         }
     }
 
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl ExecSessionKiller for ContainerdExecSession {
     async fn kill(&mut self) -> Result<(), RuntimeError> {
         if self.exit_emitted {
             return Ok(());

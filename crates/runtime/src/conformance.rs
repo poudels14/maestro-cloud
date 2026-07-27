@@ -324,6 +324,12 @@ async fn assert_exec(
     )
     .await
     .map_err(|_elapsed| invariant("runtime exec session did not open before its deadline"))??;
+    let advertised_kill = runtime.capabilities().supports(RuntimeCapability::KillExec);
+    if advertised_kill != session.killer().is_some() {
+        return Err(invariant(
+            "exec session kill capability disagrees with advertised capabilities",
+        ));
+    }
     let collected = tokio::time::timeout(fixture.timeout, async {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

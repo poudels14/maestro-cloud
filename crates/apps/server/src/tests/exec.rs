@@ -9,7 +9,9 @@ use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, CommandSpec,
     DeploymentId, ExecStreamFrame, Generation, NodeId, Object, SecretValue, ServiceId, WorkloadId,
 };
-use runtime::{ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, RuntimeError};
+use runtime::{
+    ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, ExecSessionKiller, RuntimeError,
+};
 use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 
@@ -200,7 +202,11 @@ async fn node_exec_client_uses_mutual_tls_node_scope_and_typed_relay()
         session.next().await?,
         Some(ExecOutput::Stdout(b"peer input".to_vec()))
     );
-    session.kill().await?;
+    session
+        .killer()
+        .ok_or("remote exec session omitted its kill capability")?
+        .kill()
+        .await?;
     assert_eq!(
         session.next().await?,
         Some(ExecOutput::Exited { code: Some(137) })
@@ -342,6 +348,13 @@ impl ExecSession for TestExecSession {
         }
     }
 
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl ExecSessionKiller for TestExecSession {
     async fn kill(&mut self) -> Result<(), RuntimeError> {
         self.outputs.clear();
         self.outputs

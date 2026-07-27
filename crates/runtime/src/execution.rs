@@ -145,10 +145,14 @@ pub trait ExecSession: Send {
     /// Waits for one output item. `None` means the backend closed without a terminal exit frame.
     async fn next(&mut self) -> Result<Option<ExecOutput>, RuntimeError>;
 
-    /// Terminates the command without terminating its workload.
-    async fn kill(&mut self) -> Result<(), RuntimeError> {
-        Err(RuntimeError::Unsupported {
-            capability: crate::RuntimeCapability::KillExec,
-        })
-    }
+    /// Returns the optional command-termination capability for this exact session.
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller>;
+}
+
+/// Optional exec-session capability that terminates only the additional command.
+#[async_trait]
+pub trait ExecSessionKiller: Send {
+    /// Requests immediate termination. Cancellation may leave the command running, so callers
+    /// must observe `Ok(())` before assuming the request reached the backend.
+    async fn kill(&mut self) -> Result<(), RuntimeError>;
 }

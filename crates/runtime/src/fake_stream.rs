@@ -6,8 +6,8 @@ use tokio::sync::broadcast;
 
 use crate::fake_state::FakeEventRecord;
 use crate::{
-    ExecInput, ExecOutput, ExecSession, LogFrame, LogStream, RuntimeError, RuntimeEvent,
-    RuntimeEventStream,
+    ExecInput, ExecOutput, ExecSession, ExecSessionKiller, LogFrame, LogStream, RuntimeError,
+    RuntimeEvent, RuntimeEventStream,
 };
 
 pub(crate) struct FakeEventStream {
@@ -62,6 +62,7 @@ impl LogStream for FakeLogStream {
 }
 
 pub(crate) struct FakeExecSession {
+    pub(crate) killable: bool,
     pub(crate) outputs: VecDeque<ExecOutput>,
 }
 
@@ -78,6 +79,13 @@ impl ExecSession for FakeExecSession {
         Ok(self.outputs.pop_front())
     }
 
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller> {
+        if self.killable { Some(self) } else { None }
+    }
+}
+
+#[async_trait]
+impl ExecSessionKiller for FakeExecSession {
     async fn kill(&mut self) -> Result<(), RuntimeError> {
         self.outputs.clear();
         self.outputs

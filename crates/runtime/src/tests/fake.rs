@@ -118,7 +118,7 @@ async fn fake_replays_events_logs_and_exec_without_hiding_event_gaps() {
         exec.next().await.unwrap(),
         Some(ExecOutput::Stdout(b"/bin/echo".to_vec()))
     );
-    exec.kill().await.unwrap();
+    exec.killer().unwrap().kill().await.unwrap();
     assert_eq!(
         exec.next().await.unwrap(),
         Some(ExecOutput::Exited { code: Some(137) })

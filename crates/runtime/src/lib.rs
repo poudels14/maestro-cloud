@@ -111,8 +111,8 @@ pub use containerd_settings::ContainerdRuntimeSettings;
 pub use docker::DockerRuntime;
 pub use error::{CgroupPathError, RuntimeError};
 pub use execution::{
-    ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, LogCursor, LogFrame, LogMode,
-    LogRequest, LogSource, LogStream,
+    ExecInput, ExecMode, ExecOutput, ExecRequest, ExecSession, ExecSessionKiller, LogCursor,
+    LogFrame, LogMode, LogRequest, LogSource, LogStream,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::{FakeRuntime, FakeRuntimeCall, FakeRuntimeOperation};

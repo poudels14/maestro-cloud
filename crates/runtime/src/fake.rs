@@ -448,6 +448,7 @@ impl WorkloadRuntime for FakeRuntime {
         checked_record(&state, handle)?;
         drop(state);
         Ok(Box::new(FakeExecSession {
+            killable: self.capabilities.supports(RuntimeCapability::KillExec),
             outputs: VecDeque::from([
                 ExecOutput::Stdout(request.command.executable.into_bytes()),
                 ExecOutput::Exited { code: Some(0) },

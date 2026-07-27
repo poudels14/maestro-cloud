@@ -12,8 +12,8 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::docker_support::{runtime_event, stream_error};
 use crate::{
-    ExecInput, ExecMode, ExecOutput, ExecSession, LogCursor, LogFrame, LogSource, LogStream,
-    RuntimeError, RuntimeEvent, RuntimeEventStream,
+    ExecInput, ExecMode, ExecOutput, ExecSession, ExecSessionKiller, LogCursor, LogFrame,
+    LogSource, LogStream, RuntimeError, RuntimeEvent, RuntimeEventStream,
 };
 
 type DockerEvents = Pin<Box<dyn Stream<Item = Result<EventMessage, DockerError>> + Send>>;
@@ -147,6 +147,10 @@ impl ExecSession for DockerExecSession {
                 code: inspect.exit_code.and_then(|code| i32::try_from(code).ok()),
             }))
         }
+    }
+
+    fn killer(&mut self) -> Option<&mut dyn ExecSessionKiller> {
+        None
     }
 }
 
