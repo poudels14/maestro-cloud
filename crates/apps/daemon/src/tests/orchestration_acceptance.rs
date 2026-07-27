@@ -14,7 +14,7 @@ use kernel_api::{
     DeploymentPhase as ResourceDeploymentPhase, IngressRouteId, NodeId, PlacementConstraint,
     ReplicaState, ResourceKind, ResourceName, RolloutState, Service, ServiceId, Timestamp,
 };
-use kernel_store::Store;
+use kernel_store::{Store, StoreSnapshotExt};
 
 use super::orchestration::{RolloutWorld, put};
 use super::orchestration_fixture::{route, service};
@@ -103,35 +103,28 @@ impl AcceptanceWorld {
     }
 
     async fn snapshot(&self) -> Result<ClusterSnapshot<kernel_api::DeploymentId>, AcceptanceError> {
-        let mut services = self
+        let snapshot = self
             .inner
-            .list::<Service>("Service")
+            .store
+            .dump(&self.inner.cluster_id)
             .await
             .map_err(AcceptanceError::from_driver)?;
-        let deployments = self
-            .inner
-            .list::<Deployment>("Deployment")
-            .await
-            .map_err(AcceptanceError::from_driver)?;
-        let assignments = self
-            .inner
-            .list::<Assignment>("Assignment")
-            .await
-            .map_err(AcceptanceError::from_driver)?;
-        let replicas = self
-            .inner
-            .list::<ReplicaState>("ReplicaState")
-            .await
-            .map_err(AcceptanceError::from_driver)?;
-
-        services.sort_by(|left, right| left.meta.id.cmp(&right.meta.id));
-        let assignments = assignments
+        let assignments = snapshot
+            .assignments
             .into_iter()
             .map(|assignment| (assignment.meta.id.clone(), assignment))
             .collect::<BTreeMap<_, _>>();
-        let services = services
+        let services = snapshot
+            .services
             .into_iter()
-            .map(|service| project_service(&service, &deployments, &assignments, &replicas))
+            .map(|service| {
+                project_service(
+                    &service,
+                    &snapshot.deployments,
+                    &assignments,
+                    &snapshot.replica_states,
+                )
+            })
             .collect::<Vec<_>>();
         Ok(ClusterSnapshot { services })
     }

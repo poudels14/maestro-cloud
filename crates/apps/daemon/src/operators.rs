@@ -255,6 +255,47 @@ impl OperatorSuite {
         })
     }
 
+    /// Returns recent reconcile decisions grouped by operator.
+    ///
+    /// This test-only diagnostic keeps each runtime's local sequence intact so
+    /// convergence failures identify both the resource and its owning loop.
+    #[cfg(feature = "test-util")]
+    pub fn journal_tails(
+        &self,
+        maximum_per_operator: usize,
+    ) -> Vec<(&'static str, Vec<kernel_controller::JournalEntry>)> {
+        let mut tails = Vec::new();
+        macro_rules! push_tail {
+            ($name:literal, $runtime:expr) => {
+                let entries = $runtime.journal().tail(maximum_per_operator);
+                if !entries.is_empty() {
+                    tails.push(($name, entries));
+                }
+            };
+        }
+
+        push_tail!("build", self.builds);
+        push_tail!("build-watch", self.build_watch);
+        if let Some(runtime) = &self.preview_sources {
+            push_tail!("preview-source", runtime);
+        }
+        if let Some(runtime) = &self.previews {
+            push_tail!("preview", runtime);
+        }
+        if let Some(runtime) = &self.upgrades {
+            push_tail!("upgrade", runtime);
+        }
+        push_tail!("deployment", self.deployment);
+        push_tail!("scheduler", self.scheduler);
+        push_tail!("ingress", self.ingress);
+        push_tail!("ingress-blocklist", self.ingress_blocklists);
+        push_tail!("dns", self.dns);
+        push_tail!("firewall-policy", self.firewall_policies);
+        push_tail!("firewall-baseline", self.firewall_baselines);
+        push_tail!("webhook", self.webhooks);
+        tails
+    }
+
     /// Runs every event-driven operator until shutdown or loss of its shared fence.
     pub async fn run(&self, shutdown: watch::Receiver<bool>) -> Result<(), ControllerError> {
         let deployment = self.deployment.run(shutdown.clone());

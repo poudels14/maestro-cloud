@@ -14,7 +14,7 @@ use kernel_api::{
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Session,
-    SessionBinding, Store,
+    SessionBinding, Store, StoreSnapshotExt,
 };
 use node_agent::{FirewallBackend, FirewallBackendError, NodeFirewallAgent, StatusClock};
 
@@ -99,6 +99,7 @@ async fn redeploy_cuts_over_before_collecting_drained_generation()
 }
 
 pub(super) struct RolloutWorld {
+    pub(super) cluster_id: ClusterId,
     pub(super) keys: Keyspace,
     pub(super) store: Arc<InMemoryStore>,
     suite: OperatorSuite,
@@ -216,6 +217,7 @@ impl RolloutWorld {
             operator_backends,
         )?;
         Ok(Self {
+            cluster_id,
             keys,
             store,
             suite,
@@ -242,7 +244,23 @@ impl RolloutWorld {
                 return Ok(());
             }
         }
-        Err("operator suite did not reach two quiet passes".into())
+        let snapshot = match self.store.dump(&self.cluster_id).await {
+            Ok(snapshot) => match snapshot.normalized() {
+                Ok(snapshot) => format!("{snapshot:#?}"),
+                Err(error) => format!("normalization failed: {error}"),
+            },
+            Err(error) => format!("dump failed: {error}"),
+        };
+        #[cfg(feature = "test-util")]
+        let journal = format!("{:#?}", self.suite.journal_tails(8));
+        #[cfg(not(feature = "test-util"))]
+        let journal = "journal unavailable without daemon/test-util".to_string();
+        Err(format!(
+            "operator suite did not reach two quiet passes\n\
+             normalized cluster snapshot:\n{snapshot}\n\
+             reconcile journal tails:\n{journal}"
+        )
+        .into())
     }
 
     pub(super) async fn reconcile_pass(&self) -> HarnessResult<()> {
