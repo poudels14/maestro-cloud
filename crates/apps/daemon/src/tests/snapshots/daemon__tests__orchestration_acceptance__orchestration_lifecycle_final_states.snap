@@ -1,0 +1,564 @@
+---
+source: crates/apps/daemon/src/tests/orchestration_acceptance.rs
+expression: final_states
+---
+1-node-cancel:
+  services:
+    - name: acceptance-cancel
+      configured_replicas: 1
+      replica_override: ~
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Canceled
+          phase_history:
+            - Canceled
+          artifact: ~
+          replicas: []
+1-node-delete:
+  services: []
+1-node-drain-finalize:
+  services:
+    - name: acceptance-drain-finalize
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Removed
+          phase_history:
+            - Removed
+          artifact: ~
+          replicas: []
+        - id: "[deployment-id]"
+          version: v2
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-drain-restore:
+  services:
+    - name: acceptance-node-drain
+      configured_replicas: 1
+      replica_override: 2
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+            - index: 1
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-freeze-unfreeze:
+  services:
+    - name: acceptance-freeze
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Draining
+          phase_history:
+            - Draining
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+        - id: "[deployment-id]"
+          version: v2
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-hard-affinity:
+  services:
+    - name: acceptance-hard-affinity
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Draining
+          phase_history:
+            - Draining
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-redeploy:
+  services:
+    - name: acceptance-redeploy
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Draining
+          phase_history:
+            - Draining
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+        - id: "[deployment-id]"
+          version: v2
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-remove:
+  services:
+    - name: acceptance-remove
+      configured_replicas: 1
+      replica_override: ~
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Removed
+          phase_history:
+            - Removed
+          artifact: ~
+          replicas: []
+1-node-replicas:
+  services:
+    - name: acceptance-replicas
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-restart:
+  services:
+    - name: acceptance-restart
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+1-node-rollout:
+  services:
+    - name: acceptance-rollout
+      configured_replicas: 2
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+            - index: 1
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+3-node-cancel:
+  services:
+    - name: acceptance-cancel
+      configured_replicas: 1
+      replica_override: ~
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Canceled
+          phase_history:
+            - Canceled
+          artifact: ~
+          replicas: []
+3-node-delete:
+  services: []
+3-node-drain-finalize:
+  services:
+    - name: acceptance-drain-finalize
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Removed
+          phase_history:
+            - Removed
+          artifact: ~
+          replicas: []
+        - id: "[deployment-id]"
+          version: v2
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+3-node-drain-restore:
+  services:
+    - name: acceptance-node-drain
+      configured_replicas: 3
+      replica_override: 4
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+            - index: 1
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+            - index: 2
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
+            - index: 3
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+3-node-freeze-unfreeze:
+  services:
+    - name: acceptance-freeze
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Draining
+          phase_history:
+            - Draining
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+        - id: "[deployment-id]"
+          version: v2
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+3-node-hard-affinity:
+  services:
+    - name: acceptance-hard-affinity
+      configured_replicas: 3
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Draining
+          phase_history:
+            - Draining
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+            - index: 1
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+            - index: 2
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+            - index: 1
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+            - index: 2
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"
+3-node-redeploy:
+  services:
+    - name: acceptance-redeploy
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Draining
+          phase_history:
+            - Draining
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+        - id: "[deployment-id]"
+          version: v2
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+3-node-remove:
+  services:
+    - name: acceptance-remove
+      configured_replicas: 1
+      replica_override: ~
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Removed
+          phase_history:
+            - Removed
+          artifact: ~
+          replicas: []
+3-node-replicas:
+  services:
+    - name: acceptance-replicas
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+3-node-restart:
+  services:
+    - name: acceptance-restart
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+3-node-rollout:
+  services:
+    - name: acceptance-rollout
+      configured_replicas: 2
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
+              workload_instance: "[workload-instance]"
+            - index: 1
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-3
+              workload_instance: "[workload-instance]"

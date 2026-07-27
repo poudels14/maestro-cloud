@@ -55,6 +55,7 @@ workspace = true
 
 [dev-dependencies]
 clustertest = { version = "0.5.0", path = "../../clustertest" }
+insta = { workspace = true, features = ["redactions", "yaml"] }
 jsonwebtoken.workspace = true
 kernel-store = { version = "0.5.0", path = "../../kernel/store", features = ["test-util"] }
 logs = { version = "0.5.0", path = "../../observability/logs", features = ["test-util"] }

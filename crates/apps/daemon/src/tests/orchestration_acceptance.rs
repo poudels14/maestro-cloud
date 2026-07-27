@@ -430,34 +430,106 @@ impl Display for AcceptanceError {
 
 impl std::error::Error for AcceptanceError {}
 
+fn record_final_state(
+    states: &mut BTreeMap<String, ClusterSnapshot<kernel_api::DeploymentId>>,
+    node_count: u8,
+    scenario: &str,
+    snapshot: ClusterSnapshot<kernel_api::DeploymentId>,
+) -> Result<(), AcceptanceError> {
+    let key = format!("{node_count}-node-{scenario}");
+    if states.insert(key.clone(), snapshot).is_some() {
+        Err(AcceptanceError::new(format!(
+            "duplicate lifecycle snapshot key `{key}`"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+macro_rules! record_lifecycle_scenario {
+    ($states:expr, $node_count:expr, $name:literal, $scenario:path) => {{
+        let mut world = AcceptanceWorld::new($node_count).await?;
+        $scenario(&mut world).await?;
+        record_final_state($states, $node_count, $name, world.snapshot().await?)?;
+    }};
+}
+
 #[tokio::test]
 async fn shared_lifecycle_scenarios_drive_composed_operators()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut final_states = BTreeMap::new();
     for node_count in [1_u8, 3_u8] {
-        scenarios::rollout_reaches_ready(&mut AcceptanceWorld::new(node_count).await?).await?;
-        scenarios::redeploy_drains_previous(&mut AcceptanceWorld::new(node_count).await?).await?;
-        scenarios::queued_deployment_can_be_canceled(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
-        scenarios::replica_override_round_trips(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
-        scenarios::drained_deployment_finalizes(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
-        scenarios::restart_recycles_workloads_in_place(
-            &mut AcceptanceWorld::new(node_count).await?,
-        )
-        .await?;
-        scenarios::remove_deployment_retains_history(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
-        scenarios::delete_service_collects_owned_state(
-            &mut AcceptanceWorld::new(node_count).await?,
-        )
-        .await?;
-        scenarios::freeze_and_unfreeze_gate_rollout(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
-        scenarios::drain_and_restore_move_placement(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
-        scenarios::hard_node_affinity_pins_placement(&mut AcceptanceWorld::new(node_count).await?)
-            .await?;
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "rollout",
+            scenarios::rollout_reaches_ready
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "redeploy",
+            scenarios::redeploy_drains_previous
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "cancel",
+            scenarios::queued_deployment_can_be_canceled
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "replicas",
+            scenarios::replica_override_round_trips
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "drain-finalize",
+            scenarios::drained_deployment_finalizes
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "restart",
+            scenarios::restart_recycles_workloads_in_place
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "remove",
+            scenarios::remove_deployment_retains_history
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "delete",
+            scenarios::delete_service_collects_owned_state
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "freeze-unfreeze",
+            scenarios::freeze_and_unfreeze_gate_rollout
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "drain-restore",
+            scenarios::drain_and_restore_move_placement
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
+            "hard-affinity",
+            scenarios::hard_node_affinity_pins_placement
+        );
     }
+    insta::assert_yaml_snapshot!("orchestration_lifecycle_final_states", final_states, {
+        ".*.services[].active_deployment_id" => "[deployment-id]",
+        ".*.services[].deployments[].id" => "[deployment-id]",
+        ".*.services[].deployments[].replicas[].workload_instance" => "[workload-instance]",
+    });
     Ok(())
 }
