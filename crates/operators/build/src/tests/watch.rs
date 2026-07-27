@@ -67,6 +67,80 @@ async fn watcher_does_not_rewrite_an_unchanged_revision() -> WatchTestResult {
 }
 
 #[tokio::test]
+async fn malformed_dependency_is_quarantined_until_repaired() -> WatchTestResult {
+    let world = WatchWorld::new().await?;
+    let (service, deployment, build) = fixture(DeploymentPhase::Ready, Some(REVISION_A), "main")?;
+    world.seed(&service, &deployment, &build).await?;
+    let deployment_key = world.deployment_key()?;
+    let resolver = Arc::new(FakeRevisionResolver::fixed(REVISION_B));
+    let runtime = world.runtime(resolver.clone())?;
+
+    let stored = world
+        .store
+        .get(&deployment_key)
+        .await?
+        .ok_or("deployment missing")?;
+    assert!(matches!(
+        world
+            .store
+            .put_cas(PutRequest {
+                key: deployment_key.clone(),
+                value: b"not-json".to_vec(),
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert!(resolver.calls().is_empty());
+
+    let stored = world
+        .store
+        .get(&deployment_key)
+        .await?
+        .ok_or("malformed deployment missing")?;
+    let mut misidentified = deployment.clone();
+    misidentified.meta.id = kernel_api::DeploymentId::new("different-deployment")?;
+    assert!(matches!(
+        world
+            .store
+            .put_cas(PutRequest {
+                key: deployment_key.clone(),
+                value: serde_json::to_vec(&misidentified)?,
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert!(resolver.calls().is_empty());
+
+    let stored = world
+        .store
+        .get(&deployment_key)
+        .await?
+        .ok_or("misidentified deployment missing")?;
+    assert!(matches!(
+        world
+            .store
+            .put_cas(PutRequest {
+                key: deployment_key,
+                value: serde_json::to_vec(&deployment)?,
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert_eq!(desired_revision(&world.service().await?), Some(REVISION_B));
+    assert_eq!(resolver.calls().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn frozen_or_inflight_rollout_suppresses_remote_polling() -> WatchTestResult {
     for frozen in [false, true] {
         let world = WatchWorld::new().await?;

@@ -112,6 +112,10 @@ impl WatchWorld {
         self.key("Service", "api")
     }
 
+    pub(super) fn deployment_key(&self) -> WatchTestResult<kernel_store::StoreKey> {
+        self.key("Deployment", "deployment-1")
+    }
+
     pub(super) async fn service(&self) -> WatchTestResult<Service> {
         Ok(serde_json::from_slice(&self.stored_service().await?.value)?)
     }

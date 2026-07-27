@@ -9,8 +9,8 @@ use kernel_api::{
     ServiceSpec, ServiceStatus,
 };
 use kernel_controller::{
-    Action, ControllerError, ControllerRuntime, FencedStore, ReconcileContext, ReconcileError,
-    Reconciler, RuntimeConfig,
+    Action, ControllerRuntime, FencedStore, ReconcileContext, ReconcileError, Reconciler,
+    RuntimeConfig,
 };
 use kernel_store::{Clock, Keyspace, StorePrefix, StoredValue};
 
@@ -45,6 +45,7 @@ pub struct BuildWatchReconciler {
     service_prefix: StorePrefix,
     trigger_prefix: StorePrefix,
     deployment_prefix: StorePrefix,
+    deployment_kind: ResourceKind,
     build_kind: ResourceKind,
     writer: BuildWatchWriter,
 }
@@ -69,6 +70,7 @@ impl BuildWatchReconciler {
             service_prefix: keyspace.resource_kind(&service_kind),
             trigger_prefix: keyspace.cluster(),
             deployment_prefix: keyspace.resource_kind(&deployment_kind),
+            deployment_kind,
             build_kind,
             writer: BuildWatchWriter::new(&cluster_id)?,
             keyspace,
@@ -172,7 +174,18 @@ impl BuildWatchReconciler {
         let listed = store.list(&self.deployment_prefix).await?;
         let mut latest: Option<Deployment> = None;
         for stored in listed.values {
-            let deployment = decode::<Deployment>(stored, "Deployment")?;
+            let deployment = decode::<Deployment>(&stored, "Deployment")?;
+            let expected_key = self
+                .keyspace
+                .resource(&self.deployment_kind, &deployment.meta.id.clone().into());
+            if stored.key != expected_key {
+                return Err(identity_mismatch(
+                    "Deployment",
+                    &stored,
+                    deployment.meta.id.as_str(),
+                    &expected_key,
+                ));
+            }
             if deployment.spec.service_id != *service_id
                 || deployment.meta.deletion_timestamp.is_some()
             {
@@ -196,11 +209,19 @@ impl BuildWatchReconciler {
         let key = self
             .keyspace
             .resource(&self.build_kind, &build_id.clone().into());
-        store
-            .get(&key)
-            .await?
-            .map(|stored| decode::<Build>(stored, "Build"))
-            .transpose()
+        let Some(stored) = store.get(&key).await? else {
+            return Ok(None);
+        };
+        let build = decode::<Build>(&stored, "Build")?;
+        if build.meta.id != *build_id {
+            return Err(identity_mismatch(
+                "Build",
+                &stored,
+                build.meta.id.as_str(),
+                &key,
+            ));
+        }
+        Ok(Some(build))
     }
 }
 
@@ -266,15 +287,31 @@ fn deployment_order(left: &Deployment, right: &Deployment) -> Ordering {
 }
 
 fn decode<Resource: serde::de::DeserializeOwned>(
-    stored: StoredValue,
+    stored: &StoredValue,
     kind: &'static str,
 ) -> Result<Resource, ReconcileError> {
-    serde_json::from_slice(&stored.value).map_err(|error| {
-        ReconcileError::Infrastructure(ControllerError::MalformedResource {
-            kind,
-            message: error.to_string(),
-        })
+    serde_json::from_slice(&stored.value).map_err(|error| ReconcileError::Terminal {
+        reason: "MalformedResource".to_owned(),
+        message: format!(
+            "persisted {kind} resource at `{}` is malformed: {error}",
+            stored.key
+        ),
     })
+}
+
+fn identity_mismatch(
+    kind: &'static str,
+    stored: &StoredValue,
+    resource_id: &str,
+    expected_key: &kernel_store::StoreKey,
+) -> ReconcileError {
+    ReconcileError::Terminal {
+        reason: "ResourceIdentityMismatch".to_owned(),
+        message: format!(
+            "persisted {kind} resource `{resource_id}` at `{}` expected key `{expected_key}`",
+            stored.key
+        ),
+    }
 }
 
 fn retry_source(error: BuildSourceError) -> ReconcileError {
