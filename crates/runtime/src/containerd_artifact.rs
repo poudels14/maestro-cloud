@@ -422,7 +422,7 @@ fn spawn_transfer(
     reference: Option<String>,
     lease_id: String,
 ) -> TransferTask {
-    TransferTask::new(tokio::spawn(async move {
+    TransferTask::new(async move {
         let result = transfer(
             channel.clone(),
             namespace.clone(),
@@ -438,7 +438,7 @@ fn spawn_transfer(
             Err(error) => Err(error),
             Ok(()) => cleanup,
         }
-    }))
+    })
 }
 
 async fn transfer(

@@ -10,7 +10,6 @@ use futures_util::stream;
 use prost::{Message, Name};
 use prost_types::Any;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use crate::containerd_artifact_support::{artifact_request, operation_error, stream_error};
 use crate::{ArtifactByteStream, ArtifactStoreError};
@@ -19,31 +18,31 @@ const DATA_BYTES: usize = 32 * 1_024;
 const WINDOW_BYTES: usize = 2 * DATA_BYTES;
 const OUTBOUND_QUEUE: usize = 4;
 
+/// Owned containerd transfer operation.
+///
+/// The operation is polled only while its import or export owner is active,
+/// so dropping the owner cancels the gRPC request instead of detaching a
+/// background task. Containerd's expiring transfer lease bounds server-side
+/// cleanup when cancellation prevents the normal explicit lease deletion.
 pub(crate) struct TransferTask {
-    handle: JoinHandle<Result<(), ArtifactStoreError>>,
+    future: Pin<Box<dyn Future<Output = Result<(), ArtifactStoreError>> + Send>>,
 }
 
 impl TransferTask {
-    pub(crate) fn new(handle: JoinHandle<Result<(), ArtifactStoreError>>) -> Self {
-        Self { handle }
-    }
-
-    pub(crate) fn abort(&self) {
-        self.handle.abort();
+    pub(crate) fn new(
+        future: impl Future<Output = Result<(), ArtifactStoreError>> + Send + 'static,
+    ) -> Self {
+        Self {
+            future: Box::pin(future),
+        }
     }
 }
 
 impl Future for TransferTask {
-    type Output = Result<Result<(), ArtifactStoreError>, tokio::task::JoinError>;
+    type Output = Result<(), ArtifactStoreError>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.handle).poll(context)
-    }
-}
-
-impl Drop for TransferTask {
-    fn drop(&mut self) {
-        self.handle.abort();
+        self.future.as_mut().poll(context)
     }
 }
 
@@ -140,7 +139,7 @@ impl ContainerdArtifactStream {
                     .transfer
                     .take()
                     .ok_or_else(|| stream_error("export", "transfer completion was lost"))?;
-                finish_transfer(transfer.await, "export")
+                transfer.await
             }
         };
         self.duplex.take();
@@ -149,13 +148,13 @@ impl ContainerdArtifactStream {
 
     fn record_completion(
         &mut self,
-        result: Result<Result<(), ArtifactStoreError>, tokio::task::JoinError>,
+        result: Result<(), ArtifactStoreError>,
     ) -> Result<(), ArtifactStoreError> {
         self.transfer.take();
         if let Some(duplex) = self.duplex.as_mut() {
             duplex.sender.take();
         }
-        let completion = finish_transfer(result, "export");
+        let completion = result;
         if let Err(error) = completion {
             self.finished = true;
             self.duplex.take();
@@ -163,14 +162,6 @@ impl ContainerdArtifactStream {
         }
         self.completion = Some(completion);
         Ok(())
-    }
-}
-
-impl Drop for ContainerdArtifactStream {
-    fn drop(&mut self) {
-        if let Some(transfer) = self.transfer.take() {
-            transfer.abort();
-        }
     }
 }
 
@@ -237,7 +228,7 @@ pub(crate) async fn upload_stream(
     loop {
         let chunk = tokio::select! {
             result = &mut transfer => {
-                finish_transfer(result, "import")?;
+                result?;
                 duplex.sender.take();
                 return clean_source_end(source).await;
             }
@@ -245,10 +236,9 @@ pub(crate) async fn upload_stream(
         };
         let Some(chunk) = chunk else {
             duplex.sender.take();
-            return finish_transfer(transfer.await, "import");
+            return transfer.await;
         };
         if chunk.len() > WINDOW_BYTES {
-            transfer.abort();
             return Err(stream_error(
                 "import",
                 format!(
@@ -262,7 +252,7 @@ pub(crate) async fn upload_stream(
             while credit == 0 {
                 let message = tokio::select! {
                     result = &mut transfer => {
-                        return Err(match finish_transfer(result, "import") {
+                        return Err(match result {
                             Ok(()) => stream_error(
                                 "import",
                                 "server completed before pending archive bytes were sent",
@@ -323,19 +313,6 @@ where
     }
     MessageType::decode(message.value.as_slice())
         .map_err(|error| stream_error(operation, format!("invalid protobuf: {error}")))
-}
-
-fn finish_transfer(
-    result: Result<Result<(), ArtifactStoreError>, tokio::task::JoinError>,
-    operation: &str,
-) -> Result<(), ArtifactStoreError> {
-    match result {
-        Ok(result) => result,
-        Err(error) => Err(stream_error(
-            operation,
-            format!("transfer task failed: {error}"),
-        )),
-    }
 }
 
 async fn clean_source_end(
