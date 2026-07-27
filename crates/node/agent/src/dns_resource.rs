@@ -18,6 +18,10 @@ const MAX_CAS_ATTEMPTS: usize = 16;
 pub struct DnsReconcileReport {
     /// Active resources compiled into the resolver.
     pub observed_resources: usize,
+    /// Stored resources skipped because decoding or identity validation failed.
+    pub malformed_resources: usize,
+    /// Complete snapshots rejected without replacing the last valid zone.
+    pub snapshot_rejections: usize,
     /// Distinct record sets and records in the published zone.
     pub zone: DnsZoneSummary,
     /// Resource statuses changed to acknowledge this node.
@@ -108,23 +112,46 @@ impl DnsResourceAgent {
             .store
             .list(&self.keyspace.resource_kind(&self.kind))
             .await?;
-        let active = snapshot
-            .values
-            .iter()
-            .map(|stored| self.decode(stored))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter(|entry| entry.resource.meta.deletion_timestamp.is_none())
-            .collect::<Vec<_>>();
+        let mut active = Vec::new();
+        let mut malformed_resources = 0_usize;
+        for stored in &snapshot.values {
+            match self.decode(stored) {
+                Ok(entry) if entry.resource.meta.deletion_timestamp.is_none() => {
+                    active.push(entry);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    malformed_resources = malformed_resources.saturating_add(1);
+                    self.warn_malformed(stored, &error);
+                }
+            }
+        }
         let resources = active
             .iter()
             .map(|entry| entry.resource.clone())
             .collect::<Vec<_>>();
-        let zone = self.resolver.replace(&resources).await?;
         let mut report = DnsReconcileReport {
             observed_resources: resources.len(),
-            zone,
+            malformed_resources,
+            zone: self.resolver.summary().await,
             ..Default::default()
+        };
+        if malformed_resources > 0 {
+            report.snapshot_rejections = 1;
+            return Ok((report, snapshot.cursor));
+        }
+        report.zone = match self.resolver.replace(&resources).await {
+            Ok(zone) => zone,
+            Err(error) => {
+                tracing::warn!(
+                    kind = DNS_RECORD_KIND,
+                    node_id = %self.node_id,
+                    error = %error,
+                    "invalid DNS resource snapshot preserved the last published zone"
+                );
+                report.snapshot_rejections = 1;
+                return Ok((report, snapshot.cursor));
+            }
         };
         for entry in active {
             match self.acknowledge(entry).await? {
@@ -134,6 +161,9 @@ impl DnsResourceAgent {
                 AcknowledgeOutcome::Current => {}
                 AcknowledgeOutcome::Stale => {
                     report.stale_acknowledgements = report.stale_acknowledgements.saturating_add(1);
+                }
+                AcknowledgeOutcome::Malformed => {
+                    report.malformed_resources = report.malformed_resources.saturating_add(1);
                 }
             }
         }
@@ -187,7 +217,13 @@ impl DnsResourceAgent {
             let Some(stored) = self.store.get(&current.stored.key).await? else {
                 return Ok(AcknowledgeOutcome::Stale);
             };
-            current = self.decode(&stored)?;
+            current = match self.decode(&stored) {
+                Ok(current) => current,
+                Err(error) => {
+                    self.warn_malformed(&stored, &error);
+                    return Ok(AcknowledgeOutcome::Malformed);
+                }
+            };
         }
         Err(DnsResourceError::Contention {
             resource_id: current.resource.meta.id.as_str().to_owned(),
@@ -216,6 +252,16 @@ impl DnsResourceAgent {
             resource,
         })
     }
+
+    fn warn_malformed(&self, stored: &StoredValue, error: &DnsResourceError) {
+        tracing::warn!(
+            kind = DNS_RECORD_KIND,
+            node_id = %self.node_id,
+            resource_key = %stored.key,
+            error = %error,
+            "malformed DNS resource preserved the last published zone"
+        );
+    }
 }
 
 struct DecodedRecord {
@@ -228,6 +274,7 @@ enum AcknowledgeOutcome {
     Applied,
     Current,
     Stale,
+    Malformed,
 }
 
 fn encode(resource: &DnsRecord) -> Result<Vec<u8>, DnsResourceError> {

@@ -117,6 +117,11 @@ impl AuthoritativeDnsResolver {
         Ok(summary)
     }
 
+    /// Returns the size of the currently published immutable zone.
+    pub async fn summary(&self) -> DnsZoneSummary {
+        self.zone.read().await.summary
+    }
+
     /// Answers one query from the current immutable snapshot without store access.
     pub async fn lookup(
         &self,

@@ -125,19 +125,67 @@ async fn invalid_store_snapshots_preserve_the_last_published_zone()
     let malformed_key = dns_key(&cluster_id, "malformed")?;
     store
         .put_cas(PutRequest {
-            key: malformed_key,
+            key: malformed_key.clone(),
             value: b"not-json".to_vec(),
             expected: ExpectedVersion::Missing,
             session: None,
         })
         .await?;
-    assert!(matches!(
-        agent.reconcile_once().await,
-        Err(DnsResourceError::MalformedResource { .. })
-    ));
+    let degraded = agent.reconcile_once().await?;
+    assert_eq!(degraded.observed_resources, 1);
+    assert_eq!(degraded.malformed_resources, 1);
+    assert_eq!(degraded.snapshot_rejections, 1);
+    assert_eq!(degraded.acknowledgements, 0);
+    assert_eq!(degraded.zone.record_sets, 1);
     assert_eq!(
         resolver
             .lookup("api.maestro.internal.", DnsQueryType::A)
+            .await?
+            .answers
+            .len(),
+        1
+    );
+
+    let malformed = store
+        .get(&malformed_key)
+        .await?
+        .ok_or("malformed missing")?;
+    let repaired = record(
+        "malformed",
+        "worker.maestro.internal.",
+        Ipv4Addr::new(10, 42, 1, 12),
+    );
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: malformed_key,
+                value: serde_json::to_vec(&repaired)?,
+                expected: ExpectedVersion::Exact(malformed.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let recovered = agent.reconcile_once().await?;
+    assert_eq!(recovered.observed_resources, 2);
+    assert_eq!(recovered.malformed_resources, 0);
+    assert_eq!(recovered.snapshot_rejections, 0);
+    assert_eq!(recovered.zone.record_sets, 2);
+
+    update_record(store.as_ref(), &cluster_id, "malformed", |resource| {
+        resource.meta.generation = Generation(2);
+        resource.spec.name = "outside.example.".to_owned();
+    })
+    .await?;
+    let invalid_zone = agent.reconcile_once().await?;
+    assert_eq!(invalid_zone.observed_resources, 2);
+    assert_eq!(invalid_zone.malformed_resources, 0);
+    assert_eq!(invalid_zone.snapshot_rejections, 1);
+    assert_eq!(invalid_zone.acknowledgements, 0);
+    assert_eq!(invalid_zone.zone.record_sets, 2);
+    assert_eq!(
+        resolver
+            .lookup("worker.maestro.internal.", DnsQueryType::A)
             .await?
             .answers
             .len(),

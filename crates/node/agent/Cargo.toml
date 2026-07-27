@@ -24,6 +24,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["codegen", "router", "transport"] }
+tracing.workspace = true
 x25519-dalek = { workspace = true, features = ["getrandom", "static_secrets"] }
 zeroize = { workspace = true, features = ["alloc"] }
 
