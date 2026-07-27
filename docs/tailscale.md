@@ -45,6 +45,11 @@ specific operator group access to that pool:
   "grants": [
     {
       "src": ["group:maestro-operators"],
+      "dst": ["tag:maestro-gateway"],
+      "ip": ["tcp:443"],
+    },
+    {
+      "src": ["group:maestro-operators"],
       "dst": ["172.22.0.0/16"],
       "ip": ["*"],
     },
@@ -53,8 +58,11 @@ specific operator group access to that pool:
 ```
 
 Use the cluster's exact CIDR instead of the example. Tailnet access policy is
-evaluated against the advertised subnet destination, not the gateway device's
-tag, so grant only the source identities and destination ports that operators
+evaluated against the actual destination: direct API and panel access through
+Tailscale Serve requires TCP 443 access to the gateway tag, while routed
+workload and DNS traffic requires access to the advertised cluster CIDR. The
+direct grant also makes the gateway identities visible in allowed Tailscale
+clients. Grant only the source identities and destination ports that operators
 need. Tailscale recommends grants for new network access rules.
 
 If you omit `autoApprovers`, approve the advertised routes for every active
