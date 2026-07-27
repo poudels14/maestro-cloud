@@ -2,6 +2,7 @@
 
 mod archive;
 mod backup;
+mod database_compaction;
 mod duck;
 mod duck_query_compiler;
 mod metric_duck;

@@ -23,6 +23,8 @@ pub struct LogRolloverReport {
     pub bytes: u64,
     /// Archived delivery-spool rows no active sink still needs.
     pub delivery_rows_reclaimed: usize,
+    /// DuckDB file bytes physically reclaimed after checkpointed archival.
+    pub database_bytes_reclaimed: u64,
 }
 
 /// Durable manifest for every committed Parquet object in one hour partition.

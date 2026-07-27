@@ -7,8 +7,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::duck::Command;
 use crate::{
-    LogArchiveError, LogBackupError, LogRetentionError, delivery_schema, log_archive,
-    log_backup_schema, log_backup_stats_schema, log_retention, schema,
+    LogArchiveError, LogBackupError, LogRetentionError, database_compaction, delivery_schema,
+    log_archive, log_backup_schema, log_backup_stats_schema, log_retention, schema,
 };
 
 pub(crate) fn run_worker(
@@ -21,7 +21,7 @@ pub(crate) fn run_worker(
         let _ignored = initialized.send(Err(error.to_string()));
         return;
     }
-    let mut connection = match schema::open(path) {
+    let mut connection = match database_compaction::open(path) {
         Ok(connection) => {
             if initialized.send(Ok(())).is_err() {
                 return;
@@ -121,12 +121,19 @@ pub(crate) fn run_worker(
                 sink_ids,
                 response,
             } => {
-                let _ignored = response.send(log_archive::rollover_before(
-                    &mut connection,
-                    cold_root,
-                    before,
-                    &sink_ids,
-                ));
+                let result =
+                    log_archive::rollover_before(&mut connection, cold_root, before, &sink_ids)
+                        .and_then(|mut report| {
+                            report.database_bytes_reclaimed =
+                                database_compaction::compact_if_needed(&mut connection, path)
+                                    .map_err(|message| LogArchiveError::Unavailable {
+                                        message: format!(
+                                            "failed to compact the hot log database: {message}"
+                                        ),
+                                    })?;
+                            Ok(report)
+                        });
+                let _ignored = response.send(result);
             }
             Command::PendingBackups { response } => {
                 let _ignored = response.send(log_backup_schema::pending_partitions(

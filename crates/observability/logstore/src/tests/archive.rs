@@ -40,6 +40,7 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
             rows: 2,
             bytes: std::fs::metadata(parquet_path(store.cold_root(), 1, 2))?.len(),
             delivery_rows_reclaimed: 0,
+            database_bytes_reclaimed: 0,
         }
     );
     assert_eq!(
@@ -89,21 +90,21 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
     let restarted = DuckLogStoreRuntime::open(settings).await?;
     let store = restarted.store();
     store.append(&[entry(4, TEN_FIFTY)?]).await?;
+    let report = store.rollover_before(Timestamp(NOON), &sinks).await?;
+    assert_eq!(report.partitions, 2);
+    assert_eq!(report.rows, 2);
     assert_eq!(
-        store.rollover_before(Timestamp(NOON), &sinks).await?,
-        LogRolloverReport {
-            partitions: 2,
-            rows: 2,
-            bytes: std::fs::metadata(parquet_path(store.cold_root(), 4, 4))?.len()
-                + std::fs::metadata(
-                    store
-                        .cold_root()
-                        .join("logs/date=2026-07-21/hour=11/part-3-3.parquet"),
-                )?
-                .len(),
-            delivery_rows_reclaimed: 0,
-        }
+        report.bytes,
+        std::fs::metadata(parquet_path(store.cold_root(), 4, 4))?.len()
+            + std::fs::metadata(
+                store
+                    .cold_root()
+                    .join("logs/date=2026-07-21/hour=11/part-3-3.parquet"),
+            )?
+            .len()
     );
+    assert_eq!(report.delivery_rows_reclaimed, 0);
+    assert!(report.database_bytes_reclaimed > 0);
     let manifest = read_manifest(store.cold_root())?;
     assert_eq!(manifest.parts.len(), 2);
     assert_eq!(manifest.parts.get(1).map(|part| part.sequence_low), Some(4));
@@ -188,6 +189,82 @@ async fn rollover_failure_keeps_hot_and_delivery_rows_available()
     Ok(())
 }
 
+#[tokio::test]
+async fn repeated_rollover_keeps_total_storage_below_normalized_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    const HOURS: u64 = 4;
+    const ROWS_PER_HOUR: u64 = 2_000;
+    const HOUR_MILLIS: i64 = 60 * 60 * 1_000;
+
+    let temporary = tempfile::tempdir()?;
+    let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 64)?;
+    let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
+    let store = runtime.store();
+    let mut normalized_input_bytes = 0_u64;
+    let mut database_bytes_reclaimed = 0_u64;
+
+    for hour in 0..HOURS {
+        let mut entries = Vec::new();
+        for offset in 0..ROWS_PER_HOUR {
+            let index = hour
+                .checked_mul(ROWS_PER_HOUR)
+                .and_then(|value| value.checked_add(offset))
+                .ok_or("fixture index overflowed")?;
+            let event_at = TEN_FIFTEEN
+                .checked_add(
+                    i64::try_from(hour)
+                        .map_err(|_| "fixture hour overflowed")?
+                        .checked_mul(HOUR_MILLIS)
+                        .ok_or("fixture timestamp overflowed")?,
+                )
+                .ok_or("fixture timestamp overflowed")?;
+            let mut value = entry(index, event_at)?;
+            value.body = LogBody::Text(format!(
+                "request {index}: {}",
+                "repeated workload message ".repeat(20)
+            ));
+            normalized_input_bytes = normalized_input_bytes.saturating_add(
+                u64::try_from(serde_json::to_vec(&value)?.len())
+                    .map_err(|_| "fixture size overflowed")?,
+            );
+            entries.push(value);
+        }
+        store.append(&entries).await?;
+        let cutoff = TEN_FIFTEEN
+            .checked_add(
+                i64::try_from(hour.saturating_add(1))
+                    .map_err(|_| "rollover hour overflowed")?
+                    .checked_mul(HOUR_MILLIS)
+                    .ok_or("rollover timestamp overflowed")?,
+            )
+            .ok_or("rollover timestamp overflowed")?;
+        let report = store.rollover_before(Timestamp(cutoff), &[]).await?;
+        assert_eq!(report.rows, usize::try_from(ROWS_PER_HOUR)?);
+        assert_eq!(
+            report.delivery_rows_reclaimed,
+            usize::try_from(ROWS_PER_HOUR)?
+        );
+        database_bytes_reclaimed =
+            database_bytes_reclaimed.saturating_add(report.database_bytes_reclaimed);
+    }
+    runtime.shutdown().await?;
+
+    let connection = duckdb::Connection::open(&settings.path)?;
+    assert_eq!(row_count(&connection, "normalized_logs")?, 0);
+    assert_eq!(row_count(&connection, "query_logs")?, 0);
+    drop(connection);
+    assert!(
+        database_bytes_reclaimed > 0,
+        "rollover never reclaimed the empty hot-tier allocation"
+    );
+    let stored_bytes = tree_bytes(temporary.path())?;
+    assert!(
+        stored_bytes.saturating_mul(2) < normalized_input_bytes,
+        "rolled log storage used {stored_bytes} bytes for {normalized_input_bytes} normalized input bytes"
+    );
+    Ok(())
+}
+
 fn entry(index: u64, event_at: i64) -> Result<IngestLogEntry, kernel_api::InvalidIdentifier> {
     let cluster_id = ClusterId::new("cluster-1")?;
     let node_id = NodeId::new("node-1")?;
@@ -231,4 +308,18 @@ fn row_count(connection: &duckdb::Connection, table: &str) -> duckdb::Result<i64
     connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
         row.get(0)
     })
+}
+
+fn tree_bytes(root: &std::path::Path) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut bytes = 0_u64;
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            bytes = bytes.saturating_add(tree_bytes(&entry.path())?);
+        } else if metadata.is_file() {
+            bytes = bytes.saturating_add(metadata.len());
+        }
+    }
+    Ok(bytes)
 }
