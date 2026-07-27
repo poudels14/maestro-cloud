@@ -147,11 +147,7 @@ substitute for staging evidence.
      /var/lib/maestro-cutover-authority \
      /var/lib/maestro/cutover/launches
 
-   aws secretsmanager get-random-password \
-     --password-length 64 \
-     --exclude-punctuation \
-     --query RandomPassword \
-     --output text |
+   openssl rand -hex 32 |
      tr -d '\n' |
      aws secretsmanager create-secret \
        --name maestro/production/operator-jwt-secret \

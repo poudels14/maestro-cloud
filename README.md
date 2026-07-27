@@ -170,11 +170,7 @@ To rotate the signing key without reading it locally, create a new secret
 version and restart all nodes against it:
 
 ```sh
-aws secretsmanager get-random-password \
-  --password-length 64 \
-  --exclude-punctuation \
-  --query RandomPassword \
-  --output text |
+openssl rand -hex 32 |
   tr -d '\n' |
   aws secretsmanager put-secret-value \
     --secret-id maestro/production/operator-jwt-secret \

@@ -28,6 +28,8 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 mod network;
 #[path = "real_cluster/scenario.rs"]
 mod scenario;
+#[path = "real_cluster/secrets.rs"]
+mod secrets;
 #[path = "real_cluster/workload.rs"]
 mod workload;
 #[path = "real_cluster/workload_fixture.rs"]
@@ -37,6 +39,7 @@ use network::{
     RealNode, kill_namespace_processes, node_namespace_diagnostics, shortened_interface_name,
     workload_namespace_diagnostics,
 };
+use secrets::LocalSecretsManager;
 
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -51,7 +54,7 @@ static NEXT_NETWORK: AtomicU16 = AtomicU16::new(1);
 #[tokio::test]
 #[ignore = "requires root, containerd, iproute2, ping, nftables, WireGuard, MAESTRO_ETCD_BIN, MAESTRO_CONTAINERD_SOCKET, and Linux network namespaces"]
 async fn real_process_one_node_cluster_setup() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cluster = RealProcessCluster::new(1)?;
+    let mut cluster = RealProcessCluster::new(1).await?;
     cluster_bootstraps_joins_meshes_and_recovers(&mut cluster).await?;
     Ok(())
 }
@@ -59,7 +62,7 @@ async fn real_process_one_node_cluster_setup() -> Result<(), Box<dyn std::error:
 #[tokio::test]
 #[ignore = "requires root, containerd, iproute2, ping, nftables, WireGuard, MAESTRO_ETCD_BIN, MAESTRO_CONTAINERD_SOCKET, and Linux network namespaces"]
 async fn real_process_three_node_cluster_setup() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cluster = RealProcessCluster::new(3)?;
+    let mut cluster = RealProcessCluster::new(3).await?;
     cluster_bootstraps_joins_meshes_and_recovers(&mut cluster).await?;
     Ok(())
 }
@@ -74,11 +77,12 @@ struct RealProcessCluster {
     authority: ClusterCertificateAuthority,
     nodes: Vec<RealNode>,
     securities: BTreeMap<NodeId, NodeCertificateBundle>,
+    secrets_manager: LocalSecretsManager,
     write_sequence: u32,
 }
 
 impl RealProcessCluster {
-    fn new(node_count: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    async fn new(node_count: usize) -> Result<Self, Box<dyn std::error::Error>> {
         if !matches!(node_count, 1 | 3) {
             return Err("real-process cluster requires one or three nodes".into());
         }
@@ -153,6 +157,7 @@ impl RealProcessCluster {
                 launch_sequence: 0,
             })
             .collect();
+        let bridge_address = Ipv4Addr::new(10, 203, segment, 1);
         let mut real = Self {
             root,
             daemon_binary,
@@ -163,9 +168,11 @@ impl RealProcessCluster {
             authority,
             nodes,
             securities,
+            secrets_manager: LocalSecretsManager::pending(),
             write_sequence: 0,
         };
         real.create_network(segment)?;
+        real.secrets_manager = LocalSecretsManager::start(bridge_address).await?;
         Ok(real)
     }
 
@@ -229,6 +236,19 @@ impl RealProcessCluster {
         let mut command = Command::new("ip");
         command
             .args(["netns", "exec", &node.namespace])
+            .env("AWS_ACCESS_KEY_ID", "maestro-real-cluster")
+            .env(
+                "AWS_SECRET_ACCESS_KEY",
+                "maestro-real-cluster-secret-access-key",
+            )
+            .env("AWS_REGION", "us-east-1")
+            .env("AWS_EC2_METADATA_DISABLED", "true")
+            .env(
+                "AWS_ENDPOINT_URL_SECRETS_MANAGER",
+                self.secrets_manager
+                    .endpoint()
+                    .map_err(RealClusterError::from_display)?,
+            )
             .arg(&self.daemon_binary)
             .arg("start")
             .arg(&node.config_path)

@@ -24,7 +24,7 @@ const WORKLOAD_TIMEOUT: Duration = Duration::from_secs(90);
 #[ignore = "requires root, containerd, etcd, iproute2, nftables, WireGuard, and registry access"]
 async fn real_process_workload_adopts_and_recovers_after_runtime_loss()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut cluster = RealProcessCluster::new(1)?;
+    let mut cluster = RealProcessCluster::new(1).await?;
     cluster.bootstrap_seed().await?;
 
     let store = cluster.wait_store().await?;
