@@ -50,18 +50,7 @@ impl CutoverEtcdConnection {
 
     /// Opens a raw legacy-prefix reader with a bounded response contract.
     pub async fn legacy_source(&self) -> Result<LegacyEtcdSource, CutoverEtcdError> {
-        let identity = Identity::from_pem(
-            self.client_certificate.clone(),
-            self.client_private_key.as_slice(),
-        );
-        let tls = TlsOptions::new()
-            .ca_certificate(Certificate::from_pem(self.certificate_authority.clone()))
-            .identity(identity);
-        let client = Client::connect(&self.endpoints, Some(ConnectOptions::new().with_tls(tls)))
-            .await
-            .map_err(|error| CutoverEtcdError::Connect {
-                message: error.to_string(),
-            })?;
+        let client = self.connect_client().await?;
         Ok(LegacyEtcdSource {
             client: client
                 .kv_client()
@@ -86,6 +75,43 @@ impl CutoverEtcdConnection {
         EtcdStore::connect_with_tls_and_encryption(self.endpoints.clone(), tls, encryption_key)
             .await
             .map_err(|error| CutoverEtcdError::Destination {
+                message: error.to_string(),
+            })
+    }
+
+    /// Removes legacy role-based auth before the native snapshot is restored
+    /// under rewrite-issued client certificate identities.
+    ///
+    /// Rewrite etcd still requires a certificate signed by its private cluster
+    /// CA. Fresh rewrite clusters do not enable etcd's separate user database,
+    /// so retaining legacy certificate common names would make a restored
+    /// snapshot unusable by every newly issued node identity.
+    pub async fn disable_legacy_auth(&self) -> Result<bool, CutoverEtcdError> {
+        let mut client = self.connect_client().await?;
+        match client.auth_disable().await {
+            Ok(_) => Ok(true),
+            Err(etcd_client::Error::GRpcStatus(status))
+                if status.message().contains("authentication is not enabled") =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(CutoverEtcdError::NormalizeAuth {
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    async fn connect_client(&self) -> Result<Client, CutoverEtcdError> {
+        let identity = Identity::from_pem(
+            self.client_certificate.clone(),
+            self.client_private_key.as_slice(),
+        );
+        let tls = TlsOptions::new()
+            .ca_certificate(Certificate::from_pem(self.certificate_authority.clone()))
+            .identity(identity);
+        Client::connect(&self.endpoints, Some(ConnectOptions::new().with_tls(tls)))
+            .await
+            .map_err(|error| CutoverEtcdError::Connect {
                 message: error.to_string(),
             })
     }
@@ -311,6 +337,8 @@ pub enum CutoverEtcdError {
     Read { message: String },
     #[error("could not connect to the encrypted rewrite store: {message}")]
     Destination { message: String },
+    #[error("could not remove inherited legacy etcd authentication: {message}")]
+    NormalizeAuth { message: String },
     #[error("legacy etcd response had no positive revision")]
     MissingRevision,
     #[error("legacy etcd returned different revisions for one paged snapshot")]

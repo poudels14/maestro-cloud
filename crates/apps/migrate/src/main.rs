@@ -352,10 +352,12 @@ async fn apply(
         })
         .await?;
     let verification = migration.verify(&plan).await?;
+    let legacy_auth_was_enabled = connection.disable_legacy_auth().await?;
     write_json(
         &ApplyReport {
-            schema_version: 2,
+            schema_version: 3,
             source_verified_at_revision: final_revision.get(),
+            legacy_auth_was_enabled,
             plan: report,
             outcome,
             verification,
@@ -461,6 +463,7 @@ impl<'a> CaptureReport<'a> {
 struct ApplyReport {
     schema_version: u32,
     source_verified_at_revision: i64,
+    legacy_auth_was_enabled: bool,
     plan: MigrationPlanReport,
     outcome: MigrationOutcome,
     verification: MigrationVerification,

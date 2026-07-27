@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use kernel_api::{
-    ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Generation, Node, NodeId,
-    NodeInstanceId, NodeRole, NodeSpec, ResourceKind, ResourceName, Timestamp,
+    AnnotationKey, ClusterId, Condition, ConditionReason, ConditionState, ConditionType,
+    Generation, Node, NodeId, NodeInstanceId, NodeRole, NodeSpec, ResourceKind, ResourceName,
+    Timestamp,
 };
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
@@ -120,6 +121,54 @@ async fn registry_rejects_topology_drift_without_replacing_the_node()
         "different.internal"
     );
     assert!(stored_liveness(&store).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn registry_adopts_the_target_role_for_a_migrated_node()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(FixedMonotonicClock)));
+    let clock = Arc::new(MutableStatusClock::new(1_000));
+    let first = agent(store.clone(), "instance-1", clock.clone())?;
+    let first_session = store.session(Duration::from_secs(30)).await?;
+    first.reconcile_once(first_session.as_ref()).await?;
+    first_session.close().await?;
+
+    let key = node_key()?;
+    let stored = store.get(&key).await?.ok_or("Node missing")?;
+    let mut node: Node = serde_json::from_slice(&stored.value)?;
+    node.spec.hostname = "unknown-host".to_owned();
+    node.spec.role = NodeRole::ControlPlane;
+    node.meta.annotations.insert(
+        AnnotationKey("migration.maestro.dev/legacy-node-record".to_owned()),
+        "{}".to_owned(),
+    );
+    node.spec
+        .scheduling_labels
+        .insert("zone".to_owned(), "west".to_owned());
+    store
+        .put_cas(PutRequest {
+            key,
+            value: serde_json::to_vec(&node)?,
+            expected: ExpectedVersion::Exact(stored.version),
+            session: None,
+        })
+        .await?;
+
+    let second = agent(store.clone(), "instance-2", clock)?;
+    let second_session = store.session(Duration::from_secs(30)).await?;
+    assert_eq!(
+        second.reconcile_once(second_session.as_ref()).await?,
+        NodeRegistryAction::Registered
+    );
+    let node = stored_node(&store).await?;
+    assert_eq!(node.spec.hostname, "node-1.internal");
+    assert_eq!(node.spec.role, NodeRole::Worker);
+    assert_eq!(node.meta.generation, Generation(2));
+    assert_eq!(
+        node.spec.scheduling_labels.get("zone"),
+        Some(&"west".to_owned())
+    );
     Ok(())
 }
 

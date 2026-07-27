@@ -72,8 +72,11 @@ substitute for staging evidence.
    Planning validates every known legacy key family and fails if leadership,
    requests, maintenance, or node-lifecycle work is still in progress. Compare
    the store plan's cluster ID, control-plane node IDs, addresses, and peer
-   ports with the rewrite `maestro.jsonc` before proceeding. Legacy nodes may
-   use different dynamically allocated etcd ports; `--store-peer-port`
+   ports with the rewrite `maestro.jsonc` before proceeding. At first rewrite
+   startup, the protected launch topology adopts the target hostname and role
+   for migration-annotated nodes while preserving their labels and status; the
+   control-plane address must still match exactly. Legacy nodes may use
+   different dynamically allocated etcd ports; `--store-peer-port`
    deliberately normalizes every restored member onto the rewrite's shared
    peer port. A replica state without a current assignment remains invalid
    unless it is a superseded `CRASHED` placement. Those historical failures are
@@ -108,8 +111,10 @@ substitute for staging evidence.
    ```
 
    Apply fences the live legacy digest before writes and immediately before its
-   completion marker. Verification must run before rewrite daemons can mutate
-   migrated resources.
+   completion marker. After successful verification it disables the legacy
+   etcd user database so the post-migration snapshot accepts rewrite-issued
+   node certificates. Mutual TLS remains mandatory. Verification must run
+   before rewrite daemons can mutate migrated resources.
 
 6. While legacy etcd is still the only running process, take a second native
    snapshot containing the verified rewrite namespace:
@@ -128,8 +133,10 @@ substitute for staging evidence.
      /var/lib/maestro/cutover/post-migration.db
    ```
 
-   The pre-migration native snapshot is the last abort point. The
-   post-migration native snapshot is the source for every rewrite store member.
+   The pre-migration native snapshot is the last abort point. Confirm the apply
+   report uses schema version 3 and contains `legacyAuthWasEnabled` before
+   taking the post-migration snapshot. That snapshot is the source for every
+   rewrite store member.
 
 7. Create one shared CA and one launch document per declared node. The operator
    secret is new; the store secret must be the exact secret used by migration:

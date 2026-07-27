@@ -18,6 +18,7 @@ use crate::StatusClock;
 const NODE_KIND: &str = "Node";
 const MAX_NODE_BYTES: usize = 256 * 1_024;
 const MAX_CAS_ATTEMPTS: usize = 16;
+const LEGACY_NODE_RECORD_ANNOTATION: &str = "migration.maestro.dev/legacy-node-record";
 
 /// Static identity and lease policy for one node daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,9 +286,7 @@ impl NodeRegistryAgent {
         if node.meta.deletion_timestamp.is_some() {
             return Err(NodeRegistryError::NodeDeleting);
         }
-        if !same_definition(&node.spec, &self.settings.node_spec) {
-            return Err(NodeRegistryError::DefinitionConflict);
-        }
+        reconcile_definition(&mut node, &self.settings.node_spec)?;
         if let Some(stored) = stored {
             node.meta.revision = stored.version.resource_revision();
         }
@@ -302,6 +301,25 @@ fn same_definition(current: &NodeSpec, desired: &NodeSpec) -> bool {
     current.hostname == desired.hostname
         && current.host_address == desired.host_address
         && current.role == desired.role
+}
+
+fn reconcile_definition(node: &mut Node, desired: &NodeSpec) -> Result<(), NodeRegistryError> {
+    if same_definition(&node.spec, desired) {
+        return Ok(());
+    }
+    let migrated_definition_transition = node.spec.host_address == desired.host_address
+        && node
+            .meta
+            .annotations
+            .keys()
+            .any(|key| key.0 == LEGACY_NODE_RECORD_ANNOTATION);
+    if !migrated_definition_transition {
+        return Err(NodeRegistryError::DefinitionConflict);
+    }
+    node.spec.hostname.clone_from(&desired.hostname);
+    node.spec.role = desired.role;
+    node.meta.generation = Generation(node.meta.generation.0.saturating_add(1));
+    Ok(())
 }
 
 fn expected(stored: Option<&StoredValue>) -> ExpectedVersion {
