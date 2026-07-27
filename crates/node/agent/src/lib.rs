@@ -126,7 +126,9 @@ pub use mesh::{
     MeshError, MeshInterface, MeshPeer, MeshPlanner, MeshReconciler, MeshRoute, MeshSubnet,
 };
 pub use mesh_identity::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, WireGuardPublicKey};
-pub use mesh_resource::{MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock};
+pub use mesh_resource::{
+    MeshReconcileReport, MeshResourceAgent, MeshResourceError, StatusClock, SystemStatusClock,
+};
 pub use network_stats::{
     HostNetworkStatsReader, WorkloadNetworkStats, WorkloadNetworkStatsError,
     WorkloadNetworkStatsReader,

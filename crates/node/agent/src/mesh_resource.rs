@@ -21,6 +21,19 @@ const MESH_APPLIED_REASON: &str = "MeshApplied";
 const MESH_FAILED_REASON: &str = "MeshApplyFailed";
 const MAX_CAS_ATTEMPTS: usize = 16;
 
+/// Result of one complete store-backed mesh reconciliation pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MeshReconcileReport {
+    /// Exact configuration accepted by the backend, when this pass succeeded.
+    pub configuration: Option<MeshConfiguration>,
+    /// Stored publications skipped because decoding or identity validation failed.
+    pub malformed_resources: usize,
+    /// Whether the backend accepted and applied the complete snapshot.
+    pub applied: bool,
+    /// Whether a rejected snapshot or backend failure was surfaced in local status.
+    pub failure_reported: bool,
+}
+
 /// Wall-clock source used only for resource condition transition timestamps.
 pub trait StatusClock: Send + Sync {
     /// Returns the current UTC Unix timestamp in milliseconds.
@@ -100,9 +113,9 @@ where
     }
 
     /// Publishes local desired state, applies one linearizable snapshot, and reports status.
-    pub async fn reconcile_once(&self) -> Result<MeshConfiguration, MeshResourceError> {
-        let (configuration, _cursor) = self.reconcile_with_cursor().await?;
-        Ok(configuration)
+    pub async fn reconcile_once(&self) -> Result<MeshReconcileReport, MeshResourceError> {
+        let (report, _cursor) = self.reconcile_with_cursor().await?;
+        Ok(report)
     }
 
     /// Runs event-driven reconciliation with a level-triggered periodic resync.
@@ -115,7 +128,7 @@ where
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let (_configuration, cursor) = self.reconcile_with_cursor().await?;
+            let (_report, cursor) = self.reconcile_with_cursor().await?;
             let mut events = self.store.watch(
                 self.keyspace.resource_kind(&self.kind),
                 WatchStart::After(cursor),
@@ -148,34 +161,75 @@ where
 
     async fn reconcile_with_cursor(
         &self,
-    ) -> Result<(MeshConfiguration, WatchCursor), MeshResourceError> {
+    ) -> Result<(MeshReconcileReport, WatchCursor), MeshResourceError> {
         self.ensure_local_publication().await?;
         let snapshot = self
             .store
             .list(&self.keyspace.resource_kind(&self.kind))
             .await?;
-        let publications = match decode_publications(&snapshot.values) {
-            Ok(publications) => publications,
-            Err(error) => return self.report_failure(error).await,
-        };
+        let mut publications = Vec::new();
+        let mut first_malformed = None;
+        let mut malformed_resources = 0_usize;
+        for stored in &snapshot.values {
+            match decode_publication(stored, &self.keyspace, &self.kind) {
+                Ok(Some(publication)) => publications.push(publication),
+                Ok(None) => {}
+                Err(error) => {
+                    self.warn_malformed(stored, &error);
+                    malformed_resources = malformed_resources.saturating_add(1);
+                    if first_malformed.is_none() {
+                        first_malformed = Some(error);
+                    }
+                }
+            }
+        }
+        if let Some(error) = first_malformed {
+            return Ok((
+                self.report_failure(error, malformed_resources).await?,
+                snapshot.cursor,
+            ));
+        }
         match self.reconciler.reconcile(&publications).await {
             Ok(configuration) => {
                 self.update_status(MeshStatus::Ready).await?;
-                Ok((configuration, snapshot.cursor))
+                Ok((
+                    MeshReconcileReport {
+                        configuration: Some(configuration),
+                        malformed_resources: 0,
+                        applied: true,
+                        failure_reported: false,
+                    },
+                    snapshot.cursor,
+                ))
             }
-            Err(error) => self.report_failure(error.into()).await,
+            Err(error) => Ok((self.report_failure(error.into(), 0).await?, snapshot.cursor)),
         }
     }
 
-    async fn report_failure<T>(&self, failure: MeshResourceError) -> Result<T, MeshResourceError> {
+    async fn report_failure(
+        &self,
+        failure: MeshResourceError,
+        malformed_resources: usize,
+    ) -> Result<MeshReconcileReport, MeshResourceError> {
         let detail = failure.to_string();
-        if let Err(status_error) = self.update_status(MeshStatus::Failed(&detail)).await {
-            return Err(MeshResourceError::FailureStatus {
+        self.update_status(MeshStatus::Failed(&detail))
+            .await
+            .map_err(|status_error| MeshResourceError::FailureStatus {
                 failure: detail,
                 status_error: status_error.to_string(),
-            });
-        }
-        Err(failure)
+            })?;
+        tracing::warn!(
+            kind = NODE_NETWORK_KIND,
+            node_id = %self.local_publication.node_id,
+            error = %failure,
+            "mesh snapshot was rejected without replacing the last applied configuration"
+        );
+        Ok(MeshReconcileReport {
+            configuration: None,
+            malformed_resources,
+            applied: false,
+            failure_reported: true,
+        })
     }
 
     async fn ensure_local_publication(&self) -> Result<(), MeshResourceError> {
@@ -186,16 +240,24 @@ where
             }
             let current = self.store.get(&key).await?;
             let (mut resource, expected) = match current {
-                Some(stored) => {
-                    let mut resource = decode_local_resource(&stored, &self.resource_id)?;
-                    if resource.spec == self.local_publication {
-                        return Ok(());
+                Some(stored) => match decode_local_resource(&stored, &self.resource_id) {
+                    Ok(mut resource) => {
+                        if resource.spec == self.local_publication {
+                            return Ok(());
+                        }
+                        resource.meta.generation =
+                            Generation(resource.meta.generation.0.saturating_add(1));
+                        resource.spec = self.local_publication.clone();
+                        (resource, ExpectedVersion::Exact(stored.version))
                     }
-                    resource.meta.generation =
-                        Generation(resource.meta.generation.0.saturating_add(1));
-                    resource.spec = self.local_publication.clone();
-                    (resource, ExpectedVersion::Exact(stored.version))
-                }
+                    Err(error) => {
+                        self.warn_malformed(&stored, &error);
+                        (
+                            self.new_local_resource(),
+                            ExpectedVersion::Exact(stored.version),
+                        )
+                    }
+                },
                 None => (self.new_local_resource(), ExpectedVersion::Missing),
             };
             resource.meta.revision = ResourceRevision::default();
@@ -280,6 +342,16 @@ where
             },
         }
     }
+
+    fn warn_malformed(&self, stored: &StoredValue, error: &MeshResourceError) {
+        tracing::warn!(
+            kind = NODE_NETWORK_KIND,
+            node_id = %self.local_publication.node_id,
+            resource_key = %stored.key,
+            error = %error,
+            "malformed mesh publication preserved the last applied configuration"
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -328,19 +400,25 @@ fn desired_status(
     }
 }
 
-fn decode_publications(values: &[StoredValue]) -> Result<Vec<NodeNetworkSpec>, MeshResourceError> {
-    values
-        .iter()
-        .map(|stored| {
-            let resource = decode_resource(stored)?;
-            if resource.meta.deletion_timestamp.is_some() {
-                Ok(None)
-            } else {
-                Ok(Some(resource.spec))
-            }
-        })
-        .filter_map(Result::transpose)
-        .collect()
+fn decode_publication(
+    stored: &StoredValue,
+    keyspace: &Keyspace,
+    kind: &ResourceKind,
+) -> Result<Option<NodeNetworkSpec>, MeshResourceError> {
+    let resource = decode_resource(stored)?;
+    let expected_key = keyspace.resource(kind, &ResourceName::new(resource.meta.id.as_str())?);
+    if stored.key != expected_key || resource.meta.id.as_str() != resource.spec.node_id.as_str() {
+        return Err(MeshResourceError::ResourceIdentityMismatch {
+            key: stored.key.to_string(),
+            resource_id: resource.meta.id.as_str().to_owned(),
+            node_id: resource.spec.node_id.as_str().to_owned(),
+        });
+    }
+    if resource.meta.deletion_timestamp.is_some() {
+        Ok(None)
+    } else {
+        Ok(Some(resource.spec))
+    }
 }
 
 fn decode_local_resource(
@@ -395,6 +473,15 @@ pub enum MeshResourceError {
     /// A local key contained another resource or node identity.
     #[error("local NodeNetwork key contains a different resource identity")]
     LocalResourceIdentityMismatch,
+    /// A stored publication's typed identities did not match its canonical key.
+    #[error(
+        "NodeNetwork resource `{resource_id}` for node `{node_id}` does not match store key `{key}`"
+    )]
+    ResourceIdentityMismatch {
+        key: String,
+        resource_id: String,
+        node_id: String,
+    },
     /// The local publication vanished between publication and status update.
     #[error("local NodeNetwork publication disappeared before status update")]
     LocalPublicationDisappeared,

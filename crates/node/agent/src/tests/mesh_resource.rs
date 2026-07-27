@@ -7,13 +7,13 @@ use kernel_api::{
     ClusterId, ConditionState, NodeId, NodeNetwork, ResourceKind, ResourceName, Timestamp,
 };
 use kernel_store::{
-    Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
-    Store,
+    CasOutcome, Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime,
+    PutRequest, Store,
 };
 
 use crate::{
-    MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, MeshPlanner, MeshResourceAgent,
-    MeshSubnet, StatusClock, WireGuardPrivateKey,
+    MeshBackend, MeshBackendError, MeshConfiguration, MeshIdentity, MeshPlanner,
+    MeshReconcileReport, MeshResourceAgent, MeshSubnet, StatusClock, WireGuardPrivateKey,
 };
 
 use super::fake_mesh::FakeMeshBackend;
@@ -41,11 +41,11 @@ async fn resource_agents_publish_apply_and_remove_stale_peers()
     )?;
 
     let first = node_1.reconcile_once().await?;
-    assert!(first.peers.is_empty());
+    assert!(configuration(&first)?.peers.is_empty());
     let second = node_2.reconcile_once().await?;
-    assert_eq!(peer_ids(&second), vec!["node-1"]);
+    assert_eq!(peer_ids(configuration(&second)?), vec!["node-1"]);
     let formed = node_1.reconcile_once().await?;
-    assert_eq!(peer_ids(&formed), vec!["node-2"]);
+    assert_eq!(peer_ids(configuration(&formed)?), vec!["node-2"]);
 
     let keyspace = Keyspace::new(&cluster_id);
     let node_2_key = keyspace.resource(
@@ -64,8 +64,11 @@ async fn resource_agents_publish_apply_and_remove_stale_peers()
         .await?;
 
     let converged = node_1.reconcile_once().await?;
-    assert!(converged.peers.is_empty());
-    assert_eq!(node_1.backend().applied().last(), Some(&converged));
+    assert!(configuration(&converged)?.peers.is_empty());
+    assert_eq!(
+        node_1.backend().applied().last(),
+        converged.configuration.as_ref()
+    );
 
     let node_1_key = keyspace.resource(
         &ResourceKind::new("NodeNetwork")?,
@@ -112,7 +115,10 @@ async fn backend_failure_is_reported_without_advancing_applied_generation()
         Duration::from_secs(30),
     )?;
 
-    assert!(agent.reconcile_once().await.is_err());
+    let failure = agent.reconcile_once().await?;
+    assert!(!failure.applied);
+    assert!(failure.failure_reported);
+    assert!(failure.configuration.is_none());
     let key = Keyspace::new(&cluster_id).resource(
         &ResourceKind::new("NodeNetwork")?,
         &ResourceName::new(node_id.as_str())?,
@@ -128,6 +134,72 @@ async fn backend_failure_is_reported_without_advancing_applied_generation()
             .map(|condition| (condition.state, condition.reason.0.as_str())),
         Some((ConditionState::False, "MeshApplyFailed"))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_peer_publication_is_quarantined_until_its_owner_repairs_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TestMonotonicClock)));
+    let cluster_id = ClusterId::new("mesh-resource-malformed")?;
+    let node_1 = agent(
+        store.clone(),
+        &cluster_id,
+        "node-1",
+        1,
+        Ipv4Addr::new(10, 20, 0, 11),
+        "172.22.1.0/24",
+    )?;
+    let node_2 = agent(
+        store.clone(),
+        &cluster_id,
+        "node-2",
+        2,
+        Ipv4Addr::new(10, 20, 0, 12),
+        "172.22.2.0/24",
+    )?;
+    node_1.reconcile_once().await?;
+    node_2.reconcile_once().await?;
+    let formed = node_1.reconcile_once().await?;
+    assert_eq!(peer_ids(configuration(&formed)?), vec!["node-2"]);
+
+    let node_2_key = Keyspace::new(&cluster_id).resource(
+        &ResourceKind::new("NodeNetwork")?,
+        &ResourceName::new("node-2")?,
+    );
+    let stored = store
+        .get(&node_2_key)
+        .await?
+        .ok_or("node-2 publication missing")?;
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: node_2_key,
+                value: b"not-json".to_vec(),
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+
+    let degraded = node_1.reconcile_once().await?;
+    assert!(!degraded.applied);
+    assert!(degraded.failure_reported);
+    assert_eq!(degraded.malformed_resources, 1);
+    assert!(degraded.configuration.is_none());
+    let applied = node_1.backend().applied();
+    assert_eq!(
+        peer_ids(applied.last().ok_or("last applied mesh missing")?),
+        vec!["node-2"]
+    );
+
+    let repaired = node_2.reconcile_once().await?;
+    assert!(repaired.applied);
+    assert_eq!(repaired.malformed_resources, 0);
+    let recovered = node_1.reconcile_once().await?;
+    assert!(recovered.applied);
+    assert_eq!(peer_ids(configuration(&recovered)?), vec!["node-2"]);
     Ok(())
 }
 
@@ -198,6 +270,13 @@ fn peer_ids(configuration: &MeshConfiguration) -> Vec<&str> {
         .iter()
         .map(|peer| peer.node_id.as_str())
         .collect()
+}
+
+fn configuration(report: &MeshReconcileReport) -> Result<&MeshConfiguration, &'static str> {
+    report
+        .configuration
+        .as_ref()
+        .ok_or("mesh configuration was not applied")
 }
 
 struct TestMonotonicClock;
