@@ -193,7 +193,20 @@ http://<gateway MagicDNS name>/
 For example, the first replica of cluster `production` requests the hostname
 `maestro-production-gateway-0`. Tailscale may append a collision suffix when a
 retired device still owns that name, so use the actual MagicDNS name shown for
-the online device. Sign in with a Maestro operator token.
+the online device. Mint a short-lived token on a workstation whose AWS
+credential chain can read the environment's signing secret:
+
+```sh
+maestro auth token \
+  --secret-source aws-secret://maestro/production/operator-jwt-secret \
+  --expires-in 1h \
+  --access-level read-only
+```
+
+The command prints only the JWT. Paste it into the panel login form. Use
+`--access-level operator` only when the session needs to change cluster state
+or open an exec session. The API enforces the access level after the panel
+exchanges the JWT for its secure browser cookie.
 
 The daemon also serves the same panel on each returned bridge address. Node
 certificates include both the control-plane endpoint and the bridge address,

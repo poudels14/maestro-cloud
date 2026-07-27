@@ -147,6 +147,19 @@ artifact packaging, follow
 
 ## Authenticate an operator CLI
 
+Mint a token without copying the signing key out of AWS Secrets Manager:
+
+```sh
+maestro auth token \
+  --secret-source aws-secret://maestro/production/operator-jwt-secret \
+  --expires-in 1h \
+  --access-level read-only
+```
+
+This prints only the short-lived JWT. `read-only` tokens can use API and panel
+views but cannot mutate cluster state or open exec sessions; `operator` tokens
+retain full access.
+
 Create a context for one declared HTTPS endpoint. Supply the cluster CA when it
 is not already in the workstation trust store:
 

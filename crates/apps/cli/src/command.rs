@@ -10,7 +10,7 @@ use crate::config::{self, ConfigKind};
 use crate::contexts::ContextStore;
 use crate::exec_command::ExecCommand;
 use crate::log_command::LogCommand;
-use crate::login::{DEFAULT_LOGIN_DAYS, login};
+use crate::login::{AccessLevel, DEFAULT_LOGIN_DAYS, TokenLifetime, login, mint_token};
 use crate::services_command::ServiceCommand;
 
 /// Rewritten Maestro operator command-line client.
@@ -23,6 +23,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Mint short-lived operator credentials from a protected signing-key source.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// Inspect and operate the active Maestro cluster.
     Cluster {
         #[command(subcommand)]
@@ -59,6 +64,25 @@ enum Command {
     Services {
         #[command(subcommand)]
         command: ServiceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthCommand {
+    /// Print one short-lived JWT to standard output.
+    Token {
+        /// Raw signing-key source, including aws-secret:// references.
+        #[arg(long)]
+        secret_source: String,
+        /// Token lifetime such as 15m, 1h, or 7d.
+        #[arg(long)]
+        expires_in: TokenLifetime,
+        /// Server-enforced API access granted to the token.
+        #[arg(long, value_enum)]
+        access_level: AccessLevel,
+        /// Non-empty identity recorded in mutations and audit metadata.
+        #[arg(long, default_value = "maestro-cli")]
+        subject: String,
     },
 }
 
@@ -119,6 +143,18 @@ pub async fn run(
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     match cli.command {
+        Command::Auth { command } => match command {
+            AuthCommand::Token {
+                secret_source,
+                expires_in,
+                access_level,
+                subject,
+            } => {
+                let token = mint_token(&secret_source, expires_in, access_level, &subject).await?;
+                writeln!(output, "{}", token.expose())
+                    .map_err(|source| CliError::io("failed to write token", source))
+            }
+        },
         Command::Cluster { command } => crate::cluster_command::run(command, input, output).await,
         Command::Daemon { arguments } => crate::daemon_command::run(arguments).await,
         Command::Config { command } => match command {

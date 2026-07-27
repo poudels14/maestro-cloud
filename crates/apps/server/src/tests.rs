@@ -164,6 +164,35 @@ async fn protected_routes_require_a_valid_operator_scope() -> Result<(), Box<dyn
             .status(),
         StatusCode::OK
     );
+    let read_only = token(&secret, "read-only")?;
+    assert_eq!(
+        request(&server, "/api/cluster/nodes", Some(&read_only))
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    let mutation = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/services/api")
+                .header(header::AUTHORIZATION, format!("Bearer {read_only}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(mutation.status(), StatusCode::FORBIDDEN);
+    let exec = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/services/api/deployments/deployment-1/assignments/assignment-1/exec")
+                .header(header::AUTHORIZATION, format!("Bearer {read_only}"))
+                .header(header::UPGRADE, "websocket")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(exec.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         request(&server, "/healthz", None).await?.status(),
         StatusCode::OK

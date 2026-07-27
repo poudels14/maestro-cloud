@@ -13,6 +13,7 @@ use crate::settings::NodeCertificateRequirement;
 use crate::{ApiError, VerifiedNodeCertificate};
 
 const OPERATOR_SCOPE: &str = "operator";
+const READ_ONLY_SCOPE: &str = "read-only";
 const NODE_SCOPE: &str = "node";
 const BROWSER_SESSION_AUDIENCE: &str = "maestro-panel";
 const BROWSER_SESSION_KIND: &str = "browser-session";
@@ -23,6 +24,18 @@ pub(crate) const BROWSER_SESSION_COOKIE: &str = "__Host-maestro-session";
 /// Authenticated operator identity attached to protected requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperatorIdentity(pub String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatorAccess {
+    ReadOnly,
+    Operator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthenticatedOperator {
+    subject: String,
+    access: OperatorAccess,
+}
 
 #[derive(Clone)]
 pub(crate) struct AuthPolicy {
@@ -47,8 +60,8 @@ impl AuthPolicy {
                 "browser sessions are unavailable when loopback authentication is disabled",
             )
         })?;
-        let subject = authenticate_bearer(request, secret, OPERATOR_SCOPE)?;
-        issue_browser_session(secret, &subject)
+        let operator = authenticate_operator_bearer(request, secret)?;
+        issue_browser_session(secret, &operator)
     }
 }
 
@@ -57,10 +70,15 @@ pub(crate) async fn require_operator(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let identity = match &policy.secret {
-        None => OperatorIdentity("loopback-operator".to_string()),
-        Some(secret) => OperatorIdentity(authenticate_operator(&request, secret)?),
+    let operator = match &policy.secret {
+        None => AuthenticatedOperator {
+            subject: "loopback-operator".to_string(),
+            access: OperatorAccess::Operator,
+        },
+        Some(secret) => authenticate_operator(&request, secret)?,
     };
+    authorize_operator_request(&request, operator.access)?;
+    let identity = OperatorIdentity(operator.subject);
     request.extensions_mut().insert(identity);
     Ok(next.run(request).await)
 }
@@ -88,9 +106,12 @@ pub(crate) async fn require_node(
     Ok(next.run(request).await)
 }
 
-fn authenticate_operator(request: &Request, secret: &SecretValue) -> Result<String, ApiError> {
+fn authenticate_operator(
+    request: &Request,
+    secret: &SecretValue,
+) -> Result<AuthenticatedOperator, ApiError> {
     if request.headers().contains_key(header::AUTHORIZATION) {
-        return authenticate_bearer(request, secret, OPERATOR_SCOPE);
+        return authenticate_operator_bearer(request, secret);
     }
     let token = cookie(request, BROWSER_SESSION_COOKIE)
         .ok_or_else(|| ApiError::unauthorized("missing operator authorization"))?;
@@ -103,6 +124,41 @@ fn authenticate_bearer(
     secret: &SecretValue,
     required_scope: &str,
 ) -> Result<String, ApiError> {
+    let claims = bearer_claims(request, secret)?;
+    let scopes = claims
+        .get("scope")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::forbidden("token has no scope claim"))?;
+    if !scopes
+        .split_ascii_whitespace()
+        .any(|scope| scope == required_scope)
+    {
+        return Err(ApiError::forbidden(format!(
+            "token does not grant the `{required_scope}` scope"
+        )));
+    }
+    token_subject(&claims)
+}
+
+fn authenticate_operator_bearer(
+    request: &Request,
+    secret: &SecretValue,
+) -> Result<AuthenticatedOperator, ApiError> {
+    let claims = bearer_claims(request, secret)?;
+    let scopes = claims
+        .get("scope")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::forbidden("token has no scope claim"))?;
+    let access = operator_access(scopes).ok_or_else(|| {
+        ApiError::forbidden("token does not grant the `operator` or `read-only` scope")
+    })?;
+    Ok(AuthenticatedOperator {
+        subject: token_subject(&claims)?,
+        access,
+    })
+}
+
+fn bearer_claims(request: &Request, secret: &SecretValue) -> Result<Value, ApiError> {
     let token = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -119,23 +175,15 @@ fn authenticate_bearer(
     )
     .map_err(|_| ApiError::unauthorized("invalid or expired operator token"))?
     .claims;
-    let scopes = claims
-        .get("scope")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::forbidden("token has no scope claim"))?;
     if claims.get("kind").and_then(Value::as_str) == Some(BROWSER_SESSION_KIND) {
         return Err(ApiError::unauthorized(
             "browser session credentials are accepted only as cookies",
         ));
     }
-    if !scopes
-        .split_ascii_whitespace()
-        .any(|scope| scope == required_scope)
-    {
-        return Err(ApiError::forbidden(format!(
-            "token does not grant the `{required_scope}` scope"
-        )));
-    }
+    Ok(claims)
+}
+
+fn token_subject(claims: &Value) -> Result<String, ApiError> {
     let subject = claims
         .get("sub")
         .and_then(Value::as_str)
@@ -144,14 +192,47 @@ fn authenticate_bearer(
     Ok(subject.to_string())
 }
 
-fn issue_browser_session(secret: &SecretValue, subject: &str) -> Result<String, ApiError> {
+fn operator_access(scopes: &str) -> Option<OperatorAccess> {
+    let scopes = scopes.split_ascii_whitespace().collect::<Vec<_>>();
+    if scopes.contains(&OPERATOR_SCOPE) {
+        Some(OperatorAccess::Operator)
+    } else if scopes.contains(&READ_ONLY_SCOPE) {
+        Some(OperatorAccess::ReadOnly)
+    } else {
+        None
+    }
+}
+
+fn authorize_operator_request(request: &Request, access: OperatorAccess) -> Result<(), ApiError> {
+    if access == OperatorAccess::Operator
+        || (matches!(
+            *request.method(),
+            Method::GET | Method::HEAD | Method::OPTIONS
+        ) && !request.headers().contains_key(header::UPGRADE))
+    {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(
+            "read-only credentials cannot execute commands or mutate cluster state",
+        ))
+    }
+}
+
+fn issue_browser_session(
+    secret: &SecretValue,
+    operator: &AuthenticatedOperator,
+) -> Result<String, ApiError> {
     let issued_at = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| ApiError::internal("system clock is before the Unix epoch"))?
         .as_secs();
     let claims = BrowserSessionClaims {
-        subject: subject.to_string(),
-        scope: OPERATOR_SCOPE.to_string(),
+        subject: operator.subject.clone(),
+        scope: match operator.access {
+            OperatorAccess::ReadOnly => READ_ONLY_SCOPE,
+            OperatorAccess::Operator => OPERATOR_SCOPE,
+        }
+        .to_string(),
         issued_at,
         expires_at: issued_at.saturating_add(BROWSER_SESSION_SECONDS),
         audience: BROWSER_SESSION_AUDIENCE.to_string(),
@@ -169,7 +250,10 @@ fn issue_browser_session(secret: &SecretValue, subject: &str) -> Result<String, 
     ))
 }
 
-fn authenticate_browser_session(token: &str, secret: &SecretValue) -> Result<String, ApiError> {
+fn authenticate_browser_session(
+    token: &str,
+    secret: &SecretValue,
+) -> Result<AuthenticatedOperator, ApiError> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.set_required_spec_claims(&["aud", "exp", "kind", "scope", "sub"]);
     validation.set_audience(&[BROWSER_SESSION_AUDIENCE]);
@@ -180,20 +264,19 @@ fn authenticate_browser_session(token: &str, secret: &SecretValue) -> Result<Str
     )
     .map_err(|_| ApiError::unauthorized("invalid or expired browser session"))?
     .claims;
-    if claims.token_kind != BROWSER_SESSION_KIND
-        || !claims
-            .scope
-            .split_ascii_whitespace()
-            .any(|scope| scope == OPERATOR_SCOPE)
-    {
-        return Err(ApiError::forbidden(
-            "browser session does not grant operator access",
-        ));
+    if claims.token_kind != BROWSER_SESSION_KIND {
+        return Err(ApiError::forbidden("credential is not a browser session"));
     }
+    let access = operator_access(&claims.scope).ok_or_else(|| {
+        ApiError::forbidden("browser session does not grant operator or read-only access")
+    })?;
     if claims.subject.trim().is_empty() {
         return Err(ApiError::unauthorized("browser session has no subject"));
     }
-    Ok(claims.subject)
+    Ok(AuthenticatedOperator {
+        subject: claims.subject,
+        access,
+    })
 }
 
 fn cookie<'a>(request: &'a Request, name: &str) -> Option<&'a str> {

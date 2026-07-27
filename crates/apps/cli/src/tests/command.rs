@@ -129,6 +129,34 @@ fn context_command_surface_matches_the_rewrite_contract() {
     assert!(Cli::try_parse_from(["maestro", "contexts", "ls"]).is_ok());
     assert!(Cli::try_parse_from(["maestro", "contexts", "remove", "dev"]).is_ok());
     assert!(Cli::try_parse_from(["maestro", "contexts", "login", "--days", "30"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "auth",
+            "token",
+            "--secret-source",
+            "aws-secret://maestro/production/operator-jwt-secret",
+            "--expires-in",
+            "1h",
+            "--access-level",
+            "read-only",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "auth",
+            "token",
+            "--secret-source",
+            "aws-secret://maestro/production/operator-jwt-secret",
+            "--expires-in",
+            "forever",
+            "--access-level",
+            "operator",
+        ])
+        .is_err()
+    );
     assert!(Cli::try_parse_from(["maestro", "cluster", "info"]).is_ok());
     assert!(Cli::try_parse_from(["maestro", "cluster", "nodes"]).is_ok());
     assert!(Cli::try_parse_from(["maestro", "cluster", "config"]).is_ok());

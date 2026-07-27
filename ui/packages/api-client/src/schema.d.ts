@@ -3658,7 +3658,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Bearer credential lacks operator scope */
+            /** @description Bearer credential lacks read-only or operator access */
             403: {
                 headers: {
                     [name: string]: unknown;

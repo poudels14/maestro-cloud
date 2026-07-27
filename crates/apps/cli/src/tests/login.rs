@@ -1,7 +1,9 @@
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use kernel_api::SecretValue;
 
-use crate::login::{OperatorClaims, issue_token};
+use crate::login::{
+    AccessLevel, OperatorClaims, TokenLifetime, issue_token, issue_token_for_lifetime,
+};
 
 #[test]
 fn login_token_carries_required_operator_claims() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,4 +36,31 @@ fn login_rejects_weak_secrets_and_invalid_lifetimes() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn token_lifetimes_and_access_levels_are_explicit() -> Result<(), Box<dyn std::error::Error>> {
+    let secret = SecretValue::new("operator-test-secret-with-32-characters");
+    let lifetime = "15m".parse::<TokenLifetime>()?;
+    let token = issue_token_for_lifetime(
+        &secret,
+        "workstation",
+        lifetime.seconds(),
+        AccessLevel::ReadOnly,
+        1_000,
+    )?;
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = false;
+    let claims = jsonwebtoken::decode::<OperatorClaims>(
+        token.expose(),
+        &DecodingKey::from_secret(secret.expose().as_bytes()),
+        &validation,
+    )?
+    .claims;
+    assert_eq!(claims.scope, "read-only");
+    assert_eq!(claims.exp, 1_000 + 15 * 60);
+    assert!("0m".parse::<TokenLifetime>().is_err());
+    assert!("1w".parse::<TokenLifetime>().is_err());
+    assert!("hour".parse::<TokenLifetime>().is_err());
+    Ok(())
 }

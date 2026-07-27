@@ -7909,12 +7909,12 @@
     "securitySchemes": {
       "bearerAuth": {
         "bearerFormat": "JWT",
-        "description": "HS256 token with a non-empty subject and the operator scope; used to create browser sessions and by non-browser clients",
+        "description": "HS256 token with a non-empty subject and either the read-only or operator scope; used to create browser sessions and by non-browser clients",
         "scheme": "bearer",
         "type": "http"
       },
       "browserSession": {
-        "description": "Short-lived Secure, HttpOnly, SameSite=Strict operator session",
+        "description": "Short-lived Secure, HttpOnly, SameSite=Strict session preserving the bearer token access level",
         "in": "cookie",
         "name": "__Host-maestro-session",
         "type": "apiKey"
@@ -8011,7 +8011,7 @@
             "description": "Bearer credential is missing or invalid"
           },
           "403": {
-            "description": "Bearer credential lacks operator scope"
+            "description": "Bearer credential lacks read-only or operator access"
           },
           "503": {
             "description": "Operator authentication is disabled on loopback"

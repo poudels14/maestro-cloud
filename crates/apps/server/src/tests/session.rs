@@ -157,3 +157,59 @@ async fn browser_sessions_fail_closed_for_scope_csrf_and_logout()
     assert!(cleared.contains("; Max-Age=0;"));
     Ok(())
 }
+
+#[tokio::test]
+async fn read_only_bearers_create_read_only_browser_sessions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let secret = "browser-session-test-secret-32-bytes";
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, Some(SecretValue::new(secret))),
+    )?;
+    let read_only = token(secret, "read-only")?;
+    let response = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/session")
+                .header(header::AUTHORIZATION, format!("Bearer {read_only}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .ok_or("session response did not set a cookie")?;
+
+    let read = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/cluster/nodes")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(read.status(), StatusCode::OK);
+
+    let mutation = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/services/api")
+                .header(header::COOKIE, cookie)
+                .header(header::HOST, "localhost")
+                .header(header::ORIGIN, "https://localhost")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(mutation.status(), StatusCode::FORBIDDEN);
+    Ok(())
+}

@@ -277,13 +277,13 @@ pub fn openapi_document() -> Value {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "HS256 token with a non-empty subject and the operator scope; used to create browser sessions and by non-browser clients"
+            "description": "HS256 token with a non-empty subject and either the read-only or operator scope; used to create browser sessions and by non-browser clients"
         },
         "browserSession": {
             "type": "apiKey",
             "in": "cookie",
             "name": "__Host-maestro-session",
-            "description": "Short-lived Secure, HttpOnly, SameSite=Strict operator session"
+            "description": "Short-lived Secure, HttpOnly, SameSite=Strict session preserving the bearer token access level"
         }
     });
     if let Some(root) = document.as_object_mut() {
@@ -312,7 +312,7 @@ fn browser_session_operation() -> Value {
             "responses": {
                 "204": {"description": "Secure browser session created"},
                 "401": {"description": "Bearer credential is missing or invalid"},
-                "403": {"description": "Bearer credential lacks operator scope"},
+                "403": {"description": "Bearer credential lacks read-only or operator access"},
                 "503": {"description": "Operator authentication is disabled on loopback"}
             }
         },
