@@ -256,10 +256,13 @@ pub(crate) fn normalize_origin(host: &str) -> Result<String, CliError> {
             "context host must be an origin without path, query, or fragment",
         ));
     }
-    if url.scheme() == "http" && !is_loopback_host(url.host_str()) {
+    if url.scheme() == "http"
+        && !is_loopback_host(url.host_str())
+        && !is_tailnet_magic_dns_host(url.host_str())
+    {
         if has_explicit_scheme {
             return Err(CliError::invalid_input(
-                "non-loopback context hosts must use https",
+                "non-loopback HTTP context hosts must use a Tailscale .ts.net MagicDNS name",
             ));
         }
         url.set_scheme("https")
@@ -282,6 +285,11 @@ fn validate_name(name: &str) -> Result<String, CliError> {
         ));
     }
     Ok(name.to_string())
+}
+
+fn is_tailnet_magic_dns_host(host: Option<&str>) -> bool {
+    host.and_then(|host| host.strip_suffix(".ts.net"))
+        .is_some_and(|prefix| !prefix.is_empty() && !prefix.ends_with('.'))
 }
 
 fn is_loopback_host(host: Option<&str>) -> bool {

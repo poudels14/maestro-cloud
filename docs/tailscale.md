@@ -193,8 +193,10 @@ http://<gateway MagicDNS name>/
 For example, the first replica of cluster `production` requests the hostname
 `maestro-production-gateway-0`. Tailscale may append a collision suffix when a
 retired device still owns that name, so use the actual MagicDNS name shown for
-the online device. Mint a short-lived token on a workstation whose AWS
-credential chain can read the environment's signing secret:
+the online device. The CLI accepts explicit HTTP contexts only for the
+gateway's full `.ts.net` MagicDNS name. Mint a short-lived token on a
+workstation whose AWS credential chain can read the environment's signing
+secret:
 
 ```sh
 maestro auth token \

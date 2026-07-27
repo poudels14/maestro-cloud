@@ -14,7 +14,10 @@ pub(crate) fn serve(router: Router, directory: Option<&Path>, auth: AuthPolicy) 
     let files = ServeDir::new(directory).fallback(ServeFile::new(directory.join("index.html")));
     let panel = Router::new()
         .fallback_service(files)
-        .layer(middleware::from_fn_with_state(auth, require_operator_source));
+        .layer(middleware::from_fn_with_state(
+            auth,
+            require_operator_source,
+        ));
     router
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
