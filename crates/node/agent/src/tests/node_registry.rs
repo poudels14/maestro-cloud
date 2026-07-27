@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use kernel_api::{
@@ -13,6 +13,7 @@ use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
 };
 use semver::Version;
+use tokio::sync::{Notify, watch};
 
 use crate::{
     NodeRegistryAction, NodeRegistryAgent, NodeRegistryError, NodeRegistrySettings, StatusClock,
@@ -173,6 +174,173 @@ async fn registry_adopts_the_target_role_for_a_migrated_node()
 }
 
 #[tokio::test]
+async fn registry_recovers_a_malformed_node_unschedulable_then_preserves_operator_repair()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(FixedMonotonicClock)));
+    let clock = Arc::new(MutableStatusClock::new(1_000));
+    store
+        .put_cas(PutRequest {
+            key: node_key()?,
+            value: b"{not-json".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    let agent = agent(store.clone(), "instance-1", clock.clone())?;
+    let session = store.session(Duration::from_secs(30)).await?;
+
+    assert_eq!(
+        agent.reconcile_once(session.as_ref()).await?,
+        NodeRegistryAction::Registered
+    );
+    let recovered = stored_node(&store).await?;
+    assert_eq!(recovered.spec, settings("instance-1")?.node_spec);
+    assert_eq!(recovered.status.instance_id.as_str(), "instance-1");
+    assert_eq!(recovered.status.conditions.len(), 1);
+    let condition = recovered
+        .status
+        .conditions
+        .first()
+        .ok_or("recovery condition missing")?;
+    assert_eq!(condition.condition_type.0, "Schedulable");
+    assert_eq!(condition.state, ConditionState::False);
+    assert_eq!(condition.reason.0, "MalformedNodeRecovered");
+    assert_eq!(
+        stored_liveness(&store).await?.as_deref(),
+        Some("instance-1")
+    );
+
+    let stored = store.get(&node_key()?).await?.ok_or("Node missing")?;
+    let mut repaired: Node = serde_json::from_slice(&stored.value)?;
+    repaired.status.conditions.clear();
+    repaired
+        .spec
+        .scheduling_labels
+        .insert("zone".to_owned(), "west".to_owned());
+    store
+        .put_cas(PutRequest {
+            key: node_key()?,
+            value: serde_json::to_vec(&repaired)?,
+            expected: ExpectedVersion::Exact(stored.version),
+            session: None,
+        })
+        .await?;
+    clock.set(2_000);
+
+    assert_eq!(
+        agent.reconcile_once(session.as_ref()).await?,
+        NodeRegistryAction::Renewed
+    );
+    let renewed = stored_node(&store).await?;
+    assert!(renewed.status.conditions.is_empty());
+    assert_eq!(
+        renewed.spec.scheduling_labels.get("zone"),
+        Some(&"west".to_owned())
+    );
+    assert_eq!(renewed.status.last_seen, Timestamp(2_000));
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn registry_refuses_to_replace_a_malformed_node_during_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(FixedMonotonicClock)));
+    let malformed = b"{not-json".to_vec();
+    store
+        .put_cas(PutRequest {
+            key: node_key()?,
+            value: malformed.clone(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    let keys = Keyspace::new(&ClusterId::new("registry-test")?);
+    store
+        .put_cas(PutRequest {
+            key: keys.node_removal(&NodeId::new("node-1")?),
+            value: b"removal-in-progress".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    let agent = agent(
+        store.clone(),
+        "instance-1",
+        Arc::new(MutableStatusClock::new(1_000)),
+    )?;
+    let session = store.session(Duration::from_secs(30)).await?;
+
+    assert!(matches!(
+        agent.reconcile_once(session.as_ref()).await,
+        Err(NodeRegistryError::UnsafeRecoveryDuringRemoval { .. })
+    ));
+    assert_eq!(
+        store.get(&node_key()?).await?.ok_or("Node missing")?.value,
+        malformed
+    );
+    assert!(stored_liveness(&store).await?.is_none());
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn registered_agent_quarantines_malformed_liveness_until_repaired()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(FixedMonotonicClock)));
+    let monotonic = Arc::new(ManualMonotonicClock::default());
+    let status = Arc::new(MutableStatusClock::new(1_000));
+    let agent = NodeRegistryAgent::new(
+        store.clone(),
+        settings("instance-1")?,
+        monotonic.clone(),
+        status.clone(),
+    )?;
+    let registration = agent.register().await?;
+    let liveness_key =
+        Keyspace::new(&ClusterId::new("registry-test")?).node_liveness(&NodeId::new("node-1")?);
+    let stored = store.get(&liveness_key).await?.ok_or("liveness missing")?;
+    store
+        .put_cas(PutRequest {
+            key: liveness_key.clone(),
+            value: b"{malformed".to_vec(),
+            expected: ExpectedVersion::Exact(stored.version),
+            session: None,
+        })
+        .await?;
+    let (shutdown, receiver) = watch::channel(false);
+    let task = tokio::spawn(async move { agent.run_registered(registration, receiver).await });
+
+    wait_for_sleeps(&monotonic, 1).await?;
+    monotonic.advance(Duration::from_secs(10));
+    wait_for_sleeps(&monotonic, 2).await?;
+    assert!(!task.is_finished());
+    assert_eq!(
+        stored_node(&store).await?.status.last_seen,
+        Timestamp(1_000)
+    );
+
+    let stored = store.get(&liveness_key).await?.ok_or("liveness missing")?;
+    store
+        .put_cas(PutRequest {
+            key: liveness_key,
+            value: b"instance-1".to_vec(),
+            expected: ExpectedVersion::Exact(stored.version),
+            session: None,
+        })
+        .await?;
+    status.set(2_000);
+    monotonic.advance(Duration::from_secs(10));
+    wait_for_last_seen(&store, Timestamp(2_000)).await?;
+    assert!(!task.is_finished());
+
+    shutdown.send(true)?;
+    task.await??;
+    assert!(stored_liveness(&store).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn removed_identity_cannot_recreate_node_or_liveness_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(InMemoryStore::new(Arc::new(FixedMonotonicClock)));
@@ -295,6 +463,32 @@ async fn add_operator_state(store: &Arc<InMemoryStore>) -> Result<(), Box<dyn st
     Ok(())
 }
 
+async fn wait_for_sleeps(
+    clock: &ManualMonotonicClock,
+    expected: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if clock.sleeps() >= expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("node registry did not begin sleep {expected}").into())
+}
+
+async fn wait_for_last_seen(
+    store: &Arc<InMemoryStore>,
+    expected: Timestamp,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if stored_node(store).await?.status.last_seen == expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("node registry did not publish lastSeen {}", expected.0).into())
+}
+
 struct FixedMonotonicClock;
 
 #[async_trait::async_trait]
@@ -305,6 +499,45 @@ impl Clock for FixedMonotonicClock {
 
     async fn sleep_until(&self, _deadline: MonotonicTime) {
         std::future::pending::<()>().await;
+    }
+}
+
+#[derive(Default)]
+struct ManualMonotonicClock {
+    milliseconds: AtomicU64,
+    sleeps: AtomicU64,
+    changed: Notify,
+}
+
+impl ManualMonotonicClock {
+    fn advance(&self, duration: Duration) {
+        let milliseconds = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        self.milliseconds.fetch_add(milliseconds, Ordering::SeqCst);
+        self.changed.notify_waiters();
+    }
+
+    fn sleeps(&self) -> u64 {
+        self.sleeps.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl Clock for ManualMonotonicClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::from_millis(
+            self.milliseconds.load(Ordering::SeqCst),
+        ))
+    }
+
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        self.sleeps.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let changed = self.changed.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            changed.await;
+        }
     }
 }
 

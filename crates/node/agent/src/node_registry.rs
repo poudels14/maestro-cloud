@@ -3,8 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kernel_api::{
-    ClusterId, Generation, InvalidIdentifier, Node, NodeId, NodeInstanceId, NodeSpec, NodeStatus,
-    ObjectMeta, ResourceKind, ResourceName, ResourceRevision,
+    ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Generation,
+    InvalidIdentifier, Node, NodeId, NodeInstanceId, NodeSpec, NodeStatus, ObjectMeta,
+    ResourceKind, ResourceName, ResourceRevision,
 };
 use kernel_store::{
     Clock, Compare, ExpectedVersion, Keyspace, Mutation, Session, SessionBinding, Store,
@@ -19,6 +20,8 @@ const NODE_KIND: &str = "Node";
 const MAX_NODE_BYTES: usize = 256 * 1_024;
 const MAX_CAS_ATTEMPTS: usize = 16;
 const LEGACY_NODE_RECORD_ANNOTATION: &str = "migration.maestro.dev/legacy-node-record";
+const SCHEDULABLE_CONDITION: &str = "Schedulable";
+const MALFORMED_NODE_RECOVERY_REASON: &str = "MalformedNodeRecovered";
 
 /// Static identity and lease policy for one node daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +103,7 @@ pub struct NodeRegistryAgent {
     store: Arc<dyn Store>,
     node_key: kernel_store::StoreKey,
     tombstone_key: kernel_store::StoreKey,
+    removal_key: kernel_store::StoreKey,
     liveness_key: kernel_store::StoreKey,
     settings: NodeRegistrySettings,
     monotonic_clock: Arc<dyn Clock>,
@@ -121,6 +125,7 @@ impl NodeRegistryAgent {
         Ok(Self {
             node_key: keyspace.resource(&kind, &resource_name),
             tombstone_key: keyspace.node_tombstone(&settings.node_id),
+            removal_key: keyspace.node_removal(&settings.node_id),
             liveness_key: keyspace.node_liveness(&settings.node_id),
             store,
             settings,
@@ -139,10 +144,11 @@ impl NodeRegistryAgent {
             if current_tombstone.is_some() {
                 return Err(NodeRegistryError::NodeRemoved);
             }
+            let current_removal = self.store.get(&self.removal_key).await?;
             let current_node = self.store.get(&self.node_key).await?;
             let current_liveness = self.store.get(&self.liveness_key).await?;
             self.validate_liveness(current_liveness.as_ref())?;
-            let node = self.desired_node(current_node.as_ref())?;
+            let node = self.desired_node(current_node.as_ref(), current_removal.is_some())?;
             let action = if current_liveness.is_some() {
                 NodeRegistryAction::Renewed
             } else {
@@ -153,6 +159,10 @@ impl NodeRegistryAgent {
                     Compare {
                         key: self.tombstone_key.clone(),
                         expected: ExpectedVersion::Missing,
+                    },
+                    Compare {
+                        key: self.removal_key.clone(),
+                        expected: expected(current_removal.as_ref()),
                     },
                     Compare {
                         key: self.node_key.clone(),
@@ -232,6 +242,14 @@ impl NodeRegistryAgent {
                         return close_after_error(session, error.into()).await;
                     }
                     if let Err(error) = self.reconcile_once(session.as_ref()).await {
+                        if error.retryable_after_registration() {
+                            tracing::warn!(
+                                node_id = %self.settings.node_id,
+                                error = %error,
+                                "node registry reconciliation failed without surrendering liveness"
+                            );
+                            continue;
+                        }
                         return close_after_error(session, error).await;
                     }
                 }
@@ -259,29 +277,49 @@ impl NodeRegistryAgent {
         }
     }
 
-    fn desired_node(&self, stored: Option<&StoredValue>) -> Result<Node, NodeRegistryError> {
+    fn desired_node(
+        &self,
+        stored: Option<&StoredValue>,
+        removal_in_progress: bool,
+    ) -> Result<Node, NodeRegistryError> {
         let now = self.status_clock.now();
         let mut node = match stored {
-            Some(stored) => decode_node(stored, &self.settings.node_id)?,
-            None => Node {
-                meta: ObjectMeta {
-                    id: self.settings.node_id.clone(),
-                    labels: BTreeMap::new(),
-                    annotations: BTreeMap::new(),
-                    revision: ResourceRevision::default(),
-                    generation: Generation(1),
-                    owner_refs: Vec::new(),
-                    finalizers: BTreeSet::new(),
-                    deletion_timestamp: None,
-                },
-                spec: self.settings.node_spec.clone(),
-                status: NodeStatus {
-                    instance_id: self.settings.instance_id.clone(),
-                    version: self.settings.running_version.to_string(),
-                    last_seen: now,
-                    conditions: Vec::new(),
-                },
+            Some(stored) => match decode_node(stored, &self.settings.node_id) {
+                Ok(node) => node,
+                Err(
+                    error @ (NodeRegistryError::MalformedNode { .. }
+                    | NodeRegistryError::NodeIdentityMismatch { .. }),
+                ) => {
+                    if removal_in_progress {
+                        return Err(NodeRegistryError::UnsafeRecoveryDuringRemoval {
+                            message: error.to_string(),
+                        });
+                    }
+                    tracing::warn!(
+                        key = %stored.key,
+                        node_id = %self.settings.node_id,
+                        error = %error,
+                        "malformed local Node resource was recreated unschedulable from protected topology"
+                    );
+                    self.fresh_node(
+                        now,
+                        vec![Condition {
+                            condition_type: ConditionType(SCHEDULABLE_CONDITION.to_owned()),
+                            state: ConditionState::False,
+                            reason: ConditionReason(
+                                MALFORMED_NODE_RECOVERY_REASON.to_owned(),
+                            ),
+                            message: format!(
+                                "{error}; review the recovered node and explicitly restore scheduling"
+                            ),
+                            observed_generation: Generation(1),
+                            last_transition_time: now,
+                        }],
+                    )
+                }
+                Err(error) => return Err(error),
             },
+            None => self.fresh_node(now, Vec::new()),
         };
         if node.meta.deletion_timestamp.is_some() {
             return Err(NodeRegistryError::NodeDeleting);
@@ -294,6 +332,28 @@ impl NodeRegistryAgent {
         node.status.version = self.settings.running_version.to_string();
         node.status.last_seen = now;
         Ok(node)
+    }
+
+    fn fresh_node(&self, now: kernel_api::Timestamp, conditions: Vec<Condition>) -> Node {
+        Node {
+            meta: ObjectMeta {
+                id: self.settings.node_id.clone(),
+                labels: BTreeMap::new(),
+                annotations: BTreeMap::new(),
+                revision: ResourceRevision::default(),
+                generation: Generation(1),
+                owner_refs: Vec::new(),
+                finalizers: BTreeSet::new(),
+                deletion_timestamp: None,
+            },
+            spec: self.settings.node_spec.clone(),
+            status: NodeStatus {
+                instance_id: self.settings.instance_id.clone(),
+                version: self.settings.running_version.to_string(),
+                last_seen: now,
+                conditions,
+            },
+        }
     }
 }
 
@@ -374,6 +434,15 @@ async fn close_after_error<T>(
     }
 }
 
+impl NodeRegistryError {
+    fn retryable_after_registration(&self) -> bool {
+        matches!(
+            self,
+            Self::Store(_) | Self::MalformedLiveness { .. } | Self::Contention
+        )
+    }
+}
+
 /// Node resource, liveness ownership, or session lifecycle failure.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeRegistryError {
@@ -395,6 +464,9 @@ pub enum NodeRegistryError {
     /// Protected topology disagreed with an existing durable node definition.
     #[error("stored Node definition conflicts with the protected cluster topology")]
     DefinitionConflict,
+    /// Reconstructing a malformed node would discard an active removal's drain evidence.
+    #[error("refused to recover malformed local Node during removal: {message}")]
+    UnsafeRecoveryDuringRemoval { message: String },
     /// A deleting node must not be silently re-registered.
     #[error("local Node resource is being deleted")]
     NodeDeleting,
