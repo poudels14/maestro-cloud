@@ -138,20 +138,14 @@ substitute for staging evidence.
    taking the post-migration snapshot. That snapshot is the source for every
    rewrite store member.
 
-7. Create one shared CA, one AWS-managed operator signing key, and one launch
-   document per declared node. The store secret must be the exact secret used
-   by migration:
+7. Create one shared CA and one launch document per declared node. The
+   protected cluster config must contain the shared `jwt-secret-key`; the store
+   secret must be the exact secret used by migration:
 
    ```sh
    install -d -m 0700 \
      /var/lib/maestro-cutover-authority \
      /var/lib/maestro/cutover/launches
-
-   openssl rand -hex 32 |
-     tr -d '\n' |
-     aws secretsmanager create-secret \
-       --name maestro/production/operator-jwt-secret \
-       --secret-string file:///dev/stdin
 
    maestro cluster init-ca \
      --config maestro.jsonc \
@@ -163,16 +157,12 @@ substitute for staging evidence.
      --data-dir /var/lib/maestro/production \
      --etcd-binary /run/current-system/sw/bin/etcd \
      --store-secret-file /run/maestro/store-master-secret \
-     --operator-secret-source \
-       aws-secret://maestro/production/operator-jwt-secret \
      --output-dir /var/lib/maestro/cutover/launches
    ```
 
    Securely copy each `<node-id>.launch.json` only to its named node. The
    documents are create-only and exact reruns verify rather than rotate their
-   certificates or secret references. Grant every node instance role
-   `secretsmanager:GetSecretValue` on that exact operator secret before
-   starting the daemon.
+   certificates or secrets.
 
 8. Stop legacy etcd. On each control-plane node, restore the same
    post-migration snapshot into an otherwise empty rewrite data root:

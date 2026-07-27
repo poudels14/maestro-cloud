@@ -68,8 +68,8 @@ pub use dns_launch::{
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
-    DaemonLaunchConfig, DaemonLaunchDocument, ResolvedOperatorJwtSecret, StoreLaunchMode,
-    launch_daemon, load_launch_config, load_launch_document,
+    DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, launch_daemon, load_launch_config,
+    load_launch_document,
 };
 pub use launch_error::DaemonLaunchError;
 pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};

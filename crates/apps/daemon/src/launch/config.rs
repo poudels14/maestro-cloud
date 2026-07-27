@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use cluster::{
-    ClusterCertificateAuthority, ClusterConfig, NodeCertificateBundle, OperatorJwtSecretSource,
-    StoreJoinTicket, StoreStartMode,
+    ClusterCertificateAuthority, ClusterConfig, NodeCertificateBundle, StoreJoinTicket,
+    StoreStartMode,
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 use runtime::ContainerdRuntimeSettings;
@@ -42,7 +42,7 @@ impl StoreLaunchMode {
 /// Protected launch document consumed by the control-plane daemon executable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DaemonLaunchConfig<OperatorSecret = ResolvedOperatorJwtSecret> {
+pub struct DaemonLaunchConfig {
     /// Authoritative topology and fixed cluster settings.
     pub cluster: ClusterConfig,
     /// Stable local node selected from the topology.
@@ -62,8 +62,8 @@ pub struct DaemonLaunchConfig<OperatorSecret = ResolvedOperatorJwtSecret> {
     /// Cluster CA signer retained only by control-plane-capable nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub certificate_issuer: Option<ClusterCertificateAuthority>,
-    /// AWS source or resolved cluster-wide HS256 operator authentication key.
-    pub operator_jwt_secret: OperatorSecret,
+    /// Cluster-wide HS256 key used for operator and internal authentication.
+    pub jwt_secret_key: SecretValue,
     /// Cluster-wide master secret used to encrypt internal persisted values.
     pub store_encryption_secret: SecretValue,
     /// Optional deterministic process identity, primarily for cluster tests.
@@ -86,50 +86,10 @@ pub struct DaemonLaunchConfig<OperatorSecret = ResolvedOperatorJwtSecret> {
     pub nixos_upgrade: Option<NixosUpgradeLaunchConfig>,
 }
 
-/// Persisted launch document that contains only the operator key reference.
-pub type DaemonLaunchDocument = DaemonLaunchConfig<OperatorJwtSecretSource>;
+/// Private on-disk daemon configuration.
+pub type DaemonLaunchDocument = DaemonLaunchConfig;
 
-/// Resolved operator signing key retained only in daemon memory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedOperatorJwtSecret {
-    source: OperatorJwtSecretSource,
-    value: SecretValue,
-}
-
-impl ResolvedOperatorJwtSecret {
-    /// Associates a validated source with key material already resolved from it.
-    pub fn new(source: OperatorJwtSecretSource, value: SecretValue) -> Self {
-        Self { source, value }
-    }
-
-    /// Returns the source URI without exposing the resolved key.
-    pub fn source(&self) -> &OperatorJwtSecretSource {
-        &self.source
-    }
-
-    /// Borrows the key for an authentication boundary.
-    pub fn secret(&self) -> &SecretValue {
-        &self.value
-    }
-
-    pub(super) fn into_secret(self) -> SecretValue {
-        self.value
-    }
-}
-
-impl Serialize for ResolvedOperatorJwtSecret {
-    fn serialize<Serializer>(
-        &self,
-        serializer: Serializer,
-    ) -> Result<Serializer::Ok, Serializer::Error>
-    where
-        Serializer: serde::Serializer,
-    {
-        self.source.serialize(serializer)
-    }
-}
-
-impl<OperatorSecret> DaemonLaunchConfig<OperatorSecret> {
+impl DaemonLaunchConfig {
     fn validate_common(&self) -> Result<(), DaemonLaunchError> {
         self.cluster.preflight()?;
         if let Some(datadog) = &self.datadog {
@@ -181,6 +141,11 @@ impl<OperatorSecret> DaemonLaunchConfig<OperatorSecret> {
         if self.store_encryption_secret.expose().chars().count() < 32 {
             return Err(invalid(
                 "store encryption secret must contain at least 32 characters",
+            ));
+        }
+        if self.jwt_secret_key.expose().len() < 32 || self.jwt_secret_key.expose().contains('\0') {
+            return Err(invalid(
+                "JWT secret key must contain at least 32 bytes and no NUL bytes",
             ));
         }
         match (&self.etcd_binary, node.role.is_control_plane()) {
@@ -248,42 +213,14 @@ impl DaemonLaunchConfig {
             &self.cluster,
             node,
             &self.security,
-            self.operator_jwt_secret.value.clone(),
+            self.jwt_secret_key.clone(),
         )
         .validate()?;
         Ok(())
     }
 }
 
-impl DaemonLaunchDocument {
-    /// Validates source shape and every secret-independent launch choice.
-    pub fn validate(&self) -> Result<(), DaemonLaunchError> {
-        self.validate_common()
-    }
-
-    fn resolve(self, value: SecretValue) -> DaemonLaunchConfig {
-        DaemonLaunchConfig {
-            cluster: self.cluster,
-            node_id: self.node_id,
-            data_directory: self.data_directory,
-            containerd_socket: self.containerd_socket,
-            etcd_binary: self.etcd_binary,
-            store_mode: self.store_mode,
-            security: self.security,
-            certificate_issuer: self.certificate_issuer,
-            operator_jwt_secret: ResolvedOperatorJwtSecret::new(self.operator_jwt_secret, value),
-            store_encryption_secret: self.store_encryption_secret,
-            instance_id: self.instance_id,
-            datadog: self.datadog,
-            depot: self.depot,
-            log_backup: self.log_backup,
-            preview: self.preview,
-            nixos_upgrade: self.nixos_upgrade,
-        }
-    }
-}
-
-/// Reads a source-only launch document after enforcing owner-only permissions.
+/// Reads a private launch document after enforcing owner-only permissions.
 pub fn load_launch_document(path: &Path) -> Result<DaemonLaunchDocument, DaemonLaunchError> {
     validate_private_permissions(path)?;
     let bytes = std::fs::read(path).map_err(|source| DaemonLaunchError::Io {
@@ -301,30 +238,9 @@ pub fn load_launch_document(path: &Path) -> Result<DaemonLaunchDocument, DaemonL
     Ok(config)
 }
 
-/// Resolves the operator signing key through the instance's AWS credential chain.
+/// Loads one owner-only daemon launch document.
 pub async fn load_launch_config(path: &Path) -> Result<DaemonLaunchConfig, DaemonLaunchError> {
-    let document = load_launch_document(path)?;
-    let source = document.operator_jwt_secret.clone();
-    let sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let response = aws_sdk_secretsmanager::Client::new(&sdk)
-        .get_secret_value()
-        .secret_id(source.secret_id())
-        .send()
-        .await
-        .map_err(|error| DaemonLaunchError::OperatorSecret {
-            source_uri: source.as_str().to_owned(),
-            message: error.to_string(),
-        })?;
-    let value = response
-        .secret_string()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| DaemonLaunchError::OperatorSecret {
-            source_uri: source.as_str().to_owned(),
-            message: "secret does not contain a string value".to_owned(),
-        })?;
-    let config = document.resolve(SecretValue::new(value));
-    config.validate()?;
-    Ok(config)
+    load_launch_document(path)
 }
 
 fn default_containerd_socket() -> PathBuf {

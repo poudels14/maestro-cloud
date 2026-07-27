@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use cluster::{
     CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
-    OperatorJwtSecretSource, certificate_fingerprint,
+    certificate_fingerprint,
 };
 use kernel_api::{NodeId, SecretValue};
 use time::{Duration, OffsetDateTime};
@@ -25,7 +25,6 @@ pub(crate) struct CutoverBundleOptions {
     pub(crate) containerd_socket: PathBuf,
     pub(crate) etcd_binary: PathBuf,
     pub(crate) store_secret_file: PathBuf,
-    pub(crate) operator_secret_source: String,
     pub(crate) output_directory: PathBuf,
 }
 
@@ -42,8 +41,6 @@ pub(crate) async fn prepare_cutover_bundle(
     .map_err(|error| CliError::cluster("failed to load cluster CA", error.to_string()))?;
     let store_encryption_secret =
         read_secret(&options.store_secret_file, "store encryption secret")?;
-    let operator_jwt_secret = OperatorJwtSecretSource::new(options.operator_secret_source.clone())
-        .map_err(|error| CliError::invalid_input(error.to_string()))?;
     ensure_private_directory(&options.output_directory)?;
     let provisioning = options
         .authority_data_directory
@@ -66,7 +63,7 @@ pub(crate) async fn prepare_cutover_bundle(
             options.etcd_binary.clone(),
             security,
             authority.clone(),
-            operator_jwt_secret.clone(),
+            loaded.jwt_secret_key.clone(),
             store_encryption_secret.clone(),
             loaded.launch_policy.clone(),
         )?;

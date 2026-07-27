@@ -10,6 +10,7 @@ use crate::cluster::{self, NodeLifecycleAction};
 use crate::cluster_cutover::{self, CutoverBundleOptions};
 use crate::cluster_formation;
 use crate::cluster_join::{self, JoinOptions};
+use crate::cluster_jwt;
 use crate::cluster_restart::{self, RestartSelection, RestartSelectionArgs};
 use crate::cluster_tailscale;
 use crate::config_source::SystemConfigSourceReader;
@@ -45,9 +46,6 @@ pub(crate) enum ClusterCommand {
         /// Absolute etcd executable used by the embedded store provider.
         #[arg(long, value_name = "PATH")]
         etcd_binary: PathBuf,
-        /// AWS Secrets Manager source for the shared operator JWT signing key.
-        #[arg(long, value_name = "AWS_SECRET_URI")]
-        operator_secret_source: String,
         /// Create the private daemon launch document at this path.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
@@ -76,9 +74,6 @@ pub(crate) enum ClusterCommand {
         /// Owner-only file containing the exact migration/store master secret.
         #[arg(long, value_name = "PATH")]
         store_secret_file: PathBuf,
-        /// AWS Secrets Manager source for the shared operator JWT signing key.
-        #[arg(long, value_name = "AWS_SECRET_URI")]
-        operator_secret_source: String,
         /// Protected directory receiving one private launch document per node.
         #[arg(long, value_name = "PATH")]
         output_dir: PathBuf,
@@ -134,9 +129,6 @@ pub(crate) enum ClusterCommand {
         /// Absolute etcd executable required for control-plane nodes.
         #[arg(long, value_name = "PATH")]
         etcd_binary: Option<PathBuf>,
-        /// AWS Secrets Manager source for the shared operator JWT signing key.
-        #[arg(long, value_name = "AWS_SECRET_URI")]
-        operator_secret_source: String,
         /// Create the private daemon launch document at this path.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
@@ -155,6 +147,15 @@ pub(crate) enum ClusterCommand {
         /// Stable key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
+    },
+    /// Replace this node's launch key from the shared cluster config.
+    RotateJwtKey {
+        /// Cluster configuration containing the replacement jwt-secret-key.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Existing owner-only daemon launch document to update atomically.
+        #[arg(long, value_name = "PATH")]
+        launch: PathBuf,
     },
     /// Stop new workload placement on a node and drain its assignments.
     Drain {
@@ -257,7 +258,6 @@ pub(crate) async fn run(
             data_dir,
             containerd_socket,
             etcd_binary,
-            operator_secret_source,
             output: destination,
         } => {
             cluster_formation::bootstrap(
@@ -265,7 +265,6 @@ pub(crate) async fn run(
                 &data_dir,
                 &containerd_socket,
                 &etcd_binary,
-                &operator_secret_source,
                 destination.as_deref(),
                 output,
                 &SystemConfigSourceReader,
@@ -279,7 +278,6 @@ pub(crate) async fn run(
             containerd_socket,
             etcd_binary,
             store_secret_file,
-            operator_secret_source,
             output_dir,
         } => {
             cluster_cutover::prepare_cutover_bundle(
@@ -290,7 +288,6 @@ pub(crate) async fn run(
                     containerd_socket,
                     etcd_binary,
                     store_secret_file,
-                    operator_secret_source,
                     output_directory: output_dir,
                 },
                 output,
@@ -328,10 +325,9 @@ pub(crate) async fn run(
             data_dir,
             containerd_socket,
             etcd_binary,
-            operator_secret_source,
             output: destination,
         } => {
-            let mut options = JoinOptions::new(leader, config, data_dir, operator_secret_source);
+            let mut options = JoinOptions::new(leader, config, data_dir);
             options.containerd_socket = containerd_socket;
             options.etcd_binary = etcd_binary;
             options.output = destination;
@@ -352,6 +348,9 @@ pub(crate) async fn run(
                 &SystemConfigSourceReader,
             )
             .await
+        }
+        ClusterCommand::RotateJwtKey { config, launch } => {
+            cluster_jwt::rotate_jwt_key(&config, &launch, output, &SystemConfigSourceReader).await
         }
         ClusterCommand::Drain {
             node_id,

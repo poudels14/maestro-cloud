@@ -94,6 +94,7 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
 
 ```jsonc
 {
+  "jwt-secret-key": "<at-least-32-bytes>",
   "cluster": {
     "name": "prod",
     "cluster-cidr": "172.22.0.0/16",
@@ -194,13 +195,12 @@ For example, the first replica of cluster `production` requests the hostname
 `maestro-production-gateway-0`. Tailscale may append a collision suffix when a
 retired device still owns that name, so use the actual MagicDNS name shown for
 the online device. The CLI accepts explicit HTTP contexts only for the
-gateway's full `.ts.net` MagicDNS name. Mint a short-lived token on a
-workstation whose AWS credential chain can read the environment's signing
-secret:
+gateway's full `.ts.net` MagicDNS name. Mint a short-lived token from the
+protected cluster config:
 
 ```sh
 maestro auth token \
-  --secret-source aws-secret://maestro/production/operator-jwt-secret \
+  --config /etc/maestro/maestro.jsonc \
   --expires-in 1h \
   --access-level read-only
 ```

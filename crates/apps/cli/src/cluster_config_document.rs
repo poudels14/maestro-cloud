@@ -14,6 +14,7 @@ const DEFAULT_STORE_PEER_PORT: u16 = 2_380;
 pub(crate) struct ClusterDocument {
     #[serde(rename = "$schema", default)]
     _schema: Option<String>,
+    pub(crate) jwt_secret_key: String,
     pub(crate) cluster: ClusterInput,
     #[serde(default)]
     pub(crate) node: Option<String>,

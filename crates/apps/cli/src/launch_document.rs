@@ -3,8 +3,7 @@ use std::path::{Path, PathBuf};
 use cluster::{
     ClusterCertificateAuthority, ClusterConfig, ClusterLaunchPolicy, DatadogLaunchConfig,
     DepotLaunchConfig, JoinPayload, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
-    NodeCertificateBundle, OperatorJwtSecretSource, PreviewLaunchConfig, StoreJoinTicket,
-    certificate_fingerprint,
+    NodeCertificateBundle, PreviewLaunchConfig, StoreJoinTicket, certificate_fingerprint,
 };
 use kernel_api::{NodeId, NodeRole, SecretValue};
 use serde::{Deserialize, Serialize};
@@ -24,7 +23,7 @@ pub(crate) struct DaemonLaunchDocument {
     security: NodeCertificateBundle,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     certificate_issuer: Option<ClusterCertificateAuthority>,
-    operator_jwt_secret: OperatorJwtSecretSource,
+    jwt_secret_key: SecretValue,
     store_encryption_secret: SecretValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     datadog: Option<DatadogLaunchConfig>,
@@ -47,7 +46,7 @@ impl DaemonLaunchDocument {
         etcd_binary: PathBuf,
         security: NodeCertificateBundle,
         certificate_issuer: ClusterCertificateAuthority,
-        operator_jwt_secret: OperatorJwtSecretSource,
+        jwt_secret_key: SecretValue,
         store_encryption_secret: SecretValue,
         launch_policy: ClusterLaunchPolicy,
     ) -> Result<Self, CliError> {
@@ -67,7 +66,7 @@ impl DaemonLaunchDocument {
             store_mode: StoreLaunchDocument::Bootstrap,
             security,
             certificate_issuer: Some(certificate_issuer),
-            operator_jwt_secret,
+            jwt_secret_key,
             store_encryption_secret,
             datadog,
             depot,
@@ -85,7 +84,7 @@ impl DaemonLaunchDocument {
         data_directory: PathBuf,
         containerd_socket: PathBuf,
         etcd_binary: Option<PathBuf>,
-        operator_jwt_secret: OperatorJwtSecretSource,
+        jwt_secret_key: SecretValue,
         payload: JoinPayload,
     ) -> Result<Self, CliError> {
         let ClusterLaunchPolicy {
@@ -123,7 +122,7 @@ impl DaemonLaunchDocument {
             store_mode,
             security: payload.certificates,
             certificate_issuer: payload.certificate_issuer,
-            operator_jwt_secret,
+            jwt_secret_key,
             store_encryption_secret: payload.store_encryption_secret,
             datadog,
             depot,
@@ -143,7 +142,7 @@ impl DaemonLaunchDocument {
         etcd_binary: PathBuf,
         security: NodeCertificateBundle,
         certificate_issuer: ClusterCertificateAuthority,
-        operator_jwt_secret: OperatorJwtSecretSource,
+        jwt_secret_key: SecretValue,
         store_encryption_secret: SecretValue,
         launch_policy: ClusterLaunchPolicy,
     ) -> Result<Self, CliError> {
@@ -172,7 +171,7 @@ impl DaemonLaunchDocument {
             store_mode: StoreLaunchDocument::cutover(role),
             security,
             certificate_issuer: role.is_control_plane().then_some(certificate_issuer),
-            operator_jwt_secret,
+            jwt_secret_key,
             store_encryption_secret,
             datadog,
             depot,
@@ -206,6 +205,11 @@ impl DaemonLaunchDocument {
                 "store encryption secret must contain at least 32 characters",
             ));
         }
+        if self.jwt_secret_key.expose().len() < 32 || self.jwt_secret_key.expose().contains('\0') {
+            return Err(CliError::invalid_input(
+                "operator JWT secret must contain at least 32 bytes and no NUL bytes",
+            ));
+        }
         certificate_fingerprint(&self.security.trust_root_pem)
             .map_err(|error| cluster_error("launch trust root is invalid", error))?;
         certificate_fingerprint(&self.security.identity.certificate_pem)
@@ -237,6 +241,25 @@ impl DaemonLaunchDocument {
         &self.node_id
     }
 
+    pub(crate) fn replace_jwt_secret_key(
+        &mut self,
+        cluster: &ClusterConfig,
+        node_id: &NodeId,
+        jwt_secret_key: SecretValue,
+    ) -> Result<bool, CliError> {
+        if self.cluster.cluster_id != cluster.cluster_id || self.node_id != *node_id {
+            return Err(CliError::invalid_input(
+                "launch document cluster or node does not match the selected cluster config",
+            ));
+        }
+        if self.jwt_secret_key == jwt_secret_key {
+            return Ok(false);
+        }
+        self.jwt_secret_key = jwt_secret_key;
+        self.validate()?;
+        Ok(true)
+    }
+
     pub(crate) fn matches_bootstrap(
         &self,
         cluster: &ClusterConfig,
@@ -245,7 +268,7 @@ impl DaemonLaunchDocument {
         containerd_socket: &Path,
         etcd_binary: &Path,
         authority: &ClusterCertificateAuthority,
-        operator_jwt_secret: &OperatorJwtSecretSource,
+        jwt_secret_key: &SecretValue,
         launch_policy: &ClusterLaunchPolicy,
     ) -> bool {
         self.cluster == *cluster
@@ -255,7 +278,7 @@ impl DaemonLaunchDocument {
             && self.etcd_binary.as_deref() == Some(etcd_binary)
             && self.store_mode == StoreLaunchDocument::Bootstrap
             && self.certificate_issuer.as_ref() == Some(authority)
-            && &self.operator_jwt_secret == operator_jwt_secret
+            && &self.jwt_secret_key == jwt_secret_key
             && self.datadog == launch_policy.datadog
             && self.depot == launch_policy.depot
             && self.log_backup == launch_policy.log_backup

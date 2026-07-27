@@ -35,6 +35,12 @@ async fn init_creates_private_valid_templates_and_refuses_overwrite()
     let cluster_value: serde_json::Value = json5::from_str(&cluster)?;
     assert!(
         cluster_value
+            .pointer("/jwt-secret-key")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|secret| secret.len() == 64)
+    );
+    assert!(
+        cluster_value
             .pointer("/cluster/join-secret")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|secret| secret.len() == 64)
@@ -492,9 +498,42 @@ async fn cluster_config_rejects_removed_camel_case_aliases()
     Ok(())
 }
 
+#[tokio::test]
+async fn cluster_config_requires_one_strong_literal_jwt_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    for (document, expected) in [
+        (
+            cluster_document("172.22.1.0/24")
+                .replace("operator-test-secret-with-at-least-32-characters", "short"),
+            "jwt-secret-key: must contain at least 32 bytes",
+        ),
+        (
+            cluster_document("172.22.1.0/24").replace(
+                "\"jwt-secret-key\": \"operator-test-secret-with-at-least-32-characters\",\n",
+                "",
+            ),
+            "missing field `jwt-secret-key`",
+        ),
+    ] {
+        let reader = MemoryReader {
+            sources: BTreeMap::from([(source.to_owned(), document)]),
+        };
+        let error = load_cluster(source, &reader)
+            .await
+            .expect_err("missing or weak JWT keys must fail");
+        assert!(
+            error.to_string().contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
+    Ok(())
+}
+
 fn cluster_document(subnet: &str) -> String {
     format!(
         r#"{{
+            "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
             cluster: {{
                 name: "test-cluster",
                 "cluster-cidr": "172.22.0.0/16",

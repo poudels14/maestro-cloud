@@ -44,6 +44,7 @@ document is identical on every host except for the top-level `node` selector.
 
 ```jsonc
 {
+  "jwt-secret-key": "<at-least-32-bytes>",
   "cluster": {
     "name": "prod",
     "cluster-cidr": "172.22.0.0/16",
@@ -170,8 +171,6 @@ sudo maestro cluster bootstrap \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \
   --etcd-binary /run/current-system/sw/bin/etcd \
-  --operator-secret-source \
-    aws-secret://maestro/production/operator-jwt-secret \
   --output /run/maestro/launch.json
 ```
 
@@ -201,18 +200,15 @@ sudo maestro cluster join https://10.20.0.11:3000 \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \
   --etcd-binary /run/current-system/sw/bin/etcd \
-  --operator-secret-source \
-    aws-secret://maestro/production/operator-jwt-secret \
   --output /run/maestro/launch.json
 ```
 
 Omit `--etcd-binary` for a `worker`. The joiner authenticates CA discovery with
 the shared join secret, proves possession of the approved key, receives an
 encrypted node-bound grant, and starts an etcd learner when its role requires
-one. The operator signing key is not part of that grant: every node receives
-the same `aws-secret://` reference explicitly and resolves it with its instance
-role when the daemon starts. A joining control-plane member is promoted only
-after it catches up.
+one. The operator signing key is not part of that grant: every node copies the
+same `jwt-secret-key` from its protected shared config into its private launch
+document. A joining control-plane member is promoted only after it catches up.
 
 Bootstrap and join output files are create-only and owner-only. A retry verifies
 and reuses matching state; it does not overwrite a conflicting launch document.

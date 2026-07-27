@@ -53,8 +53,8 @@ use crate::{
 mod config;
 
 pub use config::{
-    DaemonLaunchConfig, DaemonLaunchDocument, ResolvedOperatorJwtSecret, StoreLaunchMode,
-    load_launch_config, load_launch_document,
+    DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, load_launch_config,
+    load_launch_document,
 };
 
 /// Builds production adapters and starts one daemon instance for its declared node role.
@@ -69,7 +69,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         store_mode,
         security,
         certificate_issuer,
-        operator_jwt_secret,
+        jwt_secret_key,
         store_encryption_secret,
         instance_id,
         datadog,
@@ -78,7 +78,6 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         preview,
         nixos_upgrade,
     } = config;
-    let operator_jwt_secret = operator_jwt_secret.into_secret();
     let known_members = control_plane_members(&cluster);
     let dns_plugin_settings = dns_plugin_settings(&cluster)?;
     let clock = Arc::new(TokioClock::new());
@@ -88,7 +87,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .ok_or_else(|| invalid("local node disappeared from validated topology"))?;
     let configured_datadog =
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
-    let api_settings = api_settings(&cluster, local_node, &security, operator_jwt_secret.clone());
+    let api_settings = api_settings(&cluster, local_node, &security, jwt_secret_key.clone());
     let launch_policy = ClusterLaunchPolicy {
         datadog: datadog.clone(),
         depot: depot.clone(),
@@ -421,7 +420,7 @@ pub(crate) fn api_settings(
     cluster: &ClusterConfig,
     node: &cluster::NodeDefinition,
     security: &NodeCertificateBundle,
-    operator_jwt_secret: SecretValue,
+    jwt_secret_key: SecretValue,
 ) -> ServerSettings {
     let identity = TlsIdentity::new(
         security.identity.certificate_pem.clone(),
@@ -432,7 +431,7 @@ pub(crate) fn api_settings(
             IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             node.endpoint.api_port,
         ),
-        Some(operator_jwt_secret),
+        Some(jwt_secret_key),
     )
     .with_tls_identity(identity.clone())
     .with_cluster_trust_root(security.trust_root_pem.clone())

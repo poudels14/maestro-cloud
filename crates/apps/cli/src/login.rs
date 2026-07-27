@@ -7,7 +7,6 @@ use kernel_api::SecretValue;
 use serde::{Deserialize, Serialize};
 
 use crate::CliError;
-use crate::config_source::{ConfigSourceReader, SystemConfigSourceReader};
 use crate::contexts::ContextStore;
 
 pub(crate) const DEFAULT_LOGIN_DAYS: u64 = 7;
@@ -100,24 +99,17 @@ pub(crate) fn issue_token(
     issue_token_for_lifetime(secret, subject, lifetime, AccessLevel::Operator, issued_at)
 }
 
-pub(crate) async fn mint_token(
-    secret_source: &str,
+pub(crate) fn mint_token(
+    secret: &SecretValue,
     lifetime: TokenLifetime,
     access_level: AccessLevel,
     subject: &str,
 ) -> Result<SecretValue, CliError> {
-    let secret = SystemConfigSourceReader.read(secret_source).await?;
     let issued_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| CliError::invalid_input(format!("system clock is before epoch: {error}")))?
         .as_secs();
-    issue_token_for_lifetime(
-        &SecretValue::new(secret),
-        subject,
-        lifetime.seconds(),
-        access_level,
-        issued_at,
-    )
+    issue_token_for_lifetime(secret, subject, lifetime.seconds(), access_level, issued_at)
 }
 
 pub(crate) fn issue_token_for_lifetime(

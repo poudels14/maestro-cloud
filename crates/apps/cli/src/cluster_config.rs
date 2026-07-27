@@ -23,6 +23,7 @@ pub(crate) struct LoadedClusterConfig {
     pub(crate) cluster: ClusterConfig,
     pub(crate) launch_policy: ClusterLaunchPolicy,
     pub(crate) node_id: NodeId,
+    pub(crate) jwt_secret_key: SecretValue,
     pub(crate) ignored_fields: Vec<String>,
 }
 
@@ -34,6 +35,7 @@ pub(crate) async fn decode_cluster(
     let (document, ignored_fields): (ClusterDocument, _) =
         decode_document(&value, &format!("cluster config `{source}`"))?;
     let launch_policy = convert_launch_policy(source, &document, reader).await?;
+    let jwt_secret_key = convert_jwt_secret_key(document.jwt_secret_key)?;
     let tailscale = convert_tailscale(source, document.tailscale, reader).await?;
     let cloudflare = convert_cloudflare(source, document.cloudflare, reader).await?;
     let cluster = convert_cluster(document.cluster, tailscale, cloudflare)?;
@@ -43,8 +45,20 @@ pub(crate) async fn decode_cluster(
         cluster,
         launch_policy,
         node_id,
+        jwt_secret_key,
         ignored_fields,
     })
+}
+
+fn convert_jwt_secret_key(value: String) -> Result<SecretValue, CliError> {
+    let value = required("jwt-secret-key", value)?;
+    if value.len() < 32 || value.contains('\0') {
+        return Err(invalid(
+            "jwt-secret-key",
+            "must contain at least 32 bytes and no NUL bytes",
+        ));
+    }
+    Ok(SecretValue::new(value))
 }
 
 fn convert_cluster(

@@ -102,9 +102,9 @@ maestro config init services
 ```
 
 Edit `maestro.jsonc` so every future node is declared with its stable private
-endpoint, role, and non-overlapping workload subnet. The generated join secret
-is already strong and should be moved through the same protected secret path as
-the rest of the cluster document.
+endpoint, role, and non-overlapping workload subnet. The generated
+`join-secret` and `jwt-secret-key` are already strong. The cluster document
+contains secrets and must remain owner-only.
 
 Validate the fully merged sources before creating local state:
 
@@ -121,17 +121,13 @@ sudo maestro cluster bootstrap \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \
   --etcd-binary /run/current-system/sw/bin/etcd \
-  --operator-secret-source \
-    aws-secret://maestro/production/operator-jwt-secret \
   --output /run/maestro/launch.json
 ```
 
-The launch document contains private keys, cluster secrets, and the AWS
-Secrets Manager reference for the operator signing key. It must remain an
-owner-only regular file outside the Nix store. Every node resolves that same
-reference through its AWS credential chain at startup, so its instance role
-needs `secretsmanager:GetSecretValue` for that exact secret. Start it through
-the NixOS rewrite module, or directly while developing:
+The launch document contains private keys and cluster secrets, including the
+shared `jwt-secret-key`. It must remain an owner-only regular file outside the
+Nix store. Start it through the NixOS rewrite module, or directly while
+developing:
 
 ```sh
 sudo maestro-daemon start /run/maestro/launch.json
@@ -141,9 +137,9 @@ Optional top-level `datadog`, `depot`, `log-backup`, `preview`, and
 `nixos-upgrade` settings are validated with the cluster config and copied into
 the protected launch document. Credential fields accept literal values,
 `file://` sources, or `aws-secret://` sources. Node admission carries the same
-policy inside the encrypted join response. The operator signing key is
-deliberately excluded from join grants; bootstrap and join commands receive its
-shared AWS source explicitly.
+policy inside the encrypted join response. Each node copies `jwt-secret-key`
+from its protected shared cluster config into its private launch document. The
+cluster config API never returns it.
 
 For multi-node admission, network requirements, join preparation, approval,
 verification, drain, restart, upgrade, and removal procedures, follow
@@ -153,29 +149,30 @@ artifact packaging, follow
 
 ## Authenticate an operator CLI
 
-Mint a token without copying the signing key out of AWS Secrets Manager:
+Mint a token from the same protected cluster config used by the nodes:
 
 ```sh
 maestro auth token \
-  --secret-source aws-secret://maestro/production/operator-jwt-secret \
+  --config /etc/maestro/maestro.jsonc \
   --expires-in 1h \
   --access-level read-only
 ```
+
+Use `--jwt-secret-key "$JWT_SECRET_KEY"` instead of `--config` when supplying
+the raw key directly.
 
 This prints only the short-lived JWT. `read-only` tokens can use API and panel
 views but cannot mutate cluster state or open exec sessions; `operator` tokens
 retain full access. A panel session never outlives the source token and is
 always capped at eight hours.
 
-To rotate the signing key without reading it locally, create a new secret
-version and restart all nodes against it:
+To rotate the signing key, replace `jwt-secret-key` in the protected shared
+config, update each node's private launch document, and restart nodes serially:
 
 ```sh
-openssl rand -hex 32 |
-  tr -d '\n' |
-  aws secretsmanager put-secret-value \
-    --secret-id maestro/production/operator-jwt-secret \
-    --secret-string file:///dev/stdin
+sudo maestro cluster rotate-jwt-key \
+  --config /etc/maestro/maestro.jsonc \
+  --launch /run/maestro/launch.json
 ```
 
 Maestro currently accepts one HS256 signing key at a time. Coordinate the

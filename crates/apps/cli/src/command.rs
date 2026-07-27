@@ -3,6 +3,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use kernel_api::SecretValue;
 
 use crate::CliError;
 use crate::cluster_command::ClusterCommand;
@@ -71,9 +72,12 @@ enum Command {
 enum AuthCommand {
     /// Print one short-lived JWT to standard output.
     Token {
-        /// Raw signing-key source, including aws-secret:// references.
-        #[arg(long)]
-        secret_source: String,
+        /// Cluster configuration containing the shared jwt-secret-key.
+        #[arg(long, default_value = "maestro.jsonc")]
+        config: String,
+        /// Raw jwt-secret-key value instead of loading the cluster config.
+        #[arg(long, value_name = "SECRET")]
+        jwt_secret_key: Option<String>,
         /// Token lifetime such as 15m, 1h, or 7d.
         #[arg(long)]
         expires_in: TokenLifetime,
@@ -145,12 +149,24 @@ pub async fn run(
     match cli.command {
         Command::Auth { command } => match command {
             AuthCommand::Token {
-                secret_source,
+                config,
+                jwt_secret_key,
                 expires_in,
                 access_level,
                 subject,
             } => {
-                let token = mint_token(&secret_source, expires_in, access_level, &subject).await?;
+                let jwt_secret_key = match jwt_secret_key {
+                    Some(secret) => SecretValue::new(secret),
+                    None => {
+                        config::load_cluster(
+                            &config,
+                            &crate::config_source::SystemConfigSourceReader,
+                        )
+                        .await?
+                        .jwt_secret_key
+                    }
+                };
+                let token = mint_token(&jwt_secret_key, expires_in, access_level, &subject)?;
                 writeln!(output, "{}", token.expose())
                     .map_err(|source| CliError::io("failed to write token", source))
             }

@@ -2,21 +2,19 @@ use std::path::PathBuf;
 
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use cluster::StoreJoinTicket;
-use cluster::{
-    CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle, OperatorJwtSecretSource,
-};
+use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::launch::{api_settings, panel_directory};
 use crate::{
     DaemonLaunchConfig, DaemonLaunchDocument, DatadogLaunchConfig, DatadogLogsLaunchConfig,
     DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
-    PreviewLaunchConfig, ResolvedOperatorJwtSecret, StoreLaunchMode, load_launch_document,
+    PreviewLaunchConfig, StoreLaunchMode, load_launch_document,
 };
 
 use super::cluster_with_nodes;
 
-const TEST_OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
+const TEST_JWT_SECRET_KEY: &str = "operator-test-secret-with-32-characters";
 
 #[test]
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
@@ -139,18 +137,17 @@ fn macos_launch_profile_requires_one_node_and_omits_nixos_upgrades()
 }
 
 #[test]
-fn launch_validation_requires_a_strong_redacted_operator_key()
--> Result<(), Box<dyn std::error::Error>> {
+fn launch_validation_requires_a_strong_redacted_jwt_key() -> Result<(), Box<dyn std::error::Error>>
+{
     let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
     let secret = "operator-production-secret-with-32-characters";
-    launch.operator_jwt_secret = resolved_operator_secret(secret)?;
+    launch.jwt_secret_key = SecretValue::new(secret);
     launch.validate()?;
     assert!(!format!("{launch:?}").contains(secret));
     let serialized = serde_json::to_string(&launch)?;
-    assert!(!serialized.contains(secret));
-    assert!(serialized.contains(TEST_OPERATOR_SECRET_SOURCE));
+    assert!(serialized.contains(secret));
 
-    launch.operator_jwt_secret = resolved_operator_secret("too-short")?;
+    launch.jwt_secret_key = SecretValue::new("too-short");
     assert!(launch.validate().is_err());
     Ok(())
 }
@@ -179,7 +176,7 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
         &launch.cluster,
         node,
         &launch.security,
-        launch.operator_jwt_secret.secret().clone(),
+        launch.jwt_secret_key.clone(),
     );
     assert_eq!(
         settings.bind_address,
@@ -363,11 +360,11 @@ fn config(
     role: NodeRole,
     store_mode: StoreLaunchMode,
 ) -> Result<DaemonLaunchConfig, Box<dyn std::error::Error>> {
-    config_with_operator_secret(
+    config_with_jwt_secret(
         node_id,
         role,
         store_mode,
-        resolved_operator_secret("operator-test-secret-with-32-characters")?,
+        SecretValue::new(TEST_JWT_SECRET_KEY),
     )
 }
 
@@ -376,15 +373,15 @@ fn document(
     role: NodeRole,
     store_mode: StoreLaunchMode,
 ) -> Result<DaemonLaunchDocument, Box<dyn std::error::Error>> {
-    config_with_operator_secret(node_id, role, store_mode, operator_secret_source()?)
+    config(node_id, role, store_mode)
 }
 
-fn config_with_operator_secret<OperatorSecret>(
+fn config_with_jwt_secret(
     node_id: &str,
     role: NodeRole,
     store_mode: StoreLaunchMode,
-    operator_jwt_secret: OperatorSecret,
-) -> Result<DaemonLaunchConfig<OperatorSecret>, Box<dyn std::error::Error>> {
+    jwt_secret_key: SecretValue,
+) -> Result<DaemonLaunchConfig, Box<dyn std::error::Error>> {
     Ok(DaemonLaunchConfig {
         cluster: cluster_with_nodes(&[(node_id, role)])?,
         node_id: NodeId::new(node_id)?,
@@ -403,7 +400,7 @@ fn config_with_operator_secret<OperatorSecret>(
             certificate_pem: "test-root".to_owned(),
             private_key_pem: SecretValue::new("test-ca-private-key"),
         }),
-        operator_jwt_secret,
+        jwt_secret_key,
         store_encryption_secret: SecretValue::new(
             "store-encryption-test-secret-with-32-characters",
         ),
@@ -414,17 +411,4 @@ fn config_with_operator_secret<OperatorSecret>(
         preview: None,
         nixos_upgrade: None,
     })
-}
-
-fn resolved_operator_secret(
-    value: impl Into<String>,
-) -> Result<ResolvedOperatorJwtSecret, Box<dyn std::error::Error>> {
-    Ok(ResolvedOperatorJwtSecret::new(
-        operator_secret_source()?,
-        SecretValue::new(value),
-    ))
-}
-
-fn operator_secret_source() -> Result<OperatorJwtSecretSource, Box<dyn std::error::Error>> {
-    Ok(OperatorJwtSecretSource::new(TEST_OPERATOR_SECRET_SOURCE)?)
 }

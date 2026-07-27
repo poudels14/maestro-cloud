@@ -45,14 +45,12 @@ store:
 ```
 
 `services.maestro.config` now names the protected rewrite launch document, not
-the legacy JSON/JSONC config source. The launch document contains cluster
-private keys, application secrets, and an AWS Secrets Manager reference for
-the operator JWT signing key. It must be an absolute owner-only regular file such as
+the shared JSON/JSONC config source. The launch document contains cluster
+private keys, application secrets, and the shared JWT signing key. It must be
+an absolute owner-only regular file such as
 `/run/maestro/launch.json`; placing its contents in a Nix expression would copy
 those secrets into the world-readable Nix store. The daemon validates the file
-before starting. The host instance role must allow
-`secretsmanager:GetSecretValue` on the exact referenced operator secret; no SSM
-session or node-local copy of that key is required.
+before starting.
 
 The module opens the control-plane API and embedded-store cluster ports in the
 NixOS host firewall. `services.maestro.controlPlanePort`,
@@ -82,8 +80,6 @@ sudo maestro cluster bootstrap \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \
   --etcd-binary /run/current-system/sw/bin/etcd \
-  --operator-secret-source \
-    aws-secret://maestro/production/operator-jwt-secret \
   --output /run/maestro/launch.json
 ```
 
@@ -99,8 +95,6 @@ maestro cluster approve-node node-2 <printed-sha256>
 sudo maestro cluster join https://10.20.0.11:3000 \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \
-  --operator-secret-source \
-    aws-secret://maestro/production/operator-jwt-secret \
   --output /run/maestro/launch.json
 ```
 

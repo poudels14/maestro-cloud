@@ -4,6 +4,8 @@ use crate::CliError;
 use crate::cluster_formation::{bootstrap, init_ca, issue_node, prepare_join};
 use crate::config_source::ConfigSourceReader;
 
+const JWT_SECRET_KEY: &str = "operator-test-secret-with-at-least-32-characters";
+
 struct MemoryReader {
     source: String,
 }
@@ -147,7 +149,6 @@ async fn join_preparation_persists_one_private_key_and_prints_approval_command()
 #[tokio::test]
 async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
 -> Result<(), Box<dyn std::error::Error>> {
-    const OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
     let directory = tempfile::tempdir()?;
     let reader = MemoryReader {
         source: cluster_document(),
@@ -160,7 +161,6 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
         directory.path(),
         containerd_socket,
         etcd_binary,
-        OPERATOR_SECRET_SOURCE,
         None,
         &mut first_output,
         &reader,
@@ -174,7 +174,6 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
         directory.path(),
         containerd_socket,
         etcd_binary,
-        OPERATOR_SECRET_SOURCE,
         None,
         &mut second_output,
         &reader,
@@ -190,8 +189,8 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
     );
     assert!(launch.pointer("/certificateIssuer/privateKeyPem").is_some());
     assert_eq!(
-        launch.pointer("/operatorJwtSecret"),
-        Some(&OPERATOR_SECRET_SOURCE.into())
+        launch.pointer("/jwtSecretKey"),
+        Some(&JWT_SECRET_KEY.into())
     );
     assert!(launch.pointer("/storeEncryptionSecret").is_some());
     assert_eq!(
@@ -200,7 +199,8 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
     );
     let first_output = String::from_utf8(first_output)?;
     assert!(first_output.contains("created bootstrap launch document"));
-    assert!(!first_output.contains("operatorJwtSecret"));
+    assert!(!first_output.contains("jwtSecretKey"));
+    assert!(!first_output.contains(JWT_SECRET_KEY));
     assert!(
         String::from_utf8(second_output)?.contains("verified existing bootstrap launch document")
     );
@@ -217,6 +217,7 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
 
 pub(super) fn cluster_document() -> String {
     r#"{
+            "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
                 "cluster-cidr": "172.22.0.0/16",

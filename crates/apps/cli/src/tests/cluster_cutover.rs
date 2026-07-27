@@ -7,7 +7,7 @@ use crate::cluster_formation::init_ca;
 use crate::config_source::ConfigSourceReader;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
-const OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
+const JWT_SECRET_KEY: &str = "operator-test-secret-with-at-least-32-characters";
 
 struct MemoryReader {
     source: String,
@@ -45,7 +45,6 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
         containerd_socket: Path::new("/run/containerd/containerd.sock").to_path_buf(),
         etcd_binary: Path::new("/run/current-system/sw/bin/etcd").to_path_buf(),
         store_secret_file: store_secret.clone(),
-        operator_secret_source: OPERATOR_SECRET_SOURCE.to_owned(),
         output_directory: output_directory.clone(),
     };
 
@@ -71,8 +70,8 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
         Some(&"exact-migrated-store-secret-at-least-32-characters".into())
     );
     assert_eq!(
-        master.pointer("/operatorJwtSecret"),
-        Some(&OPERATOR_SECRET_SOURCE.into())
+        master.pointer("/jwtSecretKey"),
+        Some(&JWT_SECRET_KEY.into())
     );
     assert_eq!(
         master.pointer("/depot/token"),
@@ -127,7 +126,6 @@ async fn cutover_bundle_rejects_public_secret_files() -> TestResult {
             containerd_socket: Path::new("/run/containerd/containerd.sock").to_path_buf(),
             etcd_binary: Path::new("/run/current-system/sw/bin/etcd").to_path_buf(),
             store_secret_file: store_secret,
-            operator_secret_source: OPERATOR_SECRET_SOURCE.to_owned(),
             output_directory: directory.path().join("launches"),
         },
         &mut Vec::new(),

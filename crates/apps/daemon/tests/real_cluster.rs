@@ -14,9 +14,8 @@ use cluster::{
     CertificateValidity, ClusterCertificateAuthority, ClusterConfig, ClusterPorts,
     EmbeddedEtcdProvider, EmbeddedEtcdSettings, Ipv4Cidr, JoinPayload, JoinPrivateKey, JoinRequest,
     JoinResponseStatus, MemberState, NodeCertificateBundle, NodeDefinition, NodeEndpoint,
-    OperatorJwtSecretSource, StoreJoinTicket, StoreMember, StoreProvider, StoreProviderConfig,
-    StoreProviderError, admit_join_request, decrypt_join_response, encrypt_join_response,
-    sign_join_request,
+    StoreJoinTicket, StoreMember, StoreProvider, StoreProviderConfig, StoreProviderError,
+    admit_join_request, decrypt_join_response, encrypt_join_response, sign_join_request,
 };
 use clustertest::{FixtureNodeName, scenarios::cluster_bootstraps_joins_meshes_and_recovers};
 use daemon::{DaemonLaunchDocument, StoreLaunchMode};
@@ -28,8 +27,6 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 mod network;
 #[path = "real_cluster/scenario.rs"]
 mod scenario;
-#[path = "real_cluster/secrets.rs"]
-mod secrets;
 #[path = "real_cluster/workload.rs"]
 mod workload;
 #[path = "real_cluster/workload_fixture.rs"]
@@ -39,8 +36,6 @@ use network::{
     RealNode, kill_namespace_processes, node_namespace_diagnostics, shortened_interface_name,
     workload_namespace_diagnostics,
 };
-use secrets::LocalSecretsManager;
-
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const STORE_CLIENT_PORT: u16 = 34_379;
@@ -77,7 +72,6 @@ struct RealProcessCluster {
     authority: ClusterCertificateAuthority,
     nodes: Vec<RealNode>,
     securities: BTreeMap<NodeId, NodeCertificateBundle>,
-    secrets_manager: LocalSecretsManager,
     write_sequence: u32,
 }
 
@@ -157,7 +151,6 @@ impl RealProcessCluster {
                 launch_sequence: 0,
             })
             .collect();
-        let bridge_address = Ipv4Addr::new(10, 203, segment, 1);
         let mut real = Self {
             root,
             daemon_binary,
@@ -168,11 +161,9 @@ impl RealProcessCluster {
             authority,
             nodes,
             securities,
-            secrets_manager: LocalSecretsManager::pending(),
             write_sequence: 0,
         };
         real.create_network(segment)?;
-        real.secrets_manager = LocalSecretsManager::start(bridge_address).await?;
         Ok(real)
     }
 
@@ -213,10 +204,9 @@ impl RealProcessCluster {
             } else {
                 None
             },
-            operator_jwt_secret: OperatorJwtSecretSource::new(
-                "aws-secret://maestro/test/operator-jwt-secret",
-            )
-            .map_err(RealClusterError::from_display)?,
+            jwt_secret_key: SecretValue::new(
+                "real-cluster-operator-secret-with-at-least-32-characters",
+            ),
             store_encryption_secret: SecretValue::new(
                 "real-cluster-store-secret-with-32-characters",
             ),
@@ -243,12 +233,6 @@ impl RealProcessCluster {
             )
             .env("AWS_REGION", "us-east-1")
             .env("AWS_EC2_METADATA_DISABLED", "true")
-            .env(
-                "AWS_ENDPOINT_URL_SECRETS_MANAGER",
-                self.secrets_manager
-                    .endpoint()
-                    .map_err(RealClusterError::from_display)?,
-            )
             .arg(&self.daemon_binary)
             .arg("start")
             .arg(&node.config_path)

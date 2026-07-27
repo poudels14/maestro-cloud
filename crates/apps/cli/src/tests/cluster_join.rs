@@ -13,7 +13,7 @@ use crate::cluster_join::{AdmissionResponse, JoinOptions, JoinTransport, join_wi
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
 
-const OPERATOR_SECRET_SOURCE: &str = "aws-secret://maestro/test/operator-jwt-secret";
+const JWT_SECRET_KEY: &str = "operator-test-secret-with-at-least-32-characters";
 
 struct MemoryReader {
     source: String,
@@ -144,7 +144,6 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
             "https://10.20.0.11:3000".to_string(),
             "maestro.jsonc".to_string(),
             directory.path().to_path_buf(),
-            OPERATOR_SECRET_SOURCE.to_owned(),
         )
     };
 
@@ -172,8 +171,8 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
     );
     assert!(launch.pointer("/security/identity/privateKeyPem").is_some());
     assert_eq!(
-        launch.pointer("/operatorJwtSecret"),
-        Some(&OPERATOR_SECRET_SOURCE.into())
+        launch.pointer("/jwtSecretKey"),
+        Some(&JWT_SECRET_KEY.into())
     );
     assert_eq!(
         launch.pointer("/depot/token"),
@@ -224,7 +223,6 @@ async fn join_rejects_non_https_leader_before_transport() -> Result<(), Box<dyn 
             "http://10.20.0.11:3000".to_string(),
             "maestro.jsonc".to_string(),
             directory.path().to_path_buf(),
-            OPERATOR_SECRET_SOURCE.to_owned(),
         ),
         &mut Vec::new(),
         &reader,
@@ -297,7 +295,6 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
         "https://10.20.0.11:3000".to_string(),
         "maestro.jsonc".to_string(),
         directory.path().to_path_buf(),
-        OPERATOR_SECRET_SOURCE.to_owned(),
     );
     options.etcd_binary = Some("/run/current-system/sw/bin/etcd".into());
 
@@ -362,6 +359,7 @@ fn unusable_payload(
 
 fn cluster_document() -> String {
     r#"{
+            "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
                 "cluster-cidr": "172.22.0.0/16",
@@ -389,6 +387,7 @@ fn cluster_document() -> String {
 
 fn control_plane_cluster_document() -> String {
     r#"{
+            "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
                 "cluster-cidr": "172.22.0.0/16",

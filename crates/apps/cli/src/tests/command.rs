@@ -27,6 +27,18 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from([
             "maestro",
             "cluster",
+            "rotate-jwt-key",
+            "--config",
+            "maestro.jsonc",
+            "--launch",
+            "/run/maestro/launch.json",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
             "prepare-cutover",
             "--config",
             "maestro.jsonc",
@@ -38,8 +50,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/run/current-system/sw/bin/etcd",
             "--store-secret-file",
             "/run/maestro/store-secret",
-            "--operator-secret-source",
-            "aws-secret://maestro/production/operator-jwt-secret",
             "--output-dir",
             "/run/maestro/cutover-launches",
         ])
@@ -57,8 +67,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
             "--etcd-binary",
             "/run/current-system/sw/bin/etcd",
-            "--operator-secret-source",
-            "aws-secret://maestro/production/operator-jwt-secret",
             "--output",
             "/var/lib/maestro/launch.json",
         ])
@@ -76,8 +84,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
             "--etcd-binary",
             "/run/current-system/sw/bin/etcd",
-            "--operator-secret-source",
-            "aws-secret://maestro/production/operator-jwt-secret",
             "--output",
             "/var/lib/maestro/launch.json",
         ])
@@ -138,8 +144,8 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "maestro",
             "auth",
             "token",
-            "--secret-source",
-            "aws-secret://maestro/production/operator-jwt-secret",
+            "--config",
+            "maestro.jsonc",
             "--expires-in",
             "1h",
             "--access-level",
@@ -152,8 +158,8 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "maestro",
             "auth",
             "token",
-            "--secret-source",
-            "aws-secret://maestro/production/operator-jwt-secret",
+            "--jwt-secret-key",
+            "operator-test-secret-with-at-least-32-characters",
             "--expires-in",
             "forever",
             "--access-level",
@@ -381,6 +387,49 @@ async fn config_init_prompts_without_loading_an_api_context()
     let output = String::from_utf8(output)?;
     assert!(output.contains("Config kind (cluster/services):"));
     assert!(output.contains("[maestro]: created"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn auth_token_uses_the_cluster_config_key_or_an_explicit_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let config_path = directory.path().join("maestro.jsonc");
+    crate::config::init(
+        crate::config::ConfigKind::Cluster,
+        Some(&config_path),
+        &mut Vec::new(),
+    )?;
+    for arguments in [
+        vec![
+            "maestro",
+            "auth",
+            "token",
+            "--config",
+            config_path.to_str().ok_or("non-UTF-8 config path")?,
+            "--expires-in",
+            "15m",
+            "--access-level",
+            "read-only",
+        ],
+        vec![
+            "maestro",
+            "auth",
+            "token",
+            "--jwt-secret-key",
+            "operator-test-secret-with-at-least-32-characters",
+            "--expires-in",
+            "15m",
+            "--access-level",
+            "operator",
+        ],
+    ] {
+        let cli = Cli::try_parse_from(arguments)?;
+        let mut output = Vec::new();
+        run(cli, &mut std::io::Cursor::new(Vec::new()), &mut output).await?;
+        let token = String::from_utf8(output)?;
+        assert_eq!(token.trim().split('.').count(), 3);
+    }
     Ok(())
 }
 

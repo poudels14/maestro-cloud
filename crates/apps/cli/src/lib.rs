@@ -15,6 +15,7 @@ mod cluster_config_launch;
 mod cluster_cutover;
 mod cluster_formation;
 mod cluster_join;
+mod cluster_jwt;
 mod cluster_restart;
 mod cluster_tailscale;
 mod command;

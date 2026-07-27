@@ -12,7 +12,6 @@ mod join_crypto;
 mod join_key;
 mod network;
 mod node_lifecycle;
-mod operator_secret;
 mod ports;
 mod provider;
 mod topology;

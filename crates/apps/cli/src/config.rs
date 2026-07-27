@@ -160,7 +160,14 @@ fn cluster_template() -> String {
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
-    CLUSTER_TEMPLATE.replace("__JOIN_SECRET__", &join_secret)
+    let jwt_secret_key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    CLUSTER_TEMPLATE
+        .replace("__JOIN_SECRET__", &join_secret)
+        .replace("__JWT_SECRET_KEY__", &jwt_secret_key)
 }
 
 fn output_error(source: std::io::Error) -> CliError {
@@ -169,6 +176,7 @@ fn output_error(source: std::io::Error) -> CliError {
 
 const CLUSTER_TEMPLATE: &str = r#"{
   // "$extends": "file://shared-cluster.jsonc",
+  "jwt-secret-key": "__JWT_SECRET_KEY__",
   "cluster": {
     "name": "my-cluster",
     "cluster-cidr": "10.42.0.0/16",

@@ -48,6 +48,54 @@ pub(crate) fn persist_private_new(
     persist_private_new_bytes(path, &encode_document(value, description)?, description)
 }
 
+pub(crate) fn replace_private(
+    path: &Path,
+    value: &impl Serialize,
+    description: &str,
+) -> Result<(), CliError> {
+    read_private(path, description)?;
+    let encoded = encode_document(value, description)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|source| {
+        CliError::io(
+            format!(
+                "failed to create replacement {description} in `{}`",
+                parent.display()
+            ),
+            source,
+        )
+    })?;
+    temporary
+        .write_all(&encoded)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|source| {
+            CliError::io(
+                format!("failed to persist {description} `{}`", path.display()),
+                source,
+            )
+        })?;
+    temporary.persist(path).map_err(|error| {
+        CliError::io(
+            format!("failed to replace {description} `{}`", path.display()),
+            error.error,
+        )
+    })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| {
+            CliError::io(
+                format!(
+                    "failed to sync {description} directory `{}`",
+                    parent.display()
+                ),
+                source,
+            )
+        })
+}
+
 fn encode_document(value: &impl Serialize, description: &str) -> Result<Vec<u8>, CliError> {
     let mut encoded = serde_json::to_vec_pretty(value)
         .map_err(|source| CliError::json(format!("failed to encode {description}"), source))?;
