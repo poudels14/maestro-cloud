@@ -58,7 +58,7 @@ async fn local_agent_reapplies_exact_state_and_acknowledges_only_its_node()
 }
 
 #[tokio::test]
-async fn digest_or_backend_failure_never_advances_the_applied_generation()
+async fn digest_or_backend_failure_is_reported_without_stopping_reconciliation()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(InMemoryStore::new(Arc::new(TestClock)));
     let cluster_id = ClusterId::new("firewall-failure")?;
@@ -71,10 +71,10 @@ async fn digest_or_backend_failure_never_advances_the_applied_generation()
         "node-1",
         RecordingBackend::default(),
     )?;
-    assert!(matches!(
-        agent.reconcile_once().await,
-        Err(FirewallAgentError::DigestMismatch { .. })
-    ));
+    let digest_failure = agent.reconcile_once().await?;
+    assert!(digest_failure.resource_present);
+    assert!(!digest_failure.applied);
+    assert!(digest_failure.failure_reported);
     assert!(agent.backend().applied()?.is_empty());
     let rejected = get(store.as_ref(), &cluster_id, "node-1").await?;
     assert_eq!(rejected.status.applied_generation, Generation::default());
@@ -89,10 +89,9 @@ async fn digest_or_backend_failure_never_advances_the_applied_generation()
     })
     .await?;
     agent.backend().set_failure(true)?;
-    assert!(matches!(
-        agent.reconcile_once().await,
-        Err(FirewallAgentError::Backend(_))
-    ));
+    let backend_failure = agent.reconcile_once().await?;
+    assert!(!backend_failure.applied);
+    assert!(backend_failure.failure_reported);
     let failed = get(store.as_ref(), &cluster_id, "node-1").await?;
     assert_eq!(failed.status.applied_generation, Generation::default());
     assert!(failed.status.applied_digest.is_none());
@@ -100,6 +99,69 @@ async fn digest_or_backend_failure_never_advances_the_applied_generation()
         condition.condition_type.0 == "FirewallReady"
             && condition.state == kernel_api::ConditionState::False
     }));
+
+    agent.backend().set_failure(false)?;
+    let recovered = agent.reconcile_once().await?;
+    assert!(recovered.applied);
+    assert!(!recovered.failure_reported);
+    assert_eq!(
+        get(store.as_ref(), &cluster_id, "node-1")
+            .await?
+            .status
+            .applied_generation,
+        Generation(2)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_local_resource_is_quarantined_until_repaired()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TestClock)));
+    let cluster_id = ClusterId::new("firewall-malformed")?;
+    let resource_key = key(&cluster_id, "node-1")?;
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: resource_key.clone(),
+                value: b"not-json".to_vec(),
+                expected: ExpectedVersion::Missing,
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let agent = agent(
+        store.clone(),
+        &cluster_id,
+        "node-1",
+        RecordingBackend::default(),
+    )?;
+
+    let degraded = agent.reconcile_once().await?;
+    assert!(degraded.resource_present);
+    assert!(degraded.malformed_resource);
+    assert!(!degraded.applied);
+    assert!(agent.backend().applied()?.is_empty());
+
+    let malformed = store
+        .get(&resource_key)
+        .await?
+        .ok_or("malformed NodeFirewall missing")?;
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: resource_key,
+                value: serde_json::to_vec(&resource("node-1", 1, "allow-repaired")?)?,
+                expected: ExpectedVersion::Exact(malformed.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let recovered = agent.reconcile_once().await?;
+    assert!(recovered.applied);
+    assert!(!recovered.malformed_resource);
     Ok(())
 }
 

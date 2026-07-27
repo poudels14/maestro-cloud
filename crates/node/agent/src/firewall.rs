@@ -54,8 +54,12 @@ impl FirewallBackendError {
 pub struct FirewallReconcileReport {
     /// Whether a desired resource currently exists for the node.
     pub resource_present: bool,
+    /// Whether the stored local resource could not be decoded or identified.
+    pub malformed_resource: bool,
     /// Whether the backend accepted the exact desired script.
     pub applied: bool,
+    /// Whether an application failure was surfaced in resource status.
+    pub failure_reported: bool,
     /// Whether this pass changed the resource acknowledgement.
     pub acknowledgement_updated: bool,
     /// Whether desired state changed before acknowledgement could commit.
@@ -169,15 +173,34 @@ where
         let Some(stored) = snapshot.values.iter().find(|stored| stored.key == key) else {
             return Ok((FirewallReconcileReport::default(), snapshot.cursor));
         };
-        let resource = self.decode(stored)?;
+        let resource = match self.decode(stored) {
+            Ok(resource) => resource,
+            Err(error) => {
+                self.warn_malformed(stored, &error);
+                return Ok((
+                    FirewallReconcileReport {
+                        resource_present: true,
+                        malformed_resource: true,
+                        ..Default::default()
+                    },
+                    snapshot.cursor,
+                ));
+            }
+        };
         if resource.meta.deletion_timestamp.is_some() {
             return Ok((FirewallReconcileReport::default(), snapshot.cursor));
         }
         if let Err(error) = verify_digest(&resource.spec) {
-            return self.report_failure(&resource, error).await;
+            return Ok((
+                self.report_failure(&resource, error).await?,
+                snapshot.cursor,
+            ));
         }
         if let Err(error) = self.backend.apply(&resource.spec).await {
-            return self.report_failure(&resource, error.into()).await;
+            return Ok((
+                self.report_failure(&resource, error.into()).await?,
+                snapshot.cursor,
+            ));
         }
         let outcome = self.update_status(&resource, ApplyStatus::Ready).await?;
         Ok((
@@ -186,27 +209,42 @@ where
                 applied: true,
                 acknowledgement_updated: outcome == StatusOutcome::Updated,
                 stale: outcome == StatusOutcome::Stale,
+                malformed_resource: outcome == StatusOutcome::Malformed,
+                failure_reported: false,
             },
             snapshot.cursor,
         ))
     }
 
-    async fn report_failure<T>(
+    async fn report_failure(
         &self,
         desired: &NodeFirewall,
         failure: FirewallAgentError,
-    ) -> Result<T, FirewallAgentError> {
+    ) -> Result<FirewallReconcileReport, FirewallAgentError> {
         let detail = failure.to_string();
-        if let Err(status_error) = self
+        let outcome = self
             .update_status(desired, ApplyStatus::Failed(&detail))
             .await
-        {
-            return Err(FirewallAgentError::FailureStatus {
+            .map_err(|status_error| FirewallAgentError::FailureStatus {
                 failure: detail,
                 status_error: status_error.to_string(),
-            });
-        }
-        Err(failure)
+            })?;
+        tracing::warn!(
+            kind = NODE_FIREWALL_KIND,
+            node_id = %self.node_id,
+            resource_id = %desired.meta.id,
+            generation = desired.meta.generation.0,
+            error = %failure,
+            "firewall desired state was rejected without replacing the last applied ruleset"
+        );
+        Ok(FirewallReconcileReport {
+            resource_present: true,
+            malformed_resource: outcome == StatusOutcome::Malformed,
+            applied: false,
+            failure_reported: true,
+            acknowledgement_updated: outcome == StatusOutcome::Updated,
+            stale: outcome == StatusOutcome::Stale,
+        })
     }
 
     async fn update_status(
@@ -221,7 +259,13 @@ where
             let Some(stored) = self.store.get(&key).await? else {
                 return Ok(StatusOutcome::Stale);
             };
-            let mut current = self.decode(&stored)?;
+            let mut current = match self.decode(&stored) {
+                Ok(current) => current,
+                Err(error) => {
+                    self.warn_malformed(&stored, &error);
+                    return Ok(StatusOutcome::Malformed);
+                }
+            };
             if current.meta.generation != expected_generation
                 || current.spec.digest != expected_digest
                 || current.meta.deletion_timestamp.is_some()
@@ -268,6 +312,16 @@ where
         resource.meta.revision = stored.version.resource_revision();
         Ok(resource)
     }
+
+    fn warn_malformed(&self, stored: &StoredValue, error: &FirewallAgentError) {
+        tracing::warn!(
+            kind = NODE_FIREWALL_KIND,
+            node_id = %self.node_id,
+            resource_key = %stored.key,
+            error = %error,
+            "malformed firewall resource preserved the last applied ruleset"
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -281,6 +335,7 @@ enum StatusOutcome {
     Updated,
     Current,
     Stale,
+    Malformed,
 }
 
 fn desired_status(
