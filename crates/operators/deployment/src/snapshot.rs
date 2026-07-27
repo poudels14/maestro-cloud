@@ -24,10 +24,7 @@ pub(crate) struct ResourceSnapshot {
 }
 
 impl ResourceSnapshot {
-    pub(crate) async fn load(
-        store: &FencedStore,
-        keyspace: &Keyspace,
-    ) -> Result<Self, DeploymentError> {
+    async fn load(store: &FencedStore, keyspace: &Keyspace) -> Result<Self, DeploymentError> {
         let values = store.list(&keyspace.resources()).await?.values;
         Ok(Self {
             services: decode_kind::<ServiceId, ServiceSpec, ServiceStatus>(
@@ -57,6 +54,31 @@ impl ResourceSnapshot {
         })
     }
 
+    pub(crate) async fn load_service(
+        store: &FencedStore,
+        keyspace: &Keyspace,
+        service_id: &ServiceId,
+    ) -> Result<Self, DeploymentError> {
+        let mut snapshot = Self::load(store, keyspace).await?;
+        snapshot.services.retain(|id, _| id == service_id);
+        snapshot
+            .deployments
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot
+            .builds
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot
+            .assignments
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot
+            .replicas
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot
+            .traffic
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        Ok(snapshot)
+    }
+
     pub(crate) fn input(
         &self,
         cluster_id: kernel_api::ClusterId,
@@ -76,24 +98,15 @@ impl ResourceSnapshot {
         }
     }
 
-    pub(crate) fn dependency_compares(&self) -> Vec<Compare> {
-        self.values()
+    pub(crate) fn primary_compares(&self) -> Vec<Compare> {
+        self.services
+            .values()
+            .map(|resource| &resource.stored)
             .map(|stored| Compare {
                 key: stored.key.clone(),
                 expected: ExpectedVersion::Exact(stored.version),
             })
             .collect()
-    }
-
-    fn values(&self) -> impl Iterator<Item = &StoredValue> {
-        self.services
-            .values()
-            .map(|resource| &resource.stored)
-            .chain(self.deployments.values().map(|resource| &resource.stored))
-            .chain(self.builds.values().map(|resource| &resource.stored))
-            .chain(self.assignments.values().map(|resource| &resource.stored))
-            .chain(self.replicas.values().map(|resource| &resource.stored))
-            .chain(self.traffic.values().map(|resource| &resource.stored))
     }
 }
 

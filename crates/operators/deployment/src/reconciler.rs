@@ -59,11 +59,12 @@ impl DeploymentReconciler {
     async fn converge(
         &self,
         context: &ReconcileContext,
+        service_id: &ServiceId,
         finalizing: Option<&ServiceId>,
     ) -> Result<Action, ReconcileError> {
         let report = self
             .controller
-            .reconcile_once(context.store(), self.timestamp_clock.now())
+            .reconcile_service(context.store(), service_id, self.timestamp_clock.now())
             .await
             .map_err(classify_error)?;
         if report.conflict || finalizing.is_some_and(|id| report.has_children(id)) {
@@ -85,10 +86,10 @@ impl Reconciler for DeploymentReconciler {
 
     async fn reconcile(
         &self,
-        _resource: Object<Self::Id, Self::Spec, Self::Status>,
+        resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context, None).await
+        self.converge(&context, &resource.meta.id, None).await
     }
 
     async fn finalize(
@@ -96,7 +97,8 @@ impl Reconciler for DeploymentReconciler {
         resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context, Some(&resource.meta.id)).await
+        self.converge(&context, &resource.meta.id, Some(&resource.meta.id))
+            .await
     }
 }
 

@@ -129,6 +129,12 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         }
     }
 
+    collect_orphan_replicas(
+        &input.assignments,
+        &input.replicas,
+        &mut output.delete_replicas,
+    );
+
     for (deployment_id, desired) in desired_statuses {
         let deployment = deployments.get(&deployment_id).ok_or_else(|| {
             DeploymentPlanError::MissingIndexedDeployment {
@@ -168,6 +174,23 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         .service_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
     Ok(output)
+}
+
+fn collect_orphan_replicas(
+    assignments: &[Assignment],
+    replicas: &[ReplicaState],
+    delete_replicas: &mut Vec<kernel_api::ReplicaStateId>,
+) {
+    let current_assignments = assignments
+        .iter()
+        .map(|assignment| &assignment.meta.id)
+        .collect::<std::collections::BTreeSet<_>>();
+    delete_replicas.extend(
+        replicas
+            .iter()
+            .filter(|replica| !current_assignments.contains(&replica.spec.assignment_id))
+            .map(|replica| replica.meta.id.clone()),
+    );
 }
 
 fn collect_finalized_children(

@@ -10,6 +10,13 @@ use serde::Serialize;
 use crate::snapshot::{ResourceSnapshot, StoredResource};
 use crate::{DeploymentPlan, ResourceStatusUpdate};
 
+// FencedStore adds one leader compare. Each simple deletion consumes one
+// compare and one mutation; replica deletion also proves its Assignment is
+// still absent. These batch sizes stay below etcd's default 128-op limit while
+// leaving room for the primary Service compare.
+const SIMPLE_GC_BATCH_SIZE: usize = 60;
+const REPLICA_GC_BATCH_SIZE: usize = 40;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DeploymentWriteReport {
     pub(crate) created_deployments: usize,
@@ -24,6 +31,7 @@ pub(crate) struct DeploymentWriteReport {
 
 pub(crate) struct DeploymentWriter {
     keyspace: Keyspace,
+    assignment_kind: ResourceKind,
     deployment_kind: ResourceKind,
     build_kind: ResourceKind,
 }
@@ -34,23 +42,35 @@ impl DeploymentWriter {
     ) -> Result<Self, kernel_api::InvalidIdentifier> {
         Ok(Self {
             keyspace: Keyspace::new(cluster_id),
+            assignment_kind: ResourceKind::new("Assignment")?,
             deployment_kind: ResourceKind::new("Deployment")?,
             build_kind: ResourceKind::new("Build")?,
         })
     }
 
-    /// Commits one lifecycle generation atomically under the active leader fence.
+    /// Commits one lifecycle generation under the active leader fence.
     ///
-    /// Cancellation may leave the entire transaction committed. A subsequent
-    /// relist observes that generation and computes the next level-triggered step;
-    /// no partial combination of child, status, or deletion mutations is visible.
+    /// Status and creation mutations remain one atomic transaction. Independent
+    /// garbage collection is bounded and level-triggered so retained history can
+    /// never exceed a backend transaction limit.
     pub(crate) async fn apply(
         &self,
         store: &FencedStore,
         snapshot: &ResourceSnapshot,
         plan: &DeploymentPlan,
     ) -> Result<DeploymentWriteReport, DeploymentWriteError> {
-        let mut compares = snapshot.dependency_compares();
+        let garbage = self.collect_garbage(store, snapshot, plan).await?;
+        if garbage.conflict {
+            return Ok(DeploymentWriteReport {
+                deleted_deployments: garbage.deleted_deployments,
+                deleted_builds: garbage.deleted_builds,
+                deleted_replicas: garbage.deleted_replicas,
+                conflict: true,
+                ..Default::default()
+            });
+        }
+
+        let mut compares = snapshot.primary_compares();
         let mut mutations = Vec::new();
 
         for deployment in &plan.create_deployments {
@@ -74,21 +94,14 @@ impl DeploymentWriter {
         for update in &plan.deployment_updates {
             let current = required(&snapshot.deployments, &update.id, "Deployment")?;
             let resource = status_replacement(current, update, "Deployment")?;
+            compares.push(exact(&current.stored));
             mutations.push(put(&current.stored, &resource, "Deployment", &update.id)?);
         }
         for update in &plan.service_updates {
             let current = required(&snapshot.services, &update.id, "Service")?;
             let resource = status_replacement(current, update, "Service")?;
+            compares.push(exact(&current.stored));
             mutations.push(put(&current.stored, &resource, "Service", &update.id)?);
-        }
-        for id in &plan.delete_replicas {
-            mutations.push(delete(required(&snapshot.replicas, id, "ReplicaState")?));
-        }
-        for id in &plan.delete_builds {
-            mutations.push(delete(required(&snapshot.builds, id, "Build")?));
-        }
-        for id in &plan.delete_deployments {
-            mutations.push(delete(required(&snapshot.deployments, id, "Deployment")?));
         }
 
         let outcome = store
@@ -99,6 +112,9 @@ impl DeploymentWriter {
             .await?;
         if outcome == TransactionOutcome::Conflict {
             return Ok(DeploymentWriteReport {
+                deleted_deployments: garbage.deleted_deployments,
+                deleted_builds: garbage.deleted_builds,
+                deleted_replicas: garbage.deleted_replicas,
                 conflict: true,
                 ..Default::default()
             });
@@ -108,11 +124,114 @@ impl DeploymentWriter {
             created_builds: plan.create_builds.len(),
             updated_deployments: plan.deployment_updates.len(),
             updated_services: plan.service_updates.len(),
-            deleted_deployments: plan.delete_deployments.len(),
-            deleted_builds: plan.delete_builds.len(),
-            deleted_replicas: plan.delete_replicas.len(),
+            deleted_deployments: garbage.deleted_deployments,
+            deleted_builds: garbage.deleted_builds,
+            deleted_replicas: garbage.deleted_replicas,
             conflict: false,
         })
+    }
+
+    async fn collect_garbage(
+        &self,
+        store: &FencedStore,
+        snapshot: &ResourceSnapshot,
+        plan: &DeploymentPlan,
+    ) -> Result<GarbageCollectionReport, DeploymentWriteError> {
+        let mut report = GarbageCollectionReport::default();
+        let primary = snapshot.primary_compares();
+
+        for ids in plan.delete_replicas.chunks(REPLICA_GC_BATCH_SIZE) {
+            let mut compares = primary.clone();
+            let mut mutations = Vec::with_capacity(ids.len());
+            for id in ids {
+                let replica = required(&snapshot.replicas, id, "ReplicaState")?;
+                compares.push(exact(&replica.stored));
+                compares.push(Compare {
+                    key: self.keyspace.resource(
+                        &self.assignment_kind,
+                        &ResourceName::from(replica.resource.spec.assignment_id.clone()),
+                    ),
+                    expected: ExpectedVersion::Missing,
+                });
+                mutations.push(delete(replica));
+            }
+            if store
+                .txn(Transaction {
+                    compares,
+                    mutations,
+                })
+                .await?
+                == TransactionOutcome::Conflict
+            {
+                report.conflict = true;
+                return Ok(report);
+            }
+            report.deleted_replicas += ids.len();
+        }
+
+        let builds = self
+            .delete_batches(
+                store,
+                &primary,
+                &snapshot.builds,
+                &plan.delete_builds,
+                "Build",
+            )
+            .await?;
+        report.deleted_builds = builds.applied;
+        if builds.conflict {
+            report.conflict = true;
+            return Ok(report);
+        }
+
+        let deployments = self
+            .delete_batches(
+                store,
+                &primary,
+                &snapshot.deployments,
+                &plan.delete_deployments,
+                "Deployment",
+            )
+            .await?;
+        report.deleted_deployments = deployments.applied;
+        report.conflict = deployments.conflict;
+        Ok(report)
+    }
+
+    async fn delete_batches<Id, Resource>(
+        &self,
+        store: &FencedStore,
+        primary: &[Compare],
+        resources: &std::collections::BTreeMap<Id, StoredResource<Resource>>,
+        ids: &[Id],
+        kind: &'static str,
+    ) -> Result<BatchReport, DeploymentWriteError>
+    where
+        Id: Ord + Display,
+    {
+        let mut report = BatchReport::default();
+        for ids in ids.chunks(SIMPLE_GC_BATCH_SIZE) {
+            let mut compares = primary.to_vec();
+            let mut mutations = Vec::with_capacity(ids.len());
+            for id in ids {
+                let resource = required(resources, id, kind)?;
+                compares.push(exact(&resource.stored));
+                mutations.push(delete(resource));
+            }
+            if store
+                .txn(Transaction {
+                    compares,
+                    mutations,
+                })
+                .await?
+                == TransactionOutcome::Conflict
+            {
+                report.conflict = true;
+                return Ok(report);
+            }
+            report.applied += ids.len();
+        }
+        Ok(report)
     }
 
     fn create<Id: Clone + Display + Into<ResourceName>, Resource: Serialize>(
@@ -134,6 +253,27 @@ impl DeploymentWriter {
             session: None,
         });
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GarbageCollectionReport {
+    deleted_deployments: usize,
+    deleted_builds: usize,
+    deleted_replicas: usize,
+    conflict: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BatchReport {
+    applied: usize,
+    conflict: bool,
+}
+
+fn exact(current: &StoredValue) -> Compare {
+    Compare {
+        key: current.key.clone(),
+        expected: ExpectedVersion::Exact(current.version),
     }
 }
 

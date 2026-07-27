@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ClusterId, Generation, IngressBlocklist, IngressBlocklistId, IngressBlocklistSpec,
-    IngressBlocklistStatus, IngressRoute, NodeId, NodeInstanceId, Object, ObjectMeta, ResourceKind,
-    ResourceName, ResourceRevision, Service, Timestamp, TrafficGeneration, TrafficGenerationPhase,
+    AssignmentId, ClusterId, Generation, IngressBlocklist, IngressBlocklistId,
+    IngressBlocklistSpec, IngressBlocklistStatus, IngressRoute, NodeId, NodeInstanceId, Object,
+    ObjectMeta, ReplicaStateId, ResourceKind, ResourceName, ResourceRevision, Service, ServiceId,
+    Timestamp, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -19,6 +20,7 @@ use kernel_store::{
 };
 
 use super::plan::World as PlannedWorld;
+use crate::snapshot::ResourceSnapshot;
 use crate::{
     BackendChange, IngressBackend, IngressBackendError, IngressBlocklistChange,
     IngressBlocklistReconciler, IngressController, IngressReconciler, IngressSettings,
@@ -161,6 +163,35 @@ async fn backend_ahead_of_a_store_conflict_is_replayed_and_acknowledged()
             .status
             .phase,
         TrafficGenerationPhase::Active
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_snapshot_excludes_unrelated_replica_cardinality()
+-> Result<(), Box<dyn std::error::Error>> {
+    let backend = Arc::new(RecordingBackend::default());
+    let world = StoreWorld::new(backend).await?;
+    let planned = PlannedWorld::ready();
+    let mut unrelated = planned.replicas[0].clone();
+    unrelated.spec.service_id = ServiceId::new("unrelated")?;
+    for index in 0..130 {
+        unrelated.meta.id = ReplicaStateId::new(format!("unrelated-{index}"))?;
+        unrelated.spec.assignment_id = AssignmentId::new(format!("unrelated-{index}"))?;
+        world
+            .put("ReplicaState", &unrelated.meta.id, &unrelated)
+            .await?;
+    }
+
+    let service_id = ServiceId::new("api")?;
+    let snapshot = ResourceSnapshot::load_service(&world.fenced, &world.keys, &service_id).await?;
+
+    assert_eq!(snapshot.services.len(), 1);
+    assert_eq!(snapshot.replicas.len(), planned.replicas.len());
+    assert_eq!(snapshot.primary_compares().len(), 1);
+    assert_eq!(
+        world.reconcile(Timestamp(1_000)).await?.created_generations,
+        1
     );
     Ok(())
 }
@@ -406,7 +437,13 @@ impl StoreWorld {
     }
 
     async fn reconcile(&self, now: Timestamp) -> Result<crate::IngressReport, crate::IngressError> {
-        self.controller.reconcile_once(&self.fenced, now).await
+        self.controller
+            .reconcile_service(
+                &self.fenced,
+                &kernel_api::ServiceId::new("api").expect("fixture service id"),
+                now,
+            )
+            .await
     }
 
     fn key(

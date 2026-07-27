@@ -23,7 +23,7 @@ pub struct DeploymentReport {
     pub deleted_deployments: usize,
     /// Build children garbage collected during Service finalization.
     pub deleted_builds: usize,
-    /// Replica observations garbage collected during Service finalization.
+    /// Replica observations garbage collected after their assignments disappear.
     pub deleted_replicas: usize,
     /// Whether concurrent input invalidated the snapshot without committing mutations.
     pub conflict: bool,
@@ -61,13 +61,14 @@ impl DeploymentController {
         })
     }
 
-    /// Projects one linearizable resource snapshot, plans, and atomically commits one step.
-    pub async fn reconcile_once(
+    /// Projects one Service-scoped resource snapshot, plans, and commits one step.
+    pub async fn reconcile_service(
         &self,
         store: &FencedStore,
+        service_id: &ServiceId,
         now: Timestamp,
     ) -> Result<DeploymentReport, DeploymentError> {
-        let snapshot = ResourceSnapshot::load(store, &self.keyspace).await?;
+        let snapshot = ResourceSnapshot::load_service(store, &self.keyspace, service_id).await?;
         let plan = crate::plan(snapshot.input(self.cluster_id.clone(), now, self.settings))?;
         let children = services_with_children_after(&snapshot, &plan);
         let write = self.writer.apply(store, &snapshot, &plan).await?;

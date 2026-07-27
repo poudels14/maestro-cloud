@@ -65,7 +65,8 @@ async fn store_backed_controller_advances_only_from_exact_replica_state()
 async fn atomic_writer_conflict_creates_no_partial_lifecycle_generation()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new(image_service()).await?;
-    let snapshot = ResourceSnapshot::load(&world.fenced, &world.keys).await?;
+    let service_id = ServiceId::new("api")?;
+    let snapshot = ResourceSnapshot::load_service(&world.fenced, &world.keys, &service_id).await?;
     let desired = plan(snapshot.input(world.cluster_id.clone(), Timestamp(1_000), settings()))?;
 
     world
@@ -77,6 +78,67 @@ async fn atomic_writer_conflict_creates_no_partial_lifecycle_generation()
     let report = writer.apply(&world.fenced, &snapshot, &desired).await?;
     assert!(report.conflict);
     assert!(world.list::<Deployment>("Deployment").await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_snapshot_excludes_unrelated_replica_cardinality()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(image_service()).await?;
+    let mut unrelated_service = image_service();
+    unrelated_service.meta.id = ServiceId::new("unrelated")?;
+    world
+        .put("Service", &unrelated_service.meta.id, &unrelated_service)
+        .await?;
+    let unrelated_deployment =
+        crate::tests::plan_support::deployment(&unrelated_service, DeploymentPhase::Removed);
+    world
+        .put(
+            "Deployment",
+            &unrelated_deployment.meta.id,
+            &unrelated_deployment,
+        )
+        .await?;
+    for index in 0..130 {
+        let assignment_id = AssignmentId::new(format!("unrelated-{index}"))?;
+        let replica = ready_replica(&unrelated_deployment, &assignment_id);
+        world
+            .put("ReplicaState", &replica.meta.id, &replica)
+            .await?;
+    }
+
+    let service_id = ServiceId::new("api")?;
+    let snapshot = ResourceSnapshot::load_service(&world.fenced, &world.keys, &service_id).await?;
+
+    assert_eq!(snapshot.services.len(), 1);
+    assert!(snapshot.replicas.is_empty());
+    assert_eq!(snapshot.primary_compares().len(), 1);
+    assert_eq!(
+        world.reconcile(Timestamp(1_000)).await?.created_deployments,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_replica_history_is_collected_in_bounded_batches()
+-> Result<(), Box<dyn std::error::Error>> {
+    let service = image_service();
+    let removed = crate::tests::plan_support::deployment(&service, DeploymentPhase::Removed);
+    let world = World::new(service).await?;
+    world.put("Deployment", &removed.meta.id, &removed).await?;
+    for index in 0..130 {
+        let assignment_id = AssignmentId::new(format!("stale-{index}"))?;
+        let replica = ready_replica(&removed, &assignment_id);
+        world
+            .put("ReplicaState", &replica.meta.id, &replica)
+            .await?;
+    }
+
+    let report = world.reconcile(Timestamp(1_000)).await?;
+
+    assert_eq!(report.deleted_replicas, 130);
+    assert!(world.list::<ReplicaState>("ReplicaState").await?.is_empty());
     Ok(())
 }
 
@@ -140,7 +202,7 @@ async fn store_backed_watched_commit_advances_after_pinned_deployment_exists()
 }
 
 #[tokio::test]
-async fn finalization_atomically_collects_deployment_build_and_replica()
+async fn finalization_collects_deployment_build_and_replica_before_release()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new(build_service()).await?;
     world.reconcile(Timestamp(1_000)).await?;
@@ -286,7 +348,13 @@ impl World {
         &self,
         now: Timestamp,
     ) -> Result<crate::DeploymentReport, crate::DeploymentError> {
-        self.controller.reconcile_once(&self.fenced, now).await
+        self.controller
+            .reconcile_service(
+                &self.fenced,
+                &ServiceId::new("api").expect("fixture service id"),
+                now,
+            )
+            .await
     }
 
     async fn put<Id: Clone + Into<ResourceName>>(

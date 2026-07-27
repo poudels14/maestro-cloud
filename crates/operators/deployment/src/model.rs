@@ -57,7 +57,7 @@ pub struct DeploymentPlan {
     pub delete_deployments: Vec<DeploymentId>,
     /// Builds owned by deployments being deleted.
     pub delete_builds: Vec<BuildId>,
-    /// Stale replica observations owned by deployments being deleted.
+    /// Replica observations whose assignments no longer exist.
     pub delete_replicas: Vec<ReplicaStateId>,
     /// Existing deployment status replacements.
     pub deployment_updates: Vec<ResourceStatusUpdate<DeploymentId, DeploymentStatus>>,

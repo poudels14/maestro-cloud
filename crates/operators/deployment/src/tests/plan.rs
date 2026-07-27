@@ -337,6 +337,21 @@ fn readiness_requires_the_exact_current_assignment() {
 }
 
 #[test]
+fn replica_observation_is_collected_after_its_assignment_disappears() {
+    let service = service(Generation(1), RolloutState::Active);
+    let deployment = deployment(&service, DeploymentPhase::Removed);
+    let assignment = assignment(&deployment, "assignment-removed", 1);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Removed, 0);
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.replicas = vec![replica.clone()];
+
+    let collected = plan(snapshot).expect("orphan replica collection");
+
+    assert_eq!(collected.delete_replicas, vec![replica.meta.id]);
+    assert!(collected.delete_deployments.is_empty());
+}
+
+#[test]
 fn every_current_slot_must_exhaust_its_configured_restart_budget() {
     let mut service = service(Generation(1), RolloutState::Active);
     service.spec.replicas = 2;

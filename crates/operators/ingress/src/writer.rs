@@ -35,7 +35,11 @@ impl IngressWriter {
         })
     }
 
-    /// Verifies that every backend input and the leadership fence are still exact.
+    /// Verifies that the primary resource and leadership fence are still exact.
+    ///
+    /// Secondary inputs are level-triggered observations. The mutation phase
+    /// conditionally replaces every resource it acknowledges, and a concurrent
+    /// secondary change schedules another pass.
     pub(crate) async fn preflight(
         &self,
         store: &FencedStore,
@@ -43,7 +47,7 @@ impl IngressWriter {
     ) -> Result<bool, IngressWriteError> {
         let outcome = store
             .txn(Transaction {
-                compares: snapshot.dependency_compares(),
+                compares: snapshot.primary_compares(),
                 mutations: Vec::new(),
             })
             .await?;
@@ -61,7 +65,7 @@ impl IngressWriter {
         snapshot: &ResourceSnapshot,
         plan: &IngressPlan,
     ) -> Result<IngressWriteReport, IngressWriteError> {
-        let mut compares = snapshot.dependency_compares();
+        let mut compares = snapshot.primary_compares();
         let mut mutations = Vec::new();
         for generation in &plan.create_generations {
             let key = self.keyspace.resource(
@@ -81,6 +85,7 @@ impl IngressWriter {
         for update in &plan.generation_updates {
             let current = required(&snapshot.generations, &update.id, "TrafficGeneration")?;
             let resource = status_replacement(current, update, "TrafficGeneration")?;
+            compares.push(exact(&current.stored));
             mutations.push(put(
                 &current.stored,
                 &resource,
@@ -91,11 +96,13 @@ impl IngressWriter {
         for update in &plan.route_updates {
             let current = required(&snapshot.routes, &update.id, "IngressRoute")?;
             let resource = status_replacement(current, update, "IngressRoute")?;
+            compares.push(exact(&current.stored));
             mutations.push(put(&current.stored, &resource, "IngressRoute", &update.id)?);
         }
         for update in &plan.blocklist_updates {
             let current = required(&snapshot.blocklists, &update.id, "IngressBlocklist")?;
             let resource = status_replacement(current, update, "IngressBlocklist")?;
+            compares.push(exact(&current.stored));
             mutations.push(put(
                 &current.stored,
                 &resource,
@@ -104,11 +111,9 @@ impl IngressWriter {
             )?);
         }
         for id in &plan.delete_generations {
-            mutations.push(delete(required(
-                &snapshot.generations,
-                id,
-                "TrafficGeneration",
-            )?));
+            let current = required(&snapshot.generations, id, "TrafficGeneration")?;
+            compares.push(exact(&current.stored));
+            mutations.push(delete(current));
         }
 
         let outcome = store
@@ -131,6 +136,13 @@ impl IngressWriter {
             deleted_generations: plan.delete_generations.len(),
             conflict: false,
         })
+    }
+}
+
+fn exact(current: &StoredValue) -> Compare {
+    Compare {
+        key: current.key.clone(),
+        expected: ExpectedVersion::Exact(current.version),
     }
 }
 

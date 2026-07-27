@@ -65,13 +65,33 @@ impl IngressController {
         })
     }
 
-    /// Projects, preflights, publishes, and atomically acknowledges one ingress step.
-    pub async fn reconcile_once(
+    /// Projects, preflights, publishes, and acknowledges one Service's ingress step.
+    pub async fn reconcile_service(
+        &self,
+        store: &FencedStore,
+        service_id: &ServiceId,
+        now: Timestamp,
+    ) -> Result<IngressReport, IngressError> {
+        let snapshot = ResourceSnapshot::load_service(store, &self.keyspace, service_id).await?;
+        self.reconcile_snapshot(store, snapshot, now).await
+    }
+
+    /// Publishes and acknowledges the singleton blocklist independently of Services.
+    pub async fn reconcile_blocklist(
         &self,
         store: &FencedStore,
         now: Timestamp,
     ) -> Result<IngressReport, IngressError> {
-        let snapshot = ResourceSnapshot::load(store, &self.keyspace).await?;
+        let snapshot = ResourceSnapshot::load_blocklist(store, &self.keyspace).await?;
+        self.reconcile_snapshot(store, snapshot, now).await
+    }
+
+    async fn reconcile_snapshot(
+        &self,
+        store: &FencedStore,
+        snapshot: ResourceSnapshot,
+        now: Timestamp,
+    ) -> Result<IngressReport, IngressError> {
         let plan = crate::plan(snapshot.input(self.cluster_id.clone(), now, self.settings))?;
         let services_with_generations = services_with_generations_after(&snapshot, &plan);
         if !self.writer.preflight(store, &snapshot).await? {
