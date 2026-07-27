@@ -46,7 +46,7 @@ specific operator group access to that pool:
     {
       "src": ["group:maestro-operators"],
       "dst": ["tag:maestro-gateway"],
-      "ip": ["tcp:443"],
+      "ip": ["tcp:80"],
     },
     {
       "src": ["group:maestro-operators"],
@@ -59,7 +59,7 @@ specific operator group access to that pool:
 
 Use the cluster's exact CIDR instead of the example. Tailnet access policy is
 evaluated against the actual destination: direct API and panel access through
-Tailscale Serve requires TCP 443 access to the gateway tag, while routed
+Tailscale Serve requires TCP 80 access to the gateway tag, while routed
 workload and DNS traffic requires access to the advertised cluster CIDR. The
 direct grant also makes the gateway identities visible in allowed Tailscale
 clients. Grant only the source identities and destination ports that operators
@@ -180,14 +180,14 @@ They are not Tailscale `100.x` addresses and are not fixed `.254` proxy
 addresses. Configure more than one returned resolver so DNS remains available
 during a node failure.
 
-Each managed gateway also exposes the authenticated HTTPS API and panel
-directly on its Tailscale identity with Tailscale Serve. This is the preferred
-operator path because it does not depend on client subnet-route settings and
-uses a certificate valid for the gateway's MagicDNS name. Find either online
+Each managed gateway also exposes the authenticated API and panel over HTTP
+inside Tailscale's encrypted transport. This is the preferred operator path
+because it does not depend on client subnet-route settings or HTTPS certificate
+issuance. Find either online
 `maestro-<cluster-name>-gateway-<replica>` device in Tailscale and open:
 
 ```text
-https://<gateway MagicDNS name>/
+http://<gateway MagicDNS name>/
 ```
 
 For example, the first replica of cluster `production` requests the hostname
