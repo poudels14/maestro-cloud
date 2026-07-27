@@ -61,6 +61,10 @@ in {
     };
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
     networking.firewall.allowedUDPPorts = [cfg.wireguardPort];
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
 
     systemd.services.buildkitd = {
       description = "BuildKit daemon for Maestro";
