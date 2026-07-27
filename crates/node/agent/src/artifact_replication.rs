@@ -14,6 +14,7 @@ use crate::artifact_drain::{
     ArtifactDrainReadiness, DRAINING_CONDITION, PeerCopyPolicy, update_artifact_drain_status,
 };
 use crate::artifact_retention::{preserved_digests, retained_digests};
+use crate::retry::{retryable_store_error, wait_for_store_retry_or_shutdown};
 use crate::{ArtifactHolderRegistry, ArtifactHolderRegistryError, StatusClock};
 
 const DEPLOYMENT_KIND: &str = "Deployment";
@@ -378,7 +379,18 @@ impl ArtifactReplicationAgent {
                 if *shutdown.borrow() {
                     return Ok(());
                 }
-                return Err(error);
+                if !error.retryable() {
+                    return Err(error);
+                }
+                tracing::warn!(
+                    node_id = %self.settings.node_id,
+                    error = %error,
+                    "transient artifact replication failure; retrying"
+                );
+                if wait_for_store_retry_or_shutdown(self.clock.as_ref(), &mut shutdown).await {
+                    return Ok(());
+                }
+                continue;
             }
             let deadline = self
                 .clock
@@ -576,6 +588,22 @@ pub enum ArtifactReplicationError {
 }
 
 impl ArtifactReplicationError {
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Artifacts(
+                ArtifactStoreError::Unavailable { .. } | ArtifactStoreError::Stream { .. },
+            ) => true,
+            Self::Holders(ArtifactHolderRegistryError::Store(error)) | Self::Store(error) => {
+                retryable_store_error(error)
+            }
+            Self::NoHolder { .. }
+            | Self::PeerFailures { .. }
+            | Self::LocalNodeMissing { .. }
+            | Self::DrainStatusContention { .. } => true,
+            _ => false,
+        }
+    }
+
     fn is_malformed_store_data(&self) -> bool {
         matches!(
             self,

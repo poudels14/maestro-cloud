@@ -107,7 +107,13 @@ where
             if *shutdown.borrow() {
                 return Ok(());
             }
-            self.reconcile_once().await?;
+            if let Err(error) = self.reconcile_once().await {
+                tracing::warn!(
+                    bridge = %self.desired.name,
+                    error = %error,
+                    "workload bridge repair failed; retrying"
+                );
+            }
             let next = self.clock.now().saturating_add(self.resync_interval);
             tokio::select! {
                 changed = shutdown.changed() => {

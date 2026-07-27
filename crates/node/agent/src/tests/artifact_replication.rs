@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -12,14 +13,16 @@ use kernel_api::{
     Timestamp,
 };
 use kernel_store::{
-    CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, SessionBinding, Store,
-    TokioClock,
+    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
+    SessionBinding, Store, TokioClock,
 };
 use runtime::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
 };
+use tokio::sync::{Notify, watch};
 
+use super::store_fault::FailFirstListStore;
 use crate::artifact_retention::{preserved_digests, retained_digests};
 use crate::{
     ArtifactHolderRegistry, ArtifactPeerSource, ArtifactPeerSourceError, ArtifactReplicationAgent,
@@ -193,6 +196,56 @@ async fn malformed_retention_snapshot_preserves_artifacts_until_repaired()
     assert_eq!(recovered.pruned, 1);
     assert!(artifacts.contains(&retained).await?);
     assert!(!artifacts.contains(&stale).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn replication_run_recovers_after_store_unavailability()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(ManualClock::default());
+    let inner = Arc::new(InMemoryStore::new(clock.clone()));
+    let cluster_id = ClusterId::new("replication-recovery")?;
+    let node_id = NodeId::new("node-target")?;
+    let session = inner.session(Duration::from_secs(30)).await?;
+    put_resource(
+        &inner,
+        &cluster_id,
+        "Node",
+        node_id.as_str(),
+        &node(node_id.clone())?,
+    )
+    .await?;
+    let unavailable = Arc::new(FailFirstListStore::new(inner));
+    let store: Arc<dyn Store> = unavailable.clone();
+    let artifacts = Arc::new(TestArtifacts::default());
+    let agent = Arc::new(ArtifactReplicationAgent::new(
+        store.clone(),
+        artifacts.clone(),
+        Arc::new(TestPeers),
+        ArtifactHolderRegistry::new(store, &cluster_id, node_id.clone(), session.id()),
+        ArtifactReplicationSettings {
+            cluster_id,
+            node_id,
+            resync_interval: Duration::from_secs(30),
+        },
+        clock.clone(),
+        Arc::new(FixedStatusClock),
+    )?);
+    let (shutdown, shutdown_rx) = watch::channel(false);
+    let running_agent = agent.clone();
+    let task = tokio::spawn(async move { running_agent.run(shutdown_rx).await });
+
+    wait_for_sleeps(clock.as_ref(), 1).await?;
+    assert!(!task.is_finished());
+    assert_eq!(unavailable.list_calls(), 1);
+    assert!(lock(&artifacts.prune_policies).is_empty());
+
+    clock.advance(Duration::from_secs(1));
+    wait_for_prune(&artifacts).await?;
+    assert!(unavailable.list_calls() >= 4);
+
+    shutdown.send(true)?;
+    task.await??;
     Ok(())
 }
 
@@ -523,4 +576,62 @@ fn unused(operation: &str) -> ArtifactStoreError {
     ArtifactStoreError::Rejected {
         message: format!("test artifact store does not support {operation}"),
     }
+}
+
+#[derive(Default)]
+struct ManualClock {
+    milliseconds: AtomicU64,
+    sleeps: AtomicU64,
+    advanced: Notify,
+}
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        let milliseconds = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        self.milliseconds.fetch_add(milliseconds, Ordering::SeqCst);
+        self.advanced.notify_waiters();
+    }
+}
+
+#[async_trait]
+impl Clock for ManualClock {
+    fn now(&self) -> MonotonicTime {
+        MonotonicTime::from_duration(Duration::from_millis(
+            self.milliseconds.load(Ordering::SeqCst),
+        ))
+    }
+
+    async fn sleep_until(&self, deadline: MonotonicTime) {
+        self.sleeps.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let advanced = self.advanced.notified();
+            if self.now() >= deadline {
+                return;
+            }
+            advanced.await;
+        }
+    }
+}
+
+async fn wait_for_sleeps(
+    clock: &ManualClock,
+    expected: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if clock.sleeps.load(Ordering::SeqCst) >= expected {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!("artifact replication agent did not begin sleep {expected}").into())
+}
+
+async fn wait_for_prune(artifacts: &TestArtifacts) -> Result<(), Box<dyn std::error::Error>> {
+    for _attempt in 0..128 {
+        if !lock(&artifacts.prune_policies).is_empty() {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err("artifact replication agent did not recover and prune".into())
 }

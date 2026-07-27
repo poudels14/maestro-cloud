@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,12 +10,11 @@ use kernel_api::{
     NodeId, ObjectMeta, ResourceKind, ResourceName, ResourceRevision, Timestamp,
 };
 use kernel_store::{
-    CasOutcome, Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, ListResult,
-    MonotonicTime, PutRequest, Session, Store, StoreError, StoreKey, StorePrefix, StoreWatch,
-    StoredValue, Transaction, TransactionOutcome, Version, WatchStart,
+    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
 };
 use tokio::sync::{Notify, watch};
 
+use super::store_fault::FailFirstListStore;
 use crate::{
     AuthoritativeDnsResolver, DnsQueryType, DnsResourceAgent, DnsResourceError, DnsResponseCode,
 };
@@ -377,67 +376,6 @@ impl Clock for TestClock {
 
     async fn sleep_until(&self, _deadline: MonotonicTime) {
         std::future::pending::<()>().await;
-    }
-}
-
-struct FailFirstListStore {
-    inner: Arc<InMemoryStore>,
-    fail_next_list: AtomicBool,
-    list_calls: AtomicU64,
-}
-
-impl FailFirstListStore {
-    fn new(inner: Arc<InMemoryStore>) -> Self {
-        Self {
-            inner,
-            fail_next_list: AtomicBool::new(true),
-            list_calls: AtomicU64::new(0),
-        }
-    }
-
-    fn list_calls(&self) -> u64 {
-        self.list_calls.load(Ordering::SeqCst)
-    }
-}
-
-#[async_trait]
-impl Store for FailFirstListStore {
-    async fn get(&self, key: &StoreKey) -> Result<Option<StoredValue>, StoreError> {
-        self.inner.get(key).await
-    }
-
-    async fn list(&self, prefix: &StorePrefix) -> Result<ListResult, StoreError> {
-        self.list_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_next_list.swap(false, Ordering::SeqCst) {
-            return Err(StoreError::Unavailable {
-                message: "injected list outage".to_owned(),
-            });
-        }
-        self.inner.list(prefix).await
-    }
-
-    async fn put_cas(&self, request: PutRequest) -> Result<CasOutcome<StoredValue>, StoreError> {
-        self.inner.put_cas(request).await
-    }
-
-    async fn delete_cas(&self, request: DeleteRequest) -> Result<CasOutcome<Version>, StoreError> {
-        self.inner.delete_cas(request).await
-    }
-
-    async fn txn(&self, transaction: Transaction) -> Result<TransactionOutcome, StoreError> {
-        self.inner.txn(transaction).await
-    }
-
-    fn watch(
-        &self,
-        prefix: StorePrefix,
-        start: WatchStart,
-    ) -> Result<Box<dyn StoreWatch>, StoreError> {
-        self.inner.watch(prefix, start)
-    }
-
-    async fn session(&self, ttl: Duration) -> Result<Box<dyn Session>, StoreError> {
-        self.inner.session(ttl).await
     }
 }
 
