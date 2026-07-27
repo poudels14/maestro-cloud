@@ -525,6 +525,8 @@ pub(crate) enum TelemetryProjectionError {
         metric_source: String,
         timestamp: i64,
     },
+    #[error("legacy telemetry resume cursor is invalid: {message}")]
+    InvalidResume { message: String },
     #[error("legacy telemetry projection consumer stopped")]
     ConsumerStopped,
     #[error("legacy telemetry projection worker failed: {0}")]

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use kernel_api::{ClusterId, NodeId, Timestamp};
-use logs::{LogStore, StatsMetricStore};
+use logs::StatsMetricStore;
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
 use metrics::{HostMetricStore, MetricStore};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::telemetry_destination::{
     DestinationPaths, existing_destination, inspect_destination, prepare_destination,
-    read_completion, write_completion,
+    read_completion, resume_log_high_watermark, write_completion,
 };
 use crate::telemetry_projection::{ProjectionBatch, TelemetryProjection};
 use crate::{LegacyTelemetryCounts, LegacyTelemetryPlan};
@@ -127,15 +127,9 @@ pub async fn apply_legacy_telemetry(
         ));
     }
 
-    let expected = import_projection(plan, &source, &paths).await?;
+    import_projection(plan, &source, &paths).await?;
     verify_source(plan, legacy_data_directory).await?;
-    let actual = inspect_destination(&paths).await?;
-    if actual != expected {
-        return Err(LegacyTelemetryMigrationError::DestinationMismatch {
-            expected: Box::new(expected),
-            actual: Box::new(actual),
-        });
-    }
+    let actual = verify_destination(plan, &source, &paths).await?;
     write_completion(
         &paths,
         &CompletionMarker {
@@ -224,7 +218,8 @@ async fn import_projection(
     plan: &LegacyTelemetryPlan,
     source: &Path,
     paths: &DestinationPaths,
-) -> Result<LegacyTelemetryVerification, LegacyTelemetryMigrationError> {
+) -> Result<(), LegacyTelemetryMigrationError> {
+    let resume_logs = resume_log_high_watermark(paths).await?;
     let log_runtime =
         DuckLogStoreRuntime::open(DuckStoreSettings::new(paths.logs.clone(), 32)?).await?;
     let log_store = log_runtime.store();
@@ -241,57 +236,38 @@ async fn import_projection(
         }
     };
     let metric_store = metric_runtime.store();
-    let mut projection = TelemetryProjection::spawn(plan.clone(), source.to_path_buf());
-    let mut digest = VerificationAccumulator::default();
+    let mut projection =
+        TelemetryProjection::spawn(plan.clone(), source.to_path_buf(), resume_logs);
     let mut migration_error = None;
     while let Some(batch) = projection.next().await {
         let result = match batch {
-            Ok(ProjectionBatch::Logs(entries)) => match digest.logs.update_all(&entries) {
-                Ok(()) => log_store.append(&entries).await.map(|_| ()).map_err(append),
-                Err(error) => Err(error),
+            Ok(ProjectionBatch::Logs(entries)) => log_store
+                .append_migration(&entries)
+                .await
+                .map(|_| ())
+                .map_err(append),
+            Ok(ProjectionBatch::WorkloadMetrics(points)) => metric_store
+                .append(&points)
+                .await
+                .map(|_| ())
+                .map_err(append),
+            Ok(ProjectionBatch::HostMetrics(points)) => metric_store
+                .append_host_metrics(&points)
+                .await
+                .map(|_| ())
+                .map_err(append),
+            Ok(ProjectionBatch::OperationalMetrics(points)) => log_store
+                .append_stats_metrics(&points)
+                .await
+                .map(|_| ())
+                .map_err(append),
+            Ok(ProjectionBatch::BackupStats(stats)) => match stats {
+                Some(stats) => log_store
+                    .save_backup_stats(&stats, backup_updated_at(&stats))
+                    .await
+                    .map_err(append),
+                None => Ok(()),
             },
-            Ok(ProjectionBatch::WorkloadMetrics(points)) => {
-                match digest.workload_metrics.update_all(&points) {
-                    Ok(()) => metric_store
-                        .append(&points)
-                        .await
-                        .map(|_| ())
-                        .map_err(append),
-                    Err(error) => Err(error),
-                }
-            }
-            Ok(ProjectionBatch::HostMetrics(points)) => {
-                match digest.host_metrics.update_all(&points) {
-                    Ok(()) => metric_store
-                        .append_host_metrics(&points)
-                        .await
-                        .map(|_| ())
-                        .map_err(append),
-                    Err(error) => Err(error),
-                }
-            }
-            Ok(ProjectionBatch::OperationalMetrics(points)) => {
-                match digest.operational_metrics.update_all(&points) {
-                    Ok(()) => log_store
-                        .append_stats_metrics(&points)
-                        .await
-                        .map(|_| ())
-                        .map_err(append),
-                    Err(error) => Err(error),
-                }
-            }
-            Ok(ProjectionBatch::BackupStats(stats)) => {
-                match digest.backup_stats.update_option(stats.as_ref()) {
-                    Ok(()) => match stats {
-                        Some(stats) => log_store
-                            .save_backup_stats(&stats, backup_updated_at(&stats))
-                            .await
-                            .map_err(append),
-                        None => Ok(()),
-                    },
-                    Err(error) => Err(error),
-                }
-            }
             Err(error) => Err(error.into()),
         };
         if let Err(error) = result {
@@ -309,14 +285,14 @@ async fn import_projection(
     projection_result?;
     metric_shutdown?;
     log_shutdown?;
-    Ok(digest.finish())
+    Ok(())
 }
 
 async fn digest_projection(
     plan: &LegacyTelemetryPlan,
     source: &Path,
 ) -> Result<LegacyTelemetryVerification, LegacyTelemetryMigrationError> {
-    let mut projection = TelemetryProjection::spawn(plan.clone(), source.to_path_buf());
+    let mut projection = TelemetryProjection::spawn(plan.clone(), source.to_path_buf(), 0);
     let mut digest = VerificationAccumulator::default();
     while let Some(batch) = projection.next().await {
         match batch? {

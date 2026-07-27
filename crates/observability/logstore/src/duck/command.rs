@@ -20,6 +20,10 @@ pub(crate) enum Command {
         entries: Vec<IngestLogEntry>,
         response: oneshot::Sender<Result<LogAppendReport, LogStoreError>>,
     },
+    AppendMigration {
+        entries: Vec<IngestLogEntry>,
+        response: oneshot::Sender<Result<LogAppendReport, LogStoreError>>,
+    },
     AppendOtlpEnvelopes {
         envelopes: Vec<OtlpEnvelope>,
         response: oneshot::Sender<Result<OtlpEnvelopeAppendReport, OtlpEnvelopeStoreError>>,

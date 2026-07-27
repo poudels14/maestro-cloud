@@ -13,7 +13,7 @@ use crate::telemetry_conversion::{
     parse_map, service_entry, service_log_row, system_entry, system_log_row, workload_metric,
 };
 
-const BATCH_SIZE: usize = 512;
+const BATCH_SIZE: usize = 8_192;
 /// A missing value records that legacy deployments reused one unit name.
 type LegacyOwners = BTreeMap<String, Option<LegacyOwner>>;
 
@@ -31,9 +31,10 @@ pub(crate) struct TelemetryProjection {
 }
 
 impl TelemetryProjection {
-    pub(crate) fn spawn(plan: LegacyTelemetryPlan, source: PathBuf) -> Self {
+    pub(crate) fn spawn(plan: LegacyTelemetryPlan, source: PathBuf, skip_logs: u64) -> Self {
         let (sender, receiver) = mpsc::channel(2);
-        let worker = tokio::task::spawn_blocking(move || project(&plan, &source, &sender));
+        let worker =
+            tokio::task::spawn_blocking(move || project(&plan, &source, skip_logs, &sender));
         Self { receiver, worker }
     }
 
@@ -57,14 +58,22 @@ impl TelemetryProjection {
 fn project(
     plan: &LegacyTelemetryPlan,
     source: &Path,
+    mut skip_logs: u64,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     let service = open(&source.join("duckdb/service-logs.duckdb"))?;
     let system = open(&source.join("duckdb/system-logs.duckdb"))?;
     let metrics = open(&source.join("duckdb/metrics.duckdb"))?;
     let mut owners = BTreeMap::new();
-    project_service_logs(plan, source, &service, &mut owners, sender)?;
-    project_system_logs(plan, source, &system, sender)?;
+    project_service_logs(plan, source, &service, &mut owners, &mut skip_logs, sender)?;
+    project_system_logs(plan, source, &system, &mut skip_logs, sender)?;
+    if skip_logs != 0 {
+        return Err(TelemetryProjectionError::InvalidResume {
+            message: format!(
+                "destination log high-water mark exceeds the projected source by {skip_logs} records"
+            ),
+        });
+    }
     project_workload_metrics(plan, &metrics, &owners, sender)?;
     project_host_metrics(plan, &metrics, sender)?;
     project_operational_metrics(&metrics, sender)?;
@@ -76,6 +85,7 @@ fn project_service_logs(
     source: &Path,
     connection: &Connection,
     owners: &mut LegacyOwners,
+    skip_logs: &mut u64,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     project_service_query(
@@ -86,6 +96,7 @@ fn project_service_logs(
          FROM logs ORDER BY seq",
         None,
         owners,
+        skip_logs,
         sender,
     )?;
     for file in plan.files.iter().filter(|file| {
@@ -101,6 +112,7 @@ fn project_service_logs(
              FROM read_parquet(?1, hive_partitioning = true) ORDER BY seq",
             Some(path.as_ref()),
             owners,
+            skip_logs,
             sender,
         )?;
     }
@@ -113,6 +125,7 @@ fn project_service_query(
     sql: &str,
     parameter: Option<&str>,
     owners: &mut LegacyOwners,
+    skip_logs: &mut u64,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     let mut statement = connection.prepare(sql).map_err(database)?;
@@ -126,7 +139,12 @@ fn project_service_query(
         let row = row.map_err(database)?;
         let owner = LegacyOwner::new(&row.service_id, &row.deployment_id)?;
         record_owner(owners, &row.unit, &owner);
-        batch.push(service_entry(plan, row, owner)?);
+        let entry = service_entry(plan, row, owner)?;
+        if *skip_logs != 0 {
+            *skip_logs = skip_logs.saturating_sub(1);
+            continue;
+        }
+        batch.push(entry);
         send_full(&mut batch, sender, ProjectionBatch::Logs)?;
     }
     send_remaining(batch, sender, ProjectionBatch::Logs)
@@ -136,6 +154,7 @@ fn project_system_logs(
     plan: &LegacyTelemetryPlan,
     source: &Path,
     connection: &Connection,
+    skip_logs: &mut u64,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     project_system_query(
@@ -145,6 +164,7 @@ fn project_system_logs(
                 to_json(tags)::VARCHAR, to_json(attributes)::VARCHAR
          FROM logs ORDER BY seq",
         None,
+        skip_logs,
         sender,
     )?;
     for file in plan.files.iter().filter(|file| {
@@ -159,6 +179,7 @@ fn project_system_logs(
                     to_json(tags)::VARCHAR, to_json(attributes)::VARCHAR
              FROM read_parquet(?1) ORDER BY seq",
             Some(path.as_ref()),
+            skip_logs,
             sender,
         )?;
     }
@@ -170,6 +191,7 @@ fn project_system_query(
     connection: &Connection,
     sql: &str,
     parameter: Option<&str>,
+    skip_logs: &mut u64,
     sender: &mpsc::Sender<Result<ProjectionBatch, TelemetryProjectionError>>,
 ) -> Result<(), TelemetryProjectionError> {
     let mut statement = connection.prepare(sql).map_err(database)?;
@@ -180,7 +202,12 @@ fn project_system_query(
     .map_err(database)?;
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     for row in rows {
-        batch.push(system_entry(plan, row.map_err(database)?)?);
+        let entry = system_entry(plan, row.map_err(database)?)?;
+        if *skip_logs != 0 {
+            *skip_logs = skip_logs.saturating_sub(1);
+            continue;
+        }
+        batch.push(entry);
         send_full(&mut batch, sender, ProjectionBatch::Logs)?;
     }
     send_remaining(batch, sender, ProjectionBatch::Logs)

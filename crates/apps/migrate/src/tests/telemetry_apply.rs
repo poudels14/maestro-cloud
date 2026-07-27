@@ -98,6 +98,83 @@ async fn verification_requires_an_existing_destination_without_creating_it() -> 
 }
 
 #[tokio::test]
+async fn verification_rejects_a_divergent_query_tier() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("probe-data");
+    let destination = directory.path().join("rewrite-data");
+    seed_databases(&source)?;
+    let plan = LegacyTelemetryPlan::capture(
+        &source,
+        ClusterId::new("cluster-a")?,
+        NodeId::new("node-a")?,
+    )?;
+    apply_legacy_telemetry(&plan, &source, &destination).await?;
+    let logs = Connection::open(destination.join("agent/logs.duckdb"))?;
+    logs.execute(
+        "UPDATE query_logs SET entry_json = '{}' WHERE sequence = (
+             SELECT MIN(sequence) FROM query_logs
+         )",
+        [],
+    )?;
+    drop(logs);
+
+    let error = verify_legacy_telemetry(&plan, &source, &destination)
+        .await
+        .expect_err("a divergent query tier must be refused");
+
+    assert!(matches!(
+        error,
+        LegacyTelemetryMigrationError::QueryTierMismatch
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_resumes_after_the_contiguous_log_high_watermark() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("probe-data");
+    let destination = directory.path().join("rewrite-data");
+    seed_databases(&source)?;
+    seed_service_partition(&source)?;
+    append_service_log_in_wal(&source)?;
+    let plan = LegacyTelemetryPlan::capture(
+        &source,
+        ClusterId::new("cluster-a")?,
+        NodeId::new("node-a")?,
+    )?;
+    apply_legacy_telemetry(&plan, &source, &destination).await?;
+    std::fs::remove_file(destination.join("agent/.legacy-telemetry-complete.json"))?;
+    let logs = Connection::open(destination.join("agent/logs.duckdb"))?;
+    logs.execute_batch(
+        "DELETE FROM normalized_logs WHERE sequence > 2;
+         DELETE FROM query_logs WHERE sequence > 2;",
+    )?;
+    drop(logs);
+
+    let resumed = apply_legacy_telemetry(&plan, &source, &destination).await?;
+
+    assert_eq!(resumed.outcome, LegacyTelemetryApplyOutcome::Applied);
+    assert_eq!(resumed.verification.logs.records, 4);
+    let logs = Connection::open_with_flags(
+        destination.join("agent/logs.duckdb"),
+        duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly)?,
+    )?;
+    assert_eq!(
+        logs.query_row("SELECT COUNT(*) FROM normalized_logs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        4
+    );
+    assert_eq!(
+        logs.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn reused_legacy_units_keep_log_owners_and_use_a_synthetic_metric_owner() -> TestResult {
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("probe-data");

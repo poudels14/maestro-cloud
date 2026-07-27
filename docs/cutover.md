@@ -202,6 +202,11 @@ substitute for staging evidence.
      --output /var/lib/maestro/cutover/node-a-telemetry-verification.json
    ```
 
+   Interrupted log imports resume after the destination's validated contiguous
+   sequence high-water mark. The migration skips that deterministic source
+   prefix, appends only new rows, and still reprojects and verifies the complete
+   source and destination before writing its completion marker.
+
 10. Stop and remove the legacy Maestro workload and system containers without
     deleting their volumes or data directories. This is the one-way commit
     point: there is no supported downgrade to the legacy controller after

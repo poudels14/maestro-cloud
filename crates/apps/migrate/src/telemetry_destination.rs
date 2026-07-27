@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use duckdb::{AccessMode, Config, Connection};
+use duckdb::{AccessMode, Config, Connection, OptionalExt};
 use serde::Serialize;
 use tempfile::NamedTempFile;
 
@@ -296,6 +296,54 @@ pub(crate) async fn inspect_destination(
         .map_err(|error| LegacyTelemetryMigrationError::Worker(error.to_string()))?
 }
 
+pub(crate) async fn resume_log_high_watermark(
+    paths: &DestinationPaths,
+) -> Result<u64, LegacyTelemetryMigrationError> {
+    let path = paths.logs.clone();
+    if !path.exists() {
+        return Ok(0);
+    }
+    tokio::task::spawn_blocking(move || {
+        let connection = open_read_only(&path)?;
+        let normalized = sequence_extent(&connection, "normalized_logs")?;
+        let query = sequence_extent(&connection, "query_logs")?;
+        if normalized != query {
+            return Err(LegacyTelemetryMigrationError::UnexpectedDestinationState);
+        }
+        let (count, minimum, maximum) = normalized;
+        if (count == 0 && (minimum != 0 || maximum != 0))
+            || (count != 0 && (minimum != 1 || maximum != count))
+        {
+            return Err(LegacyTelemetryMigrationError::UnexpectedDestinationState);
+        }
+        u64::try_from(count).map_err(|_| LegacyTelemetryMigrationError::UnexpectedDestinationState)
+    })
+    .await
+    .map_err(|error| LegacyTelemetryMigrationError::Worker(error.to_string()))?
+}
+
+fn sequence_extent(
+    connection: &Connection,
+    table: &str,
+) -> Result<(i64, i64, i64), LegacyTelemetryMigrationError> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(MIN(sequence), 0), COALESCE(MAX(sequence), 0)
+                 FROM {table}"
+            ),
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .map_err(|error| LegacyTelemetryMigrationError::Database(error.to_string()))
+}
+
 fn inspect_destination_sync(
     paths: &DestinationPaths,
 ) -> Result<LegacyTelemetryVerification, LegacyTelemetryMigrationError> {
@@ -320,10 +368,7 @@ fn inspect_destination_sync(
         &logs,
         "SELECT entry_json FROM normalized_logs ORDER BY sequence",
     )?;
-    let query_logs = digest_query(&logs, "SELECT entry_json FROM query_logs ORDER BY sequence")?;
-    if normalized_logs != query_logs {
-        return Err(LegacyTelemetryMigrationError::QueryTierMismatch);
-    }
+    ensure_query_tier_matches(&logs)?;
     let workload_metrics = digest_query(
         &metrics,
         "SELECT point_json FROM normalized_metrics ORDER BY sequence",
@@ -345,6 +390,30 @@ fn inspect_destination_sync(
         operational_metrics,
         backup_stats,
     })
+}
+
+fn ensure_query_tier_matches(connection: &Connection) -> Result<(), LegacyTelemetryMigrationError> {
+    let mismatch = connection
+        .query_row(
+            "SELECT 1
+             FROM normalized_logs AS normalized
+             FULL OUTER JOIN query_logs AS query
+               ON normalized.sequence = query.sequence
+             WHERE normalized.sequence IS NULL
+                OR query.sequence IS NULL
+                OR normalized.event_at_ms IS DISTINCT FROM query.event_at_ms
+                OR normalized.entry_json IS DISTINCT FROM query.entry_json
+             LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| LegacyTelemetryMigrationError::Database(error.to_string()))?;
+    if mismatch.is_some() {
+        Err(LegacyTelemetryMigrationError::QueryTierMismatch)
+    } else {
+        Ok(())
+    }
 }
 
 fn open_read_only(path: &Path) -> Result<Connection, LegacyTelemetryMigrationError> {

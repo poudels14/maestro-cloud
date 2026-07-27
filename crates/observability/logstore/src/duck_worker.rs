@@ -38,6 +38,9 @@ pub(crate) fn run_worker(
             Command::Append { entries, response } => {
                 let _ignored = response.send(schema::append(&mut connection, &entries));
             }
+            Command::AppendMigration { entries, response } => {
+                let _ignored = response.send(schema::append_migration(&mut connection, &entries));
+            }
             Command::AppendOtlpEnvelopes {
                 envelopes,
                 response,

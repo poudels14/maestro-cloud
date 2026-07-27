@@ -108,6 +108,30 @@ impl DuckLogStoreRuntime {
 }
 
 impl DuckLogStore {
+    /// Appends a migration batch whose deterministic source cursor is already past the durable
+    /// destination high-water mark.
+    ///
+    /// This deliberately skips replay lookups. Database uniqueness constraints still reject an
+    /// invalid cursor, and callers must independently verify the completed destination.
+    pub async fn append_migration(
+        &self,
+        entries: &[IngestLogEntry],
+    ) -> Result<LogAppendReport, LogStoreError> {
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(Command::AppendMigration {
+                entries: entries.to_vec(),
+                response,
+            })
+            .await
+            .map_err(|_| LogStoreError::Unavailable {
+                message: "DuckDB writer stopped before accepting migration append".to_owned(),
+            })?;
+        result.await.map_err(|_| LogStoreError::Unavailable {
+            message: "DuckDB writer stopped before completing migration append".to_owned(),
+        })?
+    }
+
     /// Returns the node-local root containing hive-partitioned Parquet objects.
     pub fn cold_root(&self) -> &Path {
         &self.cold_root

@@ -76,50 +76,65 @@ pub(crate) fn append(
         )
         .map_err(unavailable("read log sequence high watermark"))?;
     let mut report = LogAppendReport::default();
-    for entry in entries {
-        let encoded = serde_json::to_string(entry).map_err(|error| LogStoreError::Rejected {
-            message: format!("normalized entry could not be encoded: {error}"),
-        })?;
-        let (producer_type, producer_id) = producer_key(&entry.id.producer);
-        let existing = transaction
-            .query_row(
+    {
+        let mut read_existing = transaction
+            .prepare(
                 "SELECT entry_json FROM normalized_logs
                  WHERE node_id = ?1 AND producer_type = ?2 AND producer_id = ?3 AND cursor = ?4",
-                params![
-                    entry.id.node_id.as_str(),
-                    producer_type,
-                    producer_id,
-                    entry.id.cursor.as_str()
-                ],
-                |row| row.get::<_, String>(0),
             )
-            .optional()
-            .map_err(unavailable("read replay identity"))?;
-        match existing {
-            Some(existing) if existing == encoded => {
-                report.deduplicated = report.deduplicated.saturating_add(1);
-            }
-            Some(_) => {
-                return Err(LogStoreError::Rejected {
-                    message: format!(
-                        "record identity `{producer_type}/{producer_id}/{}` was reused with different content",
-                        entry.id.cursor.as_str()
-                    ),
-                });
-            }
-            None => {
-                let sequence =
-                    last_sequence
-                        .checked_add(1)
-                        .ok_or_else(|| LogStoreError::Rejected {
-                            message: "normalized log sequence space is exhausted".to_owned(),
-                        })?;
-                transaction
-                    .execute(
+            .map_err(unavailable("prepare replay identity read"))?;
+        let mut insert_normalized = transaction
+            .prepare(
                         "INSERT INTO normalized_logs
                          (sequence, node_id, producer_type, producer_id, cursor, event_at_ms, entry_json)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                        params![
+            )
+            .map_err(unavailable("prepare normalized log insert"))?;
+        let mut insert_query = transaction
+            .prepare(
+                "INSERT INTO query_logs (sequence, event_at_ms, entry_json)
+                         VALUES (?1, ?2, ?3)",
+            )
+            .map_err(unavailable("prepare hot query log insert"))?;
+        for entry in entries {
+            let encoded =
+                serde_json::to_string(entry).map_err(|error| LogStoreError::Rejected {
+                    message: format!("normalized entry could not be encoded: {error}"),
+                })?;
+            let (producer_type, producer_id) = producer_key(&entry.id.producer);
+            let existing = read_existing
+                .query_row(
+                    params![
+                        entry.id.node_id.as_str(),
+                        producer_type,
+                        producer_id,
+                        entry.id.cursor.as_str()
+                    ],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(unavailable("read replay identity"))?;
+            match existing {
+                Some(existing) if existing == encoded => {
+                    report.deduplicated = report.deduplicated.saturating_add(1);
+                }
+                Some(_) => {
+                    return Err(LogStoreError::Rejected {
+                        message: format!(
+                            "record identity `{producer_type}/{producer_id}/{}` was reused with different content",
+                            entry.id.cursor.as_str()
+                        ),
+                    });
+                }
+                None => {
+                    let sequence =
+                        last_sequence
+                            .checked_add(1)
+                            .ok_or_else(|| LogStoreError::Rejected {
+                                message: "normalized log sequence space is exhausted".to_owned(),
+                            })?;
+                    insert_normalized
+                        .execute(params![
                             sequence,
                             entry.id.node_id.as_str(),
                             producer_type,
@@ -127,24 +142,84 @@ pub(crate) fn append(
                             entry.id.cursor.as_str(),
                             entry.event_at.0,
                             encoded.as_str()
-                        ],
-                    )
-                    .map_err(unavailable("insert normalized log"))?;
-                transaction
-                    .execute(
-                        "INSERT INTO query_logs (sequence, event_at_ms, entry_json)
-                         VALUES (?1, ?2, ?3)",
-                        params![sequence, entry.event_at.0, encoded.as_str()],
-                    )
-                    .map_err(unavailable("insert hot query log"))?;
-                report.committed = report.committed.saturating_add(1);
-                last_sequence = sequence;
+                        ])
+                        .map_err(unavailable("insert normalized log"))?;
+                    insert_query
+                        .execute(params![sequence, entry.event_at.0, encoded.as_str()])
+                        .map_err(unavailable("insert hot query log"))?;
+                    report.committed = report.committed.saturating_add(1);
+                    last_sequence = sequence;
+                }
             }
         }
     }
     transaction
         .commit()
         .map_err(unavailable("commit append transaction"))?;
+    Ok(report)
+}
+
+pub(crate) fn append_migration(
+    connection: &mut Connection,
+    entries: &[IngestLogEntry],
+) -> Result<LogAppendReport, LogStoreError> {
+    let transaction = connection
+        .transaction()
+        .map_err(unavailable("begin migration append transaction"))?;
+    let mut last_sequence = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM normalized_logs",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(unavailable("read migration log sequence high watermark"))?;
+    let mut report = LogAppendReport::default();
+    {
+        let mut insert_normalized = transaction
+            .prepare(
+                "INSERT INTO normalized_logs
+                 (sequence, node_id, producer_type, producer_id, cursor, event_at_ms, entry_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .map_err(unavailable("prepare migration normalized log insert"))?;
+        let mut insert_query = transaction
+            .prepare(
+                "INSERT INTO query_logs (sequence, event_at_ms, entry_json)
+                 VALUES (?1, ?2, ?3)",
+            )
+            .map_err(unavailable("prepare migration hot query log insert"))?;
+        for entry in entries {
+            let encoded =
+                serde_json::to_string(entry).map_err(|error| LogStoreError::Rejected {
+                    message: format!("normalized entry could not be encoded: {error}"),
+                })?;
+            let (producer_type, producer_id) = producer_key(&entry.id.producer);
+            let sequence = last_sequence
+                .checked_add(1)
+                .ok_or_else(|| LogStoreError::Rejected {
+                    message: "normalized log sequence space is exhausted".to_owned(),
+                })?;
+            insert_normalized
+                .execute(params![
+                    sequence,
+                    entry.id.node_id.as_str(),
+                    producer_type,
+                    producer_id,
+                    entry.id.cursor.as_str(),
+                    entry.event_at.0,
+                    encoded.as_str()
+                ])
+                .map_err(unavailable("insert migration normalized log"))?;
+            insert_query
+                .execute(params![sequence, entry.event_at.0, encoded.as_str()])
+                .map_err(unavailable("insert migration hot query log"))?;
+            report.committed = report.committed.saturating_add(1);
+            last_sequence = sequence;
+        }
+    }
+    transaction
+        .commit()
+        .map_err(unavailable("commit migration append transaction"))?;
     Ok(report)
 }
 
