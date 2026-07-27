@@ -249,13 +249,31 @@ async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
     let second_key = keys.resource(&kind, &ResourceName::new("second")?);
     let second = store
         .put_cas(PutRequest {
-            key: second_key,
-            value: serde_json::to_vec(&toy_resource_named("second", None)?)?,
+            key: second_key.clone(),
+            value: b"not-json".to_vec(),
             expected: ExpectedVersion::Missing,
             session: None,
         })
         .await?;
     assert!(matches!(second, CasOutcome::Applied(_)));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!runtime_task.is_finished());
+    assert_eq!(reconciler.reconciles.load(Ordering::SeqCst), 1);
+    let malformed = store
+        .get(&second_key)
+        .await?
+        .ok_or("malformed resource missing")?;
+    let repaired = store
+        .put_cas(PutRequest {
+            key: second_key,
+            value: serde_json::to_vec(&toy_resource_named("second", None)?)?,
+            expected: ExpectedVersion::Exact(malformed.version),
+            session: None,
+        })
+        .await?;
+    assert!(matches!(repaired, CasOutcome::Applied(_)));
     wait_for_count(&reconciler.reconciles, 2).await?;
 
     let dependency_kind = ResourceKind::new("Dependency")?;
@@ -275,6 +293,104 @@ async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
     wait_for_count(&reconciler.reconciles, 6).await?;
     shutdown_tx.send_replace(true);
     runtime_task.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn snapshot_skips_malformed_and_misidentified_resources_until_repaired()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(NoopClock);
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let keys = Keyspace::new(&ClusterId::new("malformed-runtime")?);
+    let session = store.session(Duration::from_secs(30)).await?;
+    let leader = store
+        .put_cas(PutRequest {
+            key: keys.leader(),
+            value: b"leader".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: Some(SessionBinding {
+                session_id: session.id(),
+            }),
+        })
+        .await?;
+    let CasOutcome::Applied(leader) = leader else {
+        return Err("leader should be created".into());
+    };
+    let fenced = Arc::new(FencedStore::new(
+        store.clone(),
+        keys.leader(),
+        LeadershipToken::from_campaign(
+            LeaderIdentity {
+                node_id: kernel_api::NodeId::new("node-1")?,
+                instance_id: kernel_api::NodeInstanceId::new("instance-1")?,
+            },
+            session.id(),
+            leader.version,
+        ),
+    ));
+    let kind = ResourceKind::new("Toy")?;
+    let malformed_key = keys.resource(&kind, &ResourceName::new("malformed")?);
+    let wrong_key = keys.resource(&kind, &ResourceName::new("wrong-key")?);
+    let valid_key = keys.resource(&kind, &ResourceName::new("valid")?);
+    for (key, value) in [
+        (malformed_key.clone(), b"not-json".to_vec()),
+        (
+            wrong_key.clone(),
+            serde_json::to_vec(&toy_resource_named("different-id", None)?)?,
+        ),
+        (
+            valid_key,
+            serde_json::to_vec(&toy_resource_named("valid", None)?)?,
+        ),
+    ] {
+        assert!(matches!(
+            store
+                .put_cas(PutRequest {
+                    key,
+                    value,
+                    expected: ExpectedVersion::Missing,
+                    session: None,
+                })
+                .await?,
+            CasOutcome::Applied(_)
+        ));
+    }
+    let reconciler = Arc::new(ToyReconciler {
+        reconciles: AtomicUsize::new(0),
+        finalizes: AtomicUsize::new(0),
+        terminal: AtomicBool::new(false),
+    });
+    let runtime = ControllerRuntime::new(
+        reconciler.clone(),
+        keys.resource_kind(&kind),
+        fenced,
+        clock,
+        RuntimeConfig::new(
+            Duration::from_secs(30),
+            Backoff::new(Duration::from_millis(10), Duration::from_secs(1))?,
+        )?,
+    );
+
+    assert_eq!(runtime.reconcile_snapshot().await?, 0);
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert_eq!(reconciler.reconciles.load(Ordering::SeqCst), 1);
+    for (key, id) in [(malformed_key, "malformed"), (wrong_key, "wrong-key")] {
+        let stored = store.get(&key).await?.ok_or("invalid resource missing")?;
+        assert!(matches!(
+            store
+                .put_cas(PutRequest {
+                    key,
+                    value: serde_json::to_vec(&toy_resource_named(id, None)?)?,
+                    expected: ExpectedVersion::Exact(stored.version),
+                    session: None,
+                })
+                .await?,
+            CasOutcome::Applied(_)
+        ));
+    }
+    assert_eq!(runtime.reconcile_snapshot().await?, 1);
+    assert_eq!(runtime.reconcile_snapshot().await?, 3);
+    assert_eq!(reconciler.reconciles.load(Ordering::SeqCst), 5);
     Ok(())
 }
 

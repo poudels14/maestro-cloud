@@ -27,11 +27,30 @@ where
         attempt: u32,
     ) -> Result<ProcessResult, ControllerError> {
         self.fenced_store.verify_leadership().await?;
-        let mut resource: Object<R::Id, R::Spec, R::Status> = serde_json::from_slice(&stored.value)
-            .map_err(|error| ControllerError::MalformedResource {
-                kind: R::KIND,
-                message: error.to_string(),
-            })?;
+        let mut resource: Object<R::Id, R::Spec, R::Status> =
+            match serde_json::from_slice(&stored.value) {
+                Ok(resource) => resource,
+                Err(error) => {
+                    tracing::warn!(
+                        kind = R::KIND,
+                        resource_key = %stored.key,
+                        error = %error,
+                        "malformed controller resource was skipped"
+                    );
+                    return Ok(ProcessResult::skipped());
+                }
+            };
+        let expected_key = format!("{}{}", self.resource_prefix.as_str(), resource.meta.id);
+        if stored.key.as_str() != expected_key {
+            tracing::warn!(
+                kind = R::KIND,
+                resource_id = %resource.meta.id,
+                resource_key = %stored.key,
+                expected_key,
+                "misidentified controller resource was skipped"
+            );
+            return Ok(ProcessResult::skipped());
+        }
         resource.meta.revision = stored.version.resource_revision();
 
         let finalizer = R::FINALIZER.map(|name| FinalizerName(name.to_string()));
@@ -277,5 +296,9 @@ impl ProcessResult {
             next_attempt: 0,
             successful: false,
         }
+    }
+
+    fn skipped() -> Self {
+        Self::changed()
     }
 }

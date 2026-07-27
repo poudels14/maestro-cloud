@@ -25,14 +25,6 @@ pub enum ControllerError {
         /// Serde decoding detail.
         message: String,
     },
-    /// A stored typed resource could not be decoded safely.
-    #[error("persisted {kind} resource is malformed: {message}")]
-    MalformedResource {
-        /// Stable resource kind registered by the reconciler.
-        kind: &'static str,
-        /// Serde decoding detail.
-        message: String,
-    },
     /// A typed resource could not be encoded for an atomic metadata update.
     #[error("{kind} resource could not be serialized: {message}")]
     SerializeResource {
