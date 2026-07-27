@@ -51,6 +51,24 @@ pub struct HealthReconcileReport {
     pub missing_replica_states: usize,
     /// Malformed resources skipped without stopping the health loop.
     pub malformed_resources: usize,
+    /// Status targets that disappeared or changed ownership during this pass.
+    pub stale_updates: usize,
+}
+
+impl HealthReconcileReport {
+    fn accepted_update(&mut self, outcome: HealthUpdateOutcome) -> bool {
+        match outcome {
+            HealthUpdateOutcome::Current | HealthUpdateOutcome::Updated => true,
+            HealthUpdateOutcome::Stale => {
+                self.stale_updates = self.stale_updates.saturating_add(1);
+                false
+            }
+            HealthUpdateOutcome::Malformed => {
+                self.malformed_resources = self.malformed_resources.saturating_add(1);
+                false
+            }
+        }
+    }
 }
 
 /// Store-driven health reconciler with stable probe staggering and injected time.
@@ -153,9 +171,21 @@ impl HealthAgent {
             .store
             .list(&self.keyspace.resource_kind(&self.replica_kind))
             .await?;
-        let (assignments, malformed_assignments) = decode_resources(&assignment_snapshot.values);
-        let (deployments, malformed_deployments) = decode_resources(&deployment_snapshot.values);
-        let (replicas, malformed_replicas) = decode_resources(&replica_snapshot.values);
+        let (assignments, malformed_assignments) = decode_resources(
+            &assignment_snapshot.values,
+            ASSIGNMENT_KIND,
+            &self.settings.node_id,
+        );
+        let (deployments, malformed_deployments) = decode_resources(
+            &deployment_snapshot.values,
+            DEPLOYMENT_KIND,
+            &self.settings.node_id,
+        );
+        let (replicas, malformed_replicas) = decode_resources(
+            &replica_snapshot.values,
+            REPLICA_STATE_KIND,
+            &self.settings.node_id,
+        );
         let deployments = deployments
             .into_iter()
             .map(|deployment: Deployment| (deployment.meta.id.clone(), deployment))
@@ -208,48 +238,57 @@ impl HealthAgent {
                 report.probed = report.probed.saturating_add(1);
                 match result {
                     Ok(()) => {
-                        self.update_replica(
-                            replica,
-                            &assignment,
-                            Some(health_check),
-                            HealthObservation::Healthy,
-                        )
-                        .await?;
-                        self.schedule_next(
-                            assignment.meta.id.clone(),
-                            ProbeOutcome::Healthy,
-                            Duration::from_secs(u64::from(health_check.interval_secs.max(1))),
-                        )
-                        .await;
-                        report.ready = report.ready.saturating_add(1);
+                        let outcome = self
+                            .update_replica(
+                                replica,
+                                &assignment,
+                                Some(health_check),
+                                HealthObservation::Healthy,
+                            )
+                            .await?;
+                        if report.accepted_update(outcome) {
+                            self.schedule_next(
+                                assignment.meta.id.clone(),
+                                ProbeOutcome::Healthy,
+                                Duration::from_secs(u64::from(health_check.interval_secs.max(1))),
+                            )
+                            .await;
+                            report.ready = report.ready.saturating_add(1);
+                        }
                     }
                     Err(error) => {
-                        self.update_replica(
-                            replica,
-                            &assignment,
-                            Some(health_check),
-                            HealthObservation::Unhealthy(&error.to_string()),
-                        )
-                        .await?;
-                        self.schedule_next(
-                            assignment.meta.id.clone(),
-                            ProbeOutcome::Unhealthy,
-                            self.settings.poll_interval,
-                        )
-                        .await;
-                        if replica.status.healthcheck_failures.saturating_add(1)
-                            >= health_check.unhealthy_threshold.max(1)
-                        {
-                            report.terminal = report.terminal.saturating_add(1);
-                        } else {
-                            report.unhealthy = report.unhealthy.saturating_add(1);
+                        let outcome = self
+                            .update_replica(
+                                replica,
+                                &assignment,
+                                Some(health_check),
+                                HealthObservation::Unhealthy(&error.to_string()),
+                            )
+                            .await?;
+                        if report.accepted_update(outcome) {
+                            self.schedule_next(
+                                assignment.meta.id.clone(),
+                                ProbeOutcome::Unhealthy,
+                                self.settings.poll_interval,
+                            )
+                            .await;
+                            if replica.status.healthcheck_failures.saturating_add(1)
+                                >= health_check.unhealthy_threshold.max(1)
+                            {
+                                report.terminal = report.terminal.saturating_add(1);
+                            } else {
+                                report.unhealthy = report.unhealthy.saturating_add(1);
+                            }
                         }
                     }
                 }
             } else {
-                self.update_replica(replica, &assignment, None, HealthObservation::NotConfigured)
+                let outcome = self
+                    .update_replica(replica, &assignment, None, HealthObservation::NotConfigured)
                     .await?;
-                report.ready = report.ready.saturating_add(1);
+                if report.accepted_update(outcome) {
+                    report.ready = report.ready.saturating_add(1);
+                }
             }
         }
         self.schedules
@@ -306,20 +345,22 @@ impl HealthAgent {
         assignment: &Assignment,
         health_check: Option<&kernel_api::HealthCheckSpec>,
         observation: HealthObservation<'_>,
-    ) -> Result<(), HealthAgentError> {
+    ) -> Result<HealthUpdateOutcome, HealthAgentError> {
         let name = ResourceName::new(replica.meta.id.as_str())?;
         let key = self.keyspace.resource(&self.replica_kind, &name);
         for _attempt in 0..MAX_CAS_ATTEMPTS {
-            let stored = self.store.get(&key).await?.ok_or_else(|| {
-                HealthAgentError::ReplicaDisappeared {
-                    replica_id: replica.meta.id.to_string(),
+            let Some(stored) = self.store.get(&key).await? else {
+                return Ok(HealthUpdateOutcome::Stale);
+            };
+            let mut current: ReplicaState = match decode_resource(&stored) {
+                Ok(current) => current,
+                Err(error) => {
+                    warn_malformed(REPLICA_STATE_KIND, &self.settings.node_id, &stored, &error);
+                    return Ok(HealthUpdateOutcome::Malformed);
                 }
-            })?;
-            let mut current: ReplicaState = decode_resource(&stored)?;
+            };
             if current.spec.assignment_id != assignment.meta.id {
-                return Err(HealthAgentError::ReplicaReassigned {
-                    replica_id: current.meta.id.to_string(),
-                });
+                return Ok(HealthUpdateOutcome::Stale);
             }
             let desired = desired_health_status(
                 &current,
@@ -329,7 +370,7 @@ impl HealthAgent {
                 self.status_clock.now(),
             );
             if current.status == desired {
-                return Ok(());
+                return Ok(HealthUpdateOutcome::Current);
             }
             current.status = desired;
             current.meta.revision = stored.version.resource_revision();
@@ -348,7 +389,7 @@ impl HealthAgent {
                 })
                 .await?;
             if matches!(result, CasOutcome::Applied(_)) {
-                return Ok(());
+                return Ok(HealthUpdateOutcome::Updated);
             }
         }
         Err(HealthAgentError::Contention {
@@ -393,19 +434,40 @@ pub(crate) fn healthy_stagger(key: &str, interval: Duration, poll_interval: Dura
     Duration::from_secs(slot.saturating_mul(tick_seconds).min(interval_seconds))
 }
 
-fn decode_resources<Resource>(values: &[StoredValue]) -> (Vec<Resource>, usize)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthUpdateOutcome {
+    Updated,
+    Current,
+    Stale,
+    Malformed,
+}
+
+fn decode_resources<Resource>(
+    values: &[StoredValue],
+    kind: &'static str,
+    node_id: &NodeId,
+) -> (Vec<Resource>, usize)
 where
     Resource: for<'de> serde::Deserialize<'de>,
 {
-    let decoded = values
-        .iter()
-        .map(|stored| serde_json::from_slice(&stored.value))
-        .collect::<Vec<Result<Resource, _>>>();
-    let malformed = decoded.iter().filter(|result| result.is_err()).count();
-    (
-        decoded.into_iter().filter_map(Result::ok).collect(),
-        malformed,
-    )
+    let mut decoded = Vec::new();
+    let mut malformed = 0_usize;
+    for stored in values {
+        match serde_json::from_slice(&stored.value) {
+            Ok(resource) => decoded.push(resource),
+            Err(error) => {
+                malformed = malformed.saturating_add(1);
+                tracing::warn!(
+                    kind,
+                    node_id = %node_id,
+                    resource_key = %stored.key,
+                    error = %error,
+                    "malformed health input resource was skipped"
+                );
+            }
+        }
+    }
+    (decoded, malformed)
 }
 
 fn decode_resource<Resource>(stored: &StoredValue) -> Result<Resource, HealthAgentError>
@@ -416,6 +478,21 @@ where
         key: stored.key.to_string(),
         message: error.to_string(),
     })
+}
+
+fn warn_malformed(
+    kind: &'static str,
+    node_id: &NodeId,
+    stored: &StoredValue,
+    error: &HealthAgentError,
+) {
+    tracing::warn!(
+        kind,
+        node_id = %node_id,
+        resource_key = %stored.key,
+        error = %error,
+        "malformed health status target was skipped"
+    );
 }
 
 /// Why a complete node-local health snapshot could not be reconciled.
@@ -430,12 +507,6 @@ pub enum HealthAgentError {
     /// Store access or watch setup failed.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// A ReplicaState disappeared while its status was being updated.
-    #[error("replica state `{replica_id}` disappeared before health status update")]
-    ReplicaDisappeared { replica_id: String },
-    /// A ReplicaState moved to another assignment during a probe.
-    #[error("replica state `{replica_id}` was reassigned during health status update")]
-    ReplicaReassigned { replica_id: String },
     /// A stored status target was malformed.
     #[error("malformed health resource at `{key}`: {message}")]
     MalformedResource { key: String, message: String },

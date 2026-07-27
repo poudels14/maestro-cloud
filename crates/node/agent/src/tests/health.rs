@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use kernel_api::{
     ResourceName, ResourceRevision, Timestamp, WorkloadId,
 };
 use kernel_store::{
-    Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
+    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
 };
 
 use crate::health::healthy_stagger;
@@ -114,6 +114,58 @@ async fn health_reconcile_marks_unprobed_workloads_ready() -> Result<(), Box<dyn
         load_replica(store.as_ref()).await?.status.phase,
         DeploymentPhase::Ready
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn replica_corrupted_during_probe_is_skipped_and_recovers_after_repair()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(TestClock::default());
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let (assignment, deployment, replica) = health_resources(3);
+    seed(store.as_ref(), &assignment, &deployment, &replica).await?;
+    let prober = Arc::new(CorruptingHealthProber {
+        store: store.clone(),
+        corrupted: AtomicBool::new(false),
+    });
+    let agent = HealthAgent::new(
+        store.clone(),
+        prober,
+        HealthAgentSettings {
+            cluster_id: cluster_id(),
+            node_id: node_id("node-1"),
+            poll_interval: Duration::from_secs(5),
+        },
+        clock,
+        Arc::new(FixedStatusClock),
+    )?;
+
+    let degraded = agent.reconcile_once().await?;
+    assert_eq!(degraded.probed, 1);
+    assert_eq!(degraded.ready, 0);
+    assert_eq!(degraded.malformed_resources, 1);
+    assert_eq!(degraded.stale_updates, 0);
+
+    let replica_key = replica_key()?;
+    let malformed = store
+        .get(&replica_key)
+        .await?
+        .ok_or("malformed replica missing")?;
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: replica_key,
+                value: serde_json::to_vec(&replica)?,
+                expected: ExpectedVersion::Exact(malformed.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    let recovered = agent.reconcile_once().await?;
+    assert_eq!(recovered.probed, 1);
+    assert_eq!(recovered.ready, 1);
+    assert_eq!(recovered.malformed_resources, 0);
     Ok(())
 }
 
@@ -228,12 +280,16 @@ async fn seed(
 }
 
 async fn load_replica(store: &dyn Store) -> Result<ReplicaState, Box<dyn std::error::Error>> {
-    let key = Keyspace::new(&cluster_id()).resource(
-        &ResourceKind::new("ReplicaState")?,
-        &ResourceName::new("replica-1")?,
-    );
+    let key = replica_key()?;
     let stored = store.get(&key).await?.ok_or("replica missing")?;
     Ok(serde_json::from_slice(&stored.value)?)
+}
+
+fn replica_key() -> Result<kernel_store::StoreKey, kernel_api::InvalidIdentifier> {
+    Ok(Keyspace::new(&cluster_id()).resource(
+        &ResourceKind::new("ReplicaState")?,
+        &ResourceName::new("replica-1")?,
+    ))
 }
 
 struct FakeHealthProber {
@@ -273,6 +329,51 @@ impl HealthProber for FakeHealthProber {
             })?
             .pop_front()
             .unwrap_or(Ok(()))
+    }
+}
+
+struct CorruptingHealthProber {
+    store: Arc<InMemoryStore>,
+    corrupted: AtomicBool,
+}
+
+#[async_trait]
+impl HealthProber for CorruptingHealthProber {
+    async fn probe(&self, _target: &HealthProbeTarget) -> Result<(), HealthProbeError> {
+        if self.corrupted.swap(true, Ordering::Relaxed) {
+            return Ok(());
+        }
+        let key = replica_key().map_err(|error| HealthProbeError::Unavailable {
+            message: error.to_string(),
+        })?;
+        let stored = self
+            .store
+            .get(&key)
+            .await
+            .map_err(|error| HealthProbeError::Unavailable {
+                message: error.to_string(),
+            })?
+            .ok_or_else(|| HealthProbeError::Unavailable {
+                message: "replica disappeared before injected corruption".to_owned(),
+            })?;
+        let outcome = self
+            .store
+            .put_cas(PutRequest {
+                key,
+                value: b"not-json".to_vec(),
+                expected: ExpectedVersion::Exact(stored.version),
+                session: None,
+            })
+            .await
+            .map_err(|error| HealthProbeError::Unavailable {
+                message: error.to_string(),
+            })?;
+        if !matches!(outcome, CasOutcome::Applied(_)) {
+            return Err(HealthProbeError::Unavailable {
+                message: "replica changed before injected corruption".to_owned(),
+            });
+        }
+        Ok(())
     }
 }
 
