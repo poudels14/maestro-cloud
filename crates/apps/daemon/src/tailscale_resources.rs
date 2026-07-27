@@ -58,6 +58,10 @@ while [ "$attempt" -lt 60 ]; do
 done
 [ "$ready" = true ] || fail_gateway "Tailscale did not become ready within 60 seconds"
 
+/usr/local/bin/tailscale --socket=/tmp/tailscaled.sock set \
+  --hostname="$TS_HOSTNAME" \
+  || fail_gateway "could not reconcile the Tailscale hostname"
+
 gateway="$(ip -4 route show default | awk '$1 == "default" { print $3; exit }')"
 [ -n "$gateway" ] || fail_gateway "could not discover the node workload gateway"
 
@@ -73,6 +77,8 @@ done
 IFS="$previous_ifs"
 [ -n "$api_port" ] || fail_gateway "could not discover the node API listener"
 
+/usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve reset \
+  || fail_gateway "could not reset stale Tailscale Serve configuration"
 /usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve --bg --yes \
   "https+insecure://${gateway}:${api_port}" \
   || fail_gateway "could not expose the node API with Tailscale Serve"

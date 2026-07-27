@@ -90,6 +90,14 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "each gateway must expose the node API directly on its tailnet identity"
     );
     assert!(
+        AUTH_SCRIPT.contains("set \\\n  --hostname=\"$TS_HOSTNAME\""),
+        "persisted gateway identities must adopt the configured cluster hostname"
+    );
+    assert!(
+        AUTH_SCRIPT.contains("serve reset"),
+        "stale Serve listeners must not survive a gateway hostname change"
+    );
+    assert!(
         AUTH_SCRIPT.contains("\"https+insecure://${gateway}:${api_port}\""),
         "the direct tailnet endpoint must proxy the node-local HTTPS API"
     );
