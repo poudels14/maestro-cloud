@@ -35,7 +35,7 @@ async fn traffic_queries_share_trusted_hot_and_cold_access_logs()
             "500000000",
         )?])
         .await?;
-    assert_eq!(store.rollover_before(Timestamp(ELEVEN)).await?.rows, 1);
+    assert_eq!(store.rollover_before(Timestamp(ELEVEN), &[]).await?.rows, 1);
 
     let mut spoof = access_entry(
         5,

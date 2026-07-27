@@ -2,8 +2,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use duckdb::{Connection, params};
+use duckdb::{Connection, OptionalExt, params};
 use kernel_api::Timestamp;
+use logs::LogSinkId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -20,6 +21,8 @@ pub struct LogRolloverReport {
     pub rows: usize,
     /// Compressed Parquet bytes written or resumed.
     pub bytes: u64,
+    /// Archived delivery-spool rows no active sink still needs.
+    pub delivery_rows_reclaimed: usize,
 }
 
 /// Durable manifest for every committed Parquet object in one hour partition.
@@ -103,6 +106,7 @@ pub(crate) fn rollover_before(
     connection: &mut Connection,
     cold_root: &Path,
     before: Timestamp,
+    sink_ids: &[LogSinkId],
 ) -> Result<LogRolloverReport, LogArchiveError> {
     let cutoff = before.0.div_euclid(HOUR_MILLIS) * HOUR_MILLIS;
     let groups = load_groups(connection, cutoff)?;
@@ -116,12 +120,42 @@ pub(crate) fn rollover_before(
         );
         report.bytes = report.bytes.saturating_add(size);
     }
-    if report.rows > 0 {
+    report.delivery_rows_reclaimed = prune_delivered_rows(connection, sink_ids)?;
+    if report.rows > 0 || report.delivery_rows_reclaimed > 0 {
         connection
             .execute_batch("CHECKPOINT")
-            .map_err(unavailable("checkpoint hot query tier after rollover"))?;
+            .map_err(unavailable("checkpoint log tiers after rollover"))?;
     }
     Ok(report)
+}
+
+fn prune_delivered_rows(
+    connection: &Connection,
+    sink_ids: &[LogSinkId],
+) -> Result<usize, LogArchiveError> {
+    let mut delivery_floor = i64::MAX;
+    let mut cursor = connection
+        .prepare("SELECT last_sequence FROM sink_cursors WHERE sink_id = ?1")
+        .map_err(unavailable("prepare delivery cursor read for rollover"))?;
+    for sink_id in sink_ids {
+        let sequence = cursor
+            .query_row(params![sink_id.as_str()], |row| row.get::<_, i64>(0))
+            .optional()
+            .map_err(unavailable("read delivery cursor for rollover"))?
+            .unwrap_or(0);
+        delivery_floor = delivery_floor.min(sequence);
+    }
+    connection
+        .execute(
+            "DELETE FROM normalized_logs
+             WHERE sequence <= ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM query_logs
+                   WHERE query_logs.sequence = normalized_logs.sequence
+               )",
+            params![delivery_floor],
+        )
+        .map_err(unavailable("reclaim archived delivery rows"))
 }
 
 fn load_groups(
@@ -213,10 +247,13 @@ fn export_group(
         .ok_or_else(|| rejected("cold-tier path is not UTF-8"))?;
     let sql = format!(
         "COPY (
-             SELECT sequence, event_at_ms, entry_json FROM query_logs
-             WHERE event_at_ms >= {} AND event_at_ms < {}
-               AND sequence BETWEEN {} AND {}
-             ORDER BY sequence
+             SELECT query.sequence, query.event_at_ms, normalized.entry_json
+             FROM query_logs AS query
+             INNER JOIN normalized_logs AS normalized
+               ON normalized.sequence = query.sequence
+             WHERE query.event_at_ms >= {} AND query.event_at_ms < {}
+               AND query.sequence BETWEEN {} AND {}
+             ORDER BY query.sequence
          ) TO {} (FORMAT PARQUET, COMPRESSION ZSTD)",
         group.start_millis()?,
         group.end_millis()?,

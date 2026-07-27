@@ -67,6 +67,7 @@ pub(crate) enum Command {
     },
     Rollover {
         before: Timestamp,
+        sink_ids: Vec<LogSinkId>,
         response: oneshot::Sender<Result<LogRolloverReport, LogArchiveError>>,
     },
     PendingBackups {

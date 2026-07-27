@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use kernel_api::{ClusterId, NodeId, Timestamp};
 use logs::{
-    IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogStore,
-    LogStream, OriginCursor,
+    IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogSinkId,
+    LogStore, LogStream, OriginCursor,
 };
 
 use crate::{
@@ -25,8 +25,11 @@ async fn retention_prunes_only_complete_backed_up_partitions_and_keeps_delivery_
     let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
     let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
     let store = runtime.store();
+    let sinks = [LogSinkId::new("datadog")?];
     store.append(&[entry(1, TEN_FIFTEEN)?]).await?;
-    store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?;
+    store
+        .rollover_before(Timestamp(ELEVEN_THIRTY), &sinks)
+        .await?;
     backup_log_partitions(
         store.as_ref(),
         &AcceptingObjectStore,
@@ -71,8 +74,11 @@ async fn late_export_prevents_pruning_an_older_backed_up_part()
     let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
     let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
     let store = runtime.store();
+    let sinks = [LogSinkId::new("datadog")?];
     store.append(&[entry(1, TEN_FIFTEEN)?]).await?;
-    store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?;
+    store
+        .rollover_before(Timestamp(ELEVEN_THIRTY), &sinks)
+        .await?;
     backup_log_partitions(
         store.as_ref(),
         &AcceptingObjectStore,
@@ -81,7 +87,9 @@ async fn late_export_prevents_pruning_an_older_backed_up_part()
     )
     .await?;
     store.append(&[entry(2, TEN_FORTY_FIVE)?]).await?;
-    store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?;
+    store
+        .rollover_before(Timestamp(ELEVEN_THIRTY), &sinks)
+        .await?;
 
     assert_eq!(
         store

@@ -402,7 +402,6 @@ fn ensure_query_tier_matches(connection: &Connection) -> Result<(), LegacyTeleme
              WHERE normalized.sequence IS NULL
                 OR query.sequence IS NULL
                 OR normalized.event_at_ms IS DISTINCT FROM query.event_at_ms
-                OR normalized.entry_json IS DISTINCT FROM query.entry_json
              LIMIT 1",
             [],
             |row| row.get::<_, i64>(0),

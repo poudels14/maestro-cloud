@@ -3,7 +3,7 @@ use std::path::Path;
 use duckdb::{Config, Connection, OptionalExt, params};
 use logs::{IngestLogEntry, LogAppendReport, LogProducer, LogStoreError};
 
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -26,7 +26,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
         )
         .map_err(|error| error.to_string())?;
     match (version_count, version) {
-        (0, _) => initialize_v6(&mut connection)?,
+        (0, _) => initialize_v7(&mut connection)?,
         (1, CURRENT_SCHEMA_VERSION) => {}
         (1, 1) => {
             migrate_v1_to_v2(&mut connection)?;
@@ -34,23 +34,31 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
             migrate_v3_to_v4(&mut connection)?;
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
             crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
+            migrate_v6_to_v7(&mut connection)?;
         }
         (1, 2) => {
             migrate_v2_to_v3(&mut connection)?;
             migrate_v3_to_v4(&mut connection)?;
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
             crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
+            migrate_v6_to_v7(&mut connection)?;
         }
         (1, 3) => {
             migrate_v3_to_v4(&mut connection)?;
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
             crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
+            migrate_v6_to_v7(&mut connection)?;
         }
         (1, 4) => {
             crate::stats_metric_schema::migrate_v4_to_v5(&mut connection)?;
             crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
+            migrate_v6_to_v7(&mut connection)?;
         }
-        (1, 5) => crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?,
+        (1, 5) => {
+            crate::otlp_envelope_schema::migrate_v5_to_v6(&mut connection)?;
+            migrate_v6_to_v7(&mut connection)?;
+        }
+        (1, 6) => migrate_v6_to_v7(&mut connection)?,
         (1, version) => {
             return Err(format!(
                 "database schema version {version} is not supported by version {CURRENT_SCHEMA_VERSION}"
@@ -70,7 +78,7 @@ pub(crate) fn append(
         .map_err(unavailable("begin append transaction"))?;
     let mut last_sequence = transaction
         .query_row(
-            "SELECT COALESCE(MAX(sequence), 0) FROM normalized_logs",
+            "SELECT last_sequence FROM log_sequence WHERE singleton = TRUE",
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -92,8 +100,8 @@ pub(crate) fn append(
             .map_err(unavailable("prepare normalized log insert"))?;
         let mut insert_query = transaction
             .prepare(
-                "INSERT INTO query_logs (sequence, event_at_ms, entry_json)
-                         VALUES (?1, ?2, ?3)",
+                "INSERT INTO query_logs (sequence, event_at_ms)
+                         VALUES (?1, ?2)",
             )
             .map_err(unavailable("prepare hot query log insert"))?;
         for entry in entries {
@@ -145,7 +153,7 @@ pub(crate) fn append(
                         ])
                         .map_err(unavailable("insert normalized log"))?;
                     insert_query
-                        .execute(params![sequence, entry.event_at.0, encoded.as_str()])
+                        .execute(params![sequence, entry.event_at.0])
                         .map_err(unavailable("insert hot query log"))?;
                     report.committed = report.committed.saturating_add(1);
                     last_sequence = sequence;
@@ -153,6 +161,12 @@ pub(crate) fn append(
             }
         }
     }
+    transaction
+        .execute(
+            "UPDATE log_sequence SET last_sequence = ?1 WHERE singleton = TRUE",
+            params![last_sequence],
+        )
+        .map_err(unavailable("advance log sequence high watermark"))?;
     transaction
         .commit()
         .map_err(unavailable("commit append transaction"))?;
@@ -168,7 +182,7 @@ pub(crate) fn append_migration(
         .map_err(unavailable("begin migration append transaction"))?;
     let mut last_sequence = transaction
         .query_row(
-            "SELECT COALESCE(MAX(sequence), 0) FROM normalized_logs",
+            "SELECT last_sequence FROM log_sequence WHERE singleton = TRUE",
             [],
             |row| row.get::<_, i64>(0),
         )
@@ -184,8 +198,8 @@ pub(crate) fn append_migration(
             .map_err(unavailable("prepare migration normalized log insert"))?;
         let mut insert_query = transaction
             .prepare(
-                "INSERT INTO query_logs (sequence, event_at_ms, entry_json)
-                 VALUES (?1, ?2, ?3)",
+                "INSERT INTO query_logs (sequence, event_at_ms)
+                 VALUES (?1, ?2)",
             )
             .map_err(unavailable("prepare migration hot query log insert"))?;
         for entry in entries {
@@ -211,19 +225,25 @@ pub(crate) fn append_migration(
                 ])
                 .map_err(unavailable("insert migration normalized log"))?;
             insert_query
-                .execute(params![sequence, entry.event_at.0, encoded.as_str()])
+                .execute(params![sequence, entry.event_at.0])
                 .map_err(unavailable("insert migration hot query log"))?;
             report.committed = report.committed.saturating_add(1);
             last_sequence = sequence;
         }
     }
     transaction
+        .execute(
+            "UPDATE log_sequence SET last_sequence = ?1 WHERE singleton = TRUE",
+            params![last_sequence],
+        )
+        .map_err(unavailable("advance migration log sequence high watermark"))?;
+    transaction
         .commit()
         .map_err(unavailable("commit migration append transaction"))?;
     Ok(report)
 }
 
-fn initialize_v6(connection: &mut Connection) -> Result<(), String> {
+fn initialize_v7(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -252,10 +272,14 @@ fn initialize_v6(connection: &mut Connection) -> Result<(), String> {
                  recorded_at_ms BIGINT NOT NULL,
                  PRIMARY KEY (sink_id, source_sequence)
              );
+             CREATE TABLE log_sequence (
+                 singleton BOOLEAN PRIMARY KEY CHECK (singleton = TRUE),
+                 last_sequence BIGINT NOT NULL
+             );
+             INSERT INTO log_sequence VALUES (TRUE, 0);
              CREATE TABLE query_logs (
                  sequence BIGINT PRIMARY KEY,
-                 event_at_ms BIGINT NOT NULL,
-                 entry_json VARCHAR NOT NULL
+                 event_at_ms BIGINT NOT NULL
              );
              CREATE INDEX query_logs_event_sequence
                  ON query_logs(event_at_ms, sequence);
@@ -296,7 +320,7 @@ fn initialize_v6(connection: &mut Connection) -> Result<(), String> {
              );
              CREATE INDEX otlp_envelopes_observed
                  ON otlp_envelopes(observed_at_ms, signal);
-             INSERT INTO schema_version (version) VALUES (6);",
+             INSERT INTO schema_version (version) VALUES (7);",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
@@ -389,6 +413,34 @@ fn migrate_v3_to_v4(connection: &mut Connection) -> Result<(), String> {
                  updated_at_ms BIGINT NOT NULL
              );
              UPDATE schema_version SET version = 4;",
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn migrate_v6_to_v7(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE log_sequence (
+                 singleton BOOLEAN PRIMARY KEY CHECK (singleton = TRUE),
+                 last_sequence BIGINT NOT NULL
+             );
+             INSERT INTO log_sequence
+             SELECT TRUE, COALESCE(MAX(sequence), 0) FROM normalized_logs;
+             CREATE TABLE query_logs_v7 (
+                 sequence BIGINT PRIMARY KEY,
+                 event_at_ms BIGINT NOT NULL
+             );
+             INSERT INTO query_logs_v7
+             SELECT sequence, event_at_ms FROM query_logs;
+             DROP TABLE query_logs;
+             ALTER TABLE query_logs_v7 RENAME TO query_logs;
+             CREATE INDEX query_logs_event_sequence
+                 ON query_logs(event_at_ms, sequence);
+             UPDATE schema_version SET version = 7;",
         )
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())

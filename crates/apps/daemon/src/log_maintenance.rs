@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Days, Utc};
 use kernel_controller::TimestampClock;
 use kernel_store::Clock;
-use logs::{BackupStatsProvider, BackupStatsProviderError, BackupStatsSnapshot};
+use logs::{BackupStatsProvider, BackupStatsProviderError, BackupStatsSnapshot, LogSinkId};
 use logstore::{BackupObjectStore, DuckLogStore, LogBackupSettings, backup_log_partitions};
 use tokio::sync::watch;
 
@@ -68,6 +68,7 @@ impl LogBackupTarget {
 /// Node-local owner for hourly rollover, daily backup, retention, and backup health.
 pub struct LogMaintenanceWorker {
     store: Arc<DuckLogStore>,
+    sink_ids: Arc<[LogSinkId]>,
     backup: Option<LogBackupTarget>,
     settings: LogMaintenanceSettings,
     monotonic_clock: Arc<dyn Clock>,
@@ -79,11 +80,14 @@ impl LogMaintenanceWorker {
     /// Restores durable health and records current backup enablement before startup.
     pub async fn new(
         store: Arc<DuckLogStore>,
+        mut sink_ids: Vec<LogSinkId>,
         backup: Option<LogBackupTarget>,
         settings: LogMaintenanceSettings,
         monotonic_clock: Arc<dyn Clock>,
         timestamp_clock: Arc<dyn TimestampClock>,
     ) -> Result<Self, LogMaintenanceError> {
+        sink_ids.sort();
+        sink_ids.dedup();
         let now = timestamp_clock.now();
         let mut stats = store
             .load_backup_stats()
@@ -97,6 +101,7 @@ impl LogMaintenanceWorker {
             .map_err(store_error("persist backup enablement"))?;
         Ok(Self {
             store,
+            sink_ids: Arc::from(sink_ids),
             backup,
             settings,
             monotonic_clock,
@@ -161,7 +166,7 @@ impl LogMaintenanceWorker {
 
     pub(crate) async fn rollover_once(&self) -> Result<(), LogMaintenanceError> {
         self.store
-            .rollover_before(self.timestamp_clock.now())
+            .rollover_before(self.timestamp_clock.now(), &self.sink_ids)
             .await
             .map(|_| ())
             .map_err(store_error("roll over complete log hours"))

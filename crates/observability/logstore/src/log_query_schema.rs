@@ -199,7 +199,11 @@ fn scope_filter(scope: &LogQueryScope) -> CompiledPredicate {
 
 pub(crate) fn query_source(cold_root: &Path) -> Result<CompiledPredicate, LogQueryStoreError> {
     let mut source = CompiledPredicate {
-        sql: "SELECT sequence, event_at_ms, entry_json FROM query_logs".to_owned(),
+        sql: "SELECT query.sequence, query.event_at_ms, normalized.entry_json
+              FROM query_logs AS query
+              INNER JOIN normalized_logs AS normalized
+                ON normalized.sequence = query.sequence"
+            .to_owned(),
         values: Vec::new(),
     };
     if contains_parquet(cold_root)? {

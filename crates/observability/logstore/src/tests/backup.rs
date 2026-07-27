@@ -27,9 +27,9 @@ async fn backup_uploads_verified_node_objects_with_the_manifest_last()
     let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
     let store = runtime.store();
     store.append(&[entry(1, TEN_FIFTEEN)?]).await?;
-    store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?;
+    store.rollover_before(Timestamp(ELEVEN_THIRTY), &[]).await?;
     store.append(&[entry(2, TEN_FORTY_FIVE)?]).await?;
-    store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?;
+    store.rollover_before(Timestamp(ELEVEN_THIRTY), &[]).await?;
     let object_store = RecordingObjectStore::new(false);
     let backup_settings =
         LogBackupSettings::new("clusters/production", NodeId::new("node-one")?, "kms-key")?;
@@ -114,7 +114,7 @@ async fn manifest_upload_failure_keeps_the_partition_pending_for_full_replay()
     .await?;
     let store = runtime.store();
     store.append(&[entry(1, TEN_FIFTEEN)?]).await?;
-    store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?;
+    store.rollover_before(Timestamp(ELEVEN_THIRTY), &[]).await?;
     let object_store = RecordingObjectStore::new(true);
     let settings = LogBackupSettings::new("production", NodeId::new("node-one")?, "kms")?;
 

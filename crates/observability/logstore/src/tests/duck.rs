@@ -341,7 +341,7 @@ async fn duck_store_migrates_v1_rows_to_deterministic_delivery_sequences()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        6
+        7
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM query_logs", [], |row| {
@@ -353,7 +353,7 @@ async fn duck_store_migrates_v1_rows_to_deterministic_delivery_sequences()
 }
 
 #[tokio::test]
-async fn duck_store_migrates_v2_rows_into_an_independent_hot_query_tier()
+async fn duck_store_migrates_v2_rows_into_compact_hot_query_metadata()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
     let path = temporary.path().join("logs.duckdb");
@@ -420,7 +420,23 @@ async fn duck_store_migrates_v2_rows_into_an_independent_hot_query_tier()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        6
+        7
+    );
+    assert_eq!(
+        connection.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('query_logs')",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        2
+    );
+    assert_eq!(
+        connection.query_row(
+            "SELECT last_sequence FROM log_sequence WHERE singleton = TRUE",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        1
     );
     Ok(())
 }
@@ -435,6 +451,7 @@ async fn duck_store_migrates_v4_to_operational_metric_history()
         "CREATE TABLE schema_version (version BIGINT NOT NULL);
          INSERT INTO schema_version VALUES (4);",
     )?;
+    seed_v4_log_schema(&connection)?;
     drop(connection);
 
     let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(path.clone(), 8)?).await?;
@@ -452,7 +469,7 @@ async fn duck_store_migrates_v4_to_operational_metric_history()
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        6
+        7
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM stats_metrics", [], |row| {
@@ -473,6 +490,18 @@ async fn duck_store_migrates_v5_to_lossless_otlp_spooling() -> Result<(), Box<dy
         "CREATE TABLE schema_version (version BIGINT NOT NULL);
          INSERT INTO schema_version VALUES (5);",
     )?;
+    seed_v4_log_schema(&connection)?;
+    connection.execute_batch(
+        "CREATE TABLE stats_metrics (
+             ts BIGINT NOT NULL,
+             name VARCHAR NOT NULL,
+             value DOUBLE NOT NULL,
+             labels_json VARCHAR NOT NULL,
+             PRIMARY KEY (ts, name, labels_json)
+         );
+         CREATE INDEX stats_metrics_name_ts
+             ON stats_metrics(name, ts, labels_json);",
+    )?;
     drop(connection);
 
     let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(path.clone(), 8)?).await?;
@@ -487,7 +516,7 @@ async fn duck_store_migrates_v5_to_lossless_otlp_spooling() -> Result<(), Box<dy
         connection.query_row("SELECT version FROM schema_version", [], |row| {
             row.get::<_, i64>(0)
         })?,
-        6
+        7
     );
     assert_eq!(
         connection.query_row("SELECT COUNT(*) FROM otlp_envelopes", [], |row| {
@@ -496,6 +525,57 @@ async fn duck_store_migrates_v5_to_lossless_otlp_spooling() -> Result<(), Box<dy
         1
     );
     Ok(())
+}
+
+fn seed_v4_log_schema(connection: &duckdb::Connection) -> duckdb::Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE normalized_logs (
+             sequence BIGINT PRIMARY KEY,
+             node_id VARCHAR NOT NULL,
+             producer_type VARCHAR NOT NULL,
+             producer_id VARCHAR NOT NULL,
+             cursor VARCHAR NOT NULL,
+             event_at_ms BIGINT NOT NULL,
+             entry_json VARCHAR NOT NULL,
+             UNIQUE (node_id, producer_type, producer_id, cursor)
+         );
+         CREATE TABLE sink_cursors (
+             sink_id VARCHAR PRIMARY KEY,
+             last_sequence BIGINT NOT NULL
+         );
+         CREATE TABLE sink_dead_letters (
+             sink_id VARCHAR NOT NULL,
+             source_sequence BIGINT NOT NULL,
+             status_code INTEGER,
+             reason VARCHAR NOT NULL,
+             payload BLOB NOT NULL,
+             recorded_at_ms BIGINT NOT NULL,
+             PRIMARY KEY (sink_id, source_sequence)
+         );
+         CREATE TABLE query_logs (
+             sequence BIGINT PRIMARY KEY,
+             event_at_ms BIGINT NOT NULL,
+             entry_json VARCHAR NOT NULL
+         );
+         CREATE INDEX query_logs_event_sequence
+             ON query_logs(event_at_ms, sequence);
+         CREATE TABLE log_partitions (
+             partition_key VARCHAR NOT NULL,
+             state VARCHAR NOT NULL,
+             row_count BIGINT NOT NULL,
+             sequence_low BIGINT NOT NULL,
+             sequence_high BIGINT NOT NULL,
+             sha256 VARCHAR NOT NULL,
+             size_bytes BIGINT NOT NULL,
+             updated_at_ms BIGINT NOT NULL,
+             PRIMARY KEY (partition_key, sequence_low)
+         );
+         CREATE TABLE backup_stats (
+             singleton BOOLEAN PRIMARY KEY CHECK (singleton = TRUE),
+             value_json VARCHAR NOT NULL,
+             updated_at_ms BIGINT NOT NULL
+         );",
+    )
 }
 
 fn entry() -> Result<IngestLogEntry, kernel_api::InvalidIdentifier> {

@@ -310,16 +310,21 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
     let (log_store_runtime, metric_store_runtime) =
         open_observability_stores(plan.data_directory()).await?;
+    let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
     let log_maintenance = configure_log_maintenance(
         log_backup.as_ref(),
         &plan.cluster().name,
         plan.node_id(),
         log_store_runtime.store(),
+        datadog_sinks
+            .logs
+            .iter()
+            .map(|sink| sink.id().clone())
+            .collect(),
         clock.clone(),
         timestamp_clock,
     )
     .await?;
-    let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     let network_stats_reader = Arc::new(HostNetworkStatsReader::production(runtime.clone()));
     #[cfg(any(target_os = "macos", feature = "macos-platform"))]

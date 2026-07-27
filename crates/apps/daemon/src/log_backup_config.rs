@@ -8,6 +8,7 @@ use cluster::LogBackupLaunchConfig;
 use kernel_api::NodeId;
 use kernel_controller::TimestampClock;
 use kernel_store::Clock;
+use logs::LogSinkId;
 use logstore::{DuckLogStore, LogBackupSettings};
 
 const MAX_BUCKET_BYTES: usize = 255;
@@ -60,6 +61,7 @@ pub(crate) async fn configure_log_maintenance(
     cluster_name: &str,
     node_id: &NodeId,
     store: Arc<DuckLogStore>,
+    sink_ids: Vec<LogSinkId>,
     monotonic_clock: Arc<dyn Clock>,
     timestamp_clock: Arc<dyn TimestampClock>,
 ) -> Result<LogMaintenanceWorker, DaemonLaunchError> {
@@ -85,6 +87,7 @@ pub(crate) async fn configure_log_maintenance(
     };
     LogMaintenanceWorker::new(
         store,
+        sink_ids,
         backup,
         LogMaintenanceSettings::default(),
         monotonic_clock,

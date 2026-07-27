@@ -29,7 +29,9 @@ async fn queries_hot_and_cold_logs_with_status_aliases_and_typed_scope()
         .attributes
         .insert("DownstreamStatus".to_owned(), "503".to_owned());
     store.append(&[failed]).await?;
-    assert_eq!(store.rollover_before(Timestamp(ELEVEN)).await?.rows, 1);
+    let rollover = store.rollover_before(Timestamp(ELEVEN), &[]).await?;
+    assert_eq!(rollover.rows, 1);
+    assert_eq!(rollover.delivery_rows_reclaimed, 1);
 
     let mut success = workload_entry(2, ELEVEN + 60_000, "info", "request complete")?;
     success
@@ -81,7 +83,7 @@ async fn histogram_and_cursors_preserve_order_across_hot_and_cold_tiers()
         .attributes
         .insert("statusCode".to_owned(), "503".to_owned());
     store.append(&[failed]).await?;
-    store.rollover_before(Timestamp(ELEVEN)).await?;
+    store.rollover_before(Timestamp(ELEVEN), &[]).await?;
     let mut success = workload_entry(2, ELEVEN + 60_000, "info", "complete")?;
     success
         .attributes

@@ -111,7 +111,7 @@ async fn verification_rejects_a_divergent_query_tier() -> TestResult {
     apply_legacy_telemetry(&plan, &source, &destination).await?;
     let logs = Connection::open(destination.join("agent/logs.duckdb"))?;
     logs.execute(
-        "UPDATE query_logs SET entry_json = '{}' WHERE sequence = (
+        "UPDATE query_logs SET event_at_ms = event_at_ms + 1 WHERE sequence = (
              SELECT MIN(sequence) FROM query_logs
          )",
         [],

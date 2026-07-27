@@ -141,10 +141,15 @@ impl DuckLogStore {
     pub async fn rollover_before(
         &self,
         before: Timestamp,
+        sink_ids: &[LogSinkId],
     ) -> Result<LogRolloverReport, LogArchiveError> {
         let (response, result) = oneshot::channel();
         self.commands
-            .send(Command::Rollover { before, response })
+            .send(Command::Rollover {
+                before,
+                sink_ids: sink_ids.to_vec(),
+                response,
+            })
             .await
             .map_err(|_| archive_worker_stopped("accepting rollover"))?;
         result

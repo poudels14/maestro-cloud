@@ -262,13 +262,18 @@ pub(crate) fn stats_snapshot(
     path: &Path,
     sink_ids: &[LogSinkId],
 ) -> Result<LogSpoolStats, LogStatsStoreError> {
-    let (row_count, high_watermark) = connection
-        .query_row(
-            "SELECT COUNT(*), COALESCE(MAX(sequence), 0) FROM normalized_logs",
-            [],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        )
+    let row_count = connection
+        .query_row("SELECT COUNT(*) FROM normalized_logs", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .map_err(stats_unavailable("read spool totals"))?;
+    let high_watermark = connection
+        .query_row(
+            "SELECT last_sequence FROM log_sequence WHERE singleton = TRUE",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(stats_unavailable("read log sequence high watermark"))?;
     let oldest_entry_at_ms = connection
         .query_row(
             "SELECT event_at_ms FROM normalized_logs ORDER BY sequence ASC LIMIT 1",
@@ -282,9 +287,17 @@ pub(crate) fn stats_snapshot(
     for sink_id in sink_ids.iter().cloned().collect::<BTreeSet<_>>() {
         let cursor = load_stats_cursor(connection, &sink_id)?;
         let cursor_value = cursor.map_or(0, |sequence| sequence.0);
-        let pending_entries = high_watermark.0.saturating_sub(cursor_value);
         let cursor_value = i64::try_from(cursor_value)
             .map_err(|_| stats_rejected("sink cursor exceeds durable range"))?;
+        let pending_entries = connection
+            .query_row(
+                "SELECT COUNT(*) FROM normalized_logs WHERE sequence > ?1",
+                params![cursor_value],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(stats_unavailable("count pending sink logs"))?;
+        let pending_entries = u64::try_from(pending_entries)
+            .map_err(|_| stats_unavailable_message("pending log count is invalid"))?;
         let oldest_pending_at_ms = connection
             .query_row(
                 "SELECT event_at_ms FROM normalized_logs

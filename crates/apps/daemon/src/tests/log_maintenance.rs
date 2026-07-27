@@ -33,6 +33,7 @@ async fn maintenance_rolls_over_backs_up_then_prunes_and_persists_success()
     let object_store = std::sync::Arc::new(RecordingObjectStore::default());
     let worker = LogMaintenanceWorker::new(
         store.clone(),
+        Vec::new(),
         Some(LogBackupTarget::new(
             object_store.clone(),
             LogBackupSettings::new("production", NodeId::new("node-one")?, "kms")?,
@@ -80,11 +81,12 @@ async fn failed_manifest_is_persisted_as_pending_health_and_recovers_next_run()
     let store = runtime.store();
     store.append(&[entry(JULY_NINETEENTH_TEN)?]).await?;
     store
-        .rollover_before(Timestamp(JULY_TWENTY_FIRST_NOON))
+        .rollover_before(Timestamp(JULY_TWENTY_FIRST_NOON), &[])
         .await?;
     let object_store = std::sync::Arc::new(RecordingObjectStore::failing_manifest_once());
     let worker = LogMaintenanceWorker::new(
         store.clone(),
+        Vec::new(),
         Some(LogBackupTarget::new(
             object_store,
             LogBackupSettings::new("production", NodeId::new("node-one")?, "kms")?,

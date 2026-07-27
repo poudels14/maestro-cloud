@@ -116,11 +116,16 @@ pub(crate) fn run_worker(
                     &sink_ids,
                 ));
             }
-            Command::Rollover { before, response } => {
+            Command::Rollover {
+                before,
+                sink_ids,
+                response,
+            } => {
                 let _ignored = response.send(log_archive::rollover_before(
                     &mut connection,
                     cold_root,
                     before,
+                    &sink_ids,
                 ));
             }
             Command::PendingBackups { response } => {

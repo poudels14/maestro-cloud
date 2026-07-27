@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use kernel_api::{ClusterId, NodeId, Timestamp};
 use logs::{
-    IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogStore,
-    LogStream, OriginCursor,
+    IngestLogEntry, LogBody, LogDeliveryStore, LogOrigin, LogProducer, LogRecordId, LogSequence,
+    LogSinkId, LogStore, LogStream, OriginCursor,
 };
 
 use crate::{ColdPartitionManifest, DuckLogStoreRuntime, DuckStoreSettings, LogRolloverReport};
@@ -22,6 +22,7 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
     let settings = DuckStoreSettings::new(temporary.path().join("logs.duckdb"), 8)?;
     let runtime = DuckLogStoreRuntime::open(settings.clone()).await?;
     let store = runtime.store();
+    let sinks = [LogSinkId::new("datadog")?];
     store
         .append(&[
             entry(1, TEN_FIFTEEN)?,
@@ -31,15 +32,20 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
         .await?;
 
     assert_eq!(
-        store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?,
+        store
+            .rollover_before(Timestamp(ELEVEN_THIRTY), &sinks)
+            .await?,
         LogRolloverReport {
             partitions: 1,
             rows: 2,
             bytes: std::fs::metadata(parquet_path(store.cold_root(), 1, 2))?.len(),
+            delivery_rows_reclaimed: 0,
         }
     );
     assert_eq!(
-        store.rollover_before(Timestamp(ELEVEN_THIRTY)).await?,
+        store
+            .rollover_before(Timestamp(ELEVEN_THIRTY), &sinks)
+            .await?,
         LogRolloverReport::default()
     );
     assert_eq!(store.read_after(None, 8).await?.len(), 3);
@@ -84,7 +90,7 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
     let store = restarted.store();
     store.append(&[entry(4, TEN_FIFTY)?]).await?;
     assert_eq!(
-        store.rollover_before(Timestamp(NOON)).await?,
+        store.rollover_before(Timestamp(NOON), &sinks).await?,
         LogRolloverReport {
             partitions: 2,
             rows: 2,
@@ -95,6 +101,7 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
                         .join("logs/date=2026-07-21/hour=11/part-3-3.parquet"),
                 )?
                 .len(),
+            delivery_rows_reclaimed: 0,
         }
     );
     let manifest = read_manifest(store.cold_root())?;
@@ -102,6 +109,60 @@ async fn hourly_rollover_writes_verified_manifests_without_consuming_delivery_ro
     assert_eq!(manifest.parts.get(1).map(|part| part.sequence_low), Some(4));
     assert_eq!(store.read_after(None, 8).await?.len(), 4);
     restarted.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollover_reclaims_only_archived_rows_delivered_to_every_active_sink()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let runtime = DuckLogStoreRuntime::open(DuckStoreSettings::new(
+        temporary.path().join("logs.duckdb"),
+        8,
+    )?)
+    .await?;
+    let store = runtime.store();
+    let sink = LogSinkId::new("datadog")?;
+    store
+        .append(&[
+            entry(1, TEN_FIFTEEN)?,
+            entry(2, TEN_FORTY_FIVE)?,
+            entry(3, ELEVEN_FIVE)?,
+        ])
+        .await?;
+    store.commit_sink_cursor(&sink, LogSequence(1)).await?;
+
+    let first = store
+        .rollover_before(Timestamp(ELEVEN_THIRTY), std::slice::from_ref(&sink))
+        .await?;
+    assert_eq!(first.rows, 2);
+    assert_eq!(first.delivery_rows_reclaimed, 1);
+    assert_eq!(
+        store
+            .read_after(None, 8)
+            .await?
+            .into_iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![LogSequence(2), LogSequence(3)]
+    );
+
+    store.commit_sink_cursor(&sink, LogSequence(3)).await?;
+    let second = store
+        .rollover_before(Timestamp(ELEVEN_THIRTY), std::slice::from_ref(&sink))
+        .await?;
+    assert_eq!(second.rows, 0);
+    assert_eq!(second.delivery_rows_reclaimed, 1);
+    assert_eq!(
+        store
+            .read_after(None, 8)
+            .await?
+            .into_iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![LogSequence(3)]
+    );
+    runtime.shutdown().await?;
     Ok(())
 }
 
@@ -117,7 +178,7 @@ async fn rollover_failure_keeps_hot_and_delivery_rows_available()
     std::fs::create_dir_all(parquet.parent().ok_or("partition parent missing")?)?;
     std::fs::write(&parquet, b"not parquet")?;
 
-    assert!(store.rollover_before(Timestamp(NOON)).await.is_err());
+    assert!(store.rollover_before(Timestamp(NOON), &[]).await.is_err());
     assert_eq!(store.read_after(None, 8).await?.len(), 1);
     runtime.shutdown().await?;
 
