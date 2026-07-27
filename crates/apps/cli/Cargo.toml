@@ -10,11 +10,16 @@ name = "maestro-next"
 path = "src/main.rs"
 
 [dependencies]
-aws-config.workspace = true
+aws-config = { workspace = true, features = [
+  "credentials-process",
+  "default-https-client",
+  "rt-tokio",
+  "sso",
+] }
 aws-sdk-secretsmanager.workspace = true
 clap.workspace = true
 cluster = { version = "0.5.0", path = "../../cluster" }
-crossterm = "=0.29.0"
+crossterm.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
 ignore.workspace = true
@@ -25,8 +30,8 @@ kernel-api = { version = "0.5.0", path = "../../kernel/api" }
 libc.workspace = true
 logs = { version = "0.5.0", path = "../../observability/logs" }
 reqwest = { workspace = true, features = ["json"] }
-rpassword = "=7.5.4"
-rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std"] }
+rpassword.workspace = true
+rustls = { workspace = true, default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde.workspace = true
 serde_ignored.workspace = true
@@ -34,13 +39,13 @@ serde_path_to_error.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 shellexpand.workspace = true
-tempfile = "=3.27.0"
+tempfile.workspace = true
 thiserror.workspace = true
 tar.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "time"] }
-tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 uuid.workspace = true
-webpki-roots = "=0.26.11"
+webpki-roots.workspace = true
 time.workspace = true
 
 [lints]

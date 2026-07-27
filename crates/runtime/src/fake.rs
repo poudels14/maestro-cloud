@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use kernel_api::{ClusterId, NodeId, WorkloadId};
-use test_util::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 use tokio::sync::broadcast;
 
 use crate::{

@@ -7,8 +7,8 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
-axum = { version = "=0.8.9", features = ["ws"] }
-axum-server = { version = "=0.8.0", features = ["tls-rustls-no-provider"] }
+axum = { workspace = true, features = ["ws"] }
+axum-server = { workspace = true, features = ["tls-rustls-no-provider"] }
 build = { version = "0.5.0", path = "../../operators/build" }
 cluster = { version = "0.5.0", path = "../../cluster" }
 firewall = { version = "0.5.0", path = "../../operators/firewall" }
@@ -24,26 +24,26 @@ metrics = { version = "0.5.0", path = "../../observability/metrics" }
 node-agent = { version = "0.5.0", path = "../../node/agent" }
 reqwest.workspace = true
 runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
-rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std"] }
+rustls = { workspace = true, default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-time = "=0.3.53"
-tokio = { version = "=1.52.3", features = ["net", "rt", "sync", "time"] }
-tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
-tower = { version = "=0.5.3", features = ["util"] }
-tower-http = { version = "=0.6.11", features = ["fs"] }
+time.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
+tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true, features = ["fs"] }
 webhook = { version = "0.5.0", path = "../../operators/webhook" }
 
 [dev-dependencies]
-http-body-util = "=0.1.4"
+http-body-util.workspace = true
 logs = { version = "0.5.0", path = "../../observability/logs", features = ["test-util"] }
 metrics = { version = "0.5.0", path = "../../observability/metrics", features = ["test-util"] }
-rcgen = { version = "=0.14.8", features = ["pem"] }
+rcgen = { workspace = true, features = ["pem"] }
 runtime = { version = "0.5.0", path = "../../runtime", default-features = false, features = ["test-util"] }
-tempfile = "=3.27.0"
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -6,14 +6,14 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-nix = { version = "=0.30.1", features = ["signal", "process"] }
-serde = { version = "=1.0.228", features = ["derive"] }
-thiserror = "=2.0.18"
-tokio = { version = "=1.52.3", features = ["rt", "sync"] }
+nix = { workspace = true, features = ["signal", "process"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-tempfile = "=3.27.0"
-tokio = { version = "=1.52.3", features = ["macros", "rt"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

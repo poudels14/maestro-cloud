@@ -79,7 +79,7 @@ pub async fn run(
     let snapshot = store.list(&prefix).await?;
     require!(snapshot.values.is_empty(), "isolated prefix was not empty")?;
     let mut watch = store.watch(prefix.clone(), WatchStart::After(snapshot.cursor))?;
-    let mut pending_next = test_util::task::spawn(watch.next());
+    let mut pending_next = tokio_test::task::spawn(watch.next());
     require!(
         matches!(pending_next.poll(), Poll::Pending),
         "an idle watch did not wait for a future mutation",

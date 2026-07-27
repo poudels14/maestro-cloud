@@ -7,43 +7,84 @@ edition = "2024"
 rust-version = "1.97.0"
 
 [workspace.dependencies]
+aes-gcm = "=0.10.3"
+argon2 = "=0.5.3"
 async-trait = "=0.1.89"
-aws-config = "=1.9.0"
+aws-config = { version = "=1.9.0", default-features = false }
+aws-sdk-s3 = { version = "=1.138.0", default-features = false }
 aws-sdk-secretsmanager = { version = "=1.109.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+axum = "=0.8.9"
+axum-server = "=0.8.0"
+base64 = "=0.22.1"
 bytes = "=1.12.1"
+chacha20poly1305 = "=0.11.0"
 chrono = "=0.4.45"
 clap = { version = "=4.6.1", features = ["derive"] }
+containerd = { version = "=0.9.0", package = "containerd-client" }
+crossterm = "=0.29.0"
+docker = { version = "=0.21.0", package = "bollard" }
+duckdb = "=1.4.1"
 etcd-client = { version = "=0.19.0", features = ["tls"] }
 flate2 = "=1.1.9"
 futures-util = "=0.3.33"
+getrandom = "=0.4.3"
 hex = "=0.4.3"
+hickory-server = { version = "=0.26.1", default-features = false }
+hkdf = "=0.12.4"
 hmac = "=0.12.1"
 http = "=1.4.2"
+http-body-util = "=0.1.4"
 ignore = "=0.4.28"
 insta = "=1.48.0"
 ipnet = "=2.12.0"
 json5 = "=0.4.1"
 jsonwebtoken = { version = "=10.4.0", default-features = false, features = ["aws_lc_rs"] }
 libc = "=0.2.186"
+netlink-packet-route = "=0.30.0"
+nix = "=0.30.1"
+opentelemetry-proto = { version = "=0.32.0", default-features = false }
+parking_lot = "=0.12.5"
+prost = "=0.14.4"
+prost-types = "=0.14.4"
 proptest = "=1.11.0"
+rcgen = "=0.14.8"
 reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls", "stream"] }
+rpassword = "=7.5.4"
+rtnetlink = "=0.21.0"
+rustls = { version = "=0.23.42", default-features = false }
+schemars = "=1.2.1"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_ignored = "=0.1.14"
 serde_path_to_error = "=0.1.20"
 serde_json = "=1.0.151"
+serde_json_canonicalizer = "=0.3.2"
 semver = "=1.0.28"
 sha2 = "=0.10.9"
 shellexpand = "=3.1.2"
 strip-ansi-escapes = "=0.2.1"
+subtle = "=2.6.1"
 tar = "=0.4.46"
 tempfile = "=3.27.0"
 thiserror = "=2.0.18"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt"] }
+tokio-stream = "=0.1.18"
+tokio-test = "=0.4.5"
+tokio-tungstenite = { version = "=0.30.0", default-features = false }
 tokio-util = { version = "=0.7.18", features = ["io", "io-util"] }
+tonic = { version = "=0.14.6", default-features = false }
+tonic-prost = "=0.14.6"
+tonic-prost-build = "=0.14.6"
+tower = "=0.5.3"
+tower-http = "=0.6.11"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "=1.23.5", features = ["v4"] }
+webpki-roots = "=0.26.11"
+wireguard-control = "=2.0.0"
+x25519-dalek = "=3.0.0"
+x509-parser = "=0.18.1"
+zeroize = "=1.9.0"
 
 [workspace.lints.clippy]
 expect_used = "deny"

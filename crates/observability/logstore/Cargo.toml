@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-duckdb = { version = "=1.4.1", features = ["bundled", "json", "parquet"] }
+duckdb = { workspace = true, features = ["bundled", "json", "parquet"] }
 kernel-api = { version = "0.5.0", path = "../../kernel/api" }
 logql = { version = "0.5.0", path = "../logql" }
 logs = { version = "0.5.0", path = "../logs" }
@@ -17,13 +17,13 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { version = "=1.52.3", features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
 logs = { version = "0.5.0", path = "../logs", features = ["test-util"] }
 metrics = { version = "0.5.0", path = "../metrics", features = ["test-util"] }
 runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
-tempfile = "=3.27.0"
+tempfile.workspace = true
 tokio.workspace = true
 
 [lints]

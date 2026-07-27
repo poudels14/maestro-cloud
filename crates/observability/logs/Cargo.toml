@@ -17,7 +17,7 @@ kernel-api = { version = "0.5.0", path = "../../kernel/api" }
 logql = { version = "0.5.0", path = "../logql" }
 node-agent = { version = "0.5.0", path = "../../node/agent" }
 node-fabric = { version = "0.5.0", path = "../../node/fabric" }
-prost = "=0.14.4"
+prost.workspace = true
 reqwest.workspace = true
 runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
 serde.workspace = true
@@ -26,7 +26,7 @@ sha2.workspace = true
 strip-ansi-escapes.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
-tonic = "=0.14.6"
+tonic = { workspace = true, features = ["codegen", "router", "transport"] }
 
 [dev-dependencies]
 proptest.workspace = true
