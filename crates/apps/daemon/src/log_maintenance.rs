@@ -135,7 +135,11 @@ impl LogMaintenanceWorker {
             let now = self.monotonic_clock.now();
             if now >= rollover_due {
                 if let Err(error) = self.rollover_once().await {
-                    eprintln!("log rollover maintenance failed: {error}");
+                    tracing::warn!(
+                        maintenance_operation = "rollover",
+                        error = %error,
+                        "log maintenance failed"
+                    );
                 }
                 rollover_due = self
                     .monotonic_clock
@@ -144,7 +148,11 @@ impl LogMaintenanceWorker {
             }
             if backup_due.is_some_and(|deadline| now >= deadline) {
                 if let Err(error) = self.backup_once().await {
-                    eprintln!("log backup maintenance failed: {error}");
+                    tracing::warn!(
+                        maintenance_operation = "backup",
+                        error = %error,
+                        "log maintenance failed"
+                    );
                 }
                 backup_due = Some(
                     self.monotonic_clock

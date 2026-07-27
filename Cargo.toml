@@ -41,6 +41,8 @@ thiserror = "=2.0.18"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt"] }
 tokio-util = { version = "=0.7.18", features = ["io", "io-util"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "=1.23.5", features = ["v4"] }
 
 [workspace.lints.clippy]

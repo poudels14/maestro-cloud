@@ -76,10 +76,38 @@ fn plan_rejects_a_public_master_secret_file() -> TestResult {
         ])
         .output()?;
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8(output.stderr)?.contains("owner-only permissions"));
+    let event = structured_error(output.stderr)?;
+    assert_eq!(
+        event.get("level").and_then(serde_json::Value::as_str),
+        Some("ERROR")
+    );
+    assert_eq!(
+        event.get("message").and_then(serde_json::Value::as_str),
+        Some("maestro migration failed")
+    );
+    assert!(
+        event
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|error| error.contains("owner-only permissions"))
+    );
     Ok(())
 }
 
 fn migration_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_maestro-migrate"))
+}
+
+fn structured_error(stderr: Vec<u8>) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let stderr = String::from_utf8(stderr)?;
+    let mut lines = stderr.lines();
+    let line = lines
+        .next()
+        .ok_or_else(|| std::io::Error::other("migration tool emitted no structured error"))?;
+    if lines.next().is_some() {
+        return Err(
+            std::io::Error::other("migration tool emitted more than one error event").into(),
+        );
+    }
+    serde_json::from_str(line).map_err(Into::into)
 }

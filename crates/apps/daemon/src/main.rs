@@ -10,6 +10,8 @@ use daemon::{
 use logs::{LogSequence, LogSinkId};
 use node_agent::{TailscaleDnsPluginSettings, TailscaleDnsRoute};
 use tokio::io::AsyncWriteExt;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Debug, Parser)]
 #[command(name = "daemon", version, about = "Maestro control-plane daemon")]
@@ -105,10 +107,25 @@ async fn main() {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
+    initialize_tracing();
     if let Err(error) = run(cli).await {
-        eprintln!("maestro daemon failed: {error}");
+        tracing::error!(error = %error, "maestro daemon failed");
         std::process::exit(1);
     }
+}
+
+fn initialize_tracing() {
+    let filter = EnvFilter::builder()
+        .with_default_directive(tracing::Level::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .json()
+        .flatten_event(true)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .finish()
+        .init();
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -219,16 +236,27 @@ async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::
 
 async fn start(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = tokio::task::spawn_blocking(move || load_launch_config(&path)).await??;
+    let cluster_id = config.cluster.cluster_id.clone();
+    let node_id = config.node_id.clone();
+    tracing::info!(%cluster_id, %node_id, "starting maestro daemon");
     let mut running = launch_daemon(config).await?;
+    tracing::info!(%cluster_id, %node_id, "maestro daemon started");
     tokio::select! {
         signal = shutdown_signal() => {
             signal?;
+            tracing::info!(%cluster_id, %node_id, "shutting down maestro daemon");
             running.shutdown().await?;
+            tracing::info!(%cluster_id, %node_id, "maestro daemon stopped");
             Ok(())
         }
         failure = running.wait_for_failure() => {
             if let Err(error) = running.shutdown().await {
-                eprintln!("maestro daemon cleanup after role failure failed: {error}");
+                tracing::error!(
+                    %cluster_id,
+                    %node_id,
+                    error = %error,
+                    "maestro daemon cleanup after role failure failed"
+                );
             }
             Err(failure.into())
         }

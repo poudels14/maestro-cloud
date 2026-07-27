@@ -60,6 +60,13 @@ default to TCP `3000`, `2379`, and `2380`; `services.maestro.wireguardPort`
 defaults to UDP `51820`. Set them to the corresponding `cluster.ports` values
 when a launch document uses non-default ports.
 
+The daemon and migration tool write newline-delimited JSON diagnostics to
+stderr. Under systemd, these records flow directly into the journal with
+structured `level`, `message`, `error`, and resource identity fields. The
+`RUST_LOG` environment variable selects tracing directives and defaults to
+`info`; launch configuration, secret values, and full environment maps are
+never emitted.
+
 Control-plane launch documents should use
 `/run/current-system/sw/bin/etcd` for `etcdBinary`. The module installs the
 selected etcd package into the system profile, enables native containerd, and

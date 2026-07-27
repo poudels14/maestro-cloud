@@ -37,6 +37,21 @@ fn start_requires_its_explicit_subcommand() -> TestResult {
 
     assert_eq!(explicit.status.code(), Some(1));
     assert!(explicit.stdout.is_empty());
+    let event = structured_error(explicit.stderr)?;
+    assert_eq!(
+        event.get("level").and_then(serde_json::Value::as_str),
+        Some("ERROR")
+    );
+    assert_eq!(
+        event.get("message").and_then(serde_json::Value::as_str),
+        Some("maestro daemon failed")
+    );
+    assert!(
+        event
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|error| error.contains("daemon launch document"))
+    );
     assert_eq!(positional.status.code(), Some(2));
     assert!(positional.stdout.is_empty());
     assert!(String::from_utf8(positional.stderr)?.contains("unrecognized subcommand"));
@@ -95,4 +110,16 @@ fn local_logs_command_retains_source_tail_and_follow_options() -> TestResult {
 
 fn daemon_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_daemon"))
+}
+
+fn structured_error(stderr: Vec<u8>) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let stderr = String::from_utf8(stderr)?;
+    let mut lines = stderr.lines();
+    let line = lines
+        .next()
+        .ok_or_else(|| std::io::Error::other("daemon emitted no structured error"))?;
+    if lines.next().is_some() {
+        return Err(std::io::Error::other("daemon emitted more than one error event").into());
+    }
+    serde_json::from_str(line).map_err(Into::into)
 }

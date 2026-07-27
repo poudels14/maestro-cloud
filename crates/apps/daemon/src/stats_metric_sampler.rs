@@ -88,7 +88,11 @@ impl StatsMetricSampler {
             tokio::select! {
                 () = self.monotonic_clock.sleep_until(due) => {
                     if let Err(error) = self.collect_once().await {
-                        eprintln!("operational stats sampling failed: {error}");
+                        tracing::warn!(
+                            node_id = %self.node_id,
+                            error = %error,
+                            "operational stats sampling failed"
+                        );
                     }
                     due = self.monotonic_clock.now().saturating_add(self.interval);
                 }

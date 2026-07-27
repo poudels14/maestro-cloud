@@ -13,6 +13,8 @@ use migrate::{
     restore_legacy_store, verify_legacy_store_restore, verify_legacy_telemetry,
 };
 use serde::Serialize;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod cutover_files;
 
@@ -193,14 +195,33 @@ impl EtcdArguments {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("maestro migration failed: {error}");
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    initialize_tracing();
+    if let Err(error) = run(cli).await {
+        tracing::error!(error = %error, "maestro migration failed");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    match Cli::parse().command {
+fn initialize_tracing() {
+    let filter = EnvFilter::builder()
+        .with_default_directive(tracing::Level::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .json()
+        .flatten_event(true)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .finish()
+        .init();
+}
+
+async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    match cli.command {
         Command::Capture { etcd, output } => capture(etcd.load()?, &output).await,
         Command::Plan {
             snapshot,

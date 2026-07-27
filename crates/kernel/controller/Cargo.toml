@@ -14,7 +14,7 @@ serde_json = "=1.0.151"
 test-util = { version = "=0.4.5", package = "tokio-test", optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tracing = "0.1.44"
+tracing.workspace = true
 
 [lints]
 workspace = true
