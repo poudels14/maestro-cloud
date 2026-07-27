@@ -62,5 +62,7 @@ fn token_lifetimes_and_access_levels_are_explicit() -> Result<(), Box<dyn std::e
     assert!("0m".parse::<TokenLifetime>().is_err());
     assert!("1w".parse::<TokenLifetime>().is_err());
     assert!("hour".parse::<TokenLifetime>().is_err());
+    assert!("".parse::<TokenLifetime>().is_err());
+    assert!("é".parse::<TokenLifetime>().is_err());
     Ok(())
 }

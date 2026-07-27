@@ -43,12 +43,17 @@ impl FromStr for TokenLifetime {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let value = value.trim();
-        let (number, unit) = value.split_at(value.len().saturating_sub(1));
+        let Some((unit_index, unit)) = value.char_indices().next_back() else {
+            return Err("lifetime must end in s, m, h, or d (for example 15m or 1h)".to_owned());
+        };
+        let number = value
+            .get(..unit_index)
+            .ok_or_else(|| "lifetime must start with a positive integer".to_owned())?;
         let multiplier = match unit {
-            "s" => 1,
-            "m" => 60,
-            "h" => 60 * 60,
-            "d" => SECONDS_PER_DAY,
+            's' => 1,
+            'm' => 60,
+            'h' => 60 * 60,
+            'd' => SECONDS_PER_DAY,
             _ => return Err("lifetime must end in s, m, h, or d (for example 15m or 1h)".into()),
         };
         let number = number
