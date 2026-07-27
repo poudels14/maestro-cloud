@@ -155,19 +155,32 @@
       in {
         default = pkgs.mkShell {
           inputsFrom = [self.packages.${system}.default];
-          packages = with pkgs; [
-            actionlint
-            cargo-deny
-            cargo-nextest
-            nodejs_22
-            (pnpm_10.override {nodejs = nodejs_22;})
-            pkg-config
-            protobuf
-            python3
-            rustToolchain
-            rust-analyzer
-            shellcheck
-          ];
+          packages =
+            (with pkgs; [
+              actionlint
+              cargo-deny
+              cargo-nextest
+              nodejs_22
+              (pnpm_10.override {nodejs = nodejs_22;})
+              pkg-config
+              protobuf
+              python3
+              rustToolchain
+              rust-analyzer
+              shellcheck
+            ])
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux (with pkgs; [
+              buildkit
+              containerd
+              etcd
+              iproute2
+              iputils
+              jq
+              kmod
+              nftables
+              procps
+              runc
+            ]);
         };
       }
     );

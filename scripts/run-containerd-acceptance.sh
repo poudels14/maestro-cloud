@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-for command in buildctl buildkitd cargo containerd ctr sudo; do
+for command in buildctl buildkitd cargo containerd ctr env runc sudo; do
   if ! command -v "$command" >/dev/null; then
     echo "required command is unavailable: $command" >&2
     exit 1
@@ -21,6 +21,17 @@ case "$(uname -m)" in
     exit 1
     ;;
 esac
+
+buildctl_binary=$(command -v buildctl)
+buildkitd_binary=$(command -v buildkitd)
+containerd_binary=$(command -v containerd)
+ctr_binary=$(command -v ctr)
+env_binary=$(command -v env)
+runc_binary=$(command -v runc)
+containerd_directory=$(dirname "$containerd_binary")
+buildkit_directory=$(dirname "$buildkitd_binary")
+runc_directory=$(dirname "$runc_binary")
+runtime_path="${containerd_directory}:${buildkit_directory}:${runc_directory}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 acceptance_root=$(mktemp -d /tmp/maestro-containerd-acceptance.XXXXXX)
 containerd_socket="$acceptance_root/containerd.sock"
@@ -42,23 +53,23 @@ cleanup() {
   fi
 
   if [[ -S "$containerd_socket" ]] \
-    && sudo ctr --address "$containerd_socket" version >/dev/null 2>&1; then
+    && sudo "$ctr_binary" --address "$containerd_socket" version >/dev/null 2>&1; then
     while IFS= read -r task_id; do
       if [[ -n "$task_id" ]]; then
-        sudo ctr --address "$containerd_socket" --namespace maestro-test \
+        sudo "$ctr_binary" --address "$containerd_socket" --namespace maestro-test \
           tasks delete --force "$task_id" >/dev/null 2>&1 || true
       fi
     done < <(
-      sudo ctr --address "$containerd_socket" --namespace maestro-test \
+      sudo "$ctr_binary" --address "$containerd_socket" --namespace maestro-test \
         tasks list --quiet 2>/dev/null || true
     )
     while IFS= read -r container_id; do
       if [[ -n "$container_id" ]]; then
-        sudo ctr --address "$containerd_socket" --namespace maestro-test \
+        sudo "$ctr_binary" --address "$containerd_socket" --namespace maestro-test \
           containers delete "$container_id" >/dev/null 2>&1 || true
       fi
     done < <(
-      sudo ctr --address "$containerd_socket" --namespace maestro-test \
+      sudo "$ctr_binary" --address "$containerd_socket" --namespace maestro-test \
         containers list --quiet 2>/dev/null || true
     )
   fi
@@ -86,7 +97,7 @@ trap cleanup EXIT INT TERM
 
 # The caller owns the isolated log directory used by this redirection.
 # shellcheck disable=SC2024
-sudo containerd \
+sudo "$env_binary" PATH="$runtime_path" "$containerd_binary" \
   --log-level warn \
   --address "$containerd_socket" \
   --root "$acceptance_root/containerd-root" \
@@ -96,7 +107,7 @@ containerd_pid=$!
 
 # The caller owns the isolated log directory used by this redirection.
 # shellcheck disable=SC2024
-sudo buildkitd \
+sudo "$env_binary" PATH="$runtime_path" "$buildkitd_binary" \
   --root "$acceptance_root/buildkit-root" \
   --addr "unix://$buildkit_socket" \
   --containerd-worker=false \
@@ -108,9 +119,9 @@ buildkit_pid=$!
 for attempt in {1..30}; do
   if [[ -S "$containerd_socket" && -S "$buildkit_socket" ]]; then
     sudo chmod 0666 "$containerd_socket" "$buildkit_socket"
-    if ctr --address "$containerd_socket" version \
+    if "$ctr_binary" --address "$containerd_socket" version \
       >"$acceptance_root/containerd-probe.log" 2>&1 \
-      && buildctl --addr "unix://$buildkit_socket" debug workers \
+      && "$buildctl_binary" --addr "unix://$buildkit_socket" debug workers \
         >"$acceptance_root/buildkit-probe.log" 2>&1; then
       break
     fi
@@ -140,7 +151,7 @@ MAESTRO_CONTAINERD_SOCKET="$containerd_socket" \
 MAESTRO_CONTAINERD_SOCKET="$containerd_socket" \
   MAESTRO_CONTAINERD_SNAPSHOTTER=overlayfs \
   MAESTRO_CONTAINERD_ARTIFACT_TEST_IMAGE="$image" \
-  MAESTRO_BUILDCTL="$(command -v buildctl)" \
+  MAESTRO_BUILDCTL="$buildctl_binary" \
   MAESTRO_BUILDKIT_ADDRESS="unix://$buildkit_socket" \
   cargo test \
     -p runtime \

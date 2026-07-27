@@ -13,7 +13,7 @@ jobs:
   quality:
     name: Rewrite quality gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
 
@@ -73,6 +73,12 @@ jobs:
 
       - name: Evaluate Nix checks
         run: nix flake check --no-build
+
+      - name: Run real containerd acceptance
+        run: nix develop --command scripts/run-containerd-acceptance.sh
+
+      - name: Run one-node and three-node acceptance
+        run: nix develop --command scripts/run-real-cluster-acceptance.sh
 
   build:
     name: Static bundle (${{ matrix.system }})

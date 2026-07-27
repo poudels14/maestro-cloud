@@ -357,6 +357,8 @@ pnpm --dir ui typecheck
 pnpm --dir ui build
 pnpm check:api-drift
 nix flake check
+scripts/run-containerd-acceptance.sh
+scripts/run-real-cluster-acceptance.sh
 ```
 
 Real etcd/runtime conformance and one-node/three-node cluster scenarios are
