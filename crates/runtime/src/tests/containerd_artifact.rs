@@ -5,7 +5,9 @@ use containerd::services::v1::Image;
 use containerd::tonic::transport::Endpoint;
 use containerd::tonic::{Code, Status};
 use containerd::types::Descriptor;
+use kernel_api::Timestamp;
 
+use crate::containerd_artifact::lease_expiration;
 use crate::containerd_artifact_support::{
     MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, image_digest,
     operation_error, prune_candidates, reference_prefix, removed_digests, select_image,
@@ -14,6 +16,15 @@ use crate::{
     ArtifactDigest, ArtifactStoreError, ContainerdRuntime, ContainerdRuntimeSettings,
     RuntimeCapability, TokioRuntimeClock, WorkloadRuntime,
 };
+
+#[test]
+fn containerd_transfer_lease_expiration_uses_injected_wall_time() {
+    assert_eq!(
+        lease_expiration(Timestamp(1_700_000_000_000)).unwrap(),
+        "2023-11-14T23:13:20Z"
+    );
+    assert!(lease_expiration(Timestamp(i64::MAX)).is_err());
+}
 
 #[test]
 fn containerd_digest_references_preserve_repository_and_registry_ports() {

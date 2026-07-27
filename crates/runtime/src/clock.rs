@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use kernel_api::Timestamp;
 
 /// Monotonic implementation-defined time used for runtime deadlines.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,17 +24,20 @@ impl MonotonicTime {
     }
 }
 
-/// Injected monotonic clock for deterministic runtime deadlines and stream polling.
+/// Injected clock for deterministic runtime deadlines, stream polling, and persisted timestamps.
 #[async_trait]
 pub trait RuntimeClock: Send + Sync {
     /// Returns the current monotonic instant.
     fn now(&self) -> MonotonicTime;
 
+    /// Returns the current Unix timestamp in milliseconds.
+    fn timestamp(&self) -> Timestamp;
+
     /// Waits until the requested instant; canceling affects only this caller's wait.
     async fn sleep_until(&self, deadline: MonotonicTime);
 }
 
-/// Production runtime clock backed by Tokio's monotonic timer.
+/// Production runtime clock backed by Tokio's monotonic timer and the host wall clock.
 #[derive(Debug, Clone)]
 pub struct TokioRuntimeClock {
     origin: tokio::time::Instant,
@@ -60,6 +64,14 @@ impl RuntimeClock for TokioRuntimeClock {
         MonotonicTime(self.origin.elapsed())
     }
 
+    fn timestamp(&self) -> Timestamp {
+        let milliseconds = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
+            |error| milliseconds(error.duration()).saturating_neg(),
+            milliseconds,
+        );
+        Timestamp(milliseconds)
+    }
+
     async fn sleep_until(&self, deadline: MonotonicTime) {
         if let Some(deadline) = self.origin.checked_add(deadline.as_duration()) {
             tokio::time::sleep_until(deadline).await;
@@ -67,4 +79,8 @@ impl RuntimeClock for TokioRuntimeClock {
             std::future::pending::<()>().await;
         }
     }
+}
+
+fn milliseconds(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }

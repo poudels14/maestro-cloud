@@ -14,6 +14,7 @@ use containerd::tonic::transport::Channel;
 use containerd::types::transfer::{
     ImageExportStream, ImageImportStream, ImageStore, OciRegistry, UnpackConfiguration,
 };
+use kernel_api::Timestamp;
 use prost_types::Any;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -35,6 +36,7 @@ use crate::{
 
 static TRANSFER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
+const TRANSFER_LEASE_MILLIS: i64 = 60 * 60 * 1_000;
 
 #[async_trait]
 impl ArtifactStore for ContainerdRuntime {
@@ -133,7 +135,13 @@ impl ArtifactStore for ContainerdRuntime {
         let image = select_image(&self.images().await?, digest)?;
         let stream_id = next_transfer_id("export");
         let lease_id = next_transfer_id("lease");
-        create_lease(self.channel.clone(), &self.settings.namespace, &lease_id).await?;
+        create_lease(
+            self.channel.clone(),
+            &self.settings.namespace,
+            &lease_id,
+            self.clock.timestamp(),
+        )
+        .await?;
         let duplex = match open_stream(
             self.channel.clone(),
             &self.settings.namespace,
@@ -179,7 +187,13 @@ impl ArtifactStore for ContainerdRuntime {
         let stream_id = next_transfer_id("import");
         let image_name = format!("maestro.local/artifacts/{stream_id}:latest");
         let lease_id = next_transfer_id("lease");
-        create_lease(self.channel.clone(), &self.settings.namespace, &lease_id).await?;
+        create_lease(
+            self.channel.clone(),
+            &self.settings.namespace,
+            &lease_id,
+            self.clock.timestamp(),
+        )
+        .await?;
         let duplex = match open_stream(
             self.channel.clone(),
             &self.settings.namespace,
@@ -455,12 +469,9 @@ async fn create_lease(
     channel: Channel,
     namespace: &str,
     lease_id: &str,
+    now: Timestamp,
 ) -> Result<(), ArtifactStoreError> {
-    let expires = (OffsetDateTime::now_utc() + time::Duration::hours(1))
-        .format(&Rfc3339)
-        .map_err(|error| ArtifactStoreError::Unavailable {
-            message: format!("format containerd lease expiration: {error}"),
-        })?;
+    let expires = lease_expiration(now)?;
     LeasesClient::new(channel)
         .create(namespaced_artifact(
             CreateLeaseRequest {
@@ -472,6 +483,22 @@ async fn create_lease(
         .await
         .map_err(|error| operation_error("create transfer lease", Some(lease_id), error))?;
     Ok(())
+}
+
+pub(crate) fn lease_expiration(now: Timestamp) -> Result<String, ArtifactStoreError> {
+    let expires_at_ms = now.0.checked_add(TRANSFER_LEASE_MILLIS).ok_or_else(|| {
+        ArtifactStoreError::Unavailable {
+            message: "containerd lease expiration exceeded timestamp bounds".to_owned(),
+        }
+    })?;
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(expires_at_ms) * 1_000_000)
+        .map_err(|error| ArtifactStoreError::Unavailable {
+            message: format!("construct containerd lease expiration: {error}"),
+        })?
+        .format(&Rfc3339)
+        .map_err(|error| ArtifactStoreError::Unavailable {
+            message: format!("format containerd lease expiration: {error}"),
+        })
 }
 
 async fn delete_lease(
