@@ -156,8 +156,17 @@
         default = pkgs.mkShell {
           inputsFrom = [self.packages.${system}.default];
           packages = with pkgs; [
+            actionlint
+            cargo-deny
+            cargo-nextest
+            nodejs_22
+            (pnpm_10.override {nodejs = nodejs_22;})
+            pkg-config
+            protobuf
+            python3
             rustToolchain
             rust-analyzer
+            shellcheck
           ];
         };
       }

@@ -2,6 +2,7 @@ name: Release
 
 on:
   push:
+    branches: ["release"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -9,6 +10,70 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: Rewrite quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.21.8
+
+      - name: Install UI dependencies
+        run: nix develop --command pnpm install --frozen-lockfile
+
+      - name: Check repository structure
+        shell: bash
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            git diff --check
+            python3 scripts/check-source-layout.py
+            python3 scripts/check-crate-boundaries.py
+            actionlint
+            shellcheck scripts/*.sh
+          '
+
+      - name: Check Rust
+        shell: bash
+        env:
+          INSTA_UPDATE: "no"
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            cargo fmt --all -- --check
+            cargo deny check
+            cargo clippy \
+              --workspace \
+              --exclude controller \
+              --all-targets \
+              --all-features \
+              -- \
+              -D warnings
+            cargo nextest run \
+              --workspace \
+              --exclude controller \
+              --all-features
+            cargo test \
+              --doc \
+              --workspace \
+              --exclude controller \
+              --all-features
+          '
+
+      - name: Check UI and generated API
+        shell: bash
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            pnpm exec oxfmt --check ui/apps/panel ui/packages
+            pnpm -r test
+            pnpm --dir ui typecheck
+            pnpm --dir ui build
+            pnpm check:api-drift
+          '
+
+      - name: Evaluate Nix checks
+        run: nix flake check --no-build
+
   build:
     name: Static bundle (${{ matrix.system }})
     runs-on: ${{ matrix.runner }}
@@ -42,6 +107,13 @@ jobs:
         run: >-
           nix build .#rewrite-daemon-image-bundle
           --out-link result-daemon-image
+          --print-build-logs
+
+      - name: Check NixOS module
+        run: >-
+          nix build
+          .#checks.${{ matrix.system }}.rewrite-module
+          --no-link
           --print-build-logs
 
       - name: Verify standalone executables
@@ -93,7 +165,7 @@ jobs:
   publish:
     name: Publish GitHub release
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [quality, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

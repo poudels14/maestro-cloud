@@ -341,10 +341,13 @@ contents, image loading, module configuration, and runtime caveats.
 The repository gates are:
 
 ```sh
-cargo test --workspace --all-targets --no-fail-fast
-cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
+cargo deny check
+cargo clippy --workspace --exclude controller --all-targets --all-features -- -D warnings
+INSTA_UPDATE=no cargo nextest run --workspace --exclude controller --all-features
+cargo test --doc --workspace --exclude controller --all-features
 git diff --check
+python3 scripts/check-source-layout.py
 python3 scripts/check-crate-boundaries.py
 actionlint
 shellcheck scripts/*.sh
