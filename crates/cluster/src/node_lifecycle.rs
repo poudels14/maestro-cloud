@@ -2,6 +2,9 @@ use kernel_api::{Condition, ConditionReason, ConditionState, ConditionType, Node
 
 const DRAINING_CONDITION: &str = "Draining";
 const DRAIN_REQUEST_REASON: &str = "ReplicatingArtifacts";
+const MAINTENANCE_CONDITION: &str = "Maintenance";
+const CUTOVER_PENDING_REASON: &str = "CutoverPending";
+const LEGACY_NODE_RECORD_ANNOTATION: &str = "migration.maestro.dev/legacy-node-record";
 
 /// Requested change to a node's workload scheduling eligibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +46,19 @@ pub fn set_node_scheduling(node: &mut Node, action: NodeSchedulingAction, now: T
         }
         NodeSchedulingAction::Restore => condition.state == desired && condition.reason.0 == reason,
     }) && existing.next().is_none();
+    let migrated = node
+        .meta
+        .annotations
+        .keys()
+        .any(|key| key.0 == LEGACY_NODE_RECORD_ANNOTATION);
+    let conditions_before_restore = node.status.conditions.len();
+    if action == NodeSchedulingAction::Restore && migrated {
+        node.status.conditions.retain(|condition| {
+            condition.condition_type.0 != MAINTENANCE_CONDITION
+                || condition.reason.0 != CUTOVER_PENDING_REASON
+        });
+    }
+    let released_cutover = node.status.conditions.len() != conditions_before_restore;
     if !canonical {
         node.status
             .conditions
@@ -56,5 +72,5 @@ pub fn set_node_scheduling(node: &mut Node, action: NodeSchedulingAction, now: T
             last_transition_time: now,
         });
     }
-    !canonical
+    !canonical || released_cutover
 }

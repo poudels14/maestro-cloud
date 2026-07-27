@@ -226,9 +226,21 @@ substitute for staging evidence.
     maestro-daemon start /run/maestro/node-a.launch.json
     ```
 
-    Verify cluster quorum, node readiness, assignment convergence, workload
-    recreation, ingress, DNS, firewall, logs, metrics, and every service
-    lifecycle operation in the
+    Verify cluster quorum, node identity, and the WireGuard mesh before
+    releasing workload scheduling. Migrated nodes deliberately retain their
+    `Maintenance/CutoverPending` condition until the operator restores each
+    verified node:
+
+    ```sh
+    maestro cluster restore node-a
+    maestro cluster restore node-b
+    ```
+
+    Restore nodes gradually and confirm assignment convergence after each
+    command. The restore operation removes only the migration-owned cutover
+    freeze; unrelated maintenance conditions remain intact. Then verify
+    workload recreation, ingress, DNS, firewall, logs, metrics, and every
+    service lifecycle operation in the
     [production rehearsal evidence checklist](rehearsal-evidence.md). Flip
     external DNS or ingress only after those checks pass.
 
