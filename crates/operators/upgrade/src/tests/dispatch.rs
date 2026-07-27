@@ -16,6 +16,41 @@ use crate::{
     StoreNodeUpgradeBackendSettings,
 };
 
+#[test]
+fn node_upgrade_command_transition_matrix_is_exhaustive() {
+    let states = [
+        NodeUpgradeCommandState::Requested,
+        NodeUpgradeCommandState::Staged,
+        NodeUpgradeCommandState::Released,
+        NodeUpgradeCommandState::Restarting,
+        NodeUpgradeCommandState::Failed,
+    ];
+
+    for current in states {
+        for target in states {
+            let expected = current == target
+                || matches!(
+                    (current, target),
+                    (
+                        NodeUpgradeCommandState::Requested,
+                        NodeUpgradeCommandState::Staged | NodeUpgradeCommandState::Failed
+                    ) | (
+                        NodeUpgradeCommandState::Staged,
+                        NodeUpgradeCommandState::Released | NodeUpgradeCommandState::Failed
+                    ) | (
+                        NodeUpgradeCommandState::Released,
+                        NodeUpgradeCommandState::Restarting | NodeUpgradeCommandState::Failed
+                    )
+                );
+            assert_eq!(
+                current.can_transition_to(target),
+                expected,
+                "{current:?} -> {target:?}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn store_backend_releases_the_complete_staged_batch_atomically()
 -> Result<(), Box<dyn std::error::Error>> {

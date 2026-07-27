@@ -166,12 +166,39 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
 }
 
 #[test]
-fn build_terminal_phases_do_not_restart_themselves() {
-    assert!(BuildPhase::Queued.can_transition_to(BuildPhase::Preparing));
-    assert!(BuildPhase::Building.can_transition_to(BuildPhase::Succeeded));
-    assert!(!BuildPhase::Succeeded.can_transition_to(BuildPhase::Building));
-    assert!(!BuildPhase::Failed.can_transition_to(BuildPhase::Queued));
-    assert!(BuildPhase::Canceled.can_transition_to(BuildPhase::Canceled));
+fn build_transition_matrix_is_exhaustive() {
+    let phases = [
+        BuildPhase::Queued,
+        BuildPhase::Preparing,
+        BuildPhase::Building,
+        BuildPhase::Succeeded,
+        BuildPhase::Failed,
+        BuildPhase::Canceled,
+    ];
+
+    for current in phases {
+        for target in phases {
+            let expected = current == target
+                || matches!(
+                    (current, target),
+                    (
+                        BuildPhase::Queued,
+                        BuildPhase::Preparing | BuildPhase::Canceled
+                    ) | (
+                        BuildPhase::Preparing,
+                        BuildPhase::Building | BuildPhase::Failed | BuildPhase::Canceled
+                    ) | (
+                        BuildPhase::Building,
+                        BuildPhase::Succeeded | BuildPhase::Failed | BuildPhase::Canceled
+                    )
+                );
+            assert_eq!(
+                current.can_transition_to(target),
+                expected,
+                "{current:?} -> {target:?}"
+            );
+        }
+    }
 }
 
 #[test]

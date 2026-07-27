@@ -1,22 +1,93 @@
 use crate::{PreviewPhase, UpgradePhase, UpgradeRunSpec};
 
 #[test]
-fn closing_preview_can_reopen_but_expired_preview_is_terminal() {
-    assert!(PreviewPhase::Pending.can_transition_to(PreviewPhase::Closing));
-    assert!(PreviewPhase::Active.can_transition_to(PreviewPhase::Closing));
-    assert!(PreviewPhase::Closing.can_transition_to(PreviewPhase::Pending));
-    assert!(PreviewPhase::Closing.can_transition_to(PreviewPhase::Active));
-    assert!(PreviewPhase::Closing.can_transition_to(PreviewPhase::Expired));
-    assert!(!PreviewPhase::Expired.can_transition_to(PreviewPhase::Active));
+fn preview_transition_matrix_is_exhaustive() {
+    let phases = [
+        PreviewPhase::Pending,
+        PreviewPhase::Active,
+        PreviewPhase::Closing,
+        PreviewPhase::Expired,
+        PreviewPhase::Failed,
+        PreviewPhase::Canceled,
+    ];
+
+    for current in phases {
+        for target in phases {
+            let expected = current == target
+                || matches!(
+                    (current, target),
+                    (
+                        PreviewPhase::Pending,
+                        PreviewPhase::Active
+                            | PreviewPhase::Closing
+                            | PreviewPhase::Expired
+                            | PreviewPhase::Failed
+                            | PreviewPhase::Canceled
+                    ) | (
+                        PreviewPhase::Active,
+                        PreviewPhase::Closing | PreviewPhase::Expired | PreviewPhase::Failed
+                    ) | (
+                        PreviewPhase::Closing,
+                        PreviewPhase::Pending
+                            | PreviewPhase::Active
+                            | PreviewPhase::Expired
+                            | PreviewPhase::Failed
+                    ) | (PreviewPhase::Failed, PreviewPhase::Pending)
+                );
+            assert_eq!(
+                current.can_transition_to(target),
+                expected,
+                "{current:?} -> {target:?}"
+            );
+        }
+    }
 }
 
 #[test]
-fn upgrade_modes_share_one_retryable_state_machine() {
-    assert!(UpgradePhase::Pending.can_transition_to(UpgradePhase::Draining));
-    assert!(UpgradePhase::Applying.can_transition_to(UpgradePhase::Restarting));
-    assert!(UpgradePhase::Verifying.can_transition_to(UpgradePhase::Draining));
-    assert!(UpgradePhase::Failed.can_transition_to(UpgradePhase::Pending));
-    assert!(!UpgradePhase::Completed.can_transition_to(UpgradePhase::Pending));
+fn upgrade_transition_matrix_is_exhaustive() {
+    let phases = [
+        UpgradePhase::Pending,
+        UpgradePhase::Draining,
+        UpgradePhase::Applying,
+        UpgradePhase::Restarting,
+        UpgradePhase::Verifying,
+        UpgradePhase::Completed,
+        UpgradePhase::Failed,
+        UpgradePhase::Canceled,
+    ];
+
+    for current in phases {
+        for target in phases {
+            let expected = current == target
+                || matches!(
+                    (current, target),
+                    (
+                        UpgradePhase::Pending,
+                        UpgradePhase::Draining | UpgradePhase::Canceled
+                    ) | (
+                        UpgradePhase::Draining,
+                        UpgradePhase::Applying | UpgradePhase::Failed | UpgradePhase::Canceled
+                    ) | (
+                        UpgradePhase::Applying,
+                        UpgradePhase::Restarting | UpgradePhase::Verifying | UpgradePhase::Failed
+                    ) | (
+                        UpgradePhase::Restarting,
+                        UpgradePhase::Verifying | UpgradePhase::Failed
+                    ) | (
+                        UpgradePhase::Verifying,
+                        UpgradePhase::Draining | UpgradePhase::Completed | UpgradePhase::Failed
+                    ) | (
+                        UpgradePhase::Failed,
+                        UpgradePhase::Pending | UpgradePhase::Canceled
+                    )
+                );
+            assert_eq!(
+                current.can_transition_to(target),
+                expected,
+                "{current:?} -> {target:?}"
+            );
+        }
+    }
 }
 
 #[test]
