@@ -1,6 +1,6 @@
 [package]
 name = "preview"
-version = "0.6.0"
+version = "0.6.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -8,9 +8,9 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-kernel-api = { version = "0.6.0", path = "../../kernel/api" }
-kernel-controller = { version = "0.6.0", path = "../../kernel/controller" }
-kernel-store = { version = "0.6.0", path = "../../kernel/store" }
+kernel-api = { version = "0.6.1", path = "../../kernel/api" }
+kernel-controller = { version = "0.6.1", path = "../../kernel/controller" }
+kernel-store = { version = "0.6.1", path = "../../kernel/store" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

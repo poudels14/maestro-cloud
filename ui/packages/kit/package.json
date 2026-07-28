@@ -1,6 +1,6 @@
 {
   "name": "@maestro/kit",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Shared Maestro panel primitives",
   "type": "module",

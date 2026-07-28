@@ -1,12 +1,12 @@
 [package]
 name = "node-fabric"
-version = "0.6.0"
+version = "0.6.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
-kernel-api = { version = "0.6.0", path = "../../kernel/api" }
+kernel-api = { version = "0.6.1", path = "../../kernel/api" }
 opentelemetry-proto = { workspace = true, default-features = false, features = ["gen-tonic", "trace", "logs", "metrics"] }
 prost.workspace = true
 subtle.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "cluster"
-version = "0.6.0"
+version = "0.6.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -13,8 +13,8 @@ etcd-client = { workspace = true, features = ["tls"] }
 hex.workspace = true
 hkdf.workspace = true
 hmac.workspace = true
-kernel-api = { version = "0.6.0", path = "../kernel/api" }
-kernel-store = { version = "0.6.0", path = "../kernel/store" }
+kernel-api = { version = "0.6.1", path = "../kernel/api" }
+kernel-store = { version = "0.6.1", path = "../kernel/store" }
 nix = { workspace = true, features = ["signal", "process"] }
 rcgen = { workspace = true, features = ["pem", "x509-parser"] }
 serde.workspace = true

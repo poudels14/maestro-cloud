@@ -407,7 +407,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .value,
     )?;
     assert_eq!(node.status.instance_id.as_str(), "instance-1");
-    assert_eq!(node.status.version, "0.6.0");
+    assert_eq!(node.status.version, "0.6.1");
 
     running.shutdown().await?;
     assert_eq!(store.get(&leader_key).await?, None);

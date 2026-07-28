@@ -1,6 +1,6 @@
 {
   "name": "@maestro/charts",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Reusable Maestro panel charts",
   "type": "module",
