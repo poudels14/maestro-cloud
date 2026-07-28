@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use async_trait::async_trait;
-use containerd::services::v1::snapshots::{PrepareSnapshotRequest, RemoveSnapshotRequest};
+use containerd::services::v1::snapshots::{
+    PrepareSnapshotRequest, RemoveSnapshotRequest, StatSnapshotRequest,
+};
 use containerd::services::v1::{
     CreateContainerRequest, DeleteContainerRequest, GetContainerRequest, ListContainersRequest,
     ListTasksRequest,
@@ -106,6 +108,30 @@ impl ContainerdRuntime {
                 message: format!("containerd omitted metadata for container `{container_id}`"),
             })
     }
+
+    async fn snapshot_exists(
+        &self,
+        key: &str,
+        workload_id: &WorkloadId,
+    ) -> Result<bool, RuntimeError> {
+        let result = containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
+            self.channel.clone(),
+        )
+        .stat(namespaced_timeout(
+            StatSnapshotRequest {
+                snapshotter: self.settings.snapshotter.clone(),
+                key: key.to_owned(),
+            },
+            &self.settings.namespace,
+            self.settings.rpc_timeout,
+        )?)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(error) if is_not_found(&error) => Ok(false),
+            Err(error) => Err(runtime_status(error, workload_id)),
+        }
+    }
 }
 
 #[async_trait]
@@ -132,6 +158,7 @@ impl WorkloadRuntime for ContainerdRuntime {
         let workload_id = &workload.configuration.metadata.workload_id;
         let fingerprint = fingerprint(spec)?;
         let container_id = container_name(workload_id);
+        let snapshot_key = snapshot_key(&container_id);
         let existing = self.container(&container_id, workload_id).await;
         match existing {
             Ok(container) => {
@@ -141,12 +168,16 @@ impl WorkloadRuntime for ContainerdRuntime {
                     &fingerprint,
                     &self.settings.namespace,
                 )?;
-                prepare_managed_volumes(&self.settings.state_root, &workload.configuration).await?;
-                if let Some(dns_server) = workload.configuration.dns_server {
-                    prepare_resolver_file(&self.settings.state_root, workload_id, dns_server)
+                if self.snapshot_exists(&snapshot_key, workload_id).await? {
+                    prepare_managed_volumes(&self.settings.state_root, &workload.configuration)
                         .await?;
+                    if let Some(dns_server) = workload.configuration.dns_server {
+                        prepare_resolver_file(&self.settings.state_root, workload_id, dns_server)
+                            .await?;
+                    }
+                    return Ok(handle);
                 }
-                return Ok(handle);
+                self.remove(&handle).await?;
             }
             Err(RuntimeError::NotFound { .. }) => {}
             Err(error) => return Err(error),
@@ -161,7 +192,6 @@ impl WorkloadRuntime for ContainerdRuntime {
             workload_id,
         )
         .await?;
-        let snapshot_key = snapshot_key(&container_id);
         let snapshot_result =
             containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
                 self.channel.clone(),
