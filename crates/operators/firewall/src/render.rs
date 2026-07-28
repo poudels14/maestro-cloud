@@ -120,12 +120,9 @@ fn render_node(
         ));
     }
     renderer.add_hook_chain("forward", "forward", -50, "accept", forward);
-    renderer.add_nat_hook_chain(
-        "prerouting",
-        "prerouting",
-        "dstnat",
-        host_port_rules(input, node),
-    );
+    let mut prerouting = system_host_redirect_rules(input, node);
+    prerouting.extend(host_port_rules(input, node));
+    renderer.add_nat_hook_chain("prerouting", "prerouting", "dstnat", prerouting);
     renderer.add_nat_hook_chain(
         "postrouting",
         "postrouting",
@@ -222,7 +219,7 @@ fn render_system_host_access(
                 .map(|endpoint| {
                     format!(
                         "ip saddr @{source_set} ip daddr {} tcp dport {} accept",
-                        endpoint.address, endpoint.port
+                        endpoint.address, endpoint.listener_port
                     )
                 }),
         );
@@ -230,9 +227,30 @@ fn render_system_host_access(
     rules.extend(guarded_endpoints.into_iter().map(|endpoint| {
         format!(
             "ip daddr {} tcp dport {} reject",
-            endpoint.address, endpoint.port
+            endpoint.address, endpoint.listener_port
         )
     }));
+}
+
+fn system_host_redirect_rules(
+    input: &ValidatedInput,
+    node: &crate::validation::NodeContext,
+) -> Vec<String> {
+    input
+        .settings
+        .system_host_access
+        .iter()
+        .flat_map(|access| access.endpoints.iter())
+        .filter(|endpoint| {
+            endpoint.address == node.admin_address && endpoint.public_port != endpoint.listener_port
+        })
+        .map(|endpoint| {
+            format!(
+                "ip daddr {} tcp dport {} dnat ip to {}:{}",
+                endpoint.address, endpoint.public_port, endpoint.address, endpoint.listener_port
+            )
+        })
+        .collect()
 }
 
 fn host_port_rules(input: &ValidatedInput, node: &crate::validation::NodeContext) -> Vec<String> {

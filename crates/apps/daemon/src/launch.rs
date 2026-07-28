@@ -430,7 +430,7 @@ pub(crate) fn api_settings(
     );
     let settings = ServerSettings::new(
         SocketAddr::new(
-            IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            IpAddr::V4(node.endpoint.host_address),
             node.endpoint.api_port,
         ),
         Some(jwt_secret_key),
@@ -444,8 +444,6 @@ pub(crate) fn api_settings(
         None => settings,
     }
 }
-
-const ADMIN_API_PORT: u16 = 80;
 
 pub(crate) fn admin_api_settings(
     cluster: &ClusterConfig,
@@ -474,7 +472,7 @@ pub(crate) fn admin_api_settings(
             ))
         })?;
         let settings = ServerSettings::new(
-            SocketAddr::new(IpAddr::V4(address), ADMIN_API_PORT),
+            SocketAddr::new(IpAddr::V4(address), node.endpoint.api_port),
             Some(jwt_secret_key),
         )
         .with_managed_operator_plaintext()

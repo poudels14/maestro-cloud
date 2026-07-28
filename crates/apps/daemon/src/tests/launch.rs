@@ -188,7 +188,10 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
     );
     assert_eq!(
         settings.bind_address,
-        std::net::SocketAddr::from(([0, 0, 0, 0], node.endpoint.api_port))
+        std::net::SocketAddr::new(
+            std::net::IpAddr::V4(node.endpoint.host_address),
+            node.endpoint.api_port,
+        )
     );
     assert_eq!(
         settings.operator_proxy_cidrs,
@@ -205,7 +208,7 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
             .ok_or("Admin listener missing")?;
         assert_eq!(
             admin.bind_address,
-            std::net::SocketAddr::from(([172, 22, 0, 250], 80))
+            std::net::SocketAddr::from(([172, 22, 0, 250], node.endpoint.api_port))
         );
         assert!(
             admin

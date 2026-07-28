@@ -127,11 +127,15 @@ pub enum FirewallPlanError {
         address: std::net::Ipv4Addr,
     },
     /// The same exact system-host grant was declared more than once.
-    #[error("protected host access for Service `{service_id}` repeats endpoint `{address}:{port}`")]
+    #[error(
+        "protected host access for Service `{service_id}` repeats endpoint \
+         `{address}:{public_port}` -> `{address}:{listener_port}`"
+    )]
     DuplicateSystemHostEndpoint {
         service_id: ServiceId,
         address: std::net::Ipv4Addr,
-        port: u16,
+        public_port: u16,
+        listener_port: u16,
     },
     /// An assignment references a service absent from the snapshot.
     #[error("Assignment `{assignment_id}` references missing Service `{service_id}`")]

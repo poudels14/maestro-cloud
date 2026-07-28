@@ -51,7 +51,20 @@ fn contexts_reject_unsafe_or_ambiguous_origins() {
             .as_deref(),
         Some("http://maestro-sandbox.example-tailnet.ts.net")
     );
+    assert_eq!(
+        normalize_origin("http://10.50.0.250/").ok().as_deref(),
+        Some("http://10.50.0.250")
+    );
+    assert_eq!(
+        normalize_origin("10.50.0.250").ok().as_deref(),
+        Some("http://10.50.0.250")
+    );
+    assert_eq!(
+        normalize_origin("http://100.64.0.1").ok().as_deref(),
+        Some("http://100.64.0.1")
+    );
     assert!(normalize_origin("http://maestro.example.test").is_err());
+    assert!(normalize_origin("http://8.8.8.8").is_err());
     assert!(normalize_origin("http://example.ts.net.evil.test").is_err());
     assert!(normalize_origin("http://ts.net").is_err());
     assert!(normalize_origin("https://user@maestro.example.test").is_err());

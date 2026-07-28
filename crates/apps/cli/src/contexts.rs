@@ -259,10 +259,12 @@ pub(crate) fn normalize_origin(host: &str) -> Result<String, CliError> {
     if url.scheme() == "http"
         && !is_loopback_host(url.host_str())
         && !is_tailnet_magic_dns_host(url.host_str())
+        && !is_private_operator_ip(url.host_str())
     {
         if has_explicit_scheme {
             return Err(CliError::invalid_input(
-                "non-loopback HTTP context hosts must use a Tailscale .ts.net MagicDNS name",
+                "HTTP context hosts must use loopback, a private or Tailscale IP, or a Tailscale \
+                 .ts.net MagicDNS name",
             ));
         }
         url.set_scheme("https")
@@ -295,10 +297,28 @@ fn is_tailnet_magic_dns_host(host: Option<&str>) -> bool {
 fn is_loopback_host(host: Option<&str>) -> bool {
     host.is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
+            || parse_host_ip(host).is_some_and(|address| address.is_loopback())
     })
+}
+
+fn is_private_operator_ip(host: Option<&str>) -> bool {
+    host.and_then(parse_host_ip)
+        .is_some_and(|address| match address {
+            IpAddr::V4(address) => address.is_private() || is_tailscale_ipv4(address),
+            IpAddr::V6(address) => address.is_unique_local(),
+        })
+}
+
+fn parse_host_ip(host: &str) -> Option<IpAddr> {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse()
+        .ok()
+}
+
+fn is_tailscale_ipv4(address: std::net::Ipv4Addr) -> bool {
+    let [first, second, _, _] = address.octets();
+    first == 100 && second & 0b1100_0000 == 64
 }
 
 fn no_active_context() -> CliError {

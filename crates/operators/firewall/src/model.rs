@@ -46,8 +46,10 @@ pub struct SystemHostAccess {
 pub struct SystemHostEndpoint {
     /// Bridge address that owns the listener.
     pub address: Ipv4Addr,
-    /// TCP listener port.
-    pub port: u16,
+    /// Stable TCP port exposed to the system transport.
+    pub public_port: u16,
+    /// TCP port used by the protected host listener after translation.
+    pub listener_port: u16,
 }
 
 /// Static cluster security settings compiled beside resource policies.

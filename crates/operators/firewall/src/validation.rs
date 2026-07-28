@@ -150,7 +150,7 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
             }
         }
         for endpoint in &access.endpoints {
-            if endpoint.port == 0 {
+            if endpoint.public_port == 0 || endpoint.listener_port == 0 {
                 return Err(FirewallPlanError::ZeroSystemHostEndpointPort {
                     service_id: access.service_id.clone(),
                     address: endpoint.address,
@@ -159,12 +159,14 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
             if !exact_system_host_endpoints.insert((
                 access.service_id.clone(),
                 endpoint.address,
-                endpoint.port,
+                endpoint.public_port,
+                endpoint.listener_port,
             )) {
                 return Err(FirewallPlanError::DuplicateSystemHostEndpoint {
                     service_id: access.service_id.clone(),
                     address: endpoint.address,
-                    port: endpoint.port,
+                    public_port: endpoint.public_port,
+                    listener_port: endpoint.listener_port,
                 });
             }
         }

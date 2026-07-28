@@ -52,11 +52,13 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         [
             firewall::SystemHostEndpoint {
                 address: "172.22.0.250".parse()?,
-                port: 80,
+                public_port: 80,
+                listener_port: 3_011,
             },
             firewall::SystemHostEndpoint {
                 address: "172.22.1.250".parse()?,
-                port: 80,
+                public_port: 80,
+                listener_port: 3_012,
             },
         ]
     );

@@ -155,7 +155,11 @@ impl TailscaleSystemResources {
                 .map(|node| {
                     node.workload_subnet
                         .admin_address()
-                        .map(|address| SystemHostEndpoint { address, port: 80 })
+                        .map(|address| SystemHostEndpoint {
+                            address,
+                            public_port: 80,
+                            listener_port: node.endpoint.api_port,
+                        })
                         .ok_or_else(|| TailscaleResourceError::MissingAdminAddress {
                             subnet: node.workload_subnet.to_string(),
                         })

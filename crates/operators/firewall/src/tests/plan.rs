@@ -120,7 +120,7 @@ fn system_dns_and_control_guards_precede_user_policy() {
         .find("ip saddr @host_access_")
         .expect("system host access");
     let guarded_admin = script
-        .find("ip daddr 10.42.1.250 tcp dport 80 reject")
+        .find("ip daddr 10.42.1.250 tcp dport 3000 reject")
         .expect("Admin endpoint guard");
     let workload_reject = script
         .find("ip saddr @all_workloads_v4 ct direction original reject")
@@ -371,7 +371,8 @@ impl World {
                 host_ports: vec![3000],
                 endpoints: vec![SystemHostEndpoint {
                     address: Ipv4Addr::new(10, 42, 1, 250),
-                    port: 80,
+                    public_port: 80,
+                    listener_port: 3000,
                 }],
             }],
             host_port_routes: vec![HostPortRoute {
