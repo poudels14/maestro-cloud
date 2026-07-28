@@ -15,14 +15,15 @@ use crate::{
     encrypt_join_response,
 };
 
-mod approval;
+mod record;
 
-use approval::{AcceptedJoin, StoredApproval, decode_record, encode_record, validate_fingerprint};
-pub use approval::{NodeJoinApproval, NodeJoinApprovalRequest, NodeJoinApprovalState};
+use record::{
+    AcceptedJoin, NodeJoinRecord, NodeJoinRecordState, StoredJoin, decode_record, encode_record,
+};
 
-const MAXIMUM_APPROVAL_CAS_ATTEMPTS: usize = 8;
+const MAXIMUM_ADMISSION_CAS_ATTEMPTS: usize = 8;
 
-/// Store-backed coordinator for approval, signed admission, and encrypted grants.
+/// Store-backed coordinator for signed configured-node admission and encrypted grants.
 pub struct AdmissionCoordinator {
     config: ClusterConfig,
     authority: ClusterCertificateAuthority,
@@ -59,85 +60,6 @@ impl AdmissionCoordinator {
         })
     }
 
-    /// Creates or replays one approval without replacing another key identity.
-    pub async fn approve(
-        &self,
-        node_id: NodeId,
-        public_key_sha256: String,
-        now_unix_ms: i64,
-    ) -> Result<NodeJoinApproval, AdmissionCoordinatorError> {
-        validate_fingerprint(&public_key_sha256)?;
-        let node = self.config.nodes.get(&node_id).ok_or_else(|| {
-            AdmissionCoordinatorError::UnknownNode {
-                node_id: node_id.clone(),
-            }
-        })?;
-        if node.role == NodeRole::Master {
-            return Err(AdmissionCoordinatorError::MasterCannotJoin);
-        }
-        let key = self.keys.join_approval(&node_id);
-        for _attempt in 0..MAXIMUM_APPROVAL_CAS_ATTEMPTS {
-            self.ensure_join_allowed(&node_id).await?;
-            let stored = self.store.get(&key).await?;
-            if let Some(stored) = stored {
-                let existing = decode_record(&stored)?;
-                if existing.view.public_key_sha256 == public_key_sha256 {
-                    return Ok(existing.view);
-                }
-                return Err(AdmissionCoordinatorError::ApprovalConflict { node_id });
-            }
-            let record = StoredApproval {
-                view: NodeJoinApproval {
-                    node_id: node_id.clone(),
-                    public_key_sha256: public_key_sha256.clone(),
-                    approved_at_unix_ms: now_unix_ms,
-                    state: NodeJoinApprovalState::Approved,
-                    admitted_at_unix_ms: None,
-                },
-                accepted: None,
-            };
-            let outcome = self
-                .store
-                .txn(Transaction {
-                    compares: vec![
-                        Compare {
-                            key: key.clone(),
-                            expected: ExpectedVersion::Missing,
-                        },
-                        Compare {
-                            key: self.keys.node_removal(&node_id),
-                            expected: ExpectedVersion::Missing,
-                        },
-                        Compare {
-                            key: self.keys.node_tombstone(&node_id),
-                            expected: ExpectedVersion::Missing,
-                        },
-                    ],
-                    mutations: vec![Mutation::Put {
-                        key: key.clone(),
-                        value: encode_record(&record)?,
-                        session: None,
-                    }],
-                })
-                .await?;
-            if matches!(outcome, TransactionOutcome::Applied { .. }) {
-                return Ok(record.view);
-            }
-        }
-        Err(AdmissionCoordinatorError::ConcurrentApproval { node_id })
-    }
-
-    /// Lists secret-free approvals in stable node identity order.
-    pub async fn list(&self) -> Result<Vec<NodeJoinApproval>, AdmissionCoordinatorError> {
-        let listed = self.store.list(&self.keys.join_approvals()).await?;
-        listed
-            .values
-            .iter()
-            .map(decode_record)
-            .map(|record| record.map(|record| record.view))
-            .collect()
-    }
-
     /// Returns an HMAC-authenticated trust root for a not-yet-trusted joiner.
     pub fn discover(
         &self,
@@ -153,7 +75,7 @@ impl AdmissionCoordinator {
         .map_err(Into::into)
     }
 
-    /// Authenticates, stages, and durably commits one exact approved request.
+    /// Authenticates and durably binds one configured node to its first exact request.
     pub async fn admit(
         &self,
         request: &JoinRequest,
@@ -181,43 +103,53 @@ impl AdmissionCoordinator {
             }
             Err(error) => return Err(error.into()),
         };
-        let key = self.keys.join_approval(&evidence.node_id);
-        for _attempt in 0..MAXIMUM_APPROVAL_CAS_ATTEMPTS {
+        if evidence.role == NodeRole::Master {
+            return Err(AdmissionCoordinatorError::MasterCannotJoin);
+        }
+        let key = self.keys.join_record(&evidence.node_id);
+        for _attempt in 0..MAXIMUM_ADMISSION_CAS_ATTEMPTS {
             self.ensure_join_allowed(&evidence.node_id).await?;
-            let stored = self.store.get(&key).await?.ok_or_else(|| {
-                AdmissionCoordinatorError::ApprovalRequired {
-                    node_id: evidence.node_id.clone(),
+            let stored = self.store.get(&key).await?;
+            if let Some(stored) = &stored {
+                let record = decode_record(stored)?;
+                if record.view.public_key_sha256 != evidence.public_key_sha256 {
+                    return Err(AdmissionCoordinatorError::JoinKeyConflict {
+                        node_id: evidence.node_id,
+                    });
                 }
-            })?;
-            let mut record = decode_record(&stored)?;
-            if record.view.public_key_sha256 != evidence.public_key_sha256 {
-                return Err(AdmissionCoordinatorError::ApprovalKeyMismatch {
-                    node_id: evidence.node_id,
-                });
-            }
-            if let Some(accepted) = record.accepted {
-                if accepted.request_sha256 == evidence.request_sha256 {
-                    return self.encrypt(request, &accepted.payload);
+                if let Some(accepted) = record.accepted {
+                    if accepted.request_sha256 == evidence.request_sha256 {
+                        return self.encrypt(request, &accepted.payload);
+                    }
+                    return Err(AdmissionCoordinatorError::AdmissionConflict {
+                        node_id: evidence.node_id,
+                    });
                 }
-                return Err(AdmissionCoordinatorError::AdmissionConflict {
-                    node_id: evidence.node_id,
-                });
             }
 
             let payload = self.issue_payload(request, certificate_validity).await?;
-            record.view.state = NodeJoinApprovalState::Admitted;
-            record.view.admitted_at_unix_ms = Some(now_unix_ms);
-            record.accepted = Some(AcceptedJoin {
-                request_sha256: evidence.request_sha256.clone(),
-                payload: payload.clone(),
-            });
+            let record = StoredJoin {
+                view: NodeJoinRecord {
+                    node_id: evidence.node_id.clone(),
+                    public_key_sha256: evidence.public_key_sha256.clone(),
+                    approved_at_unix_ms: now_unix_ms,
+                    state: NodeJoinRecordState::Admitted,
+                    admitted_at_unix_ms: Some(now_unix_ms),
+                },
+                accepted: Some(AcceptedJoin {
+                    request_sha256: evidence.request_sha256.clone(),
+                    payload: payload.clone(),
+                }),
+            };
             let outcome = self
                 .store
                 .txn(Transaction {
                     compares: vec![
                         Compare {
                             key: key.clone(),
-                            expected: ExpectedVersion::Exact(stored.version),
+                            expected: stored.map_or(ExpectedVersion::Missing, |value| {
+                                ExpectedVersion::Exact(value.version)
+                            }),
                         },
                         Compare {
                             key: self.keys.node_removal(&evidence.node_id),
@@ -262,14 +194,14 @@ impl AdmissionCoordinator {
         self.ensure_join_allowed(&evidence.node_id).await?;
         let stored = self
             .store
-            .get(&self.keys.join_approval(&evidence.node_id))
+            .get(&self.keys.join_record(&evidence.node_id))
             .await?;
         let Some(stored) = stored else {
             return Err(freshness_error.into());
         };
         let record = decode_record(&stored)?;
         if record.view.public_key_sha256 != evidence.public_key_sha256 {
-            return Err(AdmissionCoordinatorError::ApprovalKeyMismatch {
+            return Err(AdmissionCoordinatorError::JoinKeyConflict {
                 node_id: evidence.node_id,
             });
         }
@@ -371,7 +303,7 @@ impl AdmissionCoordinator {
     }
 }
 
-/// Why approval or admission did not converge safely.
+/// Why a configured-node admission did not converge safely.
 #[derive(Debug, thiserror::Error)]
 pub enum AdmissionCoordinatorError {
     /// Static cluster topology was invalid.
@@ -380,11 +312,8 @@ pub enum AdmissionCoordinatorError {
     /// The value-encryption secret cannot safely start an admitted node.
     #[error("store encryption secret must contain at least 32 characters")]
     WeakStoreSecret,
-    /// An approval named no declared topology node.
-    #[error("node `{node_id}` is absent from the cluster topology")]
-    UnknownNode { node_id: NodeId },
-    /// The designated seed never joins its own already-bootstrapped cluster.
-    #[error("the designated master cannot receive a join approval")]
+    /// The designated seed is initialized by bootstrap and never joins.
+    #[error("the designated master cannot join its own cluster")]
     MasterCannotJoin,
     /// A pending permanent removal blocks new trust or membership grants.
     #[error("node `{node_id}` is being permanently removed")]
@@ -392,23 +321,11 @@ pub enum AdmissionCoordinatorError {
     /// A tombstoned node identity can never receive another trust or membership grant.
     #[error("node `{node_id}` was permanently removed")]
     NodeRemoved { node_id: NodeId },
-    /// A public-key fingerprint was not canonical SHA-256 hexadecimal.
-    #[error("join public key fingerprint must be 64 lowercase hexadecimal characters")]
-    InvalidFingerprint,
-    /// A node already has an approval for another key.
-    #[error("node `{node_id}` already has an approval for another key")]
-    ApprovalConflict { node_id: NodeId },
-    /// Approval writes changed too frequently to converge.
-    #[error("join approval for node `{node_id}` kept changing")]
-    ConcurrentApproval { node_id: NodeId },
-    /// A signed request had no operator approval.
-    #[error("node `{node_id}` requires operator approval before joining")]
-    ApprovalRequired { node_id: NodeId },
-    /// A signed request used a key other than the approved key.
-    #[error("node `{node_id}` join key does not match its approval")]
-    ApprovalKeyMismatch { node_id: NodeId },
-    /// A one-time approval already admitted another request.
-    #[error("node `{node_id}` approval already admitted another request")]
+    /// A configured identity was already bound to another join key.
+    #[error("node `{node_id}` is already bound to another join key")]
+    JoinKeyConflict { node_id: NodeId },
+    /// A configured identity already admitted another exact request.
+    #[error("node `{node_id}` already admitted another join request")]
     AdmissionConflict { node_id: NodeId },
     /// Admission writes changed too frequently to converge.
     #[error("join admission for node `{node_id}` kept changing")]
@@ -422,11 +339,11 @@ pub enum AdmissionCoordinatorError {
     /// Store membership staging failed.
     #[error(transparent)]
     Provider(#[from] StoreProviderError),
-    /// Durable approval storage failed.
+    /// Durable join-record storage failed.
     #[error(transparent)]
     Store(#[from] kernel_store::StoreError),
-    /// Approval persistence could not be encoded or decoded.
-    #[error("invalid persisted join approval: {0}")]
+    /// Join-record persistence could not be encoded or decoded.
+    #[error("invalid persisted join record: {0}")]
     Serialization(#[from] serde_json::Error),
     /// Join discovery or response encryption failed.
     #[error(transparent)]

@@ -2752,60 +2752,6 @@
         "description": "Identity of one running daemon instance on a cluster node.",
         "type": "string"
       },
-      "NodeJoinApproval": {
-        "additionalProperties": false,
-        "properties": {
-          "admittedAtUnixMs": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "approvedAtUnixMs": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "nodeId": {
-            "$ref": "#/components/schemas/NodeId"
-          },
-          "publicKeySha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "state": {
-            "$ref": "#/components/schemas/NodeJoinApprovalState"
-          }
-        },
-        "required": [
-          "nodeId",
-          "publicKeySha256",
-          "approvedAtUnixMs",
-          "state"
-        ],
-        "type": "object"
-      },
-      "NodeJoinApprovalRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "nodeId": {
-            "$ref": "#/components/schemas/NodeId"
-          },
-          "publicKeySha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "nodeId",
-          "publicKeySha256"
-        ],
-        "type": "object"
-      },
-      "NodeJoinApprovalState": {
-        "enum": [
-          "approved",
-          "admitted"
-        ],
-        "type": "string"
-      },
       "NodeNetwork": {
         "$ref": "#/components/schemas/Object3"
       },
@@ -8029,82 +7975,6 @@
         ]
       }
     },
-    "/api/cluster/admissions": {
-      "get": {
-        "operationId": "listClusterAdmissions",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/NodeJoinApproval"
-                  },
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Secret-free join approval list"
-          },
-          "503": {
-            "description": "Cluster admission is unavailable on this node"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "browserSession": []
-          }
-        ]
-      },
-      "post": {
-        "operationId": "approveClusterAdmission",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NodeJoinApprovalRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NodeJoinApproval"
-                }
-              }
-            },
-            "description": "Approval created or replayed"
-          },
-          "400": {
-            "description": "Invalid approval"
-          },
-          "404": {
-            "description": "Node is absent from the declared topology"
-          },
-          "409": {
-            "description": "Another join key is already approved"
-          },
-          "503": {
-            "description": "Cluster admission is unavailable on this node"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "browserSession": []
-          }
-        ]
-      }
-    },
     "/api/cluster/ca": {
       "post": {
         "operationId": "discoverClusterCa",
@@ -8136,7 +8006,7 @@
             "description": "Join authentication or source address was rejected"
           },
           "409": {
-            "description": "One-time approval already admitted another request"
+            "description": "The configured node already admitted another request"
           },
           "503": {
             "description": "Cluster admission is unavailable on this node"
@@ -8241,7 +8111,7 @@
             "description": "Join authentication or source address was rejected"
           },
           "409": {
-            "description": "One-time approval already admitted another request"
+            "description": "The configured node already admitted another request"
           },
           "503": {
             "description": "Cluster admission is unavailable on this node"

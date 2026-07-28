@@ -93,18 +93,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
         Cli::try_parse_from([
             "maestro",
             "cluster",
-            "prepare-join",
-            "--config",
-            "maestro.jsonc",
-            "--data-dir",
-            "/var/lib/maestro",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "maestro",
-            "cluster",
             "join",
             "https://10.20.0.11:3000",
             "--prepare",
@@ -122,16 +110,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
         ])
         .is_err()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "maestro",
-            "cluster",
-            "approve-node",
-            "node-a",
-            "1111111111111111111111111111111111111111111111111111111111111111",
-        ])
-        .is_ok()
     );
     assert!(Cli::try_parse_from(["maestro", "config", "validate", "maestro.jsonc"]).is_ok());
     assert!(Cli::try_parse_from(["maestro", "contexts", "set", "dev", "localhost:3000",]).is_ok());

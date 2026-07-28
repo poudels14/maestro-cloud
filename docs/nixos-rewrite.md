@@ -83,15 +83,10 @@ sudo maestro cluster bootstrap \
   --output /run/maestro/launch.json
 ```
 
-For another declared node, prepare its stable private join key, approve the
-printed fingerprint through an authenticated operator context, then join over
-the cluster's HTTPS endpoint:
+For another declared node, join over the cluster's HTTPS endpoint. The command
+creates and persists the node's private join key automatically:
 
 ```sh
-sudo maestro cluster prepare-join \
-  --config /etc/maestro/maestro.jsonc \
-  --data-dir /var/lib/maestro
-maestro cluster approve-node node-2 <printed-sha256>
 sudo maestro cluster join https://10.20.0.11:3000 \
   --config /etc/maestro/maestro.jsonc \
   --data-dir /var/lib/maestro \

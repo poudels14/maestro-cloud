@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::time::Duration;
 
-use cluster::{NodeJoinApproval, NodeJoinApprovalRequest, NodeJoinApprovalState};
 use kernel_api::{
     ClusterInfo, CommandRequest, ConditionState, MaskedClusterConfig, Node, NodeCommandResponse,
     NodeId, NodeRemovalRequest, NodeRemovalResponse, NodeRemovalState, NodeRole, RequestId,
@@ -109,35 +108,6 @@ pub(crate) async fn node_lifecycle(
         "[maestro]: node `{}` {} accepted",
         response.node_id,
         action.verb()
-    )
-    .map_err(output_error)
-}
-
-pub(crate) async fn approve_node(
-    client: &impl ClusterApi,
-    node_id: String,
-    public_key_sha256: String,
-    output: &mut dyn Write,
-) -> Result<(), CliError> {
-    let node_id =
-        NodeId::new(node_id).map_err(|error| CliError::invalid_input(error.to_string()))?;
-    let approval = client
-        .approve_node(NodeJoinApprovalRequest {
-            node_id: node_id.clone(),
-            public_key_sha256: public_key_sha256.clone(),
-        })
-        .await?;
-    if approval.node_id != node_id || approval.public_key_sha256 != public_key_sha256 {
-        return Err(CliError::invalid_api_response(
-            "join approval receipt does not match the submitted node and key",
-        ));
-    }
-    writeln!(
-        output,
-        "[maestro]: {} join key `{}` for node `{}`",
-        approval_state(approval.state),
-        approval.public_key_sha256,
-        approval.node_id,
     )
     .map_err(output_error)
 }
@@ -269,11 +239,6 @@ pub(crate) trait ClusterApi {
 
     async fn get_node(&self, node_id: &NodeId) -> Result<Node, CliError>;
 
-    async fn approve_node(
-        &self,
-        request: NodeJoinApprovalRequest,
-    ) -> Result<NodeJoinApproval, CliError>;
-
     async fn command_node(
         &self,
         node_id: &NodeId,
@@ -307,13 +272,6 @@ impl ClusterApi for ApiClient {
         self.get(&format!("/api/cluster/nodes/{node_id}")).await
     }
 
-    async fn approve_node(
-        &self,
-        request: NodeJoinApprovalRequest,
-    ) -> Result<NodeJoinApproval, CliError> {
-        self.post_query("/api/cluster/admissions", &request).await
-    }
-
     async fn command_node(
         &self,
         node_id: &NodeId,
@@ -341,13 +299,6 @@ impl ClusterApi for ApiClient {
             &request,
         )
         .await
-    }
-}
-
-fn approval_state(state: NodeJoinApprovalState) -> &'static str {
-    match state {
-        NodeJoinApprovalState::Approved => "approved",
-        NodeJoinApprovalState::Admitted => "replayed admitted",
     }
 }
 

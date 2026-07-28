@@ -175,8 +175,8 @@ Evidence:
       drains, verifies, and unfreezes each node.
 - [ ] The all-node mode displays and requires the expected outage approval.
 - [ ] The panel loads from the daemon origin and its home, cluster, services,
-      deployments, metrics, traffic, HTTP logs, cluster logs, firewall,
-      admissions, and webhook surfaces return live data.
+      deployments, metrics, traffic, HTTP logs, cluster logs, firewall, and
+      webhook surfaces return live data.
 - [ ] Confirm dialogs, error toasts, log detail, histograms, and deployment
       timeline interactions work in the production browser profile.
 

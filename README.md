@@ -141,8 +141,8 @@ policy inside the encrypted join response. Each node copies `jwt-secret-key`
 from its protected shared cluster config into its private launch document. The
 cluster config API never returns it.
 
-For multi-node admission, network requirements, join preparation, approval,
-verification, drain, restart, upgrade, and removal procedures, follow
+For multi-node admission, network requirements, verification, drain, restart,
+upgrade, and removal procedures, follow
 [Multi-node rewrite operations](docs/multi-node.md). For NixOS service and
 artifact packaging, follow
 [Rewrite NixOS deployment](docs/nixos-rewrite.md).

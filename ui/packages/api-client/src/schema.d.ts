@@ -52,22 +52,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cluster/admissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listClusterAdmissions"];
-        put?: never;
-        post: operations["approveClusterAdmission"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/cluster/ca": {
         parameters: {
             query?: never;
@@ -2110,21 +2094,6 @@ export interface components {
         NodeId: string;
         /** @description Identity of one running daemon instance on a cluster node. */
         NodeInstanceId: string;
-        NodeJoinApproval: {
-            /** Format: int64 */
-            admittedAtUnixMs?: number;
-            /** Format: int64 */
-            approvedAtUnixMs: number;
-            nodeId: components["schemas"]["NodeId"];
-            publicKeySha256: string;
-            state: components["schemas"]["NodeJoinApprovalState"];
-        };
-        NodeJoinApprovalRequest: {
-            nodeId: components["schemas"]["NodeId"];
-            publicKeySha256: string;
-        };
-        /** @enum {string} */
-        NodeJoinApprovalState: "approved" | "admitted";
         NodeNetwork: components["schemas"]["Object3"];
         /** @description Stable identity of a node's published network configuration. */
         NodeNetworkId: string;
@@ -3700,85 +3669,6 @@ export interface operations {
             };
         };
     };
-    listClusterAdmissions: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Secret-free join approval list */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NodeJoinApproval"][];
-                };
-            };
-            /** @description Cluster admission is unavailable on this node */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    approveClusterAdmission: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NodeJoinApprovalRequest"];
-            };
-        };
-        responses: {
-            /** @description Approval created or replayed */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NodeJoinApproval"];
-                };
-            };
-            /** @description Invalid approval */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Node is absent from the declared topology */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Another join key is already approved */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Cluster admission is unavailable on this node */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     discoverClusterCa: {
         parameters: {
             query?: never;
@@ -3815,7 +3705,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description One-time approval already admitted another request */
+            /** @description The configured node already admitted another request */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3916,7 +3806,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description One-time approval already admitted another request */
+            /** @description The configured node already admitted another request */
             409: {
                 headers: {
                     [name: string]: unknown;

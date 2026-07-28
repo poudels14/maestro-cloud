@@ -165,22 +165,7 @@ The command creates the cluster authority, master identity, secrets, initial
 store membership, and a create-only launch document. Start the rewrite daemon
 with that launch document before admitting another node.
 
-On each joining node, create its durable join key and copy the printed SHA-256
-fingerprint to an authenticated operator workstation:
-
-```sh
-sudo maestro cluster prepare-join \
-  --config /etc/maestro/maestro.jsonc \
-  --data-dir /var/lib/maestro
-```
-
-Approve the exact declared identity and fingerprint:
-
-```sh
-maestro cluster approve-node node-2 <printed-sha256>
-```
-
-Then join through a running control-plane API:
+Join each configured node through a running control-plane API:
 
 ```sh
 sudo maestro cluster join https://10.20.0.11:3000 \
@@ -190,11 +175,15 @@ sudo maestro cluster join https://10.20.0.11:3000 \
   --output /run/maestro/launch.json
 ```
 
-Omit `--etcd-binary` for a `worker`. The joiner authenticates CA discovery with
-the shared join secret, proves possession of the approved key, receives an
-encrypted node-bound grant, and starts an etcd learner when its role requires
-one. The operator signing key is not part of that grant: every node copies the
-same `jwt-secret-key` from its protected shared config into its private launch
+Omit `--etcd-binary` for a `worker`. The join command creates a durable private
+key, authenticates CA discovery with the shared join secret, and sends a signed
+request. The control plane admits only a node declared in the cluster config
+whose role, hostname, endpoint, workload subnet, and observed source address
+all match that declaration. The first accepted request durably binds the node
+ID to its key and exact request for safe retries. The node receives an encrypted
+node-bound grant and starts an etcd learner when its role requires one. The
+operator signing key is not part of that grant: every node copies the same
+`jwt-secret-key` from its protected shared config into its private launch
 document. A joining control-plane member is promoted only after it catches up.
 
 Bootstrap and join output files are create-only and owner-only. A retry verifies

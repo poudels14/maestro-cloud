@@ -314,7 +314,7 @@ impl NodeRemovalCoordinator {
                 key: self.keys.node_upgrade_command(node_id),
             },
             Mutation::Delete {
-                key: self.keys.join_approval(node_id),
+                key: self.keys.join_record(node_id),
             },
             Mutation::Delete { key: intent_key },
             Mutation::Put {

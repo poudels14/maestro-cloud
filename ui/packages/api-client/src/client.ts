@@ -68,11 +68,6 @@ export interface MaestroApiClient {
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["StatsMetricPoint"][]>;
   listNodes(options?: ApiRequestOptions): Promise<ApiSchemas["Node"][]>;
-  listClusterAdmissions(options?: ApiRequestOptions): Promise<ApiSchemas["NodeJoinApproval"][]>;
-  approveClusterAdmission(
-    request: ApiSchemas["NodeJoinApprovalRequest"],
-    options?: ApiRequestOptions
-  ): Promise<ApiSchemas["NodeJoinApproval"]>;
   listUnschedulableReplicas(
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["UnschedulableReplica"][]>;

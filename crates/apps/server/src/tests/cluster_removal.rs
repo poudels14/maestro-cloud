@@ -376,7 +376,7 @@ async fn seed_cleanup_targets(
     for key in [
         keys.node_liveness(&NodeId::new("node-1")?),
         keys.node_upgrade_command(&NodeId::new("node-1")?),
-        keys.join_approval(&NodeId::new("node-1")?),
+        keys.join_record(&NodeId::new("node-1")?),
     ] {
         store
             .put_cas(PutRequest {
@@ -401,7 +401,7 @@ fn cleanup_keys(
         keys.resource(&ResourceKind::new("NodeFirewall")?, &resource_name),
         keys.node_liveness(&node_id),
         keys.node_upgrade_command(&node_id),
-        keys.join_approval(&node_id),
+        keys.join_record(&node_id),
         keys.node_removal(&node_id),
     ])
 }

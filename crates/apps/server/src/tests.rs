@@ -300,13 +300,8 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     );
     assert!(
         document
-            .pointer("/paths/~1api~1cluster~1admissions/get")
-            .is_some()
-    );
-    assert!(
-        document
-            .pointer("/paths/~1api~1cluster~1admissions/post")
-            .is_some()
+            .pointer("/paths/~1api~1cluster~1admissions")
+            .is_none()
     );
     assert!(
         document

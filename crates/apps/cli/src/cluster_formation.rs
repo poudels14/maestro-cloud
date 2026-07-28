@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use cluster::{
     CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
-    certificate_fingerprint, load_or_create_join_key, public_key_fingerprint,
+    certificate_fingerprint,
 };
 use kernel_api::{NodeId, NodeRole, SecretValue};
 use time::{Duration, OffsetDateTime};
@@ -84,39 +84,6 @@ pub(crate) async fn issue_node(
     )
     .map_err(output_error)?;
     writeln!(output, "Bundle: {}", bundle_path.display()).map_err(output_error)
-}
-
-pub(crate) async fn prepare_join(
-    config_source: &str,
-    data_directory: &Path,
-    output: &mut dyn Write,
-    reader: &impl ConfigSourceReader,
-) -> Result<(), CliError> {
-    let loaded = load_cluster(config_source, reader).await?;
-    let node =
-        loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
-            CliError::invalid_input("selected node disappeared from the topology")
-        })?;
-    if node.role == NodeRole::Master {
-        return Err(CliError::invalid_input(
-            "the declared master initializes the cluster and cannot request admission",
-        ));
-    }
-    let key_path = data_directory.join("security").join("join.key");
-    let key = load_or_create_join_key(&key_path)
-        .map_err(|error| CliError::cluster("failed to prepare node join key", error.to_string()))?;
-    let fingerprint = public_key_fingerprint(&key.public_key_hex()).map_err(|error| {
-        CliError::cluster("failed to fingerprint node join key", error.to_string())
-    })?;
-    writeln!(output, "Node: {}", loaded.node_id).map_err(output_error)?;
-    writeln!(output, "Join key SHA-256: {fingerprint}").map_err(output_error)?;
-    writeln!(output, "Join key: {}", key_path.display()).map_err(output_error)?;
-    writeln!(
-        output,
-        "Approve with: maestro cluster approve-node {} {fingerprint}",
-        loaded.node_id
-    )
-    .map_err(output_error)
 }
 
 pub(crate) async fn bootstrap(

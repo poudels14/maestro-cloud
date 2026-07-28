@@ -116,9 +116,6 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
     listOperationalStatsMetrics: (query, options) =>
       get(withQuery("/api/metrics/stats", query), options),
     listNodes: (options) => get("/api/cluster/nodes", options),
-    listClusterAdmissions: (options) => get("/api/cluster/admissions", options),
-    approveClusterAdmission: (request, options) =>
-      submit("POST", "/api/cluster/admissions", request, options),
     listUnschedulableReplicas: (options) => get("/api/cluster/unschedulable", options),
     getNode: (nodeId, options) => get(`/api/cluster/nodes/${encodeURIComponent(nodeId)}`, options),
     drainNode: (nodeId, request, idempotencyKey, options) =>

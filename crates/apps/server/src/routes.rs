@@ -41,7 +41,6 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy, panel_directory: Option<
         .merge(automation::router())
         .merge(artifact_archives::router())
         .merge(cluster::router())
-        .merge(cluster_admission::protected_router())
         .merge(cluster_commands::router())
         .merge(cluster_removal::router())
         .merge(config::router())

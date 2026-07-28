@@ -4,10 +4,6 @@ pub(crate) fn paths() -> Map<String, Value> {
     Map::from_iter([
         ("/api/cluster/ca".to_string(), discovery_operation()),
         ("/api/cluster/join".to_string(), join_operation()),
-        (
-            "/api/cluster/admissions".to_string(),
-            admissions_operation(),
-        ),
     ])
 }
 
@@ -120,33 +116,6 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
                 }),
             ),
         ),
-        (
-            "NodeJoinApprovalRequest".to_string(),
-            object_schema(
-                &["nodeId", "publicKeySha256"],
-                json!({
-                    "nodeId": {"$ref": "#/components/schemas/NodeId"},
-                    "publicKeySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-                }),
-            ),
-        ),
-        (
-            "NodeJoinApprovalState".to_string(),
-            json!({"type": "string", "enum": ["approved", "admitted"]}),
-        ),
-        (
-            "NodeJoinApproval".to_string(),
-            object_schema(
-                &["nodeId", "publicKeySha256", "approvedAtUnixMs", "state"],
-                json!({
-                    "nodeId": {"$ref": "#/components/schemas/NodeId"},
-                    "publicKeySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "approvedAtUnixMs": {"type": "integer", "format": "int64"},
-                    "state": {"$ref": "#/components/schemas/NodeJoinApprovalState"},
-                    "admittedAtUnixMs": {"type": "integer", "format": "int64"}
-                }),
-            ),
-        ),
     ]));
 }
 
@@ -166,47 +135,6 @@ fn join_operation() -> Value {
         "EncryptedJoinResponse",
         "Encrypted node-specific cluster grant",
     )
-}
-
-fn admissions_operation() -> Value {
-    json!({
-        "get": {
-            "operationId": "listClusterAdmissions",
-            "security": [{"bearerAuth": []}, {"browserSession": []}],
-            "responses": {
-                "200": {
-                    "description": "Secret-free join approval list",
-                    "content": {"application/json": {"schema": {
-                        "type": "array",
-                        "items": {"$ref": "#/components/schemas/NodeJoinApproval"}
-                    }}}
-                },
-                "503": {"description": "Cluster admission is unavailable on this node"}
-            }
-        },
-        "post": {
-            "operationId": "approveClusterAdmission",
-            "security": [{"bearerAuth": []}, {"browserSession": []}],
-            "requestBody": {
-                "required": true,
-                "content": {"application/json": {"schema": {
-                    "$ref": "#/components/schemas/NodeJoinApprovalRequest"
-                }}}
-            },
-            "responses": {
-                "200": {
-                    "description": "Approval created or replayed",
-                    "content": {"application/json": {"schema": {
-                        "$ref": "#/components/schemas/NodeJoinApproval"
-                    }}}
-                },
-                "400": {"description": "Invalid approval"},
-                "404": {"description": "Node is absent from the declared topology"},
-                "409": {"description": "Another join key is already approved"},
-                "503": {"description": "Cluster admission is unavailable on this node"}
-            }
-        }
-    })
 }
 
 fn public_post_operation(
@@ -233,7 +161,7 @@ fn public_post_operation(
                 },
                 "400": {"description": "Malformed or topology-mismatched request"},
                 "403": {"description": "Join authentication or source address was rejected"},
-                "409": {"description": "One-time approval already admitted another request"},
+                "409": {"description": "The configured node already admitted another request"},
                 "503": {"description": "Cluster admission is unavailable on this node"}
             }
         }

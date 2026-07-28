@@ -27,10 +27,7 @@ mod tailscale;
 mod topology;
 
 pub use admission::{AdmissionError, JoinAdmission, admit_join_request};
-pub use admission_coordinator::{
-    AdmissionCoordinator, AdmissionCoordinatorError, NodeJoinApproval, NodeJoinApprovalRequest,
-    NodeJoinApprovalState,
-};
+pub use admission_coordinator::{AdmissionCoordinator, AdmissionCoordinatorError};
 pub use certificates::{
     CertificateError, CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority,
     NodeCertificateBundle, certificate_fingerprint,

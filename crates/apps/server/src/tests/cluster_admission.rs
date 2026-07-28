@@ -10,10 +10,9 @@ use axum::http::{Method, Request, StatusCode, header};
 use cluster::{
     AdmissionCoordinator, CaDiscoveryRequest, CertificateValidity, ClusterCertificateAuthority,
     ClusterConfig, ClusterPorts, EncryptedJoinResponse, Ipv4Cidr, JoinPrivateKey, JoinRequest,
-    JoinResponseStatus, MemberActivation, NodeDefinition, NodeEndpoint, NodeJoinApproval,
-    NodeJoinApprovalRequest, NodeJoinApprovalState, SignedJoinRequest, StoreJoinTicket,
-    StoreMember, StoreProvider, StoreProviderError, StoreRecovery, StoreRecoveryPermit,
-    StoreRuntime, StoreStartMode, decrypt_join_response, public_key_fingerprint, sign_join_request,
+    JoinResponseStatus, MemberActivation, NodeDefinition, NodeEndpoint, SignedJoinRequest,
+    StoreJoinTicket, StoreMember, StoreProvider, StoreProviderError, StoreRecovery,
+    StoreRecoveryPermit, StoreRuntime, StoreStartMode, decrypt_join_response, sign_join_request,
     verify_ca_discovery_response,
 };
 use kernel_api::{ClusterId, NodeId, NodeRole, SecretValue};
@@ -23,13 +22,12 @@ use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings};
 
-use super::{decode, token};
+use super::decode;
 
 #[tokio::test]
-async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_join()
+async fn declared_node_discovers_and_joins_without_operator_approval()
 -> Result<(), Box<dyn std::error::Error>> {
     let (config, worker_id) = cluster_config()?;
-    let operator_secret = SecretValue::new("operator-test-secret-with-at-least-32-characters");
     let store_secret = SecretValue::new("storage-test-secret-with-at-least-32-characters");
     let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let authority = ClusterCertificateAuthority::generate(&config.name, authority_validity()?)?;
@@ -44,43 +42,11 @@ async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_jo
     let server = ApiServer::new(
         store,
         config.cluster_id.clone(),
-        ServerSettings::new("127.0.0.1:3000".parse()?, Some(operator_secret.clone())),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
     )?
     .with_admission_coordinator(coordinator);
     let now = now_unix_ms();
     let join_key = JoinPrivateKey::generate();
-    let approval_request = NodeJoinApprovalRequest {
-        node_id: worker_id.clone(),
-        public_key_sha256: public_key_fingerprint(&join_key.public_key_hex())?,
-    };
-
-    let unauthorized = send_json(
-        &server,
-        Method::POST,
-        "/api/cluster/admissions",
-        &approval_request,
-        None,
-        Ipv4Addr::LOCALHOST,
-    )
-    .await?;
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-    let operator_token = token(operator_secret.expose(), "operator")?;
-    let approved = send_json(
-        &server,
-        Method::POST,
-        "/api/cluster/admissions",
-        &approval_request,
-        Some(&operator_token),
-        Ipv4Addr::LOCALHOST,
-    )
-    .await?;
-    assert_eq!(approved.status(), StatusCode::OK);
-    assert_eq!(
-        decode::<NodeJoinApproval>(approved).await?.state,
-        NodeJoinApprovalState::Approved
-    );
-
     let discovery_request = CaDiscoveryRequest::new(config.name.clone());
     let discovered = send_json(
         &server,
@@ -127,23 +93,6 @@ async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_jo
     assert!(payload.store_join_ticket.is_none());
     assert!(payload.certificate_issuer.is_none());
 
-    let listed = send_json(
-        &server,
-        Method::GET,
-        "/api/cluster/admissions",
-        &serde_json::Value::Null,
-        Some(&operator_token),
-        Ipv4Addr::LOCALHOST,
-    )
-    .await?;
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed: Vec<NodeJoinApproval> = decode(listed).await?;
-    assert_eq!(listed.len(), 1);
-    assert_eq!(
-        listed.first().map(|approval| approval.state),
-        Some(NodeJoinApprovalState::Admitted)
-    );
-
     let changed_request = JoinRequest::from_config(&join_key, &config, &worker_id, now)?;
     let changed = SignedJoinRequest {
         signature: sign_join_request(&config.join_secret, &changed_request)?,
@@ -166,7 +115,6 @@ async fn admission_routes_approve_discover_and_admit_without_operator_auth_on_jo
 async fn join_rejects_a_transport_source_other_than_the_signed_endpoint()
 -> Result<(), Box<dyn std::error::Error>> {
     let (config, worker_id) = cluster_config()?;
-    let operator_secret = SecretValue::new("operator-test-secret-with-at-least-32-characters");
     let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let coordinator = Arc::new(AdmissionCoordinator::new(
         config.clone(),
@@ -177,17 +125,10 @@ async fn join_rejects_a_transport_source_other_than_the_signed_endpoint()
         store.clone(),
     )?);
     let join_key = JoinPrivateKey::generate();
-    coordinator
-        .approve(
-            worker_id.clone(),
-            public_key_fingerprint(&join_key.public_key_hex())?,
-            now_unix_ms(),
-        )
-        .await?;
     let server = ApiServer::new(
         store,
         config.cluster_id.clone(),
-        ServerSettings::new("127.0.0.1:3000".parse()?, Some(operator_secret)),
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
     )?
     .with_admission_coordinator(coordinator);
     let request = JoinRequest::from_config(&join_key, &config, &worker_id, now_unix_ms())?;

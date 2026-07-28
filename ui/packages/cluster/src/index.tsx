@@ -3,7 +3,6 @@ export type { ClusterApi, ClusterErrorMapper } from "./api";
 export { activeMaintenanceNode, isPartOfCluster, maintenanceStageLabel } from "./maintenance";
 export { projectClusterNodes } from "./nodes";
 export {
-  clusterAdmissionsQuery,
   clusterConfigQuery,
   clusterInfoQuery,
   clusterNodesQuery,
@@ -20,8 +19,6 @@ export type {
   ClusterSummary,
   ControllerStats,
   MaskedConfig,
-  NodeJoinApproval,
-  NodeJoinApprovalRequest,
   SinkStats,
   StatsMetricPoint,
   StatsWarning,
@@ -32,6 +29,5 @@ export type {
   WebhookEvent
 } from "./types";
 export { ClusterInfoPage } from "./ClusterInfoPage";
-export { AdmissionsPage } from "./AdmissionsPage";
 export { createClusterFeature } from "./manifest";
 export { NodesPage } from "./NodesPage";

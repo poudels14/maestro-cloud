@@ -7,9 +7,9 @@ use kernel_store::{ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, 
 
 use crate::{
     AdmissionCoordinator, AdmissionCoordinatorError, JoinPrivateKey, JoinRequest,
-    JoinResponseStatus, MemberActivation, MemberState, NodeJoinApprovalState, StoreJoinTicket,
-    StoreMember, StoreProvider, StoreProviderError, StoreRecovery, StoreRecoveryPermit,
-    StoreRuntime, StoreStartMode, decrypt_join_response, public_key_fingerprint, sign_join_request,
+    JoinResponseStatus, MemberActivation, MemberState, StoreJoinTicket, StoreMember, StoreProvider,
+    StoreProviderError, StoreRecovery, StoreRecoveryPermit, StoreRuntime, StoreStartMode,
+    decrypt_join_response, sign_join_request,
 };
 
 use super::fixtures::{valid_config, validity};
@@ -64,7 +64,7 @@ impl StoreProvider for RecordingProvider {
 }
 
 #[tokio::test]
-async fn approval_admits_and_replays_only_one_exact_control_plane_request()
+async fn configured_node_admits_and_replays_only_one_exact_control_plane_request()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut config = valid_config()?;
     let worker_id = NodeId::new("node-4")?;
@@ -100,20 +100,24 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
         provider.clone(),
         store.clone(),
     )?;
+    let master_id = NodeId::new("node-1")?;
+    let master_key = JoinPrivateKey::generate();
+    let master_request = JoinRequest::from_config(&master_key, &config, &master_id, 1_000)?;
+    assert!(matches!(
+        coordinator
+            .admit(
+                &master_request,
+                &sign_join_request(&config.join_secret, &master_request)?,
+                master_request.endpoint.host_address,
+                1_000,
+                validity()?,
+            )
+            .await,
+        Err(AdmissionCoordinatorError::MasterCannotJoin)
+    ));
+
     let node_id = NodeId::new("node-2")?;
     let join_key = JoinPrivateKey::generate();
-    let fingerprint = public_key_fingerprint(&join_key.public_key_hex())?;
-    let approval = coordinator
-        .approve(node_id.clone(), fingerprint.clone(), 900)
-        .await?;
-    assert_eq!(approval.state, NodeJoinApprovalState::Approved);
-    assert_eq!(
-        coordinator
-            .approve(node_id.clone(), fingerprint, 950)
-            .await?,
-        approval
-    );
-
     let request = JoinRequest::from_config(&join_key, &config, &node_id, 1_000)?;
     let signature = sign_join_request(&config.join_secret, &request)?;
     assert!(matches!(
@@ -187,15 +191,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
             .as_slice(),
         std::slice::from_ref(&node_id)
     );
-    let approvals = coordinator.list().await?;
-    assert_eq!(approvals.len(), 1);
-    assert_eq!(
-        approvals.first().map(|item| item.state),
-        Some(NodeJoinApprovalState::Admitted)
-    );
-    let public_json = serde_json::to_string(&approvals)?;
-    assert!(!public_json.contains(storage_secret.expose()));
-
     let changed_request = JoinRequest::from_config(&join_key, &config, &node_id, 1_002)?;
     let changed_signature = sign_join_request(&config.join_secret, &changed_request)?;
     assert!(matches!(
@@ -225,7 +220,7 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
         .await;
     assert!(matches!(
         result,
-        Err(AdmissionCoordinatorError::ApprovalKeyMismatch { .. })
+        Err(AdmissionCoordinatorError::JoinKeyConflict { .. })
     ));
 
     store
@@ -250,13 +245,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
     ));
 
     let worker_key = JoinPrivateKey::generate();
-    coordinator
-        .approve(
-            worker_id.clone(),
-            public_key_fingerprint(&worker_key.public_key_hex())?,
-            1_100,
-        )
-        .await?;
     let worker_request = JoinRequest::from_config(&worker_key, &config, &worker_id, 1_100)?;
     let worker_response = coordinator
         .admit(
@@ -284,64 +272,6 @@ async fn approval_admits_and_replays_only_one_exact_control_plane_request()
             .as_slice(),
         std::slice::from_ref(&node_id)
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn approval_rejects_unknown_master_and_conflicting_keys()
--> Result<(), Box<dyn std::error::Error>> {
-    let config = valid_config()?;
-    let authority = crate::ClusterCertificateAuthority::generate(&config.name, validity()?)?;
-    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
-    let coordinator = AdmissionCoordinator::new(
-        config.clone(),
-        authority,
-        SecretValue::new("storage-test-secret-with-at-least-32-characters"),
-        crate::ClusterLaunchPolicy::default(),
-        Arc::new(RecordingProvider {
-            staged: Mutex::new(Vec::new()),
-        }),
-        store.clone(),
-    )?;
-    assert!(matches!(
-        coordinator
-            .approve(NodeId::new("node-1")?, "00".repeat(32), 1_000)
-            .await,
-        Err(AdmissionCoordinatorError::MasterCannotJoin)
-    ));
-    assert!(matches!(
-        coordinator
-            .approve(NodeId::new("missing")?, "00".repeat(32), 1_000)
-            .await,
-        Err(AdmissionCoordinatorError::UnknownNode { .. })
-    ));
-    assert!(matches!(
-        coordinator
-            .approve(NodeId::new("node-3")?, "AA".repeat(32), 1_000)
-            .await,
-        Err(AdmissionCoordinatorError::InvalidFingerprint)
-    ));
-    let node_id = NodeId::new("node-3")?;
-    coordinator
-        .approve(node_id.clone(), "00".repeat(32), 1_000)
-        .await?;
-    assert!(matches!(
-        coordinator.approve(node_id, "11".repeat(32), 1_001).await,
-        Err(AdmissionCoordinatorError::ApprovalConflict { .. })
-    ));
-    let removing = NodeId::new("node-2")?;
-    store
-        .put_cas(PutRequest {
-            key: Keyspace::new(&config.cluster_id).node_removal(&removing),
-            value: b"removing".to_vec(),
-            expected: ExpectedVersion::Missing,
-            session: None,
-        })
-        .await?;
-    assert!(matches!(
-        coordinator.approve(removing, "22".repeat(32), 1_002).await,
-        Err(AdmissionCoordinatorError::NodeRemovalInProgress { .. })
-    ));
     Ok(())
 }
 

@@ -148,13 +148,13 @@ impl Keyspace {
         self.key(&format!("control/requests/{request_id}"))
     }
 
-    /// Durable operator approvals for topology-bound cluster joins.
-    pub fn join_approvals(&self) -> StorePrefix {
+    /// Durable key and request bindings for topology-bound cluster joins.
+    pub fn join_records(&self) -> StorePrefix {
         self.prefix("control/join-approvals")
     }
 
-    /// One durable operator approval for a declared node identity.
-    pub fn join_approval(&self, node_id: &NodeId) -> StoreKey {
+    /// One durable join binding for a declared node identity.
+    pub fn join_record(&self, node_id: &NodeId) -> StoreKey {
         self.key(&format!("control/join-approvals/{node_id}"))
     }
 

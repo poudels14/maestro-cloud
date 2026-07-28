@@ -78,7 +78,7 @@ impl ApiServer {
         self
     }
 
-    /// Enables public cluster discovery and join plus protected admission approval.
+    /// Enables authenticated discovery and joining for configured cluster nodes.
     pub fn with_admission_coordinator(
         mut self,
         coordinator: Arc<cluster::AdmissionCoordinator>,

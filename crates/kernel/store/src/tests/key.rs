@@ -66,11 +66,11 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/control/requests/request-42"
     );
     assert_eq!(
-        keys.join_approvals().as_str(),
+        keys.join_records().as_str(),
         "/maestro/clusters/production/control/join-approvals/"
     );
     assert_eq!(
-        keys.join_approval(&node_id).as_str(),
+        keys.join_record(&node_id).as_str(),
         "/maestro/clusters/production/control/join-approvals/node-1"
     );
     assert_eq!(
