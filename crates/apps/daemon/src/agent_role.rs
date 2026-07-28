@@ -1,6 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use node_agent::{FirewallBackend, MeshBackend, NodeRegistration, WorkloadBridgeBackend};
+use kernel_store::{Clock, StoreError};
+use node_agent::{
+    FirewallBackend, MeshBackend, NodeRegistration, NodeRegistryAgent, NodeRegistryError,
+    WorkloadBridgeBackend,
+};
 
 use crate::agent_api::{AgentApiInputs, bind_agent_api};
 use crate::agent_lifecycle::{AgentRoleRuntime, AgentStartupRuntimes};
@@ -17,6 +22,8 @@ use crate::workload_agents::{
     build_node_registry_agent, build_node_upgrade_agent, build_stats_agent,
 };
 use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
+
+const INITIAL_NODE_REGISTRATION_RETRY: Duration = Duration::from_secs(1);
 
 pub(crate) async fn start_agent<MeshBackendType, FirewallBackendType, BridgeBackendType>(
     factory: &DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackendType>,
@@ -278,7 +285,13 @@ where
             "initial workload stats snapshot failed; background collection will retry"
         );
     }
-    let node_registration = match node_registry_agent.register().await {
+    let node_registration = match register_node_liveness(
+        &node_registry_agent,
+        factory.monotonic_clock.as_ref(),
+        INITIAL_NODE_REGISTRATION_RETRY,
+    )
+    .await
+    {
         Ok(registration) => registration,
         Err(error) => {
             return runtimes
@@ -359,6 +372,44 @@ where
     )))
 }
 
+async fn register_node_liveness(
+    agent: &NodeRegistryAgent,
+    clock: &dyn Clock,
+    retry_interval: Duration,
+) -> Result<NodeRegistration, NodeRegistryError> {
+    let mut attempt = 1_u64;
+    loop {
+        match agent.register().await {
+            Ok(registration) => return Ok(registration),
+            Err(error) if retryable_initial_registration(&error) => {
+                if attempt == 1 || attempt.is_multiple_of(10) {
+                    tracing::warn!(
+                        attempt,
+                        error = %error,
+                        "initial node liveness is not ready; remaining fenced and retrying"
+                    );
+                }
+                let deadline = clock.now().saturating_add(retry_interval);
+                clock.sleep_until(deadline).await;
+                attempt = attempt.saturating_add(1);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn retryable_initial_registration(error: &NodeRegistryError) -> bool {
+    matches!(
+        error,
+        NodeRegistryError::DuplicateLiveInstance { .. }
+            | NodeRegistryError::Contention
+            | NodeRegistryError::SessionRollback { .. }
+            | NodeRegistryError::Store(
+                StoreError::Unavailable { .. } | StoreError::SessionExpired { .. }
+            )
+    )
+}
+
 async fn fail_after_registration<T>(
     runtimes: AgentStartupRuntimes,
     registration: NodeRegistration,
@@ -372,4 +423,68 @@ async fn fail_after_registration<T>(
         )),
     };
     runtimes.fail(error).await
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use std::collections::BTreeMap;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use kernel_api::{ClusterId, NodeId, NodeInstanceId, NodeRole, NodeSpec, WorkloadNetworkMode};
+    use kernel_store::{InMemoryStore, Keyspace, Store, TokioClock};
+    use node_agent::{NodeRegistrySettings, SystemStatusClock};
+    use semver::Version;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn waits_for_predecessor_liveness_lease_to_expire()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let clock = Arc::new(TokioClock::new());
+        let store = Arc::new(InMemoryStore::new(clock.clone()));
+        let predecessor = test_registry(store.clone(), clock.clone(), "instance-1")?;
+        let predecessor_registration = predecessor.register().await?;
+        drop(predecessor_registration);
+
+        let successor = test_registry(store.clone(), clock.clone(), "instance-2")?;
+        let successor_registration = tokio::time::timeout(
+            Duration::from_secs(1),
+            register_node_liveness(&successor, clock.as_ref(), Duration::from_millis(5)),
+        )
+        .await??;
+        let key = Keyspace::new(&ClusterId::new("registration-retry")?)
+            .node_liveness(&NodeId::new("node-1")?);
+        let liveness = store.get(&key).await?.ok_or("liveness missing")?;
+        assert_eq!(liveness.value, b"instance-2");
+
+        successor_registration.close().await?;
+        Ok(())
+    }
+
+    fn test_registry(
+        store: Arc<InMemoryStore>,
+        clock: Arc<TokioClock>,
+        instance_id: &str,
+    ) -> Result<NodeRegistryAgent, Box<dyn std::error::Error>> {
+        Ok(NodeRegistryAgent::new(
+            store,
+            NodeRegistrySettings {
+                cluster_id: ClusterId::new("registration-retry")?,
+                node_id: NodeId::new("node-1")?,
+                node_spec: NodeSpec {
+                    hostname: "node-1.internal".to_owned(),
+                    host_address: IpAddr::V4(Ipv4Addr::new(10, 20, 0, 11)),
+                    role: NodeRole::Worker,
+                    workload_network_mode: WorkloadNetworkMode::ClusterRouted,
+                    scheduling_labels: BTreeMap::new(),
+                },
+                instance_id: NodeInstanceId::new(instance_id)?,
+                running_version: Version::new(0, 6, 0),
+                session_ttl: Duration::from_millis(30),
+                keepalive_interval: Duration::from_millis(10),
+            },
+            clock,
+            Arc::new(SystemStatusClock),
+        )?)
+    }
 }
