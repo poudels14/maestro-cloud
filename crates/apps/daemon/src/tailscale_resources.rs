@@ -66,15 +66,25 @@ gateway="$(awk '$1 == "nameserver" { print $2; exit }' /etc/resolv.conf)"
 [ -n "$gateway" ] || fail_gateway "could not discover the node workload gateway"
 
 api_port=""
-previous_ifs="$IFS"
-IFS=,
-for port in $MAESTRO_NODE_API_PORTS; do
-  if nc -z -w 1 "$gateway" "$port"; then
-    api_port="$port"
+api_attempt=0
+while [ "$api_attempt" -lt 60 ]; do
+  previous_ifs="$IFS"
+  IFS=,
+  for port in $MAESTRO_NODE_API_PORTS; do
+    if nc -z -w 1 "$gateway" "$port"; then
+      api_port="$port"
+      break
+    fi
+  done
+  IFS="$previous_ifs"
+  if [ -n "$api_port" ]; then
     break
   fi
+  kill -0 "$containerboot_pid" 2>/dev/null \
+    || fail_gateway "containerboot exited before the node API became reachable"
+  api_attempt=$((api_attempt + 1))
+  sleep 1
 done
-IFS="$previous_ifs"
 [ -n "$api_port" ] || fail_gateway "could not discover the node API listener"
 
 /usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve reset \

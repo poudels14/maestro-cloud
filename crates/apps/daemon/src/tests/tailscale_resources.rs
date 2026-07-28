@@ -104,6 +104,10 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "the pinned Tailscale image does not include the ip utility"
     );
     assert!(
+        AUTH_SCRIPT.contains("while [ \"$api_attempt\" -lt 60 ]"),
+        "gateway startup must tolerate node API and firewall convergence"
+    );
+    assert!(
         AUTH_SCRIPT.contains("serve reset"),
         "stale Serve listeners must not survive a gateway hostname change"
     );
