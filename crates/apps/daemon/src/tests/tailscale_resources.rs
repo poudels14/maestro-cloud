@@ -42,6 +42,10 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         resources.system_host_access.service_id.as_str(),
         "maestro-system-tailscale-gateway"
     );
+    assert_eq!(
+        resources.system_host_access.trusted_source_cidrs,
+        ["100.64.0.0/10"]
+    );
     assert!(resources.system_host_access.host_ports.is_empty());
     assert_eq!(
         resources.system_host_access.endpoints,

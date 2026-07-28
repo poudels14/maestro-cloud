@@ -173,7 +173,7 @@ fn render_system_host_access(
         .filter(|endpoint| endpoint.address == node.admin_address)
         .collect::<BTreeSet<_>>();
     for access in &input.settings.system_host_access {
-        let sources = input
+        let mut sources = input
             .assignments
             .iter()
             .filter(|assignment| {
@@ -183,6 +183,9 @@ fn render_system_host_access(
             .filter_map(|assignment| assignment.spec.workload_address)
             .map(|address| address.to_string())
             .collect::<Vec<_>>();
+        sources.extend(access.trusted_source_cidrs.iter().cloned());
+        sources.sort();
+        sources.dedup();
         if sources.is_empty() {
             continue;
         }

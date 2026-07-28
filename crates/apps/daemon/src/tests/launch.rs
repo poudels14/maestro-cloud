@@ -207,6 +207,11 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
             admin.bind_address,
             std::net::SocketAddr::from(([172, 22, 0, 250], 80))
         );
+        assert!(
+            admin
+                .operator_proxy_cidrs
+                .contains(&"100.64.0.0/10".parse()?)
+        );
         assert!(admin.tls_identity.is_none());
         admin.validate()?;
     }

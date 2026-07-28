@@ -17,6 +17,7 @@ const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "tailscale-gateway";
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
 const TAILSCALE_HOSTNAME_PREFIX_MAX_LEN: usize = 52;
+pub(crate) const TAILSCALE_IPV4_CIDR: &str = "100.64.0.0/10";
 pub(crate) const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f";
 const TAILSCALE_VERSION: &str = "tailscale-1.98.8";
 pub(crate) const AUTH_SCRIPT: &str = r#"export PATH=/usr/local/bin:/usr/bin:/bin
@@ -146,6 +147,7 @@ impl TailscaleSystemResources {
         let annotations = BTreeMap::from([(managed_annotation(), MANAGED_VALUE.to_owned())]);
         let system_host_access = SystemHostAccess {
             service_id: service_id.clone(),
+            trusted_source_cidrs: vec![TAILSCALE_IPV4_CIDR.to_owned()],
             host_ports: Vec::new(),
             endpoints: cluster
                 .nodes

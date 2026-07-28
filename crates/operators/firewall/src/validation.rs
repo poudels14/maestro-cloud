@@ -168,6 +168,19 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
                 });
             }
         }
+        for cidr in &access.trusted_source_cidrs {
+            let field = format!("systemHostAccess[{}].trustedSourceCidrs", access.service_id);
+            let source = CanonicalCidr::parse(cidr, &field)?;
+            if source.family() != AddressFamily::V4 {
+                return Err(FirewallPlanError::InvalidCidr {
+                    field,
+                    value: cidr.clone(),
+                    message: "system host access sources must be IPv4".to_owned(),
+                });
+            }
+        }
+        access.trusted_source_cidrs.sort();
+        access.trusted_source_cidrs.dedup();
         access.host_ports.sort_unstable();
         access.endpoints.sort_unstable();
     }

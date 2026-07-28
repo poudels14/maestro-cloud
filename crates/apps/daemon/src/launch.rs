@@ -42,7 +42,7 @@ use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
 use crate::platform::{AbsentHostNetworkBackend, RuntimeDelegatedNetworkStatsReader};
-use crate::tailscale_resources::TailscaleSystemResources;
+use crate::tailscale_resources::{TAILSCALE_IPV4_CIDR, TailscaleSystemResources};
 use crate::traefik_resources::TraefikSystemResources;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
@@ -468,12 +468,23 @@ pub(crate) fn admin_api_settings(
                 node.workload_subnet
             ))
         })?;
+        let tailnet = TAILSCALE_IPV4_CIDR.parse().map_err(|error| {
+            invalid(format!(
+                "invalid built-in Tailscale operator CIDR `{TAILSCALE_IPV4_CIDR}`: {error}"
+            ))
+        })?;
         let settings = ServerSettings::new(
             SocketAddr::new(IpAddr::V4(address), ADMIN_API_PORT),
             Some(jwt_secret_key),
         )
         .with_managed_operator_plaintext()
-        .with_operator_proxy_cidrs(cluster.nodes.values().map(|node| node.workload_subnet));
+        .with_operator_proxy_cidrs(
+            cluster
+                .nodes
+                .values()
+                .map(|node| node.workload_subnet)
+                .chain([tailnet]),
+        );
         Ok(Some(match packaged_panel_directory() {
             Some(directory) => settings.with_panel_directory(directory),
             None => settings,

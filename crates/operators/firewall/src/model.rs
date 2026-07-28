@@ -33,6 +33,8 @@ pub struct HostPortRoute {
 pub struct SystemHostAccess {
     /// System service whose running assignment addresses are trusted.
     pub service_id: ServiceId,
+    /// Additional canonical IPv4 sources owned by the system transport.
+    pub trusted_source_cidrs: Vec<String>,
     /// Protected TCP host ports reachable by that service.
     pub host_ports: Vec<u16>,
     /// Exact bridge-only TCP endpoints reachable by that service.

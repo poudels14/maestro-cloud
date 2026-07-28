@@ -266,6 +266,22 @@ fn malformed_cidrs_subjects_scopes_and_ports_fail_closed() {
         plan(unprotected_host_access.input()),
         Err(FirewallPlanError::SystemHostAccessPortNotProtected { port: 9_999, .. })
     ));
+
+    let mut noncanonical_system_source = World::standard();
+    noncanonical_system_source.settings.system_host_access[0].trusted_source_cidrs =
+        vec!["100.64.0.1/10".to_owned()];
+    assert!(matches!(
+        plan(noncanonical_system_source.input()),
+        Err(FirewallPlanError::InvalidCidr { .. })
+    ));
+
+    let mut ipv6_system_source = World::standard();
+    ipv6_system_source.settings.system_host_access[0].trusted_source_cidrs =
+        vec!["fd7a:115c:a1e0::/48".to_owned()];
+    assert!(matches!(
+        plan(ipv6_system_source.input()),
+        Err(FirewallPlanError::InvalidCidr { .. })
+    ));
 }
 
 #[test]
@@ -308,6 +324,7 @@ impl World {
             system_services: BTreeSet::from([system.meta.id.clone(), ingress.meta.id.clone()]),
             system_host_access: vec![SystemHostAccess {
                 service_id: system.meta.id.clone(),
+                trusted_source_cidrs: vec!["100.64.0.0/10".to_owned()],
                 host_ports: vec![3000],
                 endpoints: vec![SystemHostEndpoint {
                     address: Ipv4Addr::new(10, 42, 1, 250),
