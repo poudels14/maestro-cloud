@@ -76,18 +76,6 @@ function NodesPage(props: { api: ClusterApi }) {
                       {node.state.reason ?? node.dataPlaneError}
                     </div>
                   </Show>
-                  <Show
-                    when={
-                      node.alive &&
-                      node.dataPlaneReady &&
-                      !node.state.unschedulable &&
-                      !node.state.drainPending
-                    }
-                  >
-                    <div class="mt-1 truncate text-[10px] text-emerald-600">
-                      Scheduling enabled
-                    </div>
-                  </Show>
                 </div>
                 <span class="text-gray-600">{node.role}</span>
                 <span
