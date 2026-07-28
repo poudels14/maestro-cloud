@@ -33,6 +33,7 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
     let resources = TraefikSystemResources::for_cluster(&cluster, &security())?;
     let service = &resources.service;
     assert_eq!(service.meta.id.as_str(), TRAEFIK_SERVICE_ID);
+    assert_eq!(service.spec.name, "Traefik");
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.node_api, NodeApiAccess::IdentityAndTelemetry);
     assert_eq!(

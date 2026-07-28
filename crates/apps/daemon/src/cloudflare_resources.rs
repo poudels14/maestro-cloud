@@ -45,7 +45,7 @@ impl CloudflareSystemResources {
                 deletion_timestamp: None,
             },
             spec: ServiceSpec {
-                name: "Maestro Cloudflare Tunnel".to_owned(),
+                name: "Cloudflare Tunnel".to_owned(),
                 version: CLOUDFLARE_VERSION.to_owned(),
                 artifact: ArtifactTemplate::Image {
                     reference: CLOUDFLARE_IMAGE.to_owned(),

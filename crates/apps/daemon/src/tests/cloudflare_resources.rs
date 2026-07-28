@@ -25,6 +25,7 @@ fn builds_a_pinned_secret_mounted_ready_connector_service() -> Result<(), Box<dy
         CloudflareSystemResources::from_cluster(&cluster)?.ok_or("Cloudflare resources missing")?;
     let service = &resources.service;
     assert_eq!(service.meta.id.as_str(), CLOUDFLARE_SERVICE_ID);
+    assert_eq!(service.spec.name, "Cloudflare Tunnel");
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.node_api, NodeApiAccess::Disabled);
     assert_eq!(service.spec.exec, ExecPolicy::Denied);

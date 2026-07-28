@@ -165,7 +165,7 @@ impl TailscaleSystemResources {
                 deletion_timestamp: None,
             },
             spec: ServiceSpec {
-                name: "Maestro Tailscale Gateway".to_owned(),
+                name: "Tailscale Gateway".to_owned(),
                 version: TAILSCALE_VERSION.to_owned(),
                 artifact: ArtifactTemplate::Image {
                     reference: TAILSCALE_IMAGE.to_owned(),

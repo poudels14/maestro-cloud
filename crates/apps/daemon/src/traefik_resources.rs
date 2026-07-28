@@ -94,7 +94,7 @@ impl TraefikSystemResources {
                 deletion_timestamp: None,
             },
             spec: ServiceSpec {
-                name: "Maestro Traefik".to_owned(),
+                name: "Traefik".to_owned(),
                 version: TRAEFIK_VERSION.to_owned(),
                 artifact: ArtifactTemplate::Image {
                     reference: TRAEFIK_IMAGE.to_owned(),
