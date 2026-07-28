@@ -31,6 +31,15 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
                         customRequestHeaders/X-Maestro-Provider-Ready"
     ));
     assert_eq!(provider_root.values[0].value, b"true");
+    let provider_mirror = store.list(&keys.traefik_provider()).await?;
+    assert_eq!(provider_mirror.values.len(), 1);
+    assert_eq!(
+        provider_mirror.values[0].key.as_str(),
+        "maestro/clusters/store-traefik/integrations/traefik/http/middlewares/\
+         maestro.internal-provider-ready/headers/customRequestHeaders/\
+         X-Maestro-Provider-Ready"
+    );
+    assert_eq!(provider_mirror.values[0].value, b"true");
 
     provider
         .stage(&TraefikStage {
@@ -71,6 +80,14 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
     let routers = store.list(&keys.traefik_prefix("http/routers")?).await?;
     assert_eq!(routers.values.len(), 1);
     assert_eq!(routers.values[0].value, b"Host(`new.example.test`)");
+    let provider_routers = store
+        .list(&keys.traefik_provider_prefix("http/routers")?)
+        .await?;
+    assert_eq!(provider_routers.values.len(), 1);
+    assert_eq!(
+        provider_routers.values[0].value,
+        b"Host(`new.example.test`)"
+    );
     assert!(
         store
             .list(&keys.traefik_prefix("http/services")?)

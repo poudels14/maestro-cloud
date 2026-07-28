@@ -34,15 +34,8 @@ impl StoreTraefikProvider {
             .keyspace
             .traefik_entry(PROVIDER_READY_ENTRY)
             .map_err(|error| backend_error("provider root validation", error))?;
-        self.commit(
-            "provider root initialization",
-            vec![Mutation::Put {
-                key,
-                value: b"true".to_vec(),
-                session: None,
-            }],
-        )
-        .await
+        let mutations = self.mirrored_put(key, b"true".to_vec())?;
+        self.commit("provider root initialization", mutations).await
     }
 
     async fn commit(
@@ -90,25 +83,61 @@ impl StoreTraefikProvider {
             .filter(|key| key.as_str().starts_with(owned.as_str()))
             .collect())
     }
+
+    fn mirrored_put(
+        &self,
+        canonical: StoreKey,
+        value: Vec<u8>,
+    ) -> Result<Vec<Mutation>, IngressBackendError> {
+        let provider = self.provider_key(&canonical)?;
+        Ok(vec![
+            Mutation::Put {
+                key: canonical,
+                value: value.clone(),
+                session: None,
+            },
+            Mutation::Put {
+                key: provider,
+                value,
+                session: None,
+            },
+        ])
+    }
+
+    fn mirrored_delete(&self, canonical: StoreKey) -> Result<Vec<Mutation>, IngressBackendError> {
+        let provider = self.provider_key(&canonical)?;
+        Ok(vec![
+            Mutation::Delete { key: canonical },
+            Mutation::Delete { key: provider },
+        ])
+    }
+
+    fn provider_key(&self, canonical: &StoreKey) -> Result<StoreKey, IngressBackendError> {
+        let relative = canonical
+            .as_str()
+            .strip_prefix(self.keyspace.traefik().as_str())
+            .ok_or_else(|| {
+                IngressBackendError::new(
+                    "canonical Traefik key is outside the cluster provider root",
+                )
+            })?;
+        self.keyspace
+            .traefik_provider_entry(relative)
+            .map_err(|error| backend_error("provider mirror validation", error))
+    }
 }
 
 #[async_trait]
 impl TraefikProvider for StoreTraefikProvider {
     async fn stage(&self, stage: &TraefikStage) -> Result<(), IngressBackendError> {
-        let mutations = stage
-            .entries
-            .iter()
-            .map(|(relative, value)| {
-                self.keyspace
-                    .traefik_entry(relative)
-                    .map(|key| Mutation::Put {
-                        key,
-                        value: value.as_bytes().to_vec(),
-                        session: None,
-                    })
-                    .map_err(|error| backend_error("stage path validation", error))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut mutations = Vec::with_capacity(stage.entries.len() * 2);
+        for (relative, value) in &stage.entries {
+            let key = self
+                .keyspace
+                .traefik_entry(relative)
+                .map_err(|error| backend_error("stage path validation", error))?;
+            mutations.extend(self.mirrored_put(key, value.as_bytes().to_vec())?);
+        }
         self.commit("generation staging", mutations).await
     }
 
@@ -146,15 +175,13 @@ impl TraefikProvider for StoreTraefikProvider {
             deletes.extend(self.list_owned(relative).await?);
         }
 
-        let mut mutations = deletes
-            .into_iter()
-            .map(|key| Mutation::Delete { key })
-            .collect::<Vec<_>>();
-        mutations.extend(desired.into_iter().map(|(key, value)| Mutation::Put {
-            key,
-            value,
-            session: None,
-        }));
+        let mut mutations = Vec::with_capacity((deletes.len() + desired.len()) * 2);
+        for key in deletes {
+            mutations.extend(self.mirrored_delete(key)?);
+        }
+        for (key, value) in desired {
+            mutations.extend(self.mirrored_put(key, value)?);
+        }
         self.commit("router cutover", mutations).await
     }
 
@@ -199,15 +226,13 @@ impl TraefikProvider for StoreTraefikProvider {
                     .filter(|key| !desired.contains_key(key)),
             );
         }
-        let mut mutations = deletes
-            .into_iter()
-            .map(|key| Mutation::Delete { key })
-            .collect::<Vec<_>>();
-        mutations.extend(desired.into_iter().map(|(key, value)| Mutation::Put {
-            key,
-            value,
-            session: None,
-        }));
+        let mut mutations = Vec::with_capacity((deletes.len() + desired.len()) * 2);
+        for key in deletes {
+            mutations.extend(self.mirrored_delete(key)?);
+        }
+        for (key, value) in desired {
+            mutations.extend(self.mirrored_put(key, value)?);
+        }
         self.commit("blocklist replacement", mutations).await
     }
 }

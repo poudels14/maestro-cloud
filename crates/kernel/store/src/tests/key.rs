@@ -103,6 +103,10 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
         "/maestro/clusters/production/integrations/traefik/"
     );
     assert_eq!(
+        keys.traefik_provider().as_str(),
+        "maestro/clusters/production/integrations/traefik/"
+    );
+    assert_eq!(
         keys.traefik_entry("http/routers/api/rule")
             .expect("Traefik entry")
             .as_str(),
@@ -114,6 +118,19 @@ fn keyspace_owns_every_canonical_cluster_key_shape() {
             .as_str(),
         "/maestro/clusters/production/integrations/traefik/http/services/api/"
     );
+    assert_eq!(
+        keys.traefik_provider_entry("http/routers/api/rule")
+            .expect("Traefik provider entry")
+            .as_str(),
+        "maestro/clusters/production/integrations/traefik/http/routers/api/rule"
+    );
+    assert_eq!(
+        keys.traefik_provider_prefix("http/services/api")
+            .expect("Traefik provider prefix")
+            .as_str(),
+        "maestro/clusters/production/integrations/traefik/http/services/api/"
+    );
     assert!(keys.traefik_entry("../control/leader").is_err());
     assert!(keys.traefik_prefix("/http/routers").is_err());
+    assert!(keys.traefik_provider_entry("../control/leader").is_err());
 }

@@ -43,8 +43,11 @@ impl TraefikSystemResources {
             return Err(TraefikResourceError::NoWorkloadNodes);
         }
         let service_id = ServiceId::new(TRAEFIK_SERVICE_ID)?;
+        // kvtools/etcdv3 strips one leading slash from every key it reads.
+        // Select the fenced compatibility mirror rather than the canonical
+        // `/maestro/` copy retained for snapshots and migration.
         let root_key = Keyspace::new(&cluster.cluster_id)
-            .traefik()
+            .traefik_provider()
             .as_str()
             .trim_end_matches('/')
             .to_owned();

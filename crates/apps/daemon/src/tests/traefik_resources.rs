@@ -60,7 +60,7 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
     assert_eq!(command.executable, "/usr/local/bin/traefik");
     for expected in [
         "--providers.etcd=true",
-        "--providers.etcd.rootKey=/maestro/clusters/daemon-test/integrations/traefik",
+        "--providers.etcd.rootKey=maestro/clusters/daemon-test/integrations/traefik",
         "--providers.etcd.tls.ca=/run/secrets/etcd/ca.pem",
         "--providers.etcd.tls.cert=/run/secrets/etcd/client.pem",
         "--providers.etcd.tls.key=/run/secrets/etcd/client-key.pem",

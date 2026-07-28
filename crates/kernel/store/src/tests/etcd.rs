@@ -81,8 +81,39 @@ async fn encrypted_etcd_never_persists_plaintext_and_binds_the_key()
         b"Host(`api.example.test`)"
     );
 
+    let traefik_provider_key =
+        keys.traefik_provider_entry("http/routers/api/rule")?;
+    raw.delete(traefik_provider_key.as_str(), None).await?;
+    let outcome = store
+        .put_cas(PutRequest {
+            key: traefik_provider_key.clone(),
+            value: b"Host(`api.example.test`)".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(outcome, CasOutcome::Applied(_)));
+    let response = raw.get(traefik_provider_key.as_str(), None).await?;
+    assert_eq!(
+        response
+            .kvs()
+            .first()
+            .ok_or("Traefik provider key should exist")?
+            .value(),
+        b"Host(`api.example.test`)"
+    );
+    assert_eq!(
+        store
+            .get(&traefik_provider_key)
+            .await?
+            .ok_or("Traefik provider key should be readable")?
+            .value,
+        b"Host(`api.example.test`)"
+    );
+
     raw.delete(key.as_str(), None).await?;
     raw.delete(traefik_key.as_str(), None).await?;
+    raw.delete(traefik_provider_key.as_str(), None).await?;
     Ok(())
 }
 

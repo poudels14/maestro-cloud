@@ -4,7 +4,7 @@ use kernel_api::{ClusterId, NodeId, RequestId, ResourceKind, ResourceName};
 
 use crate::StoreError;
 
-/// An exact persistence key under the canonical `/maestro/` namespace.
+/// An exact canonical or Traefik-provider compatibility persistence key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StoreKey(String);
 
@@ -18,10 +18,13 @@ impl StoreKey {
         let value = std::str::from_utf8(bytes).map_err(|error| StoreError::Contract {
             message: format!("store backend returned a non-UTF-8 key: {error}"),
         })?;
-        if !value.starts_with("/maestro/clusters/") {
+        let canonical = value.starts_with("/maestro/clusters/");
+        let traefik_provider =
+            value.starts_with("maestro/clusters/") && value.contains("/integrations/traefik/");
+        if !canonical && !traefik_provider {
             Err(StoreError::Contract {
                 message: format!(
-                    "store backend returned a key outside the Maestro namespace: {value}"
+                    "store backend returned a key outside the Maestro namespaces: {value}"
                 ),
             })
         } else {
@@ -36,7 +39,7 @@ impl Display for StoreKey {
     }
 }
 
-/// A key prefix under the canonical `/maestro/` namespace.
+/// A canonical or Traefik-provider compatibility key prefix.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StorePrefix(String);
 
@@ -188,6 +191,11 @@ impl Keyspace {
         self.prefix("integrations/traefik")
     }
 
+    /// Slashless compatibility root read by Traefik's normalizing etcd driver.
+    pub fn traefik_provider(&self) -> StorePrefix {
+        StorePrefix(self.traefik().as_str().trim_start_matches('/').to_owned())
+    }
+
     /// Exact dynamic-provider key below the cluster's Traefik root.
     pub fn traefik_entry(&self, relative: &str) -> Result<StoreKey, StoreError> {
         validate_relative_path(relative)?;
@@ -198,6 +206,24 @@ impl Keyspace {
     pub fn traefik_prefix(&self, relative: &str) -> Result<StorePrefix, StoreError> {
         validate_relative_path(relative)?;
         Ok(self.prefix(&format!("integrations/traefik/{relative}")))
+    }
+
+    /// Exact compatibility-mirror key read by Traefik's etcd provider.
+    pub fn traefik_provider_entry(&self, relative: &str) -> Result<StoreKey, StoreError> {
+        validate_relative_path(relative)?;
+        Ok(StoreKey(format!(
+            "{}{relative}",
+            self.traefik_provider().as_str()
+        )))
+    }
+
+    /// Compatibility-mirror subtree read by Traefik's etcd provider.
+    pub fn traefik_provider_prefix(&self, relative: &str) -> Result<StorePrefix, StoreError> {
+        validate_relative_path(relative)?;
+        Ok(StorePrefix(format!(
+            "{}{relative}/",
+            self.traefik_provider().as_str()
+        )))
     }
 
     fn key(&self, suffix: &str) -> StoreKey {
