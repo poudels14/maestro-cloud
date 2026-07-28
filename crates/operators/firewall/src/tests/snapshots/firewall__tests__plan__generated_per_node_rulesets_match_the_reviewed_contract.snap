@@ -4,7 +4,7 @@ assertion_line: 32
 expression: artifact
 ---
 node: node-1
-digest: 95006562b5093ea2a43faa84ca8f5d1765f7e690c37d4671b1f151cf4bca4bcf
+digest: 436d9207ce3463074d6709ca82860345e50772cdfbb6737a91e6966921892062
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -128,13 +128,13 @@ table inet maestro_firewall {
 
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
-        iifname != "maestro0" tcp dport 443 dnat ip to 10.42.1.20:8443
+        iifname != "maestro0" ip daddr != 10.42.1.250 tcp dport 443 dnat ip to 10.42.1.20:8443
     }
 
 }
 
 node: node-2
-digest: 944218d7e430f18af5b8debac805f0de00b846ad0a96343501e7c2c4c12e7a97
+digest: ffa4edcc75d603aaf9d45f59ee2c7a5789c5c1b7cd65656c818fe98889431989
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -256,7 +256,7 @@ table inet maestro_firewall {
 
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
-        iifname != "maestro0" tcp dport 443 dnat ip to 10.42.2.20:8443
+        iifname != "maestro0" ip daddr != 10.42.2.250 tcp dport 443 dnat ip to 10.42.2.20:8443
     }
 
 }

@@ -247,8 +247,11 @@ fn host_port_rules(input: &ValidatedInput, node: &crate::validation::NodeContext
                 crate::HostPortProtocol::Udp => "udp",
             };
             Some(format!(
-                "iifname != \"{}\" {protocol} dport {} dnat ip to {address}:{}",
-                input.settings.workload_interface, route.host_port, route.workload_port
+                "iifname != \"{}\" ip daddr != {} {protocol} dport {} dnat ip to {address}:{}",
+                input.settings.workload_interface,
+                node.admin_address,
+                route.host_port,
+                route.workload_port
             ))
         })
         .collect()

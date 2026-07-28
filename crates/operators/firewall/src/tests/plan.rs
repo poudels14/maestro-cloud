@@ -168,7 +168,7 @@ fn local_workloads_are_masqueraded_only_when_leaving_cluster_subnets() {
 }
 
 #[test]
-fn host_ports_route_to_one_running_local_system_assignment() {
+fn host_ports_route_to_one_running_local_system_assignment_without_capturing_admin() {
     let output = plan(World::standard().input()).unwrap();
     let first = output
         .rulesets
@@ -180,17 +180,15 @@ fn host_ports_route_to_one_running_local_system_assignment() {
         .iter()
         .find(|ruleset| ruleset.node_id.as_str() == "node-2")
         .unwrap();
-    assert!(
-        first
-            .script
-            .contains("iifname != \"maestro0\" tcp dport 443 dnat ip to 10.42.1.20:8443")
-    );
+    assert!(first.script.contains(
+        "iifname != \"maestro0\" ip daddr != 10.42.1.250 tcp dport 443 \
+                 dnat ip to 10.42.1.20:8443"
+    ));
     assert!(!first.script.contains("10.42.2.20:8443"));
-    assert!(
-        second
-            .script
-            .contains("iifname != \"maestro0\" tcp dport 443 dnat ip to 10.42.2.20:8443")
-    );
+    assert!(second.script.contains(
+        "iifname != \"maestro0\" ip daddr != 10.42.2.250 tcp dport 443 \
+                 dnat ip to 10.42.2.20:8443"
+    ));
     assert!(!second.script.contains("10.42.1.20:8443"));
     assert!(first.script.contains("tcp dport 443 reject"));
     assert!(second.script.contains("tcp dport 443 reject"));
