@@ -88,14 +88,18 @@ async fn reconcile(
         .try_collect::<Vec<_>>()
         .await
         .map_err(|error| backend_error("list workload bridge addresses", error))?;
-    let delta = address_delta(addresses, desired.gateway, desired.prefix_length);
-    if !delta.present {
+    let mut desired_addresses = vec![(desired.gateway, desired.prefix_length)];
+    if let Some(admin_address) = desired.admin_address {
+        desired_addresses.push((admin_address, desired.prefix_length));
+    }
+    let delta = address_delta(addresses, &desired_addresses);
+    for (address, prefix_length) in delta.missing {
         handle
             .address()
-            .add(index, IpAddr::V4(desired.gateway), desired.prefix_length)
+            .add(index, IpAddr::V4(address), prefix_length)
             .execute()
             .await
-            .map_err(|error| backend_error("add workload bridge gateway", error))?;
+            .map_err(|error| backend_error("add workload bridge address", error))?;
     }
     for stale in delta.stale {
         handle
@@ -144,16 +148,15 @@ fn validate_bridge(link: &LinkMessage) -> Result<(), WorkloadBridgeBackendError>
 }
 
 pub(crate) struct AddressDelta {
-    pub(crate) present: bool,
+    pub(crate) missing: Vec<(Ipv4Addr, u8)>,
     pub(crate) stale: Vec<AddressMessage>,
 }
 
 pub(crate) fn address_delta(
     addresses: Vec<AddressMessage>,
-    gateway: Ipv4Addr,
-    prefix_length: u8,
+    desired: &[(Ipv4Addr, u8)],
 ) -> AddressDelta {
-    let mut present = false;
+    let mut missing = desired.to_vec();
     let mut stale = Vec::new();
     for address in addresses {
         let ipv4 = address
@@ -167,13 +170,15 @@ pub(crate) fn address_delta(
         let Some(ipv4) = ipv4 else {
             continue;
         };
-        if ipv4 == gateway && address.header.prefix_len == prefix_length && !present {
-            present = true;
+        if let Some(index) = missing.iter().position(|(desired, prefix_length)| {
+            ipv4 == *desired && address.header.prefix_len == *prefix_length
+        }) {
+            missing.remove(index);
         } else {
             stale.push(address);
         }
     }
-    AddressDelta { present, stale }
+    AddressDelta { missing, stale }
 }
 
 fn backend_error(action: &str, error: impl std::fmt::Display) -> WorkloadBridgeBackendError {

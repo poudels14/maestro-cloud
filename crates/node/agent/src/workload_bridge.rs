@@ -16,6 +16,8 @@ pub struct WorkloadBridge {
     pub name: String,
     /// Node-local gateway used by workloads and the authoritative DNS listener.
     pub gateway: Ipv4Addr,
+    /// Predictable Admin address reachable only through the managed system path.
+    pub admin_address: Option<Ipv4Addr>,
     /// Prefix length of the node's workload subnet.
     pub prefix_length: u8,
     /// Link MTU kept equal to the WireGuard mesh MTU.
@@ -45,9 +47,37 @@ impl WorkloadBridge {
         Ok(Self {
             name: WORKLOAD_BRIDGE_NAME.to_string(),
             gateway,
+            admin_address: None,
             prefix_length,
             mtu_bytes,
         })
+    }
+
+    /// Adds the fixed Admin address to the managed bridge address set.
+    pub fn with_admin_address(
+        mut self,
+        admin_address: Ipv4Addr,
+    ) -> Result<Self, WorkloadBridgeError> {
+        if admin_address.is_unspecified()
+            || admin_address.is_loopback()
+            || admin_address.is_multicast()
+            || admin_address == Ipv4Addr::BROADCAST
+        {
+            return Err(WorkloadBridgeError::InvalidAdminAddress { admin_address });
+        }
+        if admin_address == self.gateway {
+            return Err(WorkloadBridgeError::AdminAddressConflictsWithGateway { admin_address });
+        }
+        let mask = u32::MAX << (u32::BITS - u32::from(self.prefix_length));
+        if u32::from(admin_address) & mask != u32::from(self.gateway) & mask {
+            return Err(WorkloadBridgeError::AdminAddressOutsideSubnet {
+                admin_address,
+                gateway: self.gateway,
+                prefix_length: self.prefix_length,
+            });
+        }
+        self.admin_address = Some(admin_address);
+        Ok(self)
     }
 }
 
@@ -160,6 +190,21 @@ pub enum WorkloadBridgeError {
     /// A zero MTU cannot carry workload traffic.
     #[error("workload bridge MTU must be greater than zero")]
     ZeroMtu,
+    /// The Admin endpoint must be a concrete unicast address.
+    #[error("workload bridge Admin address `{admin_address}` is not a usable unicast address")]
+    InvalidAdminAddress { admin_address: Ipv4Addr },
+    /// The Admin endpoint cannot replace the workload gateway.
+    #[error("workload bridge Admin address `{admin_address}` conflicts with its gateway")]
+    AdminAddressConflictsWithGateway { admin_address: Ipv4Addr },
+    /// The Admin endpoint must belong to the bridge subnet.
+    #[error(
+        "workload bridge Admin address `{admin_address}` is outside `{gateway}/{prefix_length}`"
+    )]
+    AdminAddressOutsideSubnet {
+        admin_address: Ipv4Addr,
+        gateway: Ipv4Addr,
+        prefix_length: u8,
+    },
     /// A zero interval would create an unbounded hot repair loop.
     #[error("workload bridge resync interval must be greater than zero")]
     ZeroResyncInterval,

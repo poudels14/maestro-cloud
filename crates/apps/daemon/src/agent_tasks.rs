@@ -17,7 +17,7 @@ use crate::stats_metric_sampler::StatsMetricSampler;
 use crate::{LogMaintenanceWorker, RoleError};
 
 pub(crate) struct AgentTaskInputs<MeshBackendType, FirewallBackendType, BridgeBackendType> {
-    pub(crate) api_server: server::BoundApiServer,
+    pub(crate) api_servers: Vec<server::BoundApiServer>,
     pub(crate) node_registry_agent: NodeRegistryAgent,
     pub(crate) node_registration: NodeRegistration,
     pub(crate) artifact_replication_agent: Arc<ArtifactReplicationAgent>,
@@ -58,7 +58,7 @@ where
     BridgeBackendType: WorkloadBridgeBackend + 'static,
 {
     let AgentTaskInputs {
-        api_server,
+        api_servers,
         node_registry_agent,
         node_registration,
         artifact_replication_agent,
@@ -84,14 +84,7 @@ where
     let host_telemetry_shutdown = task_shutdown.clone();
     let node_upgrade_shutdown = task_shutdown.clone();
     let node_registry_shutdown = task_shutdown.clone();
-    let api_shutdown = task_shutdown.clone();
     let stats_metric_shutdown = task_shutdown.clone();
-    let api_task = tokio::spawn(async move {
-        api_server
-            .serve(api_shutdown)
-            .await
-            .map_err(|error| role_error("serve operator API", error))
-    });
     let node_registry_task = tokio::spawn(async move {
         node_registry_agent
             .run_registered(node_registration, node_registry_shutdown)
@@ -107,12 +100,20 @@ where
     let mut tasks = vec![
         artifact_replication_task,
         node_registry_task,
-        api_task,
         tokio::spawn(async move {
             stats_metric_sampler.run(stats_metric_shutdown).await;
             Ok(())
         }),
     ];
+    for api_server in api_servers {
+        let api_shutdown = task_shutdown.clone();
+        tasks.push(tokio::spawn(async move {
+            api_server
+                .serve(api_shutdown)
+                .await
+                .map_err(|error| role_error("serve operator API", error))
+        }));
+    }
     if let AgentNetworkAgents::ClusterRouted {
         bridge,
         mesh,

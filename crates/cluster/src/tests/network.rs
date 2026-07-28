@@ -36,6 +36,10 @@ fn workload_range_preserves_gateway_and_system_addresses() -> Result<(), Box<dyn
         network.host_address_from_end(1),
         Some(Ipv4Addr::new(172, 22, 4, 254))
     );
+    assert_eq!(
+        network.admin_address(),
+        Some(Ipv4Addr::new(172, 22, 4, 250))
+    );
     assert!(network.is_workload_address(Ipv4Addr::new(172, 22, 4, 100)));
     assert!(!network.is_workload_address(Ipv4Addr::new(172, 22, 4, 200)));
     Ok(())

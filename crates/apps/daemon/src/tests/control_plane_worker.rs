@@ -104,6 +104,7 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
             api_settings: test_api_settings("127.0.0.1:0".parse()?)?,
+            admin_api_settings: None,
             firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default(),

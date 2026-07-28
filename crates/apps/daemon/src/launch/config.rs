@@ -216,6 +216,11 @@ impl DaemonLaunchConfig {
             self.jwt_secret_key.clone(),
         )
         .validate()?;
+        if let Some(settings) =
+            super::admin_api_settings(&self.cluster, node, self.jwt_secret_key.clone())?
+        {
+            settings.validate()?;
+        }
         Ok(())
     }
 }

@@ -97,6 +97,9 @@ pub enum FirewallPlanError {
     /// A subnet had no usable first host address for the bridge and DNS listener.
     #[error("node `{node_id}` workload subnet `{subnet}` has no bridge address")]
     WorkloadSubnetHasNoBridge { node_id: NodeId, subnet: String },
+    /// A subnet had no usable fixed Admin address.
+    #[error("node `{node_id}` workload subnet `{subnet}` has no reserved Admin address")]
+    WorkloadSubnetHasNoAdmin { node_id: NodeId, subnet: String },
     /// A system-plane exemption references a service absent from the snapshot.
     #[error("system firewall exemption references missing Service `{service_id}`")]
     MissingSystemService { service_id: ServiceId },
@@ -115,6 +118,21 @@ pub enum FirewallPlanError {
     /// The same protected host grant was declared more than once.
     #[error("protected host access for Service `{service_id}` repeats port {port}")]
     DuplicateSystemHostAccess { service_id: ServiceId, port: u16 },
+    /// Port zero cannot identify an exact system host destination.
+    #[error(
+        "protected host access for Service `{service_id}` contains endpoint `{address}` with port zero"
+    )]
+    ZeroSystemHostEndpointPort {
+        service_id: ServiceId,
+        address: std::net::Ipv4Addr,
+    },
+    /// The same exact system-host grant was declared more than once.
+    #[error("protected host access for Service `{service_id}` repeats endpoint `{address}:{port}`")]
+    DuplicateSystemHostEndpoint {
+        service_id: ServiceId,
+        address: std::net::Ipv4Addr,
+        port: u16,
+    },
     /// An assignment references a service absent from the snapshot.
     #[error("Assignment `{assignment_id}` references missing Service `{service_id}`")]
     MissingAssignmentService {

@@ -112,7 +112,12 @@ where
     let gateway = node.workload_subnet.gateway_address().ok_or_else(|| {
         RoleError::new("local workload subnet has no usable workload bridge gateway")
     })?;
+    let admin_address = node
+        .workload_subnet
+        .admin_address()
+        .ok_or_else(|| RoleError::new("local workload subnet has no fixed Admin address"))?;
     let desired = WorkloadBridge::new(gateway, node.workload_subnet.prefix(), WIREGUARD_MTU_BYTES)
+        .and_then(|bridge| bridge.with_admin_address(admin_address))
         .map_err(|error| role_error("build workload bridge state", error))?;
     WorkloadBridgeAgent::new(
         desired,

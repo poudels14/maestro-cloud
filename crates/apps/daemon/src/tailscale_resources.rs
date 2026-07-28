@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cluster::ClusterConfig;
-use firewall::SystemHostAccess;
+use firewall::{SystemHostAccess, SystemHostEndpoint};
 use kernel_api::{
     AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, FirewallDirection, FirewallPolicy,
     FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject,
@@ -64,34 +64,27 @@ done
 
 gateway="$(awk '$1 == "nameserver" { print $2; exit }' /etc/resolv.conf)"
 [ -n "$gateway" ] || fail_gateway "could not discover the node workload gateway"
+admin="${gateway%.*}.250"
 
-api_port=""
-api_attempt=0
-while [ "$api_attempt" -lt 60 ]; do
-  previous_ifs="$IFS"
-  IFS=,
-  for port in $MAESTRO_NODE_API_PORTS; do
-    if nc -z -w 1 "$gateway" "$port"; then
-      api_port="$port"
-      break
-    fi
-  done
-  IFS="$previous_ifs"
-  if [ -n "$api_port" ]; then
+admin_ready=false
+admin_attempt=0
+while [ "$admin_attempt" -lt 60 ]; do
+  if nc -z -w 1 "$admin" 80; then
+    admin_ready=true
     break
   fi
   kill -0 "$containerboot_pid" 2>/dev/null \
-    || fail_gateway "containerboot exited before the node API became reachable"
-  api_attempt=$((api_attempt + 1))
+    || fail_gateway "containerboot exited before Admin became reachable"
+  admin_attempt=$((admin_attempt + 1))
   sleep 1
 done
-[ -n "$api_port" ] || fail_gateway "could not discover the node API listener"
+[ "$admin_ready" = true ] || fail_gateway "Admin did not become reachable at ${admin}:80"
 
 /usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve reset \
   || fail_gateway "could not reset stale Tailscale Serve configuration"
 /usr/local/bin/tailscale --socket=/tmp/tailscaled.sock serve --bg --yes --http=80 \
-  "https+insecure://${gateway}:${api_port}" \
-  || fail_gateway "could not expose the node API with Tailscale Serve"
+  "http://${admin}:80" \
+  || fail_gateway "could not expose Admin with Tailscale Serve"
 
 wait "$containerboot_pid"
 "#;
@@ -144,14 +137,6 @@ impl TailscaleSystemResources {
                 tailscale_hostname_prefix(&cluster.name),
             ),
             (
-                "MAESTRO_NODE_API_PORTS".to_owned(),
-                api_ports(&cluster.nodes)
-                    .into_iter()
-                    .map(|port| port.to_string())
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
-            (
                 "TS_SOCKS5_SERVER".to_owned(),
                 format!(":{TAILSCALE_SOCKS_PORT}"),
             ),
@@ -161,7 +146,19 @@ impl TailscaleSystemResources {
         let annotations = BTreeMap::from([(managed_annotation(), MANAGED_VALUE.to_owned())]);
         let system_host_access = SystemHostAccess {
             service_id: service_id.clone(),
-            host_ports: api_ports(&cluster.nodes),
+            host_ports: Vec::new(),
+            endpoints: cluster
+                .nodes
+                .values()
+                .map(|node| {
+                    node.workload_subnet
+                        .admin_address()
+                        .map(|address| SystemHostEndpoint { address, port: 80 })
+                        .ok_or_else(|| TailscaleResourceError::MissingAdminAddress {
+                            subnet: node.workload_subnet.to_string(),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         };
         let service = Object {
             meta: ObjectMeta {
@@ -299,16 +296,6 @@ fn tailscale_hostname_prefix(cluster_name: &str) -> String {
     format!("{LEADING}{cluster_name}{TRAILING}")
 }
 
-fn api_ports(nodes: &BTreeMap<kernel_api::NodeId, cluster::NodeDefinition>) -> Vec<u16> {
-    let mut ports = nodes
-        .values()
-        .map(|node| node.endpoint.api_port)
-        .collect::<Vec<_>>();
-    ports.sort_unstable();
-    ports.dedup();
-    ports
-}
-
 pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool {
     annotations
         .get(&managed_annotation())
@@ -339,4 +326,7 @@ pub enum TailscaleResourceError {
     /// An internal resource template lost the private auth-key mount.
     #[error("built-in Tailscale service is missing its auth-key secret mount")]
     MissingAuthSecretMount,
+    /// One workload subnet could not provide its reserved Admin address.
+    #[error("workload subnet `{subnet}` has no reserved Admin address")]
+    MissingAdminAddress { subnet: String },
 }

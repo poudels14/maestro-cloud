@@ -143,7 +143,7 @@ fn render_node(
             node.bridge_address, input.settings.dns_port
         ),
     ];
-    render_system_host_access(input, renderer, &mut input_rules);
+    render_system_host_access(input, node, renderer, &mut input_rules);
     input_rules.push("ip saddr @all_workloads_v4 ct direction original reject".to_string());
     input_rules.push("ct state established,related accept".to_string());
     render_control_protection(input, renderer, &mut input_rules);
@@ -161,9 +161,17 @@ fn render_node(
 
 fn render_system_host_access(
     input: &ValidatedInput,
+    node: &crate::validation::NodeContext,
     renderer: &mut Renderer,
     rules: &mut Vec<String>,
 ) {
+    let guarded_endpoints = input
+        .settings
+        .system_host_access
+        .iter()
+        .flat_map(|access| access.endpoints.iter().copied())
+        .filter(|endpoint| endpoint.address == node.admin_address)
+        .collect::<BTreeSet<_>>();
     for access in &input.settings.system_host_access {
         let sources = input
             .assignments
@@ -183,19 +191,39 @@ fn render_system_host_access(
             short_hash(&[access.service_id.as_str()])
         );
         renderer.add_set(&source_set, AddressFamily::V4, sources);
-        let ports = access
-            .host_ports
-            .iter()
-            .map(|port| PortRange {
-                start: *port,
-                end: *port,
-            })
-            .collect::<Vec<_>>();
-        rules.push(format!(
-            "ip saddr @{source_set} tcp dport {} accept",
-            render_ports(&ports)
-        ));
+        if !access.host_ports.is_empty() {
+            let ports = access
+                .host_ports
+                .iter()
+                .map(|port| PortRange {
+                    start: *port,
+                    end: *port,
+                })
+                .collect::<Vec<_>>();
+            rules.push(format!(
+                "ip saddr @{source_set} tcp dport {} accept",
+                render_ports(&ports)
+            ));
+        }
+        rules.extend(
+            access
+                .endpoints
+                .iter()
+                .filter(|endpoint| endpoint.address == node.admin_address)
+                .map(|endpoint| {
+                    format!(
+                        "ip saddr @{source_set} ip daddr {} tcp dport {} accept",
+                        endpoint.address, endpoint.port
+                    )
+                }),
+        );
     }
+    rules.extend(guarded_endpoints.into_iter().map(|endpoint| {
+        format!(
+            "ip daddr {} tcp dport {} reject",
+            endpoint.address, endpoint.port
+        )
+    }));
 }
 
 fn host_port_rules(input: &ValidatedInput, node: &crate::validation::NodeContext) -> Vec<String> {

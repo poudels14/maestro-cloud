@@ -169,6 +169,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
             api_settings: test_api_settings(api_address)?,
+            admin_api_settings: None,
             firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default().with_sink_worker_settings(SinkWorkerSettings {

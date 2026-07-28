@@ -235,6 +235,20 @@ impl ApiServer {
         self.router.clone()
     }
 
+    /// Claims an additional listener over the same application state with its own access policy.
+    pub async fn bind_additional(
+        &self,
+        settings: ServerSettings,
+    ) -> Result<BoundApiServer, ServerError> {
+        let settings = settings.validate()?;
+        let router = crate::routes::operator_router(
+            self.state.clone(),
+            auth_policy(&settings),
+            settings.panel_directory.as_deref(),
+        );
+        BoundApiServer::bind(settings, router).await
+    }
+
     /// Claims the configured listener before transferring runtime ownership.
     pub async fn bind(self) -> Result<BoundApiServer, ServerError> {
         BoundApiServer::bind(self.settings, self.router).await

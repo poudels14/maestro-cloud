@@ -5,7 +5,7 @@ use cluster::StoreJoinTicket;
 use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
-use crate::launch::{api_settings, panel_directory};
+use crate::launch::{admin_api_settings, api_settings, panel_directory};
 use crate::{
     DaemonLaunchConfig, DaemonLaunchDocument, DatadogLaunchConfig, DatadogLogsLaunchConfig,
     DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
@@ -166,15 +166,23 @@ fn packaged_panel_is_discovered_only_when_the_spa_shell_exists()
 
 #[test]
 fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std::error::Error>> {
-    let launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    let mut launch = config("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    launch.cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-test"),
+        advertise_routes: None,
+        replicas: 1,
+        tags: Vec::new(),
+        cross_cluster_dns: Vec::new(),
+    });
     let node = launch
         .cluster
         .nodes
         .get(&launch.node_id)
+        .cloned()
         .ok_or("local node missing")?;
     let settings = api_settings(
         &launch.cluster,
-        node,
+        &node,
         &launch.security,
         launch.jwt_secret_key.clone(),
     );
@@ -190,6 +198,22 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
             .values()
             .map(|node| node.workload_subnet)
             .collect::<Vec<_>>()
+    );
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    {
+        let admin = admin_api_settings(&launch.cluster, &node, launch.jwt_secret_key.clone())?
+            .ok_or("Admin listener missing")?;
+        assert_eq!(
+            admin.bind_address,
+            std::net::SocketAddr::from(([172, 22, 0, 250], 80))
+        );
+        assert!(admin.tls_identity.is_none());
+        admin.validate()?;
+    }
+    launch.cluster.tailscale = None;
+    assert!(
+        admin_api_settings(&launch.cluster, &node, launch.jwt_secret_key.clone())?.is_none(),
+        "Admin must not listen without the managed Tailscale gateway"
     );
     Ok(())
 }

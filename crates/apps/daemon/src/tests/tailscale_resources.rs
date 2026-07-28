@@ -42,7 +42,20 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         resources.system_host_access.service_id.as_str(),
         "maestro-system-tailscale-gateway"
     );
-    assert_eq!(resources.system_host_access.host_ports, [3011, 3012]);
+    assert!(resources.system_host_access.host_ports.is_empty());
+    assert_eq!(
+        resources.system_host_access.endpoints,
+        [
+            firewall::SystemHostEndpoint {
+                address: "172.22.0.250".parse()?,
+                port: 80,
+            },
+            firewall::SystemHostEndpoint {
+                address: "172.22.1.250".parse()?,
+                port: 80,
+            },
+        ]
+    );
     let service = resources.service;
     assert_eq!(service.spec.name, "Tailscale Gateway");
     assert_eq!(service.spec.replicas, 2);
@@ -104,16 +117,16 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "the pinned Tailscale image does not include the ip utility"
     );
     assert!(
-        AUTH_SCRIPT.contains("while [ \"$api_attempt\" -lt 60 ]"),
-        "gateway startup must tolerate node API and firewall convergence"
+        AUTH_SCRIPT.contains("while [ \"$admin_attempt\" -lt 60 ]"),
+        "gateway startup must tolerate Admin and firewall convergence"
     );
     assert!(
         AUTH_SCRIPT.contains("serve reset"),
         "stale Serve listeners must not survive a gateway hostname change"
     );
     assert!(
-        AUTH_SCRIPT.contains("\"https+insecure://${gateway}:${api_port}\""),
-        "the direct tailnet endpoint must proxy the node-local HTTPS API"
+        AUTH_SCRIPT.contains("\"http://${admin}:80\""),
+        "the direct tailnet endpoint must proxy the fixed bridge-only Admin listener"
     );
     assert!(
         !AUTH_SCRIPT.contains("tailscaled.state"),
@@ -135,13 +148,11 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
             .map(String::as_str),
         Some("maestro-daemon-test-gateway")
     );
-    assert_eq!(
-        service
+    assert!(
+        !service
             .spec
             .environment
-            .get("MAESTRO_NODE_API_PORTS")
-            .map(String::as_str),
-        Some("3011,3012")
+            .contains_key("MAESTRO_NODE_API_PORTS")
     );
     assert_eq!(
         service

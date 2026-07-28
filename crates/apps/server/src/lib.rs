@@ -46,7 +46,7 @@ pub use node_metric_client::{
 };
 pub use node_stats_client::{HttpNodeStatsQueryStore, NodeStatsQueryError, NodeStatsQueryStore};
 pub use openapi::openapi_document;
-pub use settings::{ServerSettings, ServerSettingsError, TlsIdentity};
+pub use settings::{PlaintextPolicy, ServerSettings, ServerSettingsError, TlsIdentity};
 
 pub type NodeLogClientError = NodeHttpClientError;
 pub type NodeMetricClientError = NodeHttpClientError;

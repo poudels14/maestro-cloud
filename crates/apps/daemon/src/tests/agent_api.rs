@@ -146,11 +146,14 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
             api_settings: test_api_settings(api_address)?,
+            admin_api_settings: None,
             firewall_settings: OperatorSettings::production(&cluster)?.firewall,
         },
         DaemonRoleSettings::default(),
     );
-    let server = bind_agent_api(&factory, &plan, spec, api_inputs).await?;
+    let mut servers = bind_agent_api(&factory, &plan, spec, api_inputs).await?;
+    let server = servers.pop().ok_or("operator API listener missing")?;
+    assert!(servers.is_empty());
     let (shutdown, receiver) = tokio::sync::watch::channel(false);
     let server_task = tokio::spawn(server.serve(receiver));
 

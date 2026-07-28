@@ -37,7 +37,40 @@ use crate::AppState;
 use crate::auth::{AuthPolicy, require_node, require_operator};
 
 pub(crate) fn router(state: AppState, auth: AuthPolicy, panel_directory: Option<&Path>) -> Router {
-    let protected = Router::new()
+    let protected = operator_routes(auth.clone());
+    let node = logs::node_router()
+        .merge(metrics::node_router())
+        .merge(node_artifacts::router())
+        .merge(stats::node_router())
+        .merge(exec::node_router())
+        .merge(traffic::node_router())
+        .route_layer(middleware::from_fn_with_state(auth.clone(), require_node));
+    let router = Router::new()
+        .merge(system::router())
+        .merge(cluster_admission::public_router())
+        .merge(session::router(auth.clone()))
+        .merge(protected)
+        .merge(node)
+        .with_state(state);
+    crate::panel::serve(router, panel_directory, auth)
+}
+
+pub(crate) fn operator_router(
+    state: AppState,
+    auth: AuthPolicy,
+    panel_directory: Option<&Path>,
+) -> Router {
+    let protected = operator_routes(auth.clone());
+    let router = Router::new()
+        .merge(system::router())
+        .merge(session::router(auth.clone()))
+        .merge(protected)
+        .with_state(state);
+    crate::panel::serve(router, panel_directory, auth)
+}
+
+fn operator_routes(auth: AuthPolicy) -> Router<AppState> {
+    Router::new()
         .merge(automation::router())
         .merge(artifact_archives::router())
         .merge(cluster::router())
@@ -61,23 +94,5 @@ pub(crate) fn router(state: AppState, auth: AuthPolicy, panel_directory: Option<
         .merge(traffic::router())
         .merge(upgrades::router())
         .merge(webhook_commands::router())
-        .route_layer(middleware::from_fn_with_state(
-            auth.clone(),
-            require_operator,
-        ));
-    let node = logs::node_router()
-        .merge(metrics::node_router())
-        .merge(node_artifacts::router())
-        .merge(stats::node_router())
-        .merge(exec::node_router())
-        .merge(traffic::node_router())
-        .route_layer(middleware::from_fn_with_state(auth.clone(), require_node));
-    let router = Router::new()
-        .merge(system::router())
-        .merge(cluster_admission::public_router())
-        .merge(session::router(auth.clone()))
-        .merge(protected)
-        .merge(node)
-        .with_state(state);
-    crate::panel::serve(router, panel_directory, auth)
+        .route_layer(middleware::from_fn_with_state(auth, require_operator))
 }

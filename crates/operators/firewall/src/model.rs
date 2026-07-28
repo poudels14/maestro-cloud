@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 
 use kernel_api::{
     Assignment, FirewallPolicy, FirewallPolicyId, FirewallPolicyStatus, NodeId, NodeNetwork,
@@ -34,6 +35,17 @@ pub struct SystemHostAccess {
     pub service_id: ServiceId,
     /// Protected TCP host ports reachable by that service.
     pub host_ports: Vec<u16>,
+    /// Exact bridge-only TCP endpoints reachable by that service.
+    pub endpoints: Vec<SystemHostEndpoint>,
+}
+
+/// One exact host address and TCP port reserved for system-plane access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SystemHostEndpoint {
+    /// Bridge address that owns the listener.
+    pub address: Ipv4Addr,
+    /// TCP listener port.
+    pub port: u16,
 }
 
 /// Static cluster security settings compiled beside resource policies.

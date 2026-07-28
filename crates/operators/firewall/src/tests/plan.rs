@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
@@ -12,7 +12,7 @@ use kernel_api::{
 
 use crate::{
     FirewallInput, FirewallPlanError, FirewallSettings, HostPortProtocol, HostPortRoute,
-    SystemHostAccess, plan,
+    SystemHostAccess, SystemHostEndpoint, plan,
 };
 
 #[test]
@@ -119,11 +119,16 @@ fn system_dns_and_control_guards_precede_user_policy() {
     let routed_admin = script
         .find("ip saddr @host_access_")
         .expect("system host access");
+    let guarded_admin = script
+        .find("ip daddr 10.42.1.250 tcp dport 80 reject")
+        .expect("Admin endpoint guard");
     let workload_reject = script
         .find("ip saddr @all_workloads_v4 ct direction original reject")
         .unwrap();
     assert!(dns < workload_reject);
     assert!(routed_admin < workload_reject);
+    assert!(routed_admin < guarded_admin);
+    assert!(guarded_admin < workload_reject);
     let control_allow = script.find("tcp dport { 3000, 3001 } accept").unwrap();
     let control_reject = script.find("tcp dport { 3000, 3001 } reject").unwrap();
     assert!(workload_reject < control_allow);
@@ -306,6 +311,10 @@ impl World {
             system_host_access: vec![SystemHostAccess {
                 service_id: system.meta.id.clone(),
                 host_ports: vec![3000],
+                endpoints: vec![SystemHostEndpoint {
+                    address: Ipv4Addr::new(10, 42, 1, 250),
+                    port: 80,
+                }],
             }],
             host_port_routes: vec![HostPortRoute {
                 service_id: ingress.meta.id.clone(),

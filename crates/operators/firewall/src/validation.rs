@@ -29,6 +29,7 @@ pub(crate) struct NodeContext {
     pub(crate) node_id: NodeId,
     pub(crate) workload_subnet: CanonicalCidr,
     pub(crate) bridge_address: Ipv4Addr,
+    pub(crate) admin_address: Ipv4Addr,
 }
 
 pub(crate) struct ValidatedPolicy {
@@ -122,8 +123,9 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
         return Err(FirewallPlanError::ZeroProtectedHostPort);
     }
     let mut system_host_endpoints = BTreeSet::new();
+    let mut exact_system_host_endpoints = BTreeSet::new();
     for access in &mut settings.system_host_access {
-        if access.host_ports.is_empty() {
+        if access.host_ports.is_empty() && access.endpoints.is_empty() {
             return Err(FirewallPlanError::EmptySystemHostAccess {
                 service_id: access.service_id.clone(),
             });
@@ -147,7 +149,27 @@ fn validate_settings(settings: &mut FirewallSettings) -> Result<(), FirewallPlan
                 });
             }
         }
+        for endpoint in &access.endpoints {
+            if endpoint.port == 0 {
+                return Err(FirewallPlanError::ZeroSystemHostEndpointPort {
+                    service_id: access.service_id.clone(),
+                    address: endpoint.address,
+                });
+            }
+            if !exact_system_host_endpoints.insert((
+                access.service_id.clone(),
+                endpoint.address,
+                endpoint.port,
+            )) {
+                return Err(FirewallPlanError::DuplicateSystemHostEndpoint {
+                    service_id: access.service_id.clone(),
+                    address: endpoint.address,
+                    port: endpoint.port,
+                });
+            }
+        }
         access.host_ports.sort_unstable();
+        access.endpoints.sort_unstable();
     }
     settings.system_host_access.sort();
     if settings
@@ -225,6 +247,13 @@ fn index_nodes(
                 subnet: subnet.to_string(),
             }
         })?;
+        let admin_address =
+            subnet
+                .admin_address()
+                .ok_or_else(|| FirewallPlanError::WorkloadSubnetHasNoAdmin {
+                    node_id: network.spec.node_id.clone(),
+                    subnet: subnet.to_string(),
+                })?;
         let node_id = network.spec.node_id;
         if nodes
             .insert(
@@ -233,6 +262,7 @@ fn index_nodes(
                     node_id: node_id.clone(),
                     workload_subnet: subnet,
                     bridge_address,
+                    admin_address,
                 },
             )
             .is_some()

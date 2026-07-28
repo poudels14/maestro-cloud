@@ -10,6 +10,15 @@ pub(crate) enum NodeCertificateRequirement {
     Required,
 }
 
+/// Where an explicitly plaintext listener is allowed to exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaintextPolicy {
+    /// Plaintext is accepted only on a loopback listener.
+    LoopbackOnly,
+    /// Plaintext is accepted on a fixed endpoint protected by the managed gateway firewall path.
+    ManagedOperatorProxy,
+}
+
 /// PEM identity presented by an HTTPS listener.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsIdentity {
@@ -36,8 +45,10 @@ pub struct ServerSettings {
     pub bind_address: SocketAddr,
     /// HS256 operator key; loopback-only development may omit it.
     pub jwt_secret_key: Option<SecretValue>,
-    /// HTTPS identity; plaintext is allowed only on loopback.
+    /// HTTPS identity; managed bridge plaintext requires an explicit scoped policy.
     pub tls_identity: Option<TlsIdentity>,
+    /// Explicit scope for a listener without a TLS identity.
+    pub plaintext_policy: PlaintextPolicy,
     /// Cluster CA used by this node's internal mutual-TLS clients.
     pub cluster_trust_root_pem: Option<String>,
     /// Node identity presented only by internal mutual-TLS clients.
@@ -55,6 +66,7 @@ impl ServerSettings {
             bind_address,
             jwt_secret_key,
             tls_identity: None,
+            plaintext_policy: PlaintextPolicy::LoopbackOnly,
             cluster_trust_root_pem: None,
             cluster_client_identity: None,
             operator_proxy_cidrs: Vec::new(),
@@ -65,6 +77,12 @@ impl ServerSettings {
     /// Requires the listener to present the supplied HTTPS identity.
     pub fn with_tls_identity(mut self, identity: TlsIdentity) -> Self {
         self.tls_identity = Some(identity);
+        self
+    }
+
+    /// Allows HTTP only where routing and firewall policy restrict sources to gateway workloads.
+    pub fn with_managed_operator_plaintext(mut self) -> Self {
+        self.plaintext_policy = PlaintextPolicy::ManagedOperatorProxy;
         self
     }
 
@@ -101,8 +119,18 @@ impl ServerSettings {
                 address: self.bind_address,
             });
         }
-        if !self.bind_address.ip().is_loopback() && self.tls_identity.is_none() {
+        if !self.bind_address.ip().is_loopback()
+            && self.tls_identity.is_none()
+            && self.plaintext_policy != PlaintextPolicy::ManagedOperatorProxy
+        {
             return Err(ServerSettingsError::PlaintextNonLoopback {
+                address: self.bind_address,
+            });
+        }
+        if self.plaintext_policy == PlaintextPolicy::ManagedOperatorProxy
+            && self.bind_address.ip().is_unspecified()
+        {
+            return Err(ServerSettingsError::UnscopedManagedPlaintext {
                 address: self.bind_address,
             });
         }
@@ -157,6 +185,9 @@ pub enum ServerSettingsError {
     /// Network-reachable operator credentials must never cross plaintext HTTP.
     #[error("non-loopback API listener `{address}` requires a TLS identity")]
     PlaintextNonLoopback { address: SocketAddr },
+    /// Managed plaintext must claim one bridge address rather than every host interface.
+    #[error("managed plaintext API listener `{address}` must use an exact bridge address")]
+    UnscopedManagedPlaintext { address: SocketAddr },
     /// Network-reachable operator routes must be pinned to managed proxy networks.
     #[error("non-loopback API listener `{address}` requires operator proxy CIDRs")]
     MissingOperatorProxyCidrs { address: SocketAddr },
@@ -172,4 +203,37 @@ pub enum ServerSettingsError {
     /// A configured SPA must include its shell.
     #[error("panel index `{}` does not exist or is not a file", index.display())]
     MissingPanelIndex { index: PathBuf },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ServerSettings, ServerSettingsError};
+    use cluster::Ipv4Cidr;
+    use kernel_api::SecretValue;
+
+    #[test]
+    fn managed_plaintext_requires_one_exact_bridge_address() {
+        let settings = ServerSettings::new(
+            "10.50.0.250:80".parse().unwrap(),
+            Some(SecretValue::new(
+                "operator-test-secret-with-at-least-32-characters",
+            )),
+        )
+        .with_managed_operator_plaintext()
+        .with_operator_proxy_cidrs([Ipv4Cidr::new("10.50.0.0".parse().unwrap(), 24).unwrap()]);
+        assert!(settings.validate().is_ok());
+
+        let unscoped = ServerSettings::new(
+            "0.0.0.0:80".parse().unwrap(),
+            Some(SecretValue::new(
+                "operator-test-secret-with-at-least-32-characters",
+            )),
+        )
+        .with_managed_operator_plaintext()
+        .with_operator_proxy_cidrs([Ipv4Cidr::new("10.50.0.0".parse().unwrap(), 24).unwrap()]);
+        assert!(matches!(
+            unscoped.validate(),
+            Err(ServerSettingsError::UnscopedManagedPlaintext { .. })
+        ));
+    }
 }

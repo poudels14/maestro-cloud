@@ -1,9 +1,10 @@
 ---
 source: crates/operators/firewall/src/tests/plan.rs
+assertion_line: 32
 expression: artifact
 ---
 node: node-1
-digest: f9723061419f13dd7a58b897d1a462e971322f54094aea918b0a06222dfa4a97
+digest: 95006562b5093ea2a43faa84ca8f5d1765f7e690c37d4671b1f151cf4bca4bcf
 destroy table inet maestro_firewall
 table inet maestro_firewall {
     set all_workloads_v4 {
@@ -92,6 +93,8 @@ table inet maestro_firewall {
         ip saddr @local_workloads_v4 ip daddr 10.42.1.1 tcp dport 53 accept
         ip saddr @local_workloads_v4 ip daddr 10.42.1.1 udp dport 53 accept
         ip saddr @host_access_02eadcea31e567e9_v4 tcp dport 3000 accept
+        ip saddr @host_access_02eadcea31e567e9_v4 ip daddr 10.42.1.250 tcp dport 80 accept
+        ip daddr 10.42.1.250 tcp dport 80 reject
         ip saddr @all_workloads_v4 ct direction original reject
         ct state established,related accept
         ip saddr @control_allow_v4 tcp dport { 3000, 3001 } accept

@@ -141,7 +141,21 @@ where
             ))
             .await;
     }
-    let api_server = match bind_agent_api(
+    let network_agents = match prepare_agent_network(
+        factory,
+        plan,
+        spec,
+        store.clone(),
+        mesh_backend,
+        firewall_backend,
+        bridge_backend,
+    )
+    .await
+    {
+        Ok(agents) => agents,
+        Err(error) => return runtimes.fail(error).await,
+    };
+    let api_servers = match bind_agent_api(
         factory,
         plan,
         spec,
@@ -187,20 +201,6 @@ where
         Err(error) => return runtimes.fail(error).await,
     };
 
-    let network_agents = match prepare_agent_network(
-        factory,
-        plan,
-        spec,
-        store.clone(),
-        mesh_backend,
-        firewall_backend,
-        bridge_backend,
-    )
-    .await
-    {
-        Ok(agents) => agents,
-        Err(error) => return runtimes.fail(error).await,
-    };
     let mut assignment_agent = if spec.workload_enabled {
         match build_assignment_agent(
             factory,
@@ -331,7 +331,7 @@ where
         return fail_after_registration(runtimes, node_registration, error).await;
     }
     let (shutdown, tasks) = spawn_agent_tasks(AgentTaskInputs {
-        api_server,
+        api_servers,
         node_registry_agent,
         node_registration,
         artifact_replication_agent,

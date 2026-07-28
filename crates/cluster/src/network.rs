@@ -14,6 +14,8 @@ pub struct Ipv4Cidr {
 impl Ipv4Cidr {
     /// Number of highest host addresses reserved for Maestro system services.
     pub const SYSTEM_RESERVED_HOSTS: u32 = 55;
+    /// Stable offset from the first `/24` broadcast address used by Admin.
+    pub const ADMIN_ADDRESS_OFFSET: u32 = 5;
 
     /// Creates a CIDR when `network` is the canonical address for `prefix`.
     pub fn new(network: Ipv4Addr, prefix: u8) -> Result<Self, CidrError> {
@@ -103,6 +105,11 @@ impl Ipv4Cidr {
             .and_then(|end| end.checked_sub(offset))
             .filter(|address| *address > network)
             .map(Ipv4Addr::from)
+    }
+
+    /// Returns the predictable Admin endpoint reserved at `.250` in a `/24`.
+    pub fn admin_address(self) -> Option<Ipv4Addr> {
+        self.system_address_from_end(Self::ADMIN_ADDRESS_OFFSET)
     }
 
     /// Iterates addresses available for workload replicas.

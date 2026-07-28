@@ -28,7 +28,7 @@ pub(crate) async fn bind_agent_api<MeshBackendType, FirewallBackendType, BridgeB
     plan: &DaemonPlan,
     spec: &RoleSpec,
     inputs: AgentApiInputs,
-) -> Result<server::BoundApiServer, RoleError> {
+) -> Result<Vec<server::BoundApiServer>, RoleError> {
     let AgentApiInputs {
         store,
         local_log_queries,
@@ -126,8 +126,18 @@ pub(crate) async fn bind_agent_api<MeshBackendType, FirewallBackendType, BridgeB
         Some(backend) => server.with_webhook_backend(backend.clone()),
         None => server,
     };
-    server
+    let additional = match &factory.admin_api_settings {
+        Some(settings) => Some(
+            server
+                .bind_additional(settings.clone())
+                .await
+                .map_err(|error| role_error("bind bridge Admin API", error))?,
+        ),
+        None => None,
+    };
+    let primary = server
         .bind()
         .await
-        .map_err(|error| role_error("bind operator API", error))
+        .map_err(|error| role_error("bind operator API", error))?;
+    Ok(additional.into_iter().chain([primary]).collect())
 }

@@ -51,6 +51,23 @@ impl CanonicalCidr {
         let address = Ipv4Addr::from(address);
         network.contains(&address).then_some(address)
     }
+
+    pub(crate) fn admin_address(&self) -> Option<Ipv4Addr> {
+        const ADMIN_ADDRESS_OFFSET: u32 = 5;
+        let IpNet::V4(network) = self.0 else {
+            return None;
+        };
+        if network.prefix_len() >= 24 {
+            return u32::from(network.broadcast())
+                .checked_sub(ADMIN_ADDRESS_OFFSET)
+                .map(Ipv4Addr::from)
+                .filter(|address| network.contains(address) && *address != network.network());
+        }
+        u32::from(network.network())
+            .checked_add(255 - ADMIN_ADDRESS_OFFSET)
+            .map(Ipv4Addr::from)
+            .filter(|address| network.contains(address) && *address != network.network())
+    }
 }
 
 impl std::fmt::Display for CanonicalCidr {

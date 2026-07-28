@@ -88,6 +88,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     let configured_datadog =
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
     let api_settings = api_settings(&cluster, local_node, &security, jwt_secret_key.clone());
+    let admin_api_settings = admin_api_settings(&cluster, local_node, jwt_secret_key.clone())?;
     let launch_policy = ClusterLaunchPolicy {
         datadog: datadog.clone(),
         depot: depot.clone(),
@@ -385,6 +386,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             status_clock: Arc::new(SystemStatusClock),
             node_upgrade,
             api_settings,
+            admin_api_settings,
             firewall_settings: api_firewall_settings,
         },
         DaemonRoleSettings::default(),
@@ -440,6 +442,42 @@ pub(crate) fn api_settings(
     match packaged_panel_directory() {
         Some(directory) => settings.with_panel_directory(directory),
         None => settings,
+    }
+}
+
+const ADMIN_API_PORT: u16 = 80;
+
+pub(crate) fn admin_api_settings(
+    cluster: &ClusterConfig,
+    node: &cluster::NodeDefinition,
+    jwt_secret_key: SecretValue,
+) -> Result<Option<ServerSettings>, DaemonLaunchError> {
+    if cluster.tailscale.is_none() {
+        return Ok(None);
+    }
+    #[cfg(any(target_os = "macos", feature = "macos-platform"))]
+    {
+        let _ = (cluster, node, jwt_secret_key);
+        Ok(None)
+    }
+    #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+    {
+        let address = node.workload_subnet.admin_address().ok_or_else(|| {
+            invalid(format!(
+                "node workload subnet `{}` has no reserved Admin address",
+                node.workload_subnet
+            ))
+        })?;
+        let settings = ServerSettings::new(
+            SocketAddr::new(IpAddr::V4(address), ADMIN_API_PORT),
+            Some(jwt_secret_key),
+        )
+        .with_managed_operator_plaintext()
+        .with_operator_proxy_cidrs(cluster.nodes.values().map(|node| node.workload_subnet));
+        Ok(Some(match packaged_panel_directory() {
+            Some(directory) => settings.with_panel_directory(directory),
+            None => settings,
+        }))
     }
 }
 

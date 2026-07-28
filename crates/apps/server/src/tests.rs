@@ -127,6 +127,40 @@ fn settings_name_the_node_certificate_requirement() -> Result<(), Box<dyn std::e
 }
 
 #[tokio::test]
+async fn additional_operator_listener_omits_node_transport_routes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let server = ApiServer::new(
+        store,
+        ClusterId::new("operator-listener-test")?,
+        ServerSettings::new("127.0.0.1:0".parse()?, None),
+    )?;
+    let listener = server
+        .bind_additional(ServerSettings::new("127.0.0.1:0".parse()?, None))
+        .await?;
+    let address = listener.local_address();
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(listener.serve(receiver));
+
+    assert_eq!(
+        reqwest::get(format!("http://{address}/healthz"))
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        reqwest::get(format!("http://{address}/api/node/logs"))
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    shutdown.send(true)?;
+    task.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn resource_routes_report_store_revisions_and_mask_service_secrets()
 -> Result<(), Box<dyn std::error::Error>> {
     let (store, cluster_id) = seeded_store().await?;
