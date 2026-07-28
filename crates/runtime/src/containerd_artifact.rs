@@ -25,8 +25,8 @@ use crate::containerd_artifact_stream::{
 };
 use crate::containerd_artifact_support::{
     MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, host_platform, image_digest,
-    is_not_found, namespaced_artifact, operation_error, prune_candidates, removed_digests,
-    select_image,
+    is_not_found, namespaced_artifact, operation_error, prune_candidates, registry_reference,
+    removed_digests, select_image,
 };
 use crate::containerd_build::run_build;
 use crate::{
@@ -57,8 +57,9 @@ impl ArtifactStore for ContainerdRuntime {
         reference: &ArtifactReference,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let platform = host_platform();
+        let registry_reference = registry_reference(reference.as_str());
         let source = containerd::to_any(&OciRegistry {
-            reference: reference.as_str().to_owned(),
+            reference: registry_reference,
             resolver: None,
         });
         let destination = containerd::to_any(&ImageStore {
@@ -91,6 +92,7 @@ impl ArtifactStore for ContainerdRuntime {
         destination: &ArtifactReference,
     ) -> Result<(), ArtifactStoreError> {
         let image = select_image(&self.images().await?, digest)?;
+        let registry_reference = registry_reference(destination.as_str());
         transfer(
             self.channel.clone(),
             self.settings.namespace.clone(),
@@ -99,7 +101,7 @@ impl ArtifactStore for ContainerdRuntime {
                 ..Default::default()
             }),
             containerd::to_any(&OciRegistry {
-                reference: destination.as_str().to_owned(),
+                reference: registry_reference,
                 resolver: None,
             }),
             "push",

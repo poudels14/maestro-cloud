@@ -49,22 +49,27 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         let mut desired_service_status = service.status.clone();
         let desired_deployment_id = if service.meta.deletion_timestamp.is_none() {
             let desired = new_deployment(&input.cluster_id, service, input.now)?;
-            let desired_id = desired.meta.id.clone();
             let watched_revision = desired.spec.service != service.spec;
-            let exists = if watched_revision {
-                deployments.contains_key(&desired.meta.id)
-                    || related.iter().any(|deployment| {
+            let existing = if watched_revision {
+                deployments.get(&desired.meta.id).or_else(|| {
+                    related.iter().copied().find(|deployment| {
                         deployment.spec.service_generation == service.meta.generation
                             && deployment.spec.service == desired.spec.service
                     })
+                })
             } else {
-                related
-                    .iter()
-                    .any(|deployment| deployment.spec.service_generation == service.meta.generation)
+                related.iter().copied().find(|deployment| {
+                    deployment.spec.service_generation == service.meta.generation
+                })
             };
-            if !exists {
-                output.create_deployments.push(desired);
-            }
+            let desired_id = existing.map_or_else(
+                || {
+                    let desired_id = desired.meta.id.clone();
+                    output.create_deployments.push(desired);
+                    desired_id
+                },
+                |deployment| deployment.meta.id.clone(),
+            );
             Some(desired_id)
         } else {
             None

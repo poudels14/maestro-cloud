@@ -1,7 +1,7 @@
 use cluster::CloudflareTunnelConfig;
 use kernel_api::{
-    ArtifactTemplate, ExecPolicy, HealthProbe, NodeApiAccess, NodeRole, SecretMountSpec,
-    SecretValue, WorkloadUserSpec,
+    ArtifactTemplate, ExecPolicy, HealthProbe, NodeApiAccess, NodeRole, ReplicaSpread,
+    SecretMountSpec, SecretValue, WorkloadUserSpec,
 };
 
 use crate::cloudflare_resources::{
@@ -36,7 +36,10 @@ fn builds_a_pinned_secret_mounted_ready_connector_service() -> Result<(), Box<dy
             group_id: 0,
         })
     );
-    assert_eq!(service.spec.placement, Default::default());
+    assert_eq!(
+        service.spec.placement.replica_spread,
+        ReplicaSpread::BestEffort
+    );
     assert!(service.spec.environment.is_empty());
     assert!(matches!(
         &service.spec.artifact,

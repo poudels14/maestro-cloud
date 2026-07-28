@@ -10,7 +10,8 @@ use kernel_api::Timestamp;
 use crate::containerd_artifact::lease_expiration;
 use crate::containerd_artifact_support::{
     MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, image_digest,
-    operation_error, prune_candidates, reference_prefix, removed_digests, select_image,
+    operation_error, prune_candidates, reference_prefix, registry_reference, removed_digests,
+    select_image,
 };
 use crate::{
     ArtifactDigest, ArtifactStoreError, ContainerdRuntime, ContainerdRuntimeSettings,
@@ -42,6 +43,26 @@ fn containerd_digest_references_preserve_repository_and_registry_ports() {
     assert_eq!(
         image_digest(&image, &image.name).unwrap().as_str(),
         "registry.test/team/api@sha256:abc"
+    );
+}
+
+#[test]
+fn containerd_registry_references_qualify_docker_hub_images() {
+    assert_eq!(
+        registry_reference("traefik:v3.6.23@sha256:abc"),
+        "docker.io/library/traefik:v3.6.23@sha256:abc"
+    );
+    assert_eq!(
+        registry_reference("cloudflare/cloudflared:2026.7.2@sha256:def"),
+        "docker.io/cloudflare/cloudflared:2026.7.2@sha256:def"
+    );
+    assert_eq!(
+        registry_reference("ghcr.io/tailscale/tailscale:v1.98.8@sha256:ghi"),
+        "ghcr.io/tailscale/tailscale:v1.98.8@sha256:ghi"
+    );
+    assert_eq!(
+        registry_reference("localhost:5000/team/api:latest"),
+        "localhost:5000/team/api:latest"
     );
 }
 

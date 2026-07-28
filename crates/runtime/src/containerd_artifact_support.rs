@@ -82,6 +82,21 @@ pub(crate) fn reference_prefix(reference: &str) -> Result<&str, ArtifactStoreErr
     nonempty_prefix(prefix, reference)
 }
 
+pub(crate) fn registry_reference(reference: &str) -> String {
+    let first_component = reference.split('/').next().unwrap_or(reference);
+    if reference.contains('/')
+        && (first_component.contains('.')
+            || first_component.contains(':')
+            || first_component == "localhost")
+    {
+        reference.to_owned()
+    } else if reference.contains('/') {
+        format!("docker.io/{reference}")
+    } else {
+        format!("docker.io/library/{reference}")
+    }
+}
+
 pub(crate) fn select_image(
     images: &[Image],
     digest: &ArtifactDigest,

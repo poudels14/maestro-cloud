@@ -4,9 +4,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use cluster::{ClusterConfig, NodeCertificateBundle};
 use kernel_api::{
     AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, Generation, HealthCheckSpec,
-    HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ResourceRevision,
-    RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec, ServiceStatus,
-    WorkloadUserSpec,
+    HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ReplicaSpread,
+    ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec,
+    ServiceStatus, WorkloadUserSpec,
 };
 use kernel_store::Keyspace;
 use runtime::{HostPortPublication, PortProtocol};
@@ -136,7 +136,10 @@ impl TraefikSystemResources {
                     ]),
                 }),
                 volumes: Vec::new(),
-                placement: PlacementConstraint::default(),
+                placement: PlacementConstraint {
+                    replica_spread: ReplicaSpread::BestEffort,
+                    ..PlacementConstraint::default()
+                },
                 exec: ExecPolicy::Denied,
             },
             status: ServiceStatus {

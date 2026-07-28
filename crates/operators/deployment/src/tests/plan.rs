@@ -428,6 +428,65 @@ fn active_traffic_acknowledgement_drains_only_superseded_deployments() {
 }
 
 #[test]
+fn superseded_pending_deployment_drains_before_any_candidate_is_ready() {
+    let service = service(Generation(2), RolloutState::Active);
+    let old = deployment_generation(
+        &service,
+        "deployment-old",
+        Generation(1),
+        DeploymentPhase::PendingReady,
+    );
+    let incoming = deployment_generation(
+        &service,
+        "deployment-new",
+        Generation(2),
+        DeploymentPhase::PendingReady,
+    );
+
+    let result = plan(input(service, vec![old.clone(), incoming.clone()]))
+        .expect("retire superseded pending deployment");
+
+    assert_eq!(result.create_deployments.len(), 0);
+    assert_eq!(result.deployment_updates.len(), 1);
+    assert_eq!(result.deployment_updates[0].id, old.meta.id);
+    assert_eq!(
+        result.deployment_updates[0].status.phase,
+        DeploymentPhase::Draining
+    );
+    assert_eq!(
+        result.deployment_updates[0].status.draining_at,
+        Some(Timestamp(40_000))
+    );
+}
+
+#[test]
+fn superseded_frozen_queued_deployment_is_canceled() {
+    let service = service(Generation(2), RolloutState::Frozen);
+    let old = deployment_generation(
+        &service,
+        "deployment-old",
+        Generation(1),
+        DeploymentPhase::Queued,
+    );
+    let incoming = deployment_generation(
+        &service,
+        "deployment-new",
+        Generation(2),
+        DeploymentPhase::Queued,
+    );
+
+    let result = plan(input(service, vec![old.clone(), incoming]))
+        .expect("cancel superseded frozen deployment");
+
+    assert_eq!(result.deployment_updates.len(), 1);
+    assert_eq!(result.deployment_updates[0].id, old.meta.id);
+    assert_eq!(
+        result.deployment_updates[0].status.phase,
+        DeploymentPhase::Canceled
+    );
+}
+
+#[test]
 fn newer_watched_deployment_activates_and_drains_within_one_service_generation() {
     let mut service = service(Generation(2), RolloutState::Active);
     let mut old = deployment_generation(

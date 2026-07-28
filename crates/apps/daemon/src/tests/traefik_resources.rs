@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use cluster::{CertificateKeyPair, NodeCertificateBundle};
 use kernel_api::{
     ArtifactTemplate, ClusterId, HealthProbe, NodeApiAccess, NodeId, NodeInstanceId, NodeRole,
-    ResourceKind, SecretMountSpec, SecretValue, Service, ServiceId, Timestamp, WorkloadUserSpec,
+    ReplicaSpread, ResourceKind, SecretMountSpec, SecretValue, Service, ServiceId, Timestamp,
+    WorkloadUserSpec,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -43,7 +44,10 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
             group_id: 0
         })
     );
-    assert_eq!(service.spec.placement, Default::default());
+    assert_eq!(
+        service.spec.placement.replica_spread,
+        ReplicaSpread::BestEffort
+    );
     assert!(matches!(
         &service.spec.artifact,
         ArtifactTemplate::Image { reference } if reference == TRAEFIK_IMAGE

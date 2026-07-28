@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use cluster::ClusterConfig;
 use kernel_api::{
     AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, Generation, HealthCheckSpec,
-    HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ResourceRevision,
-    RolloutState, SecretMountSpec, Service, ServiceId, ServiceSpec, ServiceStatus,
-    WorkloadUserSpec,
+    HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ReplicaSpread,
+    ResourceRevision, RolloutState, SecretMountSpec, Service, ServiceId, ServiceSpec,
+    ServiceStatus, WorkloadUserSpec,
 };
 
 pub(crate) const CLOUDFLARE_SERVICE_ID: &str = "maestro-system-cloudflared";
@@ -86,7 +86,10 @@ impl CloudflareSystemResources {
                     files: BTreeMap::from([("token".to_owned(), config.token.clone())]),
                 }),
                 volumes: Vec::new(),
-                placement: PlacementConstraint::default(),
+                placement: PlacementConstraint {
+                    replica_spread: ReplicaSpread::BestEffort,
+                    ..PlacementConstraint::default()
+                },
                 exec: ExecPolicy::Denied,
             },
             status: ServiceStatus {

@@ -14,6 +14,14 @@ pub(super) fn coordinate_active_deployment(
     desired_statuses: &mut BTreeMap<DeploymentId, DeploymentStatus>,
     desired_service: &mut ServiceStatus,
 ) {
+    retire_superseded_nonserving(
+        service,
+        deployments,
+        now,
+        desired_deployment_id,
+        desired_statuses,
+        desired_service,
+    );
     let desired_candidate = desired_deployment_id.and_then(|desired_id| {
         deployments.iter().find(|deployment| {
             deployment.meta.id == *desired_id
@@ -97,6 +105,52 @@ pub(super) fn coordinate_active_deployment(
         ) {
             status.phase = DeploymentPhase::Draining;
             status.draining_at.get_or_insert(now);
+        }
+    }
+}
+
+fn retire_superseded_nonserving(
+    service: &Service,
+    deployments: &[&Deployment],
+    now: Timestamp,
+    desired_deployment_id: Option<&DeploymentId>,
+    desired_statuses: &mut BTreeMap<DeploymentId, DeploymentStatus>,
+    desired_service: &ServiceStatus,
+) {
+    let desired_deployment = desired_deployment_id.and_then(|desired_id| {
+        deployments
+            .iter()
+            .find(|deployment| deployment.meta.id == *desired_id)
+            .copied()
+    });
+    for deployment in deployments {
+        if desired_deployment_id == Some(&deployment.meta.id)
+            || desired_service.active_deployment_id.as_ref() == Some(&deployment.meta.id)
+        {
+            continue;
+        }
+        let superseded = desired_deployment.map_or_else(
+            || deployment.spec.service_generation < service.meta.generation,
+            |desired| rollout_order(deployment, desired).is_lt(),
+        );
+        if !superseded {
+            continue;
+        }
+        let Some(status) = desired_statuses.get_mut(&deployment.meta.id) else {
+            continue;
+        };
+        match status.phase {
+            DeploymentPhase::Queued => status.phase = DeploymentPhase::Canceled,
+            DeploymentPhase::Building | DeploymentPhase::PendingReady => {
+                status.phase = DeploymentPhase::Draining;
+                status.draining_at.get_or_insert(now);
+            }
+            DeploymentPhase::Ready
+            | DeploymentPhase::Crashed
+            | DeploymentPhase::Terminated
+            | DeploymentPhase::Removed
+            | DeploymentPhase::Draining
+            | DeploymentPhase::Canceled => {}
         }
     }
 }
