@@ -22,6 +22,16 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
     let (fenced, lease) = campaign(store.clone(), &keys, "leader-1").await?;
     let provider = StoreTraefikProvider::new(cluster_id, fenced);
 
+    provider.ensure_watchable_root().await?;
+    provider.ensure_watchable_root().await?;
+    let provider_root = store.list(&keys.traefik()).await?;
+    assert_eq!(provider_root.values.len(), 1);
+    assert!(provider_root.values[0].key.as_str().ends_with(
+        "/http/middlewares/maestro.internal-provider-ready/headers/\
+                        customRequestHeaders/X-Maestro-Provider-Ready"
+    ));
+    assert_eq!(provider_root.values[0].value, b"true");
+
     provider
         .stage(&TraefikStage {
             generation_id: TrafficGenerationId::new("old-generation")?,

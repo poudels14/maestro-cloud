@@ -10,6 +10,9 @@ use crate::{
     IngressBackendError, TraefikBlocklistConfig, TraefikCutover, TraefikProvider, TraefikStage,
 };
 
+const PROVIDER_READY_ENTRY: &str = "http/middlewares/maestro.internal-provider-ready/headers/customRequestHeaders/\
+     X-Maestro-Provider-Ready";
+
 /// Fenced persistence adapter for Traefik's cluster-scoped dynamic provider.
 pub struct StoreTraefikProvider {
     store: Arc<FencedStore>,
@@ -23,6 +26,23 @@ impl StoreTraefikProvider {
             store,
             keyspace: Keyspace::new(&cluster_id),
         }
+    }
+
+    /// Creates valid inert provider state so Traefik can watch an otherwise empty root.
+    pub async fn ensure_watchable_root(&self) -> Result<(), IngressBackendError> {
+        let key = self
+            .keyspace
+            .traefik_entry(PROVIDER_READY_ENTRY)
+            .map_err(|error| backend_error("provider root validation", error))?;
+        self.commit(
+            "provider root initialization",
+            vec![Mutation::Put {
+                key,
+                value: b"true".to_vec(),
+                session: None,
+            }],
+        )
+        .await
     }
 
     async fn commit(

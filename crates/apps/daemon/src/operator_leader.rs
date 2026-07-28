@@ -153,6 +153,20 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                     "failed to reconcile DNS resolver resources: {error}"
                 ))
             })?;
+        let traefik_provider = Arc::new(StoreTraefikProvider::new(
+            self.cluster_id.clone(),
+            store.clone(),
+        ));
+        if self.traefik.is_some() {
+            traefik_provider
+                .ensure_watchable_root()
+                .await
+                .map_err(|error| {
+                    RoleError::new(format!(
+                        "failed to initialize Traefik provider root: {error}"
+                    ))
+                })?;
+        }
         SystemServiceReconciler::new(
             &self.cluster_id,
             "Traefik",
@@ -221,10 +235,6 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 ))),
                 (None, None) => None,
             };
-        let provider = Arc::new(StoreTraefikProvider::new(
-            self.cluster_id.clone(),
-            store.clone(),
-        ));
         let suite = OperatorSuite::new(
             self.cluster_id.clone(),
             store.clone(),
@@ -233,7 +243,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
             self.settings.clone(),
             OperatorBackends {
                 ingress: Arc::new(
-                    TraefikBackend::new(self.cluster_id.clone(), provider)
+                    TraefikBackend::new(self.cluster_id.clone(), traefik_provider)
                         .with_ingress_denied_backends(
                             self.settings.ingress_denied_backends.clone(),
                         ),
