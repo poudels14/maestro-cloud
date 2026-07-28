@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use cluster::WIREGUARD_MTU_BYTES;
 use kernel_api::WorkloadNetworkMode;
@@ -11,6 +12,37 @@ use node_agent::{
 
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::{DaemonPlan, RoleError, RoleSpec};
+
+const INITIAL_STORE_RECONCILE_ATTEMPTS: u32 = 60;
+const INITIAL_STORE_RECONCILE_RETRY: Duration = Duration::from_secs(1);
+
+macro_rules! establish_store_snapshot {
+    ($factory:expr, $agent:expr, $action:literal) => {{
+        let mut attempt = 1;
+        loop {
+            match $agent.reconcile_once().await {
+                Ok(_) => break Ok(()),
+                Err(error) if attempt < INITIAL_STORE_RECONCILE_ATTEMPTS => {
+                    if attempt == 1 || attempt % 10 == 0 {
+                        tracing::warn!(
+                            action = $action,
+                            attempt,
+                            error = %error,
+                            "initial store-backed network snapshot is not ready; retrying"
+                        );
+                    }
+                    let deadline = $factory
+                        .monotonic_clock
+                        .now()
+                        .saturating_add(INITIAL_STORE_RECONCILE_RETRY);
+                    $factory.monotonic_clock.sleep_until(deadline).await;
+                    attempt += 1;
+                }
+                Err(error) => break Err(role_error($action, error)),
+            }
+        }
+    }};
+}
 
 /// Node-local network agents present only for cluster-routed Linux networking.
 pub(crate) enum AgentNetworkAgents<MeshBackendType, FirewallBackendType, BridgeBackendType> {
@@ -64,16 +96,9 @@ where
                 .reconcile_once()
                 .await
                 .map_err(|error| role_error("establish workload bridge", error))?;
-            mesh.reconcile_once()
-                .await
-                .map_err(|error| role_error("establish initial mesh snapshot", error))?;
-            dns.reconcile_once()
-                .await
-                .map_err(|error| role_error("establish initial DNS snapshot", error))?;
-            firewall
-                .reconcile_once()
-                .await
-                .map_err(|error| role_error("establish initial firewall snapshot", error))?;
+            establish_store_snapshot!(factory, mesh, "establish initial mesh snapshot")?;
+            establish_store_snapshot!(factory, dns, "establish initial DNS snapshot")?;
+            establish_store_snapshot!(factory, firewall, "establish initial firewall snapshot")?;
             let settings = DnsServerSettings::bridge(std::net::SocketAddr::new(
                 std::net::IpAddr::V4(bridge.desired().gateway),
                 AUTHORITATIVE_DNS_PORT,
