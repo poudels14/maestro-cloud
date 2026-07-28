@@ -1,6 +1,6 @@
 [package]
 name = "runtime"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -14,14 +14,14 @@ futures-util.workspace = true
 flate2 = { workspace = true, optional = true }
 hex.workspace = true
 ignore = { workspace = true, optional = true }
-kernel-api = { version = "0.5.0", path = "../kernel/api" }
+kernel-api = { version = "0.6.0", path = "../kernel/api" }
 libc.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
-supervisor = { version = "0.5.0", path = "../kernel/supervisor" }
+supervisor = { version = "0.6.0", path = "../kernel/supervisor" }
 tar = { workspace = true, optional = true }
 tempfile.workspace = true
 parking_lot = { workspace = true, optional = true }

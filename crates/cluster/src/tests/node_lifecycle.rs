@@ -93,7 +93,7 @@ fn migrated_node() -> Result<Node, kernel_api::InvalidIdentifier> {
         },
         status: NodeStatus {
             instance_id: NodeInstanceId::new("instance-1")?,
-            version: "0.5.0".to_owned(),
+            version: "0.6.0".to_owned(),
             last_seen: Timestamp(1_000),
             conditions: vec![condition(
                 "Maintenance",

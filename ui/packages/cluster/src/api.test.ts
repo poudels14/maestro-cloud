@@ -11,7 +11,7 @@ const node = {
   workloadNetworkMode: "clusterRouted",
   subnet: "10.51.0.0/24",
   dataPlaneReady: true,
-  version: "0.5.0",
+  version: "0.6.0",
   alive: true,
   lastSeenAtMs: 100,
   revision: 7,
@@ -131,7 +131,7 @@ test("selects the newest active upgrade when composing cluster info", async () =
       role: "worker",
       workloadNetworkMode: "clusterRouted"
     },
-    status: { instanceId: "instance-a", lastSeen: Date.now(), version: "0.5.0" }
+    status: { instanceId: "instance-a", lastSeen: Date.now(), version: "0.6.0" }
   } satisfies ApiSchemas["Node"];
   const active = upgrade("active", 3, "applying");
   const older = upgrade("older", 2, "draining");

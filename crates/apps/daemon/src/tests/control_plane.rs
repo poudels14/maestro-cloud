@@ -164,7 +164,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             volatile_root: directory.path().join("volatile"),
             mesh_identity: MeshIdentity::load_or_generate(&directory.path().join("mesh"))?,
             instance_id: NodeInstanceId::new("instance-1")?,
-            running_version: Version::new(0, 5, 0),
+            running_version: Version::new(0, 6, 0),
             monotonic_clock: clock.clone(),
             status_clock: Arc::new(FixedStatusClock),
             node_upgrade: None,
@@ -406,7 +406,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             .value,
     )?;
     assert_eq!(node.status.instance_id.as_str(), "instance-1");
-    assert_eq!(node.status.version, "0.5.0");
+    assert_eq!(node.status.version, "0.6.0");
 
     running.shutdown().await?;
     assert_eq!(store.get(&leader_key).await?, None);

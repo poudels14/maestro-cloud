@@ -1,6 +1,6 @@
 [package]
 name = "server"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -9,21 +9,21 @@ publish = false
 async-trait.workspace = true
 axum = { workspace = true, features = ["ws"] }
 axum-server = { workspace = true, features = ["tls-rustls-no-provider"] }
-build = { version = "0.5.0", path = "../../operators/build" }
-cluster = { version = "0.5.0", path = "../../cluster" }
-firewall = { version = "0.5.0", path = "../../operators/firewall" }
+build = { version = "0.6.0", path = "../../operators/build" }
+cluster = { version = "0.6.0", path = "../../cluster" }
+firewall = { version = "0.6.0", path = "../../operators/firewall" }
 futures-util.workspace = true
-ingress = { version = "0.5.0", path = "../../operators/ingress" }
+ingress = { version = "0.6.0", path = "../../operators/ingress" }
 ipnet.workspace = true
 jsonwebtoken.workspace = true
-kernel-api = { version = "0.5.0", path = "../../kernel/api" }
-kernel-controller = { version = "0.5.0", path = "../../kernel/controller" }
-kernel-store = { version = "0.5.0", path = "../../kernel/store" }
-logs = { version = "0.5.0", path = "../../observability/logs" }
-metrics = { version = "0.5.0", path = "../../observability/metrics" }
-node-agent = { version = "0.5.0", path = "../../node/agent" }
+kernel-api = { version = "0.6.0", path = "../../kernel/api" }
+kernel-controller = { version = "0.6.0", path = "../../kernel/controller" }
+kernel-store = { version = "0.6.0", path = "../../kernel/store" }
+logs = { version = "0.6.0", path = "../../observability/logs" }
+metrics = { version = "0.6.0", path = "../../observability/metrics" }
+node-agent = { version = "0.6.0", path = "../../node/agent" }
 reqwest.workspace = true
-runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
+runtime = { version = "0.6.0", path = "../../runtime", default-features = false }
 rustls = { workspace = true, default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde.workspace = true
@@ -35,14 +35,14 @@ tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true, features = ["fs"] }
-webhook = { version = "0.5.0", path = "../../operators/webhook" }
+webhook = { version = "0.6.0", path = "../../operators/webhook" }
 
 [dev-dependencies]
 http-body-util.workspace = true
-logs = { version = "0.5.0", path = "../../observability/logs", features = ["test-util"] }
-metrics = { version = "0.5.0", path = "../../observability/metrics", features = ["test-util"] }
+logs = { version = "0.6.0", path = "../../observability/logs", features = ["test-util"] }
+metrics = { version = "0.6.0", path = "../../observability/metrics", features = ["test-util"] }
 rcgen = { workspace = true, features = ["pem"] }
-runtime = { version = "0.5.0", path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.6.0", path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile.workspace = true
 
 [lints]

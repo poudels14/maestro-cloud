@@ -1,6 +1,6 @@
 [package]
 name = "maestro-cli"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -19,7 +19,7 @@ aws-config = { workspace = true, features = [
 ] }
 aws-sdk-secretsmanager.workspace = true
 clap.workspace = true
-cluster = { version = "0.5.0", path = "../../cluster" }
+cluster = { version = "0.6.0", path = "../../cluster" }
 crossterm.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
@@ -27,9 +27,9 @@ ignore.workspace = true
 jsonwebtoken.workspace = true
 json5.workspace = true
 ipnet.workspace = true
-kernel-api = { version = "0.5.0", path = "../../kernel/api" }
+kernel-api = { version = "0.6.0", path = "../../kernel/api" }
 libc.workspace = true
-logs = { version = "0.5.0", path = "../../observability/logs" }
+logs = { version = "0.6.0", path = "../../observability/logs" }
 reqwest = { workspace = true, features = ["json"] }
 rpassword.workspace = true
 rustls = { workspace = true, default-features = false, features = ["ring", "std"] }

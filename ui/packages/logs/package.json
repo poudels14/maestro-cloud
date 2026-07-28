@@ -1,6 +1,6 @@
 {
   "name": "@maestro/logs",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Maestro structured log viewing feature",
   "type": "module",

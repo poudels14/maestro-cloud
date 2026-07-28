@@ -18,7 +18,7 @@ function node(
       role: id === "node-b" ? "worker" : "master",
       workloadNetworkMode
     },
-    status: { instanceId: `${id}-instance`, lastSeen, version: "0.5.0", conditions }
+    status: { instanceId: `${id}-instance`, lastSeen, version: "0.6.0", conditions }
   };
 }
 
@@ -76,7 +76,7 @@ test("projects node liveness, mesh readiness, and drain state", () => {
     subnet: "10.51.1.0/24",
     dataPlaneReady: true,
     dataPlaneError: null,
-    version: "0.5.0",
+    version: "0.6.0",
     alive: true,
     lastSeenAtMs: 80_000,
     revision: 9,

@@ -1,6 +1,6 @@
 [package]
 name = "migrate"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -10,20 +10,20 @@ aes-gcm.workspace = true
 argon2.workspace = true
 base64.workspace = true
 clap.workspace = true
-cluster = { version = "0.5.0", path = "../../cluster" }
+cluster = { version = "0.6.0", path = "../../cluster" }
 duckdb = { workspace = true, features = ["bundled", "json", "parquet"] }
 etcd-client.workspace = true
 hex.workspace = true
 http.workspace = true
 ipnet.workspace = true
-kernel-api = { version = "0.5.0", path = "../../kernel/api" }
-kernel-controller = { version = "0.5.0", path = "../../kernel/controller" }
-kernel-store = { version = "0.5.0", path = "../../kernel/store" }
+kernel-api = { version = "0.6.0", path = "../../kernel/api" }
+kernel-controller = { version = "0.6.0", path = "../../kernel/controller" }
+kernel-store = { version = "0.6.0", path = "../../kernel/store" }
 libc.workspace = true
-logs = { version = "0.5.0", path = "../../observability/logs" }
-logstore = { version = "0.5.0", path = "../../observability/logstore" }
-metrics = { version = "0.5.0", path = "../../observability/metrics" }
-runtime = { version = "0.5.0", path = "../../runtime", default-features = false }
+logs = { version = "0.6.0", path = "../../observability/logs" }
+logstore = { version = "0.6.0", path = "../../observability/logstore" }
+metrics = { version = "0.6.0", path = "../../observability/metrics" }
+runtime = { version = "0.6.0", path = "../../runtime", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -35,8 +35,8 @@ tracing-subscriber.workspace = true
 zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-node-agent = { version = "0.5.0", path = "../../node/agent" }
-runtime = { version = "0.5.0", path = "../../runtime", default-features = false, features = ["test-util"] }
+node-agent = { version = "0.6.0", path = "../../node/agent" }
+runtime = { version = "0.6.0", path = "../../runtime", default-features = false, features = ["test-util"] }
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
