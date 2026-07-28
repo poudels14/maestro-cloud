@@ -15,7 +15,7 @@ pub(crate) const TRAEFIK_SERVICE_ID: &str = "maestro-system-traefik";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 pub(crate) const TRAEFIK_MANAGED_OWNER: &str = "traefik";
 pub(crate) const TRAEFIK_IMAGE: &str =
-    "traefik:v3.6.23@sha256:d85749d4d10d970ed2b3a7cb2406d9b9da1cdd6ea975a39c727aab809d73136a";
+    "traefik:v3.6.23@sha256:f5dba1e65167778cd5f8d1b463fc5d200f49d40c6458fc9f4b391a68ebfb9534";
 const TRAEFIK_VERSION: &str = "traefik-3.6.23";
 const ETCD_SECRET_DIRECTORY: &str = "/run/secrets/etcd";
 
@@ -61,7 +61,7 @@ impl TraefikSystemResources {
             .collect::<Vec<_>>()
             .join(",");
         let command = CommandSpec {
-            executable: "/traefik".to_owned(),
+            executable: "/usr/local/bin/traefik".to_owned(),
             arguments: vec![
                 "--providers.etcd=true".to_owned(),
                 format!("--providers.etcd.rootKey={root_key}"),

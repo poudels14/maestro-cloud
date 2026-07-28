@@ -57,7 +57,7 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
         .command
         .as_ref()
         .ok_or("Traefik command is missing")?;
-    assert_eq!(command.executable, "/traefik");
+    assert_eq!(command.executable, "/usr/local/bin/traefik");
     for expected in [
         "--providers.etcd=true",
         "--providers.etcd.rootKey=/maestro/clusters/daemon-test/integrations/traefik",
