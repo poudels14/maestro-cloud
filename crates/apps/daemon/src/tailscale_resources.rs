@@ -62,7 +62,7 @@ done
   --hostname="$TS_HOSTNAME" \
   || fail_gateway "could not reconcile the Tailscale hostname"
 
-gateway="$(ip -4 route show default | awk '$1 == "default" { print $3; exit }')"
+gateway="$(awk '$1 == "nameserver" { print $2; exit }' /etc/resolv.conf)"
 [ -n "$gateway" ] || fail_gateway "could not discover the node workload gateway"
 
 api_port=""

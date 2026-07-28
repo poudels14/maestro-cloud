@@ -96,6 +96,14 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         "persisted gateway identities must adopt the configured cluster hostname"
     );
     assert!(
+        AUTH_SCRIPT.contains("awk '$1 == \"nameserver\" { print $2; exit }' /etc/resolv.conf"),
+        "the gateway must use Maestro's mounted resolver address without requiring iproute2"
+    );
+    assert!(
+        !AUTH_SCRIPT.contains("ip -4 route"),
+        "the pinned Tailscale image does not include the ip utility"
+    );
+    assert!(
         AUTH_SCRIPT.contains("serve reset"),
         "stale Serve listeners must not survive a gateway hostname change"
     );
