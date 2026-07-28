@@ -56,8 +56,9 @@ function projectClusterNodes(
           reason:
             placementCondition?.message ||
             placementCondition?.reason ||
-            drainCondition?.message ||
-            drainCondition?.reason ||
+            (drainCondition?.status === "unknown"
+              ? drainCondition.message || drainCondition.reason
+              : null) ||
             null
         }
       } satisfies ClusterNode;

@@ -109,6 +109,26 @@ test("keeps a node schedulable while drain artifact replication is pending", () 
   assert.equal(projected[0]?.state.reason, "waiting for peer copies");
 });
 
+test("does not surface a completed restore as an active scheduling warning", () => {
+  const restored = {
+    type: "Draining",
+    status: "false",
+    reason: "Restored",
+    message: "node restored to scheduling",
+    observedGeneration: 1,
+    lastTransitionTime: 75_000
+  } satisfies ApiSchemas["Condition"];
+  const projected = projectClusterNodes(
+    [node("node-b", "worker-b", 100_000, [restored])],
+    [network("node-b", 2, meshReady)],
+    100_000
+  );
+
+  assert.equal(projected[0]?.state.unschedulable, false);
+  assert.equal(projected[0]?.state.drainPending, false);
+  assert.equal(projected[0]?.state.reason, null);
+});
+
 test("reports a desired mesh generation that has not been applied", () => {
   const projected = projectClusterNodes(
     [node("node-b", "worker-b", 100_000)],
