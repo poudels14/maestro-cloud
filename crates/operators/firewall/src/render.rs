@@ -178,7 +178,13 @@ fn render_system_host_access(
             .iter()
             .filter(|assignment| {
                 assignment.spec.service_id == access.service_id
-                    && assignment.status.phase == AssignmentPhase::Running
+                    && assignment.meta.deletion_timestamp.is_none()
+                    && matches!(
+                        assignment.status.phase,
+                        AssignmentPhase::Pending
+                            | AssignmentPhase::Running
+                            | AssignmentPhase::Draining
+                    )
             })
             .filter_map(|assignment| assignment.spec.workload_address)
             .map(|address| address.to_string())

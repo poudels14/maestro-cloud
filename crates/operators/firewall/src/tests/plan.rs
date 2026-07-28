@@ -136,6 +136,49 @@ fn system_dns_and_control_guards_precede_user_policy() {
 }
 
 #[test]
+fn system_host_access_trusts_reserved_active_assignments_only() {
+    let mut world = World::standard();
+    let system = world
+        .services
+        .iter()
+        .find(|service| service.meta.id.as_str() == "maestro-dns")
+        .unwrap()
+        .clone();
+
+    let mut pending = assignment("dns-pending", &system, "node-2", "10.42.2.30");
+    pending.status.phase = AssignmentPhase::Pending;
+    pending.status.workload_address = None;
+    world.assignments.push(pending);
+
+    let mut draining = assignment("dns-draining", &system, "node-2", "10.42.2.31");
+    draining.status.phase = AssignmentPhase::Draining;
+    world.assignments.push(draining);
+
+    let mut failed = assignment("dns-failed", &system, "node-2", "10.42.2.32");
+    failed.status.phase = AssignmentPhase::Failed;
+    world.assignments.push(failed);
+
+    let mut stopped = assignment("dns-stopped", &system, "node-2", "10.42.2.33");
+    stopped.status.phase = AssignmentPhase::Stopped;
+    world.assignments.push(stopped);
+
+    let mut deleting = assignment("dns-deleting", &system, "node-2", "10.42.2.34");
+    deleting.meta.deletion_timestamp = Some(Timestamp(50_000));
+    world.assignments.push(deleting);
+
+    let output = plan(world.input()).unwrap();
+    let script = &output.rulesets[0].script;
+    let start = script.find("set host_access_").unwrap();
+    let end = script[start..].find("\n    }\n").unwrap();
+    let source_set = &script[start..start + end];
+    assert!(source_set.contains("10.42.2.30"));
+    assert!(source_set.contains("10.42.2.31"));
+    assert!(!source_set.contains("10.42.2.32"));
+    assert!(!source_set.contains("10.42.2.33"));
+    assert!(!source_set.contains("10.42.2.34"));
+}
+
+#[test]
 fn user_workloads_cannot_connect_to_local_or_remote_system_assignments() {
     let output = plan(World::standard().input()).unwrap();
     for ruleset in output.rulesets {

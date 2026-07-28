@@ -31,7 +31,7 @@ pub struct HostPortRoute {
 /// One system workload allowed to reach selected protected host listeners.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SystemHostAccess {
-    /// System service whose running assignment addresses are trusted.
+    /// System service whose reserved active-assignment addresses are trusted.
     pub service_id: ServiceId,
     /// Additional canonical IPv4 sources owned by the system transport.
     pub trusted_source_cidrs: Vec<String>,
