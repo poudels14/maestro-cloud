@@ -2,7 +2,7 @@
 name = "daemon"
 # Deployed 0.6.1 upgrade agents read this package version before they can
 # install a release that switches version discovery to maestro-cli.
-version = "0.6.5"
+version = "0.6.6"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
