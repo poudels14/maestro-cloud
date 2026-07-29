@@ -97,7 +97,7 @@ promote the affected rows from **Acceptance pending**.
 | Requirement | Evidence | Status |
 |---|---|---|
 | WireGuard workload mesh with control-plane RPC gateway | Mesh planner/agent/netlink artifact tests and real cross-node ping script | Acceptance pending |
-| Bridge-bound authoritative DNS without recursion | DNS planner/resource/server tests | Verified |
+| Bridge-bound authoritative DNS with host-scoped public forwarding | DNS planner/resource/server/upstream tests | Verified |
 | Cluster domain, allowlists, IPAM, and overlap validation | Cluster topology/network and DNS tests | Verified |
 | Optional cross-cluster resolver through scoped Tailscale access | Agent DNS plugin and daemon Tailscale resource tests | Rehearsal pending |
 | Atomic nftables egress, named sets, exemptions, and DNS legs | Firewall snapshots/planner and Linux backend exact-script tests | Acceptance pending |

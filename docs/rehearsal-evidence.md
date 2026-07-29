@@ -116,7 +116,8 @@ Evidence:
 
 - [ ] Workloads resolve local service names through the bridge-bound
       authoritative resolver.
-- [ ] External or recursive DNS queries are refused by that resolver.
+- [ ] Public DNS queries are forwarded through the host-configured recursive
+      resolvers, while undeclared `maestro.internal` names remain private.
 - [ ] Cross-cluster DNS resolves through Tailscale only when configured.
 - [ ] The nftables dry run matches the reviewed global and per-service policy.
 - [ ] Allowed egress succeeds and denied egress fails for a rehearsal
