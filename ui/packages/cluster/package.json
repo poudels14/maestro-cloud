@@ -20,6 +20,7 @@
     "solid-js": "^1.9.14"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "typescript": "5.9.3",
     "vitest": "^4.1.10"
   },
