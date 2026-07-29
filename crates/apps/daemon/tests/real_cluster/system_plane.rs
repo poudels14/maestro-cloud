@@ -31,11 +31,11 @@ async fn real_process_three_node_system_plane_is_reachable()
     }
     cluster.await_mesh(&nodes.iter().cloned().collect()).await?;
 
-    let gateway_pid = cluster.await_tailscale_gateway_pid().await?;
+    cluster.await_tailscale_gateway_pid().await?;
     let operator_token = operator_token()?;
     for index in 0..cluster.nodes.len() {
         cluster
-            .assert_admin_cluster_endpoint(index, gateway_pid, &operator_token)
+            .assert_admin_cluster_endpoint(index, &operator_token)
             .await?;
         cluster.assert_workload_cannot_reach_system_plane(index)?;
         cluster.assert_recursive_dns(index).await?;
@@ -255,31 +255,14 @@ impl RealProcessCluster {
 
     async fn await_tailscale_gateway_pid(&mut self) -> Result<u32, RealClusterError> {
         let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
-        let mut last_observation = "Tailscale gateway assignment was not observed".to_owned();
+        let mut last_observation =
+            "running Tailscale gateway assignment was not observed".to_owned();
         loop {
             self.ensure_children_running()?;
-            if let Ok(store) = self.connect_store().await {
-                let assignments =
-                    list_resources::<Assignment>(&store, &self.cluster.cluster_id, "Assignment")
-                        .await
-                        .map_err(RealClusterError::from_display)?;
-                if let Some(workload_id) = assignments
-                    .iter()
-                    .find(|assignment| {
-                        assignment.spec.service_id.as_str() == "maestro-system-tailscale-gateway"
-                            && assignment.status.phase == AssignmentPhase::Running
-                    })
-                    .and_then(|assignment| assignment.status.workload_id.as_ref())
-                {
-                    let container_id = format!("maestro-{workload_id}");
-                    match self.containerd_task_pid(&container_id)? {
-                        Some(pid) => return Ok(pid),
-                        None => {
-                            last_observation =
-                                format!("containerd task `{container_id}` had no running PID");
-                        }
-                    }
-                }
+            match self.current_tailscale_gateway_pid().await {
+                Ok(Some(pid)) => return Ok(pid),
+                Ok(None) => {}
+                Err(error) => last_observation = error.to_string(),
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(RealClusterError::new(format!(
@@ -289,6 +272,30 @@ impl RealProcessCluster {
             }
             tokio::time::sleep(RETRY_DELAY).await;
         }
+    }
+
+    async fn current_tailscale_gateway_pid(&self) -> Result<Option<u32>, RealClusterError> {
+        let store = self
+            .connect_store()
+            .await
+            .map_err(RealClusterError::from_display)?;
+        let assignments =
+            list_resources::<Assignment>(&store, &self.cluster.cluster_id, "Assignment")
+                .await
+                .map_err(RealClusterError::from_display)?;
+        for assignment in assignments.iter().filter(|assignment| {
+            assignment.spec.service_id.as_str() == "maestro-system-tailscale-gateway"
+                && assignment.status.phase == AssignmentPhase::Running
+        }) {
+            let Some(workload_id) = assignment.status.workload_id.as_ref() else {
+                continue;
+            };
+            let container_id = format!("maestro-{workload_id}");
+            if let Some(pid) = self.containerd_task_pid(&container_id)? {
+                return Ok(Some(pid));
+            }
+        }
+        Ok(None)
     }
 
     fn containerd_task_pid(&self, container_id: &str) -> Result<Option<u32>, RealClusterError> {
@@ -323,7 +330,6 @@ impl RealProcessCluster {
     async fn assert_admin_cluster_endpoint(
         &mut self,
         index: usize,
-        gateway_pid: u32,
         operator_token: &str,
     ) -> Result<(), RealClusterError> {
         let node = self.node(index)?;
@@ -342,6 +348,18 @@ impl RealProcessCluster {
         let deadline = tokio::time::Instant::now() + SETUP_TIMEOUT;
         loop {
             self.ensure_children_running()?;
+            let gateway_pid = self.current_tailscale_gateway_pid().await?;
+            let Some(gateway_pid) = gateway_pid else {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(RealClusterError::new(format!(
+                        "authenticated Admin endpoint on `{node_id}` was not reachable from the Tailscale gateway at `{url}`: no running Tailscale gateway task was available; node: {}; node log: {}",
+                        node_namespace_diagnostics(&namespace),
+                        read_log(&self.node(index)?.log_path)
+                    )));
+                }
+                tokio::time::sleep(RETRY_DELAY).await;
+                continue;
+            };
             let output = Command::new("nsenter")
                 .args(["--target", &gateway_pid.to_string(), "--net", "--", "curl"])
                 .args([
