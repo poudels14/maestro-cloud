@@ -6,9 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use semver::Version;
 
-use crate::nixos::{
-    NixosCommand, NixosCommandError, NixosCommandOutput, NixosCommandRunner,
-};
+use crate::nixos::{NixosCommand, NixosCommandError, NixosCommandOutput, NixosCommandRunner};
 use crate::{
     NixosUpgradeStager, NixosUpgradeStagerSettings, NixosUpgradeStagingError,
     ProcessNixosUpgradeStager,
