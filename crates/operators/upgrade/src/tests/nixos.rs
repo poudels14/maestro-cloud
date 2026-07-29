@@ -155,18 +155,14 @@ fn checked_in_manifests_support_the_0_6_1_upgrade_bridge() -> Result<(), Box<dyn
     let legacy_manifest = std::fs::read_to_string(workspace.join("crates/apps/daemon/Cargo.toml"))?;
     let current_manifest = std::fs::read_to_string(workspace.join("crates/apps/cli/Cargo.toml"))?;
     let running = Version::new(0, 6, 1);
-    let minimum = Version::new(0, 6, 2);
+    let minimum = parse_package_version(&current_manifest)?;
 
     validate_source_version(
         &parse_package_version(&legacy_manifest)?,
         &running,
         &minimum,
     )?;
-    validate_source_version(
-        &parse_package_version(&current_manifest)?,
-        &running,
-        &minimum,
-    )?;
+    validate_source_version(&minimum, &running, &minimum)?;
     Ok(())
 }
 
