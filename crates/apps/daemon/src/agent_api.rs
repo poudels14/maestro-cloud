@@ -113,6 +113,10 @@ pub(crate) async fn bind_agent_api<MeshBackendType, FirewallBackendType, BridgeB
             cluster_stats_nodes,
             cluster_stats_queries,
         );
+    let server = match &factory.launch_config_admin {
+        Some(admin) => server.with_launch_config_admin(admin.clone()),
+        None => server,
+    };
     let server = server.with_exec_sessions(exec_sessions);
     let server = match admission {
         Some(coordinator) => server.with_admission_coordinator(coordinator),

@@ -8,8 +8,8 @@ use tokio::sync::Semaphore;
 
 use crate::auth::AuthPolicy;
 use crate::{
-    AppState, BoundApiServer, ClusterExecSessions, NodeMetricQueryStore, NodeStatsQueryStore,
-    ServerError, ServerSettings,
+    AppState, BoundApiServer, ClusterExecSessions, LaunchConfigAdmin, NodeMetricQueryStore,
+    NodeStatsQueryStore, ServerError, ServerSettings,
 };
 
 /// Validated API application that has not yet claimed its listener.
@@ -35,6 +35,7 @@ impl ApiServer {
             store,
             cluster_id,
             cluster_config: None,
+            launch_config_admin: None,
             artifact_archives: None,
             artifacts: None,
             firewall_settings: None,
@@ -74,6 +75,13 @@ impl ApiServer {
     /// Enables the secret-free configuration view for authenticated operators.
     pub fn with_cluster_config(mut self, config: MaskedClusterConfig) -> Self {
         self.state.cluster_config = Some(Arc::new(config));
+        self.rebuild_router();
+        self
+    }
+
+    /// Enables authenticated node-local launch-document updates.
+    pub fn with_launch_config_admin(mut self, admin: Arc<dyn LaunchConfigAdmin>) -> Self {
+        self.state.launch_config_admin = Some(admin);
         self.rebuild_router();
         self
     }

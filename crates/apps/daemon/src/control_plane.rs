@@ -182,6 +182,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) api_settings: ServerSettings,
     pub(crate) admin_api_settings: Option<ServerSettings>,
     pub(crate) firewall_settings: firewall::FirewallSettings,
+    pub(crate) launch_config_admin: Option<Arc<dyn server::LaunchConfigAdmin>>,
     pub(crate) webhook_backend: Option<Arc<dyn webhook::WebhookDeliveryBackend>>,
     pub(crate) admission: Option<AdmissionDependencies>,
     pub(crate) settings: DaemonRoleSettings,
@@ -236,6 +237,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             api_settings: dependencies.api_settings,
             admin_api_settings: dependencies.admin_api_settings,
             firewall_settings: dependencies.firewall_settings,
+            launch_config_admin: None,
             webhook_backend: None,
             admission: None,
             settings,
@@ -256,6 +258,12 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
         backend: Arc<dyn webhook::WebhookDeliveryBackend>,
     ) -> Self {
         self.webhook_backend = Some(backend);
+        self
+    }
+
+    /// Enables node-local protected launch-document updates through Admin.
+    pub fn with_launch_config_admin(mut self, admin: Arc<dyn server::LaunchConfigAdmin>) -> Self {
+        self.launch_config_admin = Some(admin);
         self
     }
 

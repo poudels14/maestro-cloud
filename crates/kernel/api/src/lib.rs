@@ -39,7 +39,7 @@ pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use config::{
     MaskedCloudflareConfig, MaskedCloudflareTunnelConfig, MaskedClusterConfig,
     MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedCrossClusterDnsRoute,
-    MaskedTailscaleConfig,
+    MaskedTailscaleConfig, PreviewLaunchConfigUpdateRequest, PreviewLaunchConfigUpdateResponse,
 };
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{

@@ -1,7 +1,33 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ClusterId, NodeId, NodeRole};
+use crate::{ClusterId, NodeId, NodeRole, SecretValue};
+
+/// Exact cluster and node target for one local preview launch-config update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreviewLaunchConfigUpdateRequest {
+    /// Cluster the caller expects the contacted Admin endpoint to serve.
+    pub cluster_id: ClusterId,
+    /// Node the caller expects the contacted Admin endpoint to serve.
+    pub node_id: NodeId,
+    /// DNS suffix used for stable preview hostnames.
+    pub domain: String,
+    /// GitHub token with pull-request read and issue-comment write access.
+    pub github_token: SecretValue,
+    /// Maximum previews retained cluster-wide, including close grace periods.
+    pub max_concurrent_previews: usize,
+}
+
+/// Secret-free receipt for one idempotent local launch-config update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewLaunchConfigUpdateResponse {
+    /// Node whose protected launch document was inspected.
+    pub node_id: NodeId,
+    /// Whether the protected launch document changed.
+    pub changed: bool,
+}
 
 /// Secret-free cluster configuration returned to authenticated operators.
 ///

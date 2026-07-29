@@ -20,6 +20,10 @@ pub fn openapi_document() -> Value {
             singleton_operation("getClusterConfig", "MaskedClusterConfig"),
         ),
         (
+            "/api/config/preview".to_string(),
+            preview_launch_config_operation(),
+        ),
+        (
             "/api/cluster/nodes".to_string(),
             list_operation("listNodes", "Node"),
         ),
@@ -320,6 +324,33 @@ fn browser_session_operation() -> Value {
             "operationId": "deleteBrowserSession",
             "responses": {
                 "204": {"description": "Browser session cookie cleared"}
+            }
+        }
+    })
+}
+
+fn preview_launch_config_operation() -> Value {
+    json!({
+        "put": {
+            "operationId": "updatePreviewLaunchConfig",
+            "security": [{"bearerAuth": []}, {"browserSession": []}],
+            "requestBody": {
+                "required": true,
+                "content": {"application/json": {"schema": {
+                    "$ref": "#/components/schemas/PreviewLaunchConfigUpdateRequest"
+                }}}
+            },
+            "responses": {
+                "200": {
+                    "description": "Protected local launch document inspected or updated",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/PreviewLaunchConfigUpdateResponse"
+                    }}}
+                },
+                "400": {"description": "Invalid config or request"},
+                "409": {"description": "Contacted Admin endpoint does not match the target node"},
+                "413": {"description": "Request body exceeds the command limit"},
+                "503": {"description": "Node-local launch configuration is unavailable"}
             }
         }
     })

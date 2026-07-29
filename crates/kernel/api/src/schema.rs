@@ -8,12 +8,12 @@ use crate::{
     ArtifactArchiveUploadResponse, Assignment, Build, ClusterId, CommandRequest, Deployment,
     DeploymentCommandResponse, DnsRecord, FirewallPolicy, IngressBlocklist, IngressRoute,
     IngressRouting, MaskedClusterConfig, Node, NodeFirewall, NodeNetwork, NodeTombstone,
-    PlacementHistory, Preview, ReplicaState, ResourceKind, Service, ServiceCommandResponse,
-    ServiceDiffChange, ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus,
-    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
-    ServiceRolloutRequest, ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec,
-    ServiceWriteRequest, ServiceWriteResponse, TrafficGeneration, UnschedulableReplica, UpgradeRun,
-    Webhook,
+    PlacementHistory, Preview, PreviewLaunchConfigUpdateRequest, PreviewLaunchConfigUpdateResponse,
+    ReplicaState, ResourceKind, Service, ServiceCommandResponse, ServiceDiffChange,
+    ServiceDiffRequest, ServiceDiffResponse, ServiceDiffStatus, ServiceReplicaOverrideRequest,
+    ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
+    ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
+    ServiceWriteResponse, TrafficGeneration, UnschedulableReplica, UpgradeRun, Webhook,
 };
 
 /// Every resource kind shipped by Maestro itself.
@@ -363,6 +363,14 @@ pub fn openapi_document() -> Value {
     register_named_schema::<ClusterId>(&mut generator, "ClusterId");
     register_named_schema::<IngressRouting>(&mut generator, "IngressRouting");
     register_named_schema::<MaskedClusterConfig>(&mut generator, "MaskedClusterConfig");
+    register_named_schema::<PreviewLaunchConfigUpdateRequest>(
+        &mut generator,
+        "PreviewLaunchConfigUpdateRequest",
+    );
+    register_named_schema::<PreviewLaunchConfigUpdateResponse>(
+        &mut generator,
+        "PreviewLaunchConfigUpdateResponse",
+    );
     register_named_schema::<UnschedulableReplica>(&mut generator, "UnschedulableReplica");
     register_named_schema::<CommandRequest>(&mut generator, "CommandRequest");
     register_named_schema::<ArtifactArchiveUploadResponse>(

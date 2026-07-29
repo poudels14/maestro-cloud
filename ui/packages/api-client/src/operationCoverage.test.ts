@@ -13,6 +13,7 @@ const nonPanelOperations = [
   "getOpenApi",
   "health",
   "joinCluster",
+  "updatePreviewLaunchConfig",
   "uploadArtifactArchive"
 ] as const;
 

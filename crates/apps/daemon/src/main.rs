@@ -4,7 +4,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use daemon::{
     DEFAULT_DNS_RESOLVER_PORT, DeadLetterAdminCommand, DeadLetterAdminOutput,
-    DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters, launch_daemon,
+    DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters, launch_daemon_with_document,
     load_launch_config, run_dns_resolver, stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
@@ -243,7 +243,7 @@ async fn start(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let cluster_id = config.cluster.cluster_id.clone();
     let node_id = config.node_id.clone();
     tracing::info!(%cluster_id, %node_id, "starting maestro daemon");
-    let mut running = launch_daemon(config).await?;
+    let mut running = launch_daemon_with_document(config, path).await?;
     tracing::info!(%cluster_id, %node_id, "maestro daemon started");
     tokio::select! {
         signal = shutdown_signal() => {

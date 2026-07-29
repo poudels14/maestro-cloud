@@ -50,6 +50,7 @@ webhook = { version = "0.1.0", path = "../../operators/webhook" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "rt", "signal", "sync", "time"] }
 tracing.workspace = true
@@ -68,7 +69,6 @@ metrics = { version = "0.1.0", path = "../../observability/metrics", features = 
 reqwest.workspace = true
 rcgen = { workspace = true, features = ["pem"] }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
-tempfile.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake"] }

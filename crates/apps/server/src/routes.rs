@@ -60,7 +60,9 @@ pub(crate) fn operator_router(
     auth: AuthPolicy,
     panel_directory: Option<&Path>,
 ) -> Router {
-    let protected = operator_routes(auth.clone());
+    let protected = operator_routes(auth.clone()).merge(config::admin_router().route_layer(
+        middleware::from_fn_with_state(auth.clone(), require_operator),
+    ));
     let router = Router::new()
         .merge(system::router())
         .merge(session::router(auth.clone()))

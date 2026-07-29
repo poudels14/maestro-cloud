@@ -24,6 +24,7 @@ mod dns_resources;
 mod error;
 mod join_activation;
 mod launch;
+mod launch_config_admin;
 mod launch_error;
 mod leadership;
 mod local_logs;
@@ -68,8 +69,8 @@ pub use dns_launch::{
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
-    DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, launch_daemon, load_launch_config,
-    load_launch_document,
+    DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, launch_daemon,
+    launch_daemon_with_document, load_launch_config, load_launch_document,
 };
 pub use launch_error::DaemonLaunchError;
 pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};

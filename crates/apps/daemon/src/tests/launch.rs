@@ -6,6 +6,7 @@ use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBu
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::launch::{admin_api_settings, api_settings, panel_directory};
+use crate::launch_config_admin::replace_preview;
 use crate::{
     DaemonLaunchConfig, DaemonLaunchDocument, DatadogLaunchConfig, DatadogLogsLaunchConfig,
     DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
@@ -81,6 +82,53 @@ fn launch_document_requires_owner_only_permissions() -> Result<(), Box<dyn std::
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
     assert_eq!(load_launch_document(&path)?, config);
+    Ok(())
+}
+
+#[test]
+fn preview_launch_config_is_atomically_updated_for_the_exact_node()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("launch.json");
+    let config = document("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
+    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let preview = PreviewLaunchConfig {
+        domain: "preview.example.test".to_string(),
+        github_token: SecretValue::new("github-super-secret"),
+        max_concurrent_previews: 5,
+    };
+
+    assert!(replace_preview(
+        &path,
+        &config.cluster.cluster_id,
+        &config.node_id,
+        preview.clone()
+    )?);
+    assert_eq!(load_launch_document(&path)?.preview, Some(preview.clone()));
+    assert!(!replace_preview(
+        &path,
+        &config.cluster.cluster_id,
+        &config.node_id,
+        preview
+    )?);
+    assert!(
+        replace_preview(
+            &path,
+            &config.cluster.cluster_id,
+            &NodeId::new("other")?,
+            PreviewLaunchConfig {
+                domain: "preview.example.test".to_string(),
+                github_token: SecretValue::new("replacement"),
+                max_concurrent_previews: 5,
+            }
+        )
+        .is_err()
+    );
     Ok(())
 }
 

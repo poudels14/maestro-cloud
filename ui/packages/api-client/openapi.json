@@ -5180,6 +5180,76 @@
         "description": "Stable identity of a pull-request preview.",
         "type": "string"
       },
+      "PreviewLaunchConfigUpdateRequest": {
+        "additionalProperties": false,
+        "description": "Exact cluster and node target for one local preview launch-config update.",
+        "properties": {
+          "clusterId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ClusterId"
+              }
+            ],
+            "description": "Cluster the caller expects the contacted Admin endpoint to serve."
+          },
+          "domain": {
+            "description": "DNS suffix used for stable preview hostnames.",
+            "type": "string"
+          },
+          "githubToken": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SecretValue"
+              }
+            ],
+            "description": "GitHub token with pull-request read and issue-comment write access."
+          },
+          "maxConcurrentPreviews": {
+            "description": "Maximum previews retained cluster-wide, including close grace periods.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node the caller expects the contacted Admin endpoint to serve."
+          }
+        },
+        "required": [
+          "clusterId",
+          "nodeId",
+          "domain",
+          "githubToken",
+          "maxConcurrentPreviews"
+        ],
+        "type": "object"
+      },
+      "PreviewLaunchConfigUpdateResponse": {
+        "description": "Secret-free receipt for one idempotent local launch-config update.",
+        "properties": {
+          "changed": {
+            "description": "Whether the protected launch document changed.",
+            "type": "boolean"
+          },
+          "nodeId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              }
+            ],
+            "description": "Node whose protected launch document was inspected."
+          }
+        },
+        "required": [
+          "nodeId",
+          "changed"
+        ],
+        "type": "object"
+      },
       "PreviewPhase": {
         "description": "Persisted lifecycle of a pull-request preview.",
         "oneOf": [
@@ -8936,6 +9006,53 @@
               }
             },
             "description": "Resource summary"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "browserSession": []
+          }
+        ]
+      }
+    },
+    "/api/config/preview": {
+      "put": {
+        "operationId": "updatePreviewLaunchConfig",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewLaunchConfigUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewLaunchConfigUpdateResponse"
+                }
+              }
+            },
+            "description": "Protected local launch document inspected or updated"
+          },
+          "400": {
+            "description": "Invalid config or request"
+          },
+          "409": {
+            "description": "Contacted Admin endpoint does not match the target node"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          },
+          "503": {
+            "description": "Node-local launch configuration is unavailable"
           }
         },
         "security": [

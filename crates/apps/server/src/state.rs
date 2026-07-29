@@ -5,7 +5,7 @@ use kernel_controller::{RequestDeduplicator, TimestampClock};
 use kernel_store::Store;
 use tokio::sync::Semaphore;
 
-use crate::{ClusterExecSessions, NodeMetricQueryStore, NodeStatsQueryStore};
+use crate::{ClusterExecSessions, LaunchConfigAdmin, NodeMetricQueryStore, NodeStatsQueryStore};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VerifiedNodeCertificate;
@@ -15,6 +15,7 @@ pub(crate) struct AppState {
     pub(crate) store: Arc<dyn Store>,
     pub(crate) cluster_id: ClusterId,
     pub(crate) cluster_config: Option<Arc<MaskedClusterConfig>>,
+    pub(crate) launch_config_admin: Option<Arc<dyn LaunchConfigAdmin>>,
     pub(crate) requests: RequestDeduplicator,
     pub(crate) timestamp_clock: Arc<dyn TimestampClock>,
     pub(crate) admission_coordinator: Option<Arc<cluster::AdmissionCoordinator>>,

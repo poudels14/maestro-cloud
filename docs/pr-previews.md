@@ -6,22 +6,17 @@ served at `app-pr-123.<preview-domain>`.
 
 ## Cluster configuration
 
-Add the GitHub integration to `maestro.jsonc`:
+Add the preview integration to the protected cluster config:
 
 ```jsonc
 {
-  "homepage": "http://maestro.internal:3001",
-  "github": {
-    "token": "replace-with-a-fine-grained-token",
-    "preview-domain": "preview.getbaton.ai",
-    "poll-interval-secs": 60,
+  "preview": {
+    "domain": "preview.getbaton.ai",
+    "github-token": "replace-with-a-fine-grained-token",
     "max-concurrent-previews": 10
   }
 }
 ```
-
-`homepage` is optional. When configured, failed-preview comments link directly to the build logs in
-the Maestro UI. It must be an absolute `http://` or `https://` URL.
 
 Use a fine-grained personal access token scoped to every preview-enabled repository with:
 
@@ -32,7 +27,19 @@ Use a fine-grained personal access token scoped to every preview-enabled reposit
 The integration token is not injected into builds. Private repositories must already build
 successfully from the base service; previews inherit its build environment and secrets.
 
-Maestro rejects preview-enabled service rollouts when the cluster has no `github` configuration.
+Preview discovery remains disabled until the cluster has a `preview` integration.
+
+For an existing cluster, persist the integration into every protected node launch document and
+restart the cluster:
+
+```sh
+maestro cluster sync-preview-config \
+  --config aws-secret://maestro/production/config.json
+maestro cluster restart --all --yes
+```
+
+The sync command contacts each node through its predictable `.250` Admin endpoint and never prints
+the GitHub token.
 
 ## Service configuration
 

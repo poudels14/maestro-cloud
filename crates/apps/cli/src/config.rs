@@ -142,6 +142,31 @@ pub(crate) async fn load_cluster(
     decode_cluster(source, load_merged(source, reader).await?, reader).await
 }
 
+pub(crate) async fn load_cluster_with_default_node(
+    source: &str,
+    reader: &impl ConfigSourceReader,
+) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
+    let mut value = load_merged(source, reader).await?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        CliError::invalid_input(format!(
+            "cluster config `{source}` must contain a JSON object at the top level"
+        ))
+    })?;
+    if !object.contains_key("node") {
+        let node_id = object
+            .get("cluster")
+            .and_then(|cluster| cluster.get("nodes"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|nodes| nodes.keys().min())
+            .cloned()
+            .ok_or_else(|| {
+                CliError::invalid_input("cluster.nodes must declare at least one node")
+            })?;
+        object.insert("node".to_string(), serde_json::Value::String(node_id));
+    }
+    decode_cluster(source, value, reader).await
+}
+
 pub(crate) async fn load_jwt_secret_key(
     source: &str,
     reader: &impl ConfigSourceReader,

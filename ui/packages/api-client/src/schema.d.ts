@@ -372,6 +372,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updatePreviewLaunchConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/disks": {
         parameters: {
             query?: never;
@@ -2805,6 +2821,29 @@ export interface components {
         Preview: components["schemas"]["Object15"];
         /** @description Stable identity of a pull-request preview. */
         PreviewId: string;
+        /** @description Exact cluster and node target for one local preview launch-config update. */
+        PreviewLaunchConfigUpdateRequest: {
+            /** @description Cluster the caller expects the contacted Admin endpoint to serve. */
+            clusterId: components["schemas"]["ClusterId"];
+            /** @description DNS suffix used for stable preview hostnames. */
+            domain: string;
+            /** @description GitHub token with pull-request read and issue-comment write access. */
+            githubToken: components["schemas"]["SecretValue"];
+            /**
+             * Format: uint
+             * @description Maximum previews retained cluster-wide, including close grace periods.
+             */
+            maxConcurrentPreviews: number;
+            /** @description Node the caller expects the contacted Admin endpoint to serve. */
+            nodeId: components["schemas"]["NodeId"];
+        };
+        /** @description Secret-free receipt for one idempotent local launch-config update. */
+        PreviewLaunchConfigUpdateResponse: {
+            /** @description Whether the protected launch document changed. */
+            changed: boolean;
+            /** @description Node whose protected launch document was inspected. */
+            nodeId: components["schemas"]["NodeId"];
+        };
         /** @description Persisted lifecycle of a pull-request preview. */
         PreviewPhase: "pending" | "active" | "closing" | "expired" | "failed" | "canceled";
         /** @description Declarative pull-request preview policy for a base service. */
@@ -4506,6 +4545,58 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MaskedClusterConfig"];
                 };
+            };
+        };
+    };
+    updatePreviewLaunchConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewLaunchConfigUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Protected local launch document inspected or updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewLaunchConfigUpdateResponse"];
+                };
+            };
+            /** @description Invalid config or request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Contacted Admin endpoint does not match the target node */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Node-local launch configuration is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

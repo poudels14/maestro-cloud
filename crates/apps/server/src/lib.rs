@@ -8,6 +8,7 @@ mod api_server;
 mod auth;
 mod error;
 mod exec_service;
+mod launch_config_admin;
 mod listener;
 mod mask;
 mod mutation;
@@ -37,6 +38,7 @@ pub use error::{ApiError, ApiErrorBody, ServerError};
 pub use exec_service::{
     ClusterExecSessions, ExecSessionOpenError, HttpClusterExecSessions, HttpExecClientError,
 };
+pub use launch_config_admin::{LaunchConfigAdmin, LaunchConfigAdminError};
 pub use listener::BoundApiServer;
 pub use node_artifact_client::{HttpNodeArtifactClient, NodeArtifactTransferError};
 pub use node_http_client::NodeHttpClientError;

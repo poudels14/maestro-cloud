@@ -38,6 +38,7 @@ use crate::NodeUpgradeDependencies;
 use crate::cloudflare_resources::CloudflareSystemResources;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::dns_resources::DnsResolverSystemResources;
+use crate::launch_config_admin::FileLaunchConfigAdmin;
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
@@ -61,6 +62,22 @@ pub use config::{
 
 /// Builds production adapters and starts one daemon instance for its declared node role.
 pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, DaemonLaunchError> {
+    launch_daemon_inner(config, None).await
+}
+
+/// Starts one daemon while enabling atomic updates to its source launch document.
+pub async fn launch_daemon_with_document(
+    config: DaemonLaunchConfig,
+    path: PathBuf,
+) -> Result<RunningDaemon, DaemonLaunchError> {
+    let admin = Arc::new(FileLaunchConfigAdmin::new(path, &config));
+    launch_daemon_inner(config, Some(admin)).await
+}
+
+async fn launch_daemon_inner(
+    config: DaemonLaunchConfig,
+    launch_config_admin: Option<Arc<dyn server::LaunchConfigAdmin>>,
+) -> Result<RunningDaemon, DaemonLaunchError> {
     config.validate()?;
     let DaemonLaunchConfig {
         cluster,
@@ -402,6 +419,9 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     .with_log_maintenance(log_maintenance)
     .with_webhook_backend(webhook_backend)
     .with_leader_workload(operator_workload);
+    if let Some(admin) = launch_config_admin {
+        factory = factory.with_launch_config_admin(admin);
+    }
     if let Some(admission) = admission {
         factory = factory.with_admission_dependencies(admission);
     }
