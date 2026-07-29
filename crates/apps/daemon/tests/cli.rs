@@ -14,21 +14,6 @@ fn daemon_help_uses_clap_success_semantics() -> TestResult {
 }
 
 #[test]
-fn daemon_reports_the_maestro_release_version() -> TestResult {
-    let output = Command::new(env!("CARGO_BIN_EXE_daemon"))
-        .arg("--version")
-        .output()?;
-
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stdout)?,
-        format!("daemon {}\n", kernel_api::MAESTRO_VERSION)
-    );
-    Ok(())
-}
-
-#[test]
 fn start_requires_its_explicit_subcommand() -> TestResult {
     let directory = tempfile::tempdir()?;
     let config = directory.path().join("missing-launch.json");

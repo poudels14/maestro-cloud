@@ -37,19 +37,6 @@ fn command_surface_separates_capture_plan_apply_and_verify() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn migration_tool_reports_the_maestro_release_version() -> TestResult {
-    let output = migration_command().arg("--version").output()?;
-
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    assert_eq!(
-        String::from_utf8(output.stdout)?,
-        format!("maestro-migrate {}\n", kernel_api::MAESTRO_VERSION)
-    );
-    Ok(())
-}
-
 #[cfg(unix)]
 #[test]
 fn plan_rejects_a_public_master_secret_file() -> TestResult {

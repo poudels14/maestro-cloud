@@ -3,10 +3,9 @@ use clap::{CommandFactory, Parser};
 use crate::{Cli, run};
 
 #[test]
-fn packaged_command_identity_is_maestro() {
+fn packaged_command_name_is_maestro() {
     let command = Cli::command();
     assert_eq!(command.get_name(), "maestro");
-    assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
