@@ -13,6 +13,7 @@ use crate::docker_support::{container_id, is_conflict, is_not_found};
 use crate::{
     AddressRequest, AddressReservation, NetworkAddressing, NetworkAttachment, NetworkHandle,
     NetworkProvider, NetworkProviderError, NetworkSpec, WorkloadHandle, WorkloadNetworkStatus,
+    WorkloadRuntime,
 };
 
 const NETWORK_MANAGED_LABEL: &str = "com.maestro.network";
@@ -107,8 +108,8 @@ impl NetworkProvider for DockerRuntime {
             .inspect_container(workload)
             .await
             .map_err(runtime_network_error)?;
-        if let Some(attachment) = container_attachment(&inspect, network)? {
-            return Ok(attachment);
+        if container_attachment(&inspect, network)?.is_some() {
+            return attached_container(self, workload, network).await;
         }
         let request = NetworkConnectRequest {
             container: container_id(workload)
@@ -187,16 +188,58 @@ async fn attached_container(
     workload: &WorkloadHandle,
     network: &NetworkHandle,
 ) -> Result<NetworkAttachment, NetworkProviderError> {
+    let mut inspect = runtime
+        .inspect_container(workload)
+        .await
+        .map_err(runtime_network_error)?;
+    if network.name() != "bridge" && has_network(&inspect, "bridge") {
+        runtime
+            .client
+            .disconnect_network(
+                "bridge",
+                NetworkDisconnectRequest {
+                    container: container_id(workload)
+                        .map_err(runtime_network_error)?
+                        .to_owned(),
+                    force: Some(false),
+                },
+            )
+            .await
+            .map_err(|error| network_error(error, "bridge"))?;
+        inspect = runtime
+            .inspect_container(workload)
+            .await
+            .map_err(runtime_network_error)?;
+    }
+    if let Some(attachment) = container_attachment(&inspect, network)? {
+        return Ok(attachment);
+    }
+
+    // Docker with the containerd image store defers delegated IPAM until the
+    // container first starts. The assignment agent starts newly attached
+    // workloads immediately after this call, so activate it here only when
+    // needed to obtain the address required by the network contract.
+    WorkloadRuntime::start(runtime, workload)
+        .await
+        .map_err(runtime_network_error)?;
     let inspect = runtime
         .inspect_container(workload)
         .await
         .map_err(runtime_network_error)?;
     container_attachment(&inspect, network)?.ok_or_else(|| NetworkProviderError::Unavailable {
         message: format!(
-            "docker network `{}` attached without reporting an address",
+            "docker network `{}` attached without reporting an address after activation",
             network.name()
         ),
     })
+}
+
+fn has_network(inspect: &docker::models::ContainerInspectResponse, name: &str) -> bool {
+    inspect
+        .network_settings
+        .as_ref()
+        .and_then(|settings| settings.networks.as_ref())
+        .is_some_and(|networks| networks.contains_key(name))
 }
 
 pub(crate) fn network_create_request(spec: &NetworkSpec) -> NetworkCreateRequest {

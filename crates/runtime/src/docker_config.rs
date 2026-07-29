@@ -150,7 +150,6 @@ fn host_config(
         .map(|mount| docker_mount(mount, cluster_id))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(HostConfig {
-        network_mode: Some("none".to_owned()),
         dns: container
             .configuration
             .dns_server

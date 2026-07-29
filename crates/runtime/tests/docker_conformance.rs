@@ -111,7 +111,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
             executable: "/bin/sh".to_owned(),
             arguments: vec![
                 "-c".to_owned(),
-                "printf runtime-stdout; printf runtime-stderr >&2; trap 'exit 0' TERM; while :; do sleep 60; done"
+                "printf 'runtime-stdout\\n'; printf 'runtime-stderr\\n' >&2; trap 'exit 0' TERM; while :; do sleep 60; done"
                     .to_owned(),
             ],
         }),

@@ -58,10 +58,10 @@ fn docker_network_rejects_legacy_maestro_owned_ipam() {
 }
 
 #[test]
-fn docker_container_starts_detached_from_default_networking() {
+fn docker_container_uses_an_attachable_bootstrap_network() {
     let config = container_config(&container_spec()).unwrap();
     let host = config.body.host_config.unwrap();
-    assert_eq!(host.network_mode.as_deref(), Some("none"));
+    assert_eq!(host.network_mode, None);
     assert_eq!(
         host.restart_policy.unwrap().name,
         Some(RestartPolicyNameEnum::NO)
