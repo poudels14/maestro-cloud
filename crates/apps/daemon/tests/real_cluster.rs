@@ -15,7 +15,8 @@ use cluster::{
     EmbeddedEtcdProvider, EmbeddedEtcdSettings, Ipv4Cidr, JoinPayload, JoinPrivateKey, JoinRequest,
     JoinResponseStatus, MemberState, NodeCertificateBundle, NodeDefinition, NodeEndpoint,
     StoreJoinTicket, StoreMember, StoreProvider, StoreProviderConfig, StoreProviderError,
-    admit_join_request, decrypt_join_response, encrypt_join_response, sign_join_request,
+    TailscaleGatewayConfig, admit_join_request, decrypt_join_response, encrypt_join_response,
+    sign_join_request,
 };
 use clustertest::{FixtureNodeName, scenarios::cluster_bootstraps_joins_meshes_and_recovers};
 use daemon::{DaemonLaunchDocument, StoreLaunchMode};
@@ -23,19 +24,25 @@ use kernel_api::{ClusterId, NodeId, NodeInstanceId, NodeRole, SecretValue};
 use kernel_store::{EtcdStore, EtcdTlsConfig, Keyspace, Store, TokioClock, derive_key};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
+#[path = "real_cluster/dns.rs"]
+mod dns;
 #[path = "real_cluster/network.rs"]
 mod network;
 #[path = "real_cluster/scenario.rs"]
 mod scenario;
+#[path = "real_cluster/system_plane.rs"]
+mod system_plane;
 #[path = "real_cluster/workload.rs"]
 mod workload;
 #[path = "real_cluster/workload_fixture.rs"]
 mod workload_fixture;
 
+use dns::LocalDnsUpstream;
 use network::{
     RealNode, kill_namespace_processes, node_namespace_diagnostics, shortened_interface_name,
     workload_namespace_diagnostics,
 };
+
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const STORE_CLIENT_PORT: u16 = 34_379;
@@ -43,6 +50,7 @@ const STORE_PEER_PORT: u16 = 34_380;
 const WIREGUARD_PORT: u16 = 34_820;
 const GATEWAY_PORT: u16 = 34_001;
 const API_PORT: u16 = 35_000;
+const OPERATOR_JWT_SECRET: &str = "real-cluster-operator-secret-with-at-least-32-characters";
 
 static NEXT_NETWORK: AtomicU16 = AtomicU16::new(1);
 
@@ -68,6 +76,8 @@ struct RealProcessCluster {
     etcd_binary: PathBuf,
     containerd_socket: PathBuf,
     bridge: String,
+    resolv_conf: PathBuf,
+    dns_upstream: Option<LocalDnsUpstream>,
     cluster: ClusterConfig,
     authority: ClusterCertificateAuthority,
     nodes: Vec<RealNode>,
@@ -77,6 +87,13 @@ struct RealProcessCluster {
 
 impl RealProcessCluster {
     async fn new(node_count: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_operator_access(node_count, OperatorAccess::Disabled).await
+    }
+
+    async fn new_with_operator_access(
+        node_count: usize,
+        operator_access: OperatorAccess,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         if !matches!(node_count, 1 | 3) {
             return Err("real-process cluster requires one or three nodes".into());
         }
@@ -90,7 +107,12 @@ impl RealProcessCluster {
         let segment = u8::try_from((allocation % 200).saturating_add(20))?;
         let token = format!("{:x}{allocation:x}", std::process::id());
         let bridge = shortened_interface_name("mb", &token, 0);
-        let cluster = topology(node_count, segment, &token)?;
+        let cluster = topology(node_count, segment, &token, operator_access)?;
+        let resolv_conf = root.path().join("resolv.conf");
+        std::fs::write(
+            &resolv_conf,
+            format!("nameserver 10.203.{segment}.1\noptions timeout:1 attempts:1\n"),
+        )?;
         let authority = ClusterCertificateAuthority::generate(
             &cluster.name,
             CertificateValidity::new(
@@ -157,6 +179,8 @@ impl RealProcessCluster {
             etcd_binary,
             containerd_socket,
             bridge,
+            resolv_conf,
+            dns_upstream: None,
             cluster,
             authority,
             nodes,
@@ -164,6 +188,7 @@ impl RealProcessCluster {
             write_sequence: 0,
         };
         real.create_network(segment)?;
+        real.dns_upstream = Some(LocalDnsUpstream::bind(Ipv4Addr::new(10, 203, segment, 1))?);
         Ok(real)
     }
 
@@ -204,9 +229,7 @@ impl RealProcessCluster {
             } else {
                 None
             },
-            jwt_secret_key: SecretValue::new(
-                "real-cluster-operator-secret-with-at-least-32-characters",
-            ),
+            jwt_secret_key: SecretValue::new(OPERATOR_JWT_SECRET),
             store_encryption_secret: SecretValue::new(
                 "real-cluster-store-secret-with-32-characters",
             ),
@@ -223,9 +246,20 @@ impl RealProcessCluster {
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;
         let error_log = log.try_clone().map_err(RealClusterError::from_display)?;
-        let mut command = Command::new("ip");
+        let mut command = Command::new("unshare");
         command
-            .args(["netns", "exec", &node.namespace])
+            .args([
+                "--mount",
+                "--propagation",
+                "private",
+                "--",
+                "bash",
+                "-ceu",
+                "mount --bind \"$1\" /etc/resolv.conf; shift; exec \"$@\"",
+                "maestro-real-cluster",
+            ])
+            .arg(&self.resolv_conf)
+            .args(["ip", "netns", "exec", &node.namespace])
             .env("AWS_ACCESS_KEY_ID", "maestro-real-cluster")
             .env(
                 "AWS_SECRET_ACCESS_KEY",
@@ -545,6 +579,12 @@ impl RealProcessCluster {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatorAccess {
+    Disabled,
+    Tailscale,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("real-process cluster failed: {detail}")]
 struct RealClusterError {
@@ -567,6 +607,7 @@ fn topology(
     node_count: usize,
     segment: u8,
     token: &str,
+    operator_access: OperatorAccess,
 ) -> Result<ClusterConfig, Box<dyn std::error::Error>> {
     let roles = if node_count == 1 {
         vec![NodeRole::Master]
@@ -594,6 +635,16 @@ fn topology(
         })
         .collect::<Result<BTreeMap<_, _>, Box<dyn std::error::Error>>>()?;
     let name = format!("real-{}", token.to_ascii_lowercase());
+    let tailscale = match operator_access {
+        OperatorAccess::Disabled => None,
+        OperatorAccess::Tailscale => Some(TailscaleGatewayConfig {
+            auth_key: SecretValue::new("tskey-auth-real-cluster-fixture"),
+            advertise_routes: None,
+            replicas: 1,
+            tags: Vec::new(),
+            cross_cluster_dns: Vec::new(),
+        }),
+    };
     Ok(ClusterConfig {
         cluster_id: ClusterId::new(name.clone())?,
         name,
@@ -606,7 +657,7 @@ fn topology(
             WIREGUARD_PORT,
         )?,
         join_secret: SecretValue::new("real-process-join-secret-with-at-least-32-characters"),
-        tailscale: None,
+        tailscale,
         cloudflare: None,
     })
 }

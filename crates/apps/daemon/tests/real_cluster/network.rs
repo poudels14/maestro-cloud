@@ -257,6 +257,9 @@ impl RealProcessCluster {
 
 impl Drop for RealProcessCluster {
     fn drop(&mut self) {
+        if let Some(dns_upstream) = self.dns_upstream.as_mut() {
+            dns_upstream.shutdown();
+        }
         for node in &mut self.nodes {
             if let Some(mut child) = node.child.take() {
                 let _ = Command::new("kill")

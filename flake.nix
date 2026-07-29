@@ -146,6 +146,8 @@
             ++ pkgs.lib.optionals pkgs.stdenv.isLinux (with pkgs; [
               buildkit
               containerd
+              curl
+              dnsutils
               etcd
               iproute2
               iputils

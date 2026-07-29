@@ -81,7 +81,7 @@ struct ReadyWorkload {
 }
 
 impl RealProcessCluster {
-    fn runtime_namespace(&self) -> String {
+    pub(super) fn runtime_namespace(&self) -> String {
         format!("maestro-{}", self.cluster.cluster_id)
     }
 
@@ -382,7 +382,7 @@ impl RealProcessCluster {
     }
 }
 
-async fn list_resources<Resource>(
+pub(super) async fn list_resources<Resource>(
     store: &dyn Store,
     cluster_id: &ClusterId,
     kind: &str,

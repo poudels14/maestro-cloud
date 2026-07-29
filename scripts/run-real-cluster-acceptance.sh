@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-for command in cargo containerd ctr env etcd ip jq modprobe nft ping runc sudo sysctl; do
+for command in bash cargo containerd ctr curl dig env etcd ip jq modprobe mount nft nsenter ping runc sudo sysctl unshare; do
   if ! command -v "$command" >/dev/null; then
     echo "required command is unavailable: $command" >&2
     exit 1
@@ -16,21 +16,31 @@ fi
 
 containerd_binary=$(command -v containerd)
 ctr_binary=$(command -v ctr)
+curl_binary=$(command -v curl)
+dig_binary=$(command -v dig)
 env_binary=$(command -v env)
 etcd_binary=$(command -v etcd)
 ip_binary=$(command -v ip)
+mount_binary=$(command -v mount)
 modprobe_binary=$(command -v modprobe)
 nft_binary=$(command -v nft)
+nsenter_binary=$(command -v nsenter)
 ping_binary=$(command -v ping)
 runc_binary=$(command -v runc)
 sysctl_binary=$(command -v sysctl)
+unshare_binary=$(command -v unshare)
 containerd_directory=$(dirname "$containerd_binary")
+curl_directory=$(dirname "$curl_binary")
+dig_directory=$(dirname "$dig_binary")
 ip_directory=$(dirname "$ip_binary")
+mount_directory=$(dirname "$mount_binary")
 nft_directory=$(dirname "$nft_binary")
+nsenter_directory=$(dirname "$nsenter_binary")
 ping_directory=$(dirname "$ping_binary")
 runc_directory=$(dirname "$runc_binary")
 sysctl_directory=$(dirname "$sysctl_binary")
-runtime_path="${containerd_directory}:${ip_directory}:${nft_directory}:${ping_directory}:${runc_directory}:${sysctl_directory}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+unshare_directory=$(dirname "$unshare_binary")
+runtime_path="${containerd_directory}:${curl_directory}:${dig_directory}:${ip_directory}:${mount_directory}:${nft_directory}:${nsenter_directory}:${ping_directory}:${runc_directory}:${sysctl_directory}:${unshare_directory}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 acceptance_root=$(mktemp -d /tmp/maestro-real-cluster.XXXXXX)
 containerd_socket="$acceptance_root/containerd.sock"
