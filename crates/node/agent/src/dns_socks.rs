@@ -174,6 +174,7 @@ pub(crate) fn query_message(
 ) -> Result<Vec<u8>, DnsResolverPluginError> {
     let mut message = Message::query();
     message.metadata.id = query_id;
+    message.metadata.recursion_desired = true;
     message.add_query(Query::query(
         Name::from_ascii(name)
             .map_err(|error| DnsResolverPluginError::new(format!("invalid DNS name: {error}")))?,

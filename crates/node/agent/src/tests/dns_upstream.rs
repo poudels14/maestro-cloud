@@ -41,7 +41,11 @@ async fn system_dns_forwards_external_names_without_leaking_maestro_names()
         let mut request = vec![0_u8; 4_096];
         let (length, source) = socket.recv_from(&mut request).await?;
         request.truncate(length);
-        let mut response = Message::from_vec(&request)?.into_response();
+        let request = Message::from_vec(&request)?;
+        if !request.metadata.recursion_desired {
+            return Err("forwarded system DNS query did not request recursion".into());
+        }
+        let mut response = request.into_response();
         response.metadata.recursion_available = true;
         response.add_answer(Record::from_rdata(
             Name::from_ascii("example.com.")?,
