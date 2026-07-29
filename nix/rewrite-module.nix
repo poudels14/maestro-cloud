@@ -28,30 +28,6 @@ in {
       description = "Absolute path to the owner-only daemon launch document outside the Nix store";
     };
 
-    wireguardPort = lib.mkOption {
-      type = lib.types.port;
-      default = 51820;
-      description = "UDP mesh port; must match cluster.ports.wireguard in the launch document";
-    };
-
-    controlPlanePort = lib.mkOption {
-      type = lib.types.port;
-      default = 3000;
-      description = "HTTPS API port; must match cluster.ports.control-plane in the launch document";
-    };
-
-    storeClientPort = lib.mkOption {
-      type = lib.types.port;
-      default = 2379;
-      description = "etcd client port; must match cluster.ports.store-client in the launch document";
-    };
-
-    storePeerPort = lib.mkOption {
-      type = lib.types.port;
-      default = 2380;
-      description = "etcd peer port; must match cluster.ports.store-peer in the launch document";
-    };
-
     etcdPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.etcd;
@@ -78,12 +54,6 @@ in {
       plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
     };
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
-    networking.firewall.allowedTCPPorts = [
-      cfg.controlPlanePort
-      cfg.storeClientPort
-      cfg.storePeerPort
-    ];
-    networking.firewall.allowedUDPPorts = [cfg.wireguardPort];
     nix.settings.experimental-features = [
       "nix-command"
       "flakes"

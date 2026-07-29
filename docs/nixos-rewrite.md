@@ -32,10 +32,6 @@ store:
           services.maestro = {
             enable = true;
             config = "/run/maestro/launch.json";
-            controlPlanePort = 3000;
-            storeClientPort = 2379;
-            storePeerPort = 2380;
-            wireguardPort = 51820;
           };
         })
       ];
@@ -52,12 +48,10 @@ an absolute owner-only regular file such as
 those secrets into the world-readable Nix store. The daemon validates the file
 before starting.
 
-The module opens the control-plane API and embedded-store cluster ports in the
-NixOS host firewall. `services.maestro.controlPlanePort`,
-`services.maestro.storeClientPort`, and `services.maestro.storePeerPort`
-default to TCP `3000`, `2379`, and `2380`; `services.maestro.wireguardPort`
-defaults to UDP `51820`. Set them to the corresponding `cluster.ports` values
-when a launch document uses non-default ports.
+The module does not enable or modify the NixOS host firewall. Maestro owns its
+runtime nftables table, and deployments that enable another host firewall must
+configure it separately so it does not block the workload bridge or cluster
+control traffic.
 
 The daemon and migration tool write newline-delimited JSON diagnostics to
 stderr. Under systemd, these records flow directly into the journal with
