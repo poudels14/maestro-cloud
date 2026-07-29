@@ -37,6 +37,7 @@ impl DnsForwardClient for RecordingClient {
             .push((proxy, nameserver, name.to_owned(), query_type));
         Ok(DnsLookup {
             authoritative: true,
+            recursion_available: false,
             response_code: DnsResponseCode::NoError,
             answers: vec![DnsAnswer {
                 name: name.to_owned(),

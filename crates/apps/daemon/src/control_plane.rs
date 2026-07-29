@@ -12,8 +12,8 @@ use logs::{LogSink, LogStoreRuntime, SinkRuntimeRegistry};
 use metrics::{HostMetricSink, MetricSink, MetricStoreRuntime};
 use node_agent::{
     CgroupStatsReader, DnsServerBinder, FirewallBackend, HealthProber, HostDiskReader,
-    HostStatsReader, MeshBackend, MeshIdentity, StatusClock, TailscaleDnsPluginSettings,
-    WorkloadBridgeBackend, WorkloadNetworkStatsReader,
+    HostStatsReader, MeshBackend, MeshIdentity, StatusClock, SystemDnsPluginSettings,
+    TailscaleDnsPluginSettings, WorkloadBridgeBackend, WorkloadNetworkStatsReader,
 };
 use runtime::{ArtifactStore, HostPortPublication, NetworkProvider, WorkloadRuntime};
 use semver::Version;
@@ -96,6 +96,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub dns_server_binder: Arc<dyn DnsServerBinder>,
     /// Optional scoped forwarding path for explicitly configured remote cluster suffixes.
     pub dns_plugin_settings: Option<TailscaleDnsPluginSettings>,
+    /// Host resolver path used for names outside Maestro-owned DNS zones.
+    pub dns_upstream_settings: Option<SystemDnsPluginSettings>,
     /// Native backend used for workload lifecycle, adoption, and events.
     pub workload_runtime: Arc<dyn WorkloadRuntime>,
     /// Native backend used for build artifacts and peer export/import streams.
@@ -154,6 +156,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) system_host_ports: BTreeMap<ServiceId, Vec<HostPortPublication>>,
     pub(crate) dns_server_binder: Arc<dyn DnsServerBinder>,
     pub(crate) dns_plugin_settings: Option<TailscaleDnsPluginSettings>,
+    pub(crate) dns_upstream_settings: Option<SystemDnsPluginSettings>,
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) artifact_store: Arc<dyn ArtifactStore>,
     pub(crate) artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
@@ -207,6 +210,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             system_host_ports: dependencies.system_host_ports,
             dns_server_binder: dependencies.dns_server_binder,
             dns_plugin_settings: dependencies.dns_plugin_settings,
+            dns_upstream_settings: dependencies.dns_upstream_settings,
             workload_runtime: dependencies.workload_runtime,
             artifact_store: dependencies.artifact_store,
             artifact_archives: dependencies.artifact_archives,

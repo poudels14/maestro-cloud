@@ -6,7 +6,7 @@ use kernel_api::{ClusterId, NodeId, SecretValue};
 use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use node_agent::{
     AUTHORITATIVE_DNS_PORT, AuthoritativeDnsResolver, BoundDnsServer, DnsResourceAgent,
-    DnsServerSettings, TailscaleDnsPluginSettings,
+    DnsServerSettings, SystemDnsPluginSettings, TailscaleDnsPluginSettings,
 };
 use tokio::sync::watch;
 
@@ -100,6 +100,12 @@ pub async fn run_dns_resolver(
         Some(settings) => settings.attach(resolver),
         None => resolver,
     };
+    let upstream = SystemDnsPluginSettings::from_resolv_conf_file(
+        Path::new("/etc/resolv.conf"),
+        Duration::from_secs(5),
+    )
+    .map_err(|error| invalid(format!("invalid upstream DNS settings: {error}")))?;
+    let resolver = upstream.attach(resolver);
     let agent = DnsResourceAgent::new(
         store,
         &config.cluster_id,

@@ -24,6 +24,7 @@ mod dns_plugin;
 mod dns_resource;
 mod dns_server;
 mod dns_socks;
+mod dns_upstream;
 mod exec;
 mod firewall;
 mod health;
@@ -102,6 +103,7 @@ pub use dns_server::{
     AUTHORITATIVE_DNS_PORT, BoundDnsServer, DnsServerBinder, DnsServerError, DnsServerRuntime,
     DnsServerSettings, HickoryDnsServerBinder,
 };
+pub use dns_upstream::SystemDnsPluginSettings;
 pub use exec::{NodeExecError, NodeExecService, NodeExecSettings};
 pub use firewall::{
     FirewallAgentError, FirewallBackend, FirewallBackendError, FirewallReconcileReport,

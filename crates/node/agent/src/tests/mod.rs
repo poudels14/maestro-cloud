@@ -15,6 +15,7 @@ mod dns_plugin;
 mod dns_resource;
 mod dns_server;
 mod dns_socks;
+mod dns_upstream;
 mod exec;
 mod fake_mesh;
 mod firewall;

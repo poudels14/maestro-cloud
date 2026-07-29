@@ -290,7 +290,7 @@ async fn send_lookup(
 ) -> ResponseInfo {
     let mut metadata = Metadata::response_from_request(&request.metadata);
     metadata.authoritative = lookup.authoritative;
-    metadata.recursion_available = false;
+    metadata.recursion_available = lookup.recursion_available;
     metadata.response_code = response_code(lookup.response_code);
     let response_edns = response_edns(request);
     let response = MessageResponseBuilder::new(&request.queries, response_edns.as_ref()).build(

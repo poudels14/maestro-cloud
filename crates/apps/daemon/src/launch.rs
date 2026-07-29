@@ -15,7 +15,7 @@ use kernel_store::{EtcdStore, EtcdTlsConfig, Store, TokioClock, derive_key};
 use logstore::{DuckLogStoreRuntime, DuckMetricStoreRuntime, DuckStoreSettings};
 use node_agent::{
     CgroupV2StatsReader, HickoryDnsServerBinder, MeshIdentity, NetworkHealthProber,
-    SystemStatusClock, TailscaleDnsPluginSettings, TailscaleDnsRoute,
+    SystemDnsPluginSettings, SystemStatusClock, TailscaleDnsPluginSettings, TailscaleDnsRoute,
 };
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use node_agent::{
@@ -82,6 +82,11 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
     } = config;
     let known_members = control_plane_members(&cluster);
     let dns_plugin_settings = dns_plugin_settings(&cluster)?;
+    let dns_upstream_settings = SystemDnsPluginSettings::from_resolv_conf_file(
+        Path::new("/etc/resolv.conf"),
+        Duration::from_secs(5),
+    )
+    .map_err(|error| invalid(format!("invalid upstream DNS settings: {error}")))?;
     let clock = Arc::new(TokioClock::new());
     let local_node = cluster
         .nodes
@@ -367,6 +372,7 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
             system_host_ports,
             dns_server_binder: Arc::new(HickoryDnsServerBinder),
             dns_plugin_settings,
+            dns_upstream_settings: Some(dns_upstream_settings),
             workload_runtime: runtime.clone(),
             artifact_store: runtime.clone(),
             artifact_archives: build_source,

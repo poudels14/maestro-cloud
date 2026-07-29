@@ -84,6 +84,10 @@ where
                 Some(settings) => settings.attach(resolver),
                 None => resolver,
             };
+            let resolver = match &factory.dns_upstream_settings {
+                Some(settings) => settings.attach(resolver),
+                None => resolver,
+            };
             let dns = DnsResourceAgent::new(
                 store,
                 &plan.cluster().cluster_id,

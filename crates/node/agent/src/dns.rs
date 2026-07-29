@@ -62,6 +62,8 @@ pub struct DnsAnswer {
 pub struct DnsLookup {
     /// Whether Maestro owns the queried name's zone.
     pub authoritative: bool,
+    /// Whether the response was obtained through a recursive upstream resolver.
+    pub recursion_available: bool,
     /// DNS response classification.
     pub response_code: DnsResponseCode,
     /// Ordered records returned in the answer section.
@@ -81,7 +83,7 @@ pub struct DnsZoneSummary {
 #[derive(Clone)]
 pub struct AuthoritativeDnsResolver {
     zone: Arc<RwLock<Arc<CompiledZone>>>,
-    plugin: Option<Arc<dyn DnsResolverPlugin>>,
+    plugins: Vec<Arc<dyn DnsResolverPlugin>>,
 }
 
 impl AuthoritativeDnsResolver {
@@ -89,7 +91,7 @@ impl AuthoritativeDnsResolver {
     pub fn new() -> Result<Self, DnsResolverError> {
         Ok(Self {
             zone: Arc::new(RwLock::new(Arc::new(CompiledZone::empty()?))),
-            plugin: None,
+            plugins: Vec::new(),
         })
     }
 
@@ -100,9 +102,9 @@ impl AuthoritativeDnsResolver {
         }
     }
 
-    /// Attaches one optional lookup path for names absent from the local zone snapshot.
+    /// Appends one optional lookup path for names not answered by the local zone.
     pub fn with_plugin(mut self, plugin: Arc<dyn DnsResolverPlugin>) -> Self {
-        self.plugin = Some(plugin);
+        self.plugins.push(plugin);
         self
     }
 
@@ -135,17 +137,22 @@ impl AuthoritativeDnsResolver {
             })?;
         let name = LowerName::new(&name);
         let local = self.zone.read().await.clone().lookup(&name, query_type);
-        if local.response_code != DnsResponseCode::NameError {
+        if !matches!(
+            local.response_code,
+            DnsResponseCode::NameError | DnsResponseCode::Refused
+        ) {
             return Ok(local);
         }
-        let Some(plugin) = &self.plugin else {
-            return Ok(local);
-        };
-        plugin
-            .lookup(&name.to_string(), query_type)
-            .await
-            .map(|lookup| lookup.unwrap_or(local))
-            .map_err(DnsResolverError::Plugin)
+        for plugin in &self.plugins {
+            if let Some(lookup) = plugin
+                .lookup(&name.to_string(), query_type)
+                .await
+                .map_err(DnsResolverError::Plugin)?
+            {
+                return Ok(lookup);
+            }
+        }
+        Ok(local)
     }
 }
 
@@ -300,6 +307,7 @@ impl CompiledZone {
         if !self.origin.zone_of(name) {
             return DnsLookup {
                 authoritative: false,
+                recursion_available: false,
                 response_code: DnsResponseCode::Refused,
                 answers: Vec::new(),
             };
@@ -307,6 +315,7 @@ impl CompiledZone {
         let Some(sets) = self.record_sets.get(name) else {
             return DnsLookup {
                 authoritative: true,
+                recursion_available: false,
                 response_code: if name == &self.origin {
                     DnsResponseCode::NoError
                 } else {
@@ -331,6 +340,7 @@ impl CompiledZone {
         };
         DnsLookup {
             authoritative: true,
+            recursion_available: false,
             response_code: DnsResponseCode::NoError,
             answers,
         }

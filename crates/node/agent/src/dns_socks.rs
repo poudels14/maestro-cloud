@@ -167,7 +167,7 @@ async fn consume_bound_address(
     Ok(())
 }
 
-fn query_message(
+pub(crate) fn query_message(
     query_id: u16,
     name: &str,
     query_type: DnsQueryType,
@@ -184,7 +184,10 @@ fn query_message(
         .map_err(|error| DnsResolverPluginError::new(format!("encode DNS request: {error}")))
 }
 
-fn parse_response(query_id: u16, response: &[u8]) -> Result<DnsLookup, DnsResolverPluginError> {
+pub(crate) fn parse_response(
+    query_id: u16,
+    response: &[u8],
+) -> Result<DnsLookup, DnsResolverPluginError> {
     let message = Message::from_vec(response)
         .map_err(|error| DnsResolverPluginError::new(format!("decode DNS response: {error}")))?;
     if message.metadata.id != query_id || message.metadata.message_type != MessageType::Response {
@@ -210,6 +213,7 @@ fn parse_response(query_id: u16, response: &[u8]) -> Result<DnsLookup, DnsResolv
         .collect::<Result<Vec<_>, _>>()?;
     Ok(DnsLookup {
         authoritative: message.metadata.authoritative,
+        recursion_available: message.metadata.recursion_available,
         response_code,
         answers,
     })
