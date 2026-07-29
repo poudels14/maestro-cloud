@@ -1,8 +1,8 @@
 use kernel_api::CommandSpec;
-use oci_spec::image::ImageConfiguration;
+use oci_spec::image::{ImageConfiguration, ImageIndex};
 
 use crate::RuntimeError;
-use crate::containerd_image::{ImageDefaults, chain_id};
+use crate::containerd_image::{ImageDefaults, chain_id, host_manifest_descriptor};
 
 #[test]
 fn image_configuration_combines_entrypoint_and_command() {
@@ -65,4 +65,65 @@ fn image_chain_id_is_derived_in_layer_order() {
         chain_id(&["sha256:a".to_owned(), "invalid".to_owned()]),
         Err(RuntimeError::Rejected { .. })
     ));
+}
+
+#[test]
+fn image_index_selects_the_immutable_host_manifest() {
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        architecture => architecture,
+    };
+    let index: ImageIndex = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 123,
+            "platform": {
+                "architecture": architecture,
+                "os": "linux"
+            }
+        }, {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 456,
+            "platform": {
+                "architecture": "other",
+                "os": "linux"
+            }
+        }]
+    }))
+    .unwrap();
+
+    let descriptor = host_manifest_descriptor(&index).unwrap();
+    assert_eq!(
+        descriptor.digest,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(
+        descriptor.media_type,
+        "application/vnd.oci.image.manifest.v1+json"
+    );
+}
+
+#[test]
+fn single_platform_archive_index_selects_its_unannotated_manifest() {
+    let index: ImageIndex = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 123
+        }]
+    }))
+    .unwrap();
+
+    let descriptor = host_manifest_descriptor(&index).unwrap();
+    assert_eq!(
+        descriptor.digest,
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    );
 }

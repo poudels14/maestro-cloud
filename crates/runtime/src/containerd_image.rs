@@ -104,21 +104,36 @@ async fn resolve_manifest(
     namespace: &str,
     target: Descriptor,
 ) -> Result<ImageManifest, RuntimeError> {
-    let descriptor = if target.media_type == OCI_INDEX || target.media_type == DOCKER_INDEX {
-        let index = read_json::<ImageIndex>(channel.clone(), namespace, &target).await?;
-        let descriptor = index
-            .manifests()
-            .iter()
-            .find(|descriptor| matches_host(descriptor))
-            .ok_or_else(|| RuntimeError::Rejected {
-                message: "containerd image index has no manifest for this Linux architecture"
-                    .to_owned(),
-            })?;
-        containerd_descriptor(descriptor)?
-    } else {
-        target
-    };
+    let descriptor = resolve_host_manifest_descriptor(channel.clone(), namespace, target).await?;
     read_json(channel, namespace, &descriptor).await
+}
+
+pub(crate) async fn resolve_host_manifest_descriptor(
+    channel: Channel,
+    namespace: &str,
+    target: Descriptor,
+) -> Result<Descriptor, RuntimeError> {
+    if target.media_type != OCI_INDEX && target.media_type != DOCKER_INDEX {
+        return Ok(target);
+    }
+    let index = read_json::<ImageIndex>(channel, namespace, &target).await?;
+    host_manifest_descriptor(&index)
+}
+
+pub(crate) fn host_manifest_descriptor(index: &ImageIndex) -> Result<Descriptor, RuntimeError> {
+    let descriptor = index
+        .manifests()
+        .iter()
+        .find(|descriptor| matches_host(descriptor))
+        .or_else(|| match index.manifests().as_slice() {
+            [descriptor] if descriptor.platform().is_none() => Some(descriptor),
+            _ => None,
+        })
+        .ok_or_else(|| RuntimeError::Rejected {
+            message: "containerd image index has no manifest for this Linux architecture"
+                .to_owned(),
+        })?;
+    containerd_descriptor(descriptor)
 }
 
 async fn read_json<Value>(

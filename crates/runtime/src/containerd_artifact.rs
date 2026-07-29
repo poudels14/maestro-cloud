@@ -29,9 +29,10 @@ use crate::containerd_artifact_support::{
     removed_digests, select_image,
 };
 use crate::containerd_build::run_build;
+use crate::containerd_image::resolve_host_manifest_descriptor;
 use crate::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
-    ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
+    ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError, RuntimeError,
 };
 
 const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
@@ -81,7 +82,9 @@ impl ArtifactStore for ContainerdRuntime {
             None,
         )
         .await?;
-        let image = self.image(reference.as_str()).await?;
+        let image = self
+            .host_platform_image(self.image(reference.as_str()).await?, reference.as_str())
+            .await?;
         self.ensure_digest_alias(&image, reference.as_str()).await
     }
 
@@ -115,7 +118,10 @@ impl ArtifactStore for ContainerdRuntime {
         reference: &ArtifactReference,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         match self.image(reference.as_str()).await {
-            Ok(image) => self.ensure_digest_alias(&image, reference.as_str()).await,
+            Ok(image) => {
+                let image = self.host_platform_image(image, reference.as_str()).await?;
+                self.ensure_digest_alias(&image, reference.as_str()).await
+            }
             Err(ArtifactStoreError::NotFound { .. }) => self.pull(reference).await,
             Err(error) => Err(error),
         }
@@ -234,7 +240,9 @@ impl ArtifactStore for ContainerdRuntime {
             lease_id,
         );
         upload_stream(source, duplex, transfer).await?;
-        let image = self.image(&image_name).await?;
+        let image = self
+            .host_platform_image(self.image(&image_name).await?, &image_name)
+            .await?;
         self.ensure_digest_alias(&image, &image_name).await
     }
 
@@ -302,6 +310,46 @@ impl ContainerdRuntime {
                 .into_inner()
                 .images,
         )
+    }
+
+    async fn host_platform_image(
+        &self,
+        mut image: Image,
+        reference: &str,
+    ) -> Result<Image, ArtifactStoreError> {
+        let target = image
+            .target
+            .take()
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: format!("containerd image `{reference}` omitted its target descriptor"),
+            })?;
+        let target_digest = target.digest.clone();
+        let host_target = resolve_host_manifest_descriptor(
+            self.channel.clone(),
+            &self.settings.namespace,
+            target,
+        )
+        .await
+        .map_err(artifact_metadata_error)?;
+        if host_target.digest == target_digest {
+            image.target = Some(host_target);
+            return Ok(image);
+        }
+        image.target = Some(host_target);
+        containerd::services::v1::images_client::ImagesClient::new(self.channel.clone())
+            .update(namespaced_artifact(
+                UpdateImageRequest {
+                    image: Some(image.clone()),
+                    update_mask: Some(prost_types::FieldMask {
+                        paths: vec!["target".to_owned()],
+                    }),
+                    source_date_epoch: None,
+                },
+                &self.settings.namespace,
+            )?)
+            .await
+            .map_err(|error| operation_error("normalize image platform", Some(reference), error))?;
+        Ok(image)
     }
 
     async fn ensure_digest_alias(
@@ -399,6 +447,20 @@ impl ContainerdRuntime {
                 error,
             )),
         }
+    }
+}
+
+fn artifact_metadata_error(error: RuntimeError) -> ArtifactStoreError {
+    match error {
+        RuntimeError::Unavailable { message } | RuntimeError::Stream { message } => {
+            ArtifactStoreError::Unavailable { message }
+        }
+        RuntimeError::Rejected { message } | RuntimeError::InvalidSpec { message } => {
+            ArtifactStoreError::Rejected { message }
+        }
+        error => ArtifactStoreError::Rejected {
+            message: error.to_string(),
+        },
     }
 }
 
