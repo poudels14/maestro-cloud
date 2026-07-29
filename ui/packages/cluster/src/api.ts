@@ -1,4 +1,5 @@
 import type { MaestroApiClient } from "@maestro/api-client";
+import { createIdempotencyKey } from "@maestro/sdk";
 import { projectClusterNodes } from "./nodes";
 import type {
   ClusterInfo,
@@ -58,9 +59,9 @@ function createClusterApi(
         async () => {
           const request = { expectedRevision: node.revision };
           if (drain) {
-            await client().drainNode(node.nodeId, request, crypto.randomUUID());
+            await client().drainNode(node.nodeId, request, createIdempotencyKey());
           } else {
-            await client().restoreNode(node.nodeId, request, crypto.randomUUID());
+            await client().restoreNode(node.nodeId, request, createIdempotencyKey());
           }
         },
         `Failed to ${drain ? "drain" : "restore"} node`
@@ -103,7 +104,7 @@ function createClusterApi(
             format: request.format,
             ...(request.signingSecret ? { signingSecret: request.signingSecret } : {})
           },
-          crypto.randomUUID()
+          createIdempotencyKey()
         );
       }, "Failed to create webhook"),
     updateWebhook: (webhook, request) =>
@@ -120,7 +121,7 @@ function createClusterApi(
             ...(request.endpoint ? { endpoint: request.endpoint } : {}),
             ...(request.signingSecret ? { signingSecret: request.signingSecret } : {})
           },
-          crypto.randomUUID()
+          createIdempotencyKey()
         );
       }, "Failed to update webhook"),
     deleteWebhook: (webhook) =>
@@ -128,12 +129,12 @@ function createClusterApi(
         await client().deleteWebhook(
           webhook.meta.id,
           { expectedRevision: webhook.meta.revision },
-          crypto.randomUUID()
+          createIdempotencyKey()
         );
       }, "Failed to delete webhook"),
     testWebhook: (id) =>
       mapped(async () => {
-        await client().testWebhook(id, {}, crypto.randomUUID());
+        await client().testWebhook(id, {}, createIdempotencyKey());
       }, "Webhook test delivery failed")
   };
 }

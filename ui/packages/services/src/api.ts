@@ -1,4 +1,5 @@
 import type { MaestroApiClient } from "@maestro/api-client";
+import { createIdempotencyKey } from "@maestro/sdk";
 import { sortDeploymentHistory } from "./deploymentView";
 import { attachPreviewResources } from "./serviceView";
 import type { Deployment, ReplicaState, Service } from "./types";
@@ -39,7 +40,11 @@ function createServicesApi(
     ) => Promise<unknown>
   ) =>
     mapped(async () => {
-      await operation(client(), { expectedRevision: service.meta.revision }, crypto.randomUUID());
+      await operation(
+        client(),
+        { expectedRevision: service.meta.revision },
+        createIdempotencyKey()
+      );
     }, fallback);
   const deploymentCommand = (
     deployment: Deployment,
@@ -58,7 +63,7 @@ function createServicesApi(
         deployment.spec.serviceId,
         deployment.meta.id,
         { expectedRevision: deployment.meta.revision },
-        crypto.randomUUID()
+        createIdempotencyKey()
       );
     }, fallback);
 
@@ -90,7 +95,7 @@ function createServicesApi(
         await client().setServiceReplicas(
           service.meta.id,
           { expectedRevision: service.meta.revision, replicas },
-          crypto.randomUUID()
+          createIdempotencyKey()
         );
       }, "Failed to update replicas"),
     listDeployments: (serviceId) =>

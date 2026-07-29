@@ -1,4 +1,5 @@
 import type { ApiSchemas, MaestroApiClient } from "@maestro/api-client";
+import { createIdempotencyKey } from "@maestro/sdk";
 
 type FirewallDryRun = ApiSchemas["FirewallDryRunResponse"];
 type FirewallPolicy = ApiSchemas["FirewallPolicy"];
@@ -33,14 +34,14 @@ function createFirewallApi(
       const request: ApiSchemas["FirewallPolicyWriteRequest"] =
         expectedRevision == null ? { spec } : { spec, expectedRevision };
       try {
-        await client().putFirewallPolicy(policyId, request, crypto.randomUUID());
+        await client().putFirewallPolicy(policyId, request, createIdempotencyKey());
       } catch (error) {
         throw mapError(error, "Failed to save firewall policy");
       }
     },
     async deletePolicy(policyId, expectedRevision) {
       try {
-        await client().deleteFirewallPolicy(policyId, { expectedRevision }, crypto.randomUUID());
+        await client().deleteFirewallPolicy(policyId, { expectedRevision }, createIdempotencyKey());
       } catch (error) {
         throw mapError(error, "Failed to delete firewall policy");
       }

@@ -1,4 +1,5 @@
 export { composeFeatureManifests, defineFeatureManifest } from "./features";
+export { createIdempotencyKey } from "./idempotency";
 export type {
   FeatureLayout,
   FeatureManifest,
