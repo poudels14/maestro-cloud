@@ -1213,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "build"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1415,7 +1415,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cluster"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "clustertest"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -1777,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1831,7 +1831,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "deployment"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "kernel-api",
@@ -1955,7 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "dns"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "insta",
@@ -2145,7 +2145,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "firewall"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "insta",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "ingress"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "kernel-api",
@@ -3094,7 +3094,7 @@ dependencies = [
 
 [[package]]
 name = "kernel-api"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "hex",
  "insta",
@@ -3106,7 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "kernel-controller"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "kernel-api",
@@ -3121,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "kernel-store"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3271,7 +3271,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "logql"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "proptest",
  "thiserror 2.0.18",
@@ -3279,7 +3279,7 @@ dependencies = [
 
 [[package]]
 name = "logs"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3304,7 +3304,7 @@ dependencies = [
 
 [[package]]
 name = "logstore"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3426,7 +3426,7 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "kernel-api",
@@ -3441,7 +3441,7 @@ dependencies = [
 
 [[package]]
 name = "migrate"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3680,7 +3680,7 @@ dependencies = [
 
 [[package]]
 name = "node-agent"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "node-fabric"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "kernel-api",
  "opentelemetry-proto",
@@ -4169,7 +4169,7 @@ dependencies = [
 
 [[package]]
 name = "preview"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4739,7 +4739,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "bollard",
@@ -4923,7 +4923,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "kernel-api",
@@ -5127,7 +5127,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5408,7 +5408,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "supervisor"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "nix 0.30.1",
  "serde",
@@ -6061,7 +6061,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "upgrade"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "kernel-api",
@@ -6284,7 +6284,7 @@ dependencies = [
 
 [[package]]
 name = "webhook"
-version = "0.6.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "hex",

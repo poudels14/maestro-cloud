@@ -125,7 +125,7 @@ fn stager_settings_reject_ambiguous_paths_and_configuration_names() {
         NixosUpgradeStagerSettings::new(
             "etc/maestro",
             "default",
-            "crates/apps/daemon/Cargo.toml",
+            "crates/apps/cli/Cargo.toml",
             running.clone(),
         )
         .is_err()
@@ -134,7 +134,7 @@ fn stager_settings_reject_ambiguous_paths_and_configuration_names() {
         NixosUpgradeStagerSettings::new(
             "/etc/maestro",
             "default#other",
-            "crates/apps/daemon/Cargo.toml",
+            "crates/apps/cli/Cargo.toml",
             running.clone(),
         )
         .is_err()
@@ -149,19 +149,19 @@ fn settings() -> Result<NixosUpgradeStagerSettings, NixosUpgradeStagingError> {
     NixosUpgradeStagerSettings::new(
         "/etc/maestro",
         "default",
-        "crates/apps/daemon/Cargo.toml",
+        "crates/apps/cli/Cargo.toml",
         Version::new(1, 0, 0),
     )?
     .with_binaries("/nix/bin/nix", "/nix/bin/nixos-rebuild")
 }
 
 async fn write_manifest(root: &Path, version: &str) -> Result<(), std::io::Error> {
-    let directory = root.join("crates/apps/daemon");
+    let directory = root.join("crates/apps/cli");
     tokio::fs::create_dir_all(&directory).await?;
     tokio::fs::write(
         directory.join("Cargo.toml"),
         format!(
-            "[workspace]\nmembers = []\n\n[package]\nname = \"daemon\"\nversion = \"{version}\"\n\n[dependencies]\n"
+            "[workspace]\nmembers = []\n\n[package]\nname = \"maestro-cli\"\nversion = \"{version}\"\n\n[dependencies]\n"
         ),
     )
     .await

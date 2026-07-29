@@ -46,6 +46,7 @@ mod service_commands;
 mod service_rollouts;
 mod services;
 mod session;
+mod settings;
 mod stats;
 mod system_resources;
 mod tailscale;

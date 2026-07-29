@@ -80,12 +80,12 @@ impl NixosUpgradeStagerSettings {
         Ok(settings)
     }
 
-    /// Selects the standard Maestro NixOS flake and rewritten daemon manifest.
+    /// Selects the standard Maestro NixOS flake and canonical release manifest.
     pub fn production(running_version: Version) -> Result<Self, NixosUpgradeStagingError> {
         Self::new(
             "/etc/maestro",
             "default",
-            "crates/apps/daemon/Cargo.toml",
+            "crates/apps/cli/Cargo.toml",
             running_version,
         )
     }

@@ -16,6 +16,7 @@ pub(crate) enum RestartReservation {
     Exhausted { maximum: u32 },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn reserve_restart(
     store: &dyn Store,
     keyspace: &Keyspace,

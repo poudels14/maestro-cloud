@@ -1,6 +1,6 @@
 [package]
 name = "webhook"
-version = "0.6.1"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -9,9 +9,9 @@ publish = false
 async-trait.workspace = true
 hex.workspace = true
 hmac.workspace = true
-kernel-api = { version = "0.6.1", path = "../../kernel/api" }
-kernel-controller = { version = "0.6.1", path = "../../kernel/controller" }
-kernel-store = { version = "0.6.1", path = "../../kernel/store" }
+kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
+kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,8 +19,8 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-kernel-controller = { version = "0.6.1", path = "../../kernel/controller", features = ["test-util"] }
-kernel-store = { version = "0.6.1", path = "../../kernel/store", features = ["test-util"] }
+kernel-controller = { version = "0.1.0", path = "../../kernel/controller", features = ["test-util"] }
+kernel-store = { version = "0.1.0", path = "../../kernel/store", features = ["test-util"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

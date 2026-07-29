@@ -1,6 +1,6 @@
 [package]
 name = "daemon"
-version = "0.6.1"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -24,27 +24,27 @@ aws-sdk-s3 = { workspace = true, default-features = false, features = [
 base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
-cluster = { version = "0.6.1", path = "../../cluster" }
-build = { version = "0.6.1", path = "../../operators/build" }
-deployment = { version = "0.6.1", path = "../../operators/deployment" }
-dns = { version = "0.6.1", path = "../../operators/dns" }
-firewall = { version = "0.6.1", path = "../../operators/firewall" }
+cluster = { version = "0.1.0", path = "../../cluster" }
+build = { version = "0.1.0", path = "../../operators/build" }
+deployment = { version = "0.1.0", path = "../../operators/deployment" }
+dns = { version = "0.1.0", path = "../../operators/dns" }
+firewall = { version = "0.1.0", path = "../../operators/firewall" }
 futures-util.workspace = true
-ingress = { version = "0.6.1", path = "../../operators/ingress" }
-kernel-api = { version = "0.6.1", path = "../../kernel/api" }
-kernel-controller = { version = "0.6.1", path = "../../kernel/controller" }
-kernel-store = { version = "0.6.1", path = "../../kernel/store" }
-logs = { version = "0.6.1", path = "../../observability/logs" }
-logstore = { version = "0.6.1", path = "../../observability/logstore" }
-metrics = { version = "0.6.1", path = "../../observability/metrics" }
-node-agent = { version = "0.6.1", path = "../../node/agent" }
-preview = { version = "0.6.1", path = "../../operators/preview" }
-runtime = { version = "0.6.1", path = "../../runtime", default-features = false }
-scheduler = { version = "0.6.1", path = "../../operators/scheduler" }
+ingress = { version = "0.1.0", path = "../../operators/ingress" }
+kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
+kernel-store = { version = "0.1.0", path = "../../kernel/store" }
+logs = { version = "0.1.0", path = "../../observability/logs" }
+logstore = { version = "0.1.0", path = "../../observability/logstore" }
+metrics = { version = "0.1.0", path = "../../observability/metrics" }
+node-agent = { version = "0.1.0", path = "../../node/agent" }
+preview = { version = "0.1.0", path = "../../operators/preview" }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
+scheduler = { version = "0.1.0", path = "../../operators/scheduler" }
 semver.workspace = true
-server = { version = "0.6.1", path = "../server" }
-upgrade = { version = "0.6.1", path = "../../operators/upgrade" }
-webhook = { version = "0.6.1", path = "../../operators/webhook" }
+server = { version = "0.1.0", path = "../server" }
+upgrade = { version = "0.1.0", path = "../../operators/upgrade" }
+webhook = { version = "0.1.0", path = "../../operators/webhook" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
@@ -57,22 +57,22 @@ tracing-subscriber.workspace = true
 workspace = true
 
 [dev-dependencies]
-clustertest = { version = "0.6.1", path = "../../clustertest" }
+clustertest = { version = "0.1.0", path = "../../clustertest" }
 insta = { workspace = true, features = ["redactions", "yaml"] }
 jsonwebtoken.workspace = true
-kernel-store = { version = "0.6.1", path = "../../kernel/store", features = ["test-util"] }
-logs = { version = "0.6.1", path = "../../observability/logs", features = ["test-util"] }
-metrics = { version = "0.6.1", path = "../../observability/metrics", features = ["test-util"] }
+kernel-store = { version = "0.1.0", path = "../../kernel/store", features = ["test-util"] }
+logs = { version = "0.1.0", path = "../../observability/logs", features = ["test-util"] }
+metrics = { version = "0.1.0", path = "../../observability/metrics", features = ["test-util"] }
 reqwest.workspace = true
 rcgen = { workspace = true, features = ["pem"] }
-runtime = { version = "0.6.1", path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
 tempfile.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-runtime = { version = "0.6.1", path = "../../runtime", default-features = false, features = ["containerd"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["containerd"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-runtime = { version = "0.6.1", path = "../../runtime", default-features = false, features = ["docker"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["docker"] }

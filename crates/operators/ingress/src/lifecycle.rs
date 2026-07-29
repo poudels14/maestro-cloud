@@ -8,6 +8,7 @@ use kernel_api::{
 use crate::resource::new_generation;
 use crate::{IngressPlan, IngressPlanError, PublishedTraffic};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn converge_desired(
     cluster_id: &kernel_api::ClusterId,
     now: Timestamp,

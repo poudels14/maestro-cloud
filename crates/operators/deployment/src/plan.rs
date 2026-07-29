@@ -230,6 +230,7 @@ fn collect_finalized_children(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn desired_deployment_status(
     service: &Service,
     deployment: &Deployment,

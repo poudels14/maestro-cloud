@@ -4,13 +4,7 @@
 }: let
   buildNodejs = pkgs.nodejs_22;
   pnpm = pkgs.pnpm_10.override {nodejs = buildNodejs;};
-  panelVersion =
-    (builtins.fromJSON (builtins.readFile ../ui/apps/panel/package.json)).version;
-  version =
-    assert pkgs.lib.assertMsg
-    (panelVersion == rewriteVersion)
-    "rewrite panel and Rust release versions must match";
-    panelVersion;
+  version = rewriteVersion;
   source = pkgs.lib.fileset.toSource {
     root = ../.;
     fileset = pkgs.lib.fileset.intersection

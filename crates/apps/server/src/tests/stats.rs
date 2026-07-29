@@ -35,7 +35,7 @@ async fn stats_routes_join_live_sink_backup_and_cluster_health()
             logs.clone(),
             vec![sink_id],
             runtime,
-            env!("CARGO_PKG_VERSION"),
+            kernel_api::MAESTRO_VERSION,
         )
         .with_uptime_clock(uptime_clock.clone()),
     ) as Arc<dyn ControllerStatsProvider>;

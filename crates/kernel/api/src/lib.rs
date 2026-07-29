@@ -18,6 +18,7 @@ mod secret;
 mod service_validation;
 mod workload;
 
+pub use crate::version::MAESTRO_VERSION;
 pub use automation::{
     NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, RESTART_TARGET_VERSION,
     UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus,
@@ -82,6 +83,8 @@ pub use workload::{
     SecretMountSpec, Service, ServiceSpec, ServiceStatus, VolumeAccess, VolumeMountSpec,
     VolumeSource, WorkloadUserSpec, assignment_workload_address, workload_hostname,
 };
+
+mod version;
 
 #[cfg(test)]
 mod tests;

@@ -24,7 +24,7 @@ pub(crate) fn configure_nixos_upgrade(
     if config.nix_binary.is_some() != config.nixos_rebuild_binary.is_some() {
         return Err(NixosUpgradeLaunchError::IncompleteNixBinaries);
     }
-    let running_version = Version::parse(env!("CARGO_PKG_VERSION")).map_err(|error| {
+    let running_version = Version::parse(kernel_api::MAESTRO_VERSION).map_err(|error| {
         NixosUpgradeLaunchError::InvalidRunningVersion {
             message: error.to_string(),
         }
@@ -79,7 +79,7 @@ pub enum NixosUpgradeLaunchError {
     /// Nix and nixos-rebuild overrides must be selected as one hermetic pair.
     #[error("nix and nixos-rebuild binary overrides must both be configured")]
     IncompleteNixBinaries,
-    /// The daemon package itself declared a non-semantic version.
-    #[error("daemon package version is invalid: {message}")]
+    /// The canonical Maestro release declared a non-semantic version.
+    #[error("Maestro release version is invalid: {message}")]
     InvalidRunningVersion { message: String },
 }

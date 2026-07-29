@@ -38,6 +38,7 @@ pub struct DaemonRoleSettings {
 
 impl DaemonRoleSettings {
     /// Creates bounded settings and rejects hot loops or expired leadership.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bridge_resync_interval: Duration,
         mesh_resync_interval: Duration,

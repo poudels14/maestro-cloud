@@ -93,7 +93,7 @@ impl GithubPullRequestClient {
         let client = reqwest::Client::builder()
             .https_only(true)
             .timeout(timeout)
-            .user_agent(concat!("maestro/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("maestro/{}", kernel_api::MAESTRO_VERSION))
             .build()
             .map_err(GithubClientError::Build)?;
         Ok(Self::with_transport(

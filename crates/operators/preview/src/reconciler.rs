@@ -329,6 +329,7 @@ impl PreviewReconciler {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn persist(
         &self,
         context: &ReconcileContext,

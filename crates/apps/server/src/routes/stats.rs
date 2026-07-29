@@ -57,12 +57,12 @@ async fn cluster_stats(
         &backup,
         heartbeat_age_ms,
         now,
-        env!("CARGO_PKG_VERSION"),
+        kernel_api::MAESTRO_VERSION,
     );
     Ok(Json(ClusterStatsResponse {
         generated_at_ms: now,
         agent: AgentStatsSnapshot {
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+            version: kernel_api::MAESTRO_VERSION.to_owned(),
             uptime_ms: state
                 .uptime_clock
                 .elapsed()

@@ -1,6 +1,6 @@
 {
   "name": "@maestro/cluster",
-  "version": "0.6.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Maestro cluster operations feature",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@maestro/ingress",
-  "version": "0.6.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Maestro ingress routes, traffic, and blocklist feature",
   "type": "module",

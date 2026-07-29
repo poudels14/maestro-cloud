@@ -91,6 +91,7 @@ pub(crate) async fn restart(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_operation(
     client: &impl UpgradeApi,
     operation: UpgradeOperation,

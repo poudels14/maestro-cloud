@@ -137,7 +137,7 @@ fn default_nixos_configuration() -> String {
 }
 
 fn default_manifest_relative_path() -> PathBuf {
-    PathBuf::from("crates/apps/daemon/Cargo.toml")
+    PathBuf::from("crates/apps/cli/Cargo.toml")
 }
 
 #[derive(Debug, Deserialize)]

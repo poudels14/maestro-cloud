@@ -396,7 +396,7 @@ pub fn openapi_document() -> Value {
         "openapi": "3.0.4",
         "info": {
             "title": "Maestro Cloud API",
-            "version": env!("CARGO_PKG_VERSION")
+            "version": crate::MAESTRO_VERSION
         },
         "paths": {},
         "components": {

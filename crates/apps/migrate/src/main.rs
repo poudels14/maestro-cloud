@@ -28,7 +28,7 @@ const DEFAULT_REWRITE_STORE_PEER_PORT: u16 = 2_380;
 #[derive(Debug, Parser)]
 #[command(
     name = "maestro-migrate",
-    version,
+    version = kernel_api::MAESTRO_VERSION,
     about = "One-shot Maestro cutover tool"
 )]
 struct Cli {

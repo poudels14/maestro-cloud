@@ -38,6 +38,7 @@ pub(crate) struct DaemonLaunchDocument {
 }
 
 impl DaemonLaunchDocument {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn bootstrap(
         cluster: ClusterConfig,
         node_id: NodeId,
@@ -131,6 +132,7 @@ impl DaemonLaunchDocument {
         Ok(document)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn cutover(
         cluster: ClusterConfig,
         node_id: NodeId,
@@ -257,6 +259,7 @@ impl DaemonLaunchDocument {
         Ok(true)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn matches_bootstrap(
         &self,
         cluster: &ClusterConfig,

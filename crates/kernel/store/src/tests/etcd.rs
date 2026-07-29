@@ -81,8 +81,7 @@ async fn encrypted_etcd_never_persists_plaintext_and_binds_the_key()
         b"Host(`api.example.test`)"
     );
 
-    let traefik_provider_key =
-        keys.traefik_provider_entry("http/routers/api/rule")?;
+    let traefik_provider_key = keys.traefik_provider_entry("http/routers/api/rule")?;
     raw.delete(traefik_provider_key.as_str(), None).await?;
     let outcome = store
         .put_cas(PutRequest {

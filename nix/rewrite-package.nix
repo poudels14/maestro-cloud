@@ -22,15 +22,7 @@
     "migrate"
   ];
   cliVersion = (builtins.fromTOML (builtins.readFile ../crates/apps/cli/Cargo.toml)).package.version;
-  daemonVersion =
-    (builtins.fromTOML (builtins.readFile ../crates/apps/daemon/Cargo.toml)).package.version;
-  migrateVersion =
-    (builtins.fromTOML (builtins.readFile ../crates/apps/migrate/Cargo.toml)).package.version;
-  version =
-    assert pkgs.lib.assertMsg
-    (cliVersion == daemonVersion && cliVersion == migrateVersion)
-    "rewrite CLI, daemon, and migration package versions must match";
-    cliVersion;
+  version = cliVersion;
   source = pkgs.lib.fileset.toSource {
     root = ../.;
     fileset = pkgs.lib.fileset.unions [

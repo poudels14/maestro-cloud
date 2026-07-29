@@ -356,7 +356,7 @@ fn nixos_upgrade_launch_config_requires_hermetic_binary_pairs()
     assert_eq!(upgrade.get("configuration"), Some(&"default".into()));
     assert_eq!(
         upgrade.get("manifestRelativePath"),
-        Some(&"crates/apps/daemon/Cargo.toml".into())
+        Some(&"crates/apps/cli/Cargo.toml".into())
     );
 
     let upgrade = launch

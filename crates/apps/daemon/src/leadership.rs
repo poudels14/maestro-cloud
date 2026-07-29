@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use crate::RoleError;
 use crate::control_plane::{DaemonRoleSettings, LeaderWorkload, role_error};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_leadership(
     store: Arc<dyn Store>,
     leader_key: StoreKey,

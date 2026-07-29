@@ -38,14 +38,14 @@ fn command_surface_separates_capture_plan_apply_and_verify() -> TestResult {
 }
 
 #[test]
-fn migration_tool_reports_its_package_version() -> TestResult {
+fn migration_tool_reports_the_maestro_release_version() -> TestResult {
     let output = migration_command().arg("--version").output()?;
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     assert_eq!(
         String::from_utf8(output.stdout)?,
-        format!("maestro-migrate {}\n", env!("CARGO_PKG_VERSION"))
+        format!("maestro-migrate {}\n", kernel_api::MAESTRO_VERSION)
     );
     Ok(())
 }

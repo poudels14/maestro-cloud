@@ -75,6 +75,7 @@ where
     Backend: MeshBackend,
 {
     /// Binds one local publication and mesh backend to the cluster resource store.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: Arc<dyn Store>,
         cluster_id: &ClusterId,

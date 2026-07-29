@@ -45,6 +45,7 @@ macro_rules! establish_store_snapshot {
 }
 
 /// Node-local network agents present only for cluster-routed Linux networking.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum AgentNetworkAgents<MeshBackendType, FirewallBackendType, BridgeBackendType> {
     ClusterRouted {
         bridge: WorkloadBridgeAgent<BridgeBackendType>,

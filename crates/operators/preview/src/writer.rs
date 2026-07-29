@@ -34,6 +34,7 @@ impl PreviewWriter {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn apply(
         &self,
         store: &FencedStore,

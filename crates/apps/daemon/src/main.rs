@@ -14,7 +14,11 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Debug, Parser)]
-#[command(name = "daemon", version, about = "Maestro control-plane daemon")]
+#[command(
+    name = "daemon",
+    version = kernel_api::MAESTRO_VERSION,
+    about = "Maestro control-plane daemon"
+)]
 struct Cli {
     #[command(subcommand)]
     command: DaemonCommand,

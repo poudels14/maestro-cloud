@@ -129,7 +129,7 @@ pub struct NixosUpgradeLaunchConfig {
     /// NixOS configuration selected from the flake.
     #[serde(default = "default_configuration")]
     pub configuration: String,
-    /// Rewritten daemon manifest below `services.maestro.source`.
+    /// Maestro CLI manifest below `services.maestro.source`.
     #[serde(default = "default_manifest_relative_path")]
     pub manifest_relative_path: PathBuf,
     /// Optional hermetic path to the Nix executable.
@@ -174,5 +174,5 @@ fn default_configuration() -> String {
 }
 
 fn default_manifest_relative_path() -> PathBuf {
-    PathBuf::from("crates/apps/daemon/Cargo.toml")
+    PathBuf::from("crates/apps/cli/Cargo.toml")
 }

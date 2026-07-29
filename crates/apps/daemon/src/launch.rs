@@ -42,7 +42,9 @@ use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
 use crate::platform::{AbsentHostNetworkBackend, RuntimeDelegatedNetworkStatsReader};
-use crate::tailscale_resources::{TAILSCALE_IPV4_CIDR, TailscaleSystemResources};
+#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+use crate::tailscale_resources::TAILSCALE_IPV4_CIDR;
+use crate::tailscale_resources::TailscaleSystemResources;
 use crate::traefik_resources::TraefikSystemResources;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
@@ -191,8 +193,8 @@ pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, 
         .transpose()?;
     let running_version = match configured_upgrade.as_ref() {
         Some(upgrade) => upgrade.running_version.clone(),
-        None => Version::parse(env!("CARGO_PKG_VERSION"))
-            .map_err(|error| invalid(format!("daemon package version is invalid: {error}")))?,
+        None => Version::parse(kernel_api::MAESTRO_VERSION)
+            .map_err(|error| invalid(format!("Maestro release version is invalid: {error}")))?,
     };
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     let node_upgrade = Some(configured_upgrade.map_or_else(
