@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use containerd::services::v1::leases_client::LeasesClient;
@@ -18,6 +17,7 @@ use kernel_api::Timestamp;
 use prost_types::Any;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use uuid::Uuid;
 
 use crate::containerd::ContainerdRuntime;
 use crate::containerd_artifact_stream::{
@@ -34,7 +34,6 @@ use crate::{
     ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
 };
 
-static TRANSFER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
 const TRANSFER_LEASE_MILLIS: i64 = 60 * 60 * 1_000;
 
@@ -410,9 +409,8 @@ fn managed_labels() -> HashMap<String, String> {
     )])
 }
 
-fn next_transfer_id(operation: &str) -> String {
-    let sequence = TRANSFER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("maestro-{operation}-{}-{sequence}", std::process::id())
+pub(crate) fn next_transfer_id(operation: &str) -> String {
+    format!("maestro-{operation}-{}", Uuid::new_v4().simple())
 }
 
 fn spawn_transfer(

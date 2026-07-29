@@ -7,7 +7,7 @@ use containerd::tonic::{Code, Status};
 use containerd::types::Descriptor;
 use kernel_api::Timestamp;
 
-use crate::containerd_artifact::lease_expiration;
+use crate::containerd_artifact::{lease_expiration, next_transfer_id};
 use crate::containerd_artifact_support::{
     MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, image_digest,
     operation_error, prune_candidates, reference_prefix, registry_reference, removed_digests,
@@ -25,6 +25,21 @@ fn containerd_transfer_lease_expiration_uses_injected_wall_time() {
         "2023-11-14T23:13:20Z"
     );
     assert!(lease_expiration(Timestamp(i64::MAX)).is_err());
+}
+
+#[test]
+fn containerd_transfer_ids_use_unique_uuid_names() {
+    let first = next_transfer_id("import");
+    let second = next_transfer_id("import");
+
+    assert_ne!(first, second);
+    for identifier in [first, second] {
+        let value = identifier
+            .strip_prefix("maestro-import-")
+            .expect("transfer identifier prefix");
+        assert_eq!(value.len(), 32);
+        assert!(value.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
 }
 
 #[test]

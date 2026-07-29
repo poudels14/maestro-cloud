@@ -64,6 +64,7 @@ async fn containerd_artifact_pull_export_import_and_prune_round_trip() {
         .expect("containerd import timed out")
         .unwrap();
     assert!(imported.as_str().contains("@sha256:"));
+    assert_eq!(content_digest(&imported), content_digest(&pulled));
     let imported_reference = ArtifactReference::new(imported.as_str()).unwrap();
     assert_eq!(
         tokio::time::timeout(

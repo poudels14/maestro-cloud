@@ -30,6 +30,7 @@ thiserror.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [lints]
 workspace = true
@@ -38,7 +39,7 @@ workspace = true
 default = ["docker", "containerd"]
 test-util = ["dep:parking_lot"]
 docker = ["dep:bytes", "dep:docker", "dep:ignore", "dep:tar", "dep:tokio-util"]
-containerd = ["dep:containerd", "dep:flate2", "dep:oci-spec", "dep:tar"]
+containerd = ["dep:containerd", "dep:flate2", "dep:oci-spec", "dep:tar", "dep:uuid"]
 
 [dev-dependencies]
 parking_lot.workspace = true
