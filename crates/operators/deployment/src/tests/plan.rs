@@ -487,6 +487,31 @@ fn superseded_frozen_queued_deployment_is_canceled() {
 }
 
 #[test]
+fn superseded_active_queued_deployment_is_canceled_before_lifecycle_advancement() {
+    let service = service(Generation(2), RolloutState::Active);
+    let old = deployment_generation(
+        &service,
+        "deployment-old",
+        Generation(1),
+        DeploymentPhase::Queued,
+    );
+
+    let result = plan(input(service, vec![old.clone()])).expect("replace stale queued deployment");
+
+    assert_eq!(result.create_deployments.len(), 1);
+    assert_eq!(
+        result.create_deployments[0].spec.service_generation,
+        Generation(2)
+    );
+    assert_eq!(result.deployment_updates.len(), 1);
+    assert_eq!(result.deployment_updates[0].id, old.meta.id);
+    assert_eq!(
+        result.deployment_updates[0].status.phase,
+        DeploymentPhase::Canceled
+    );
+}
+
+#[test]
 fn newer_watched_deployment_activates_and_drains_within_one_service_generation() {
     let mut service = service(Generation(2), RolloutState::Active);
     let mut old = deployment_generation(

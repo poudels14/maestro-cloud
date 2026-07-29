@@ -2,6 +2,41 @@
 source: crates/apps/daemon/src/tests/orchestration_acceptance.rs
 expression: final_states
 ---
+1-node-back-to-back-redeploy:
+  services:
+    - name: acceptance-back-to-back
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Canceled
+          phase_history:
+            - Canceled
+          artifact: ~
+          replicas: []
+        - id: "[deployment-id]"
+          version: v2
+          phase: Canceled
+          phase_history:
+            - Canceled
+          artifact: ~
+          replicas: []
+        - id: "[deployment-id]"
+          version: v3
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-1
+              workload_instance: "[workload-instance]"
 1-node-cancel:
   services:
     - name: acceptance-cancel
@@ -260,6 +295,41 @@ expression: final_states
               healthcheck_failures: 0
               workload: Available
               node: node-1
+              workload_instance: "[workload-instance]"
+3-node-back-to-back-redeploy:
+  services:
+    - name: acceptance-back-to-back
+      configured_replicas: 1
+      replica_override: ~
+      active_deployment_id: "[deployment-id]"
+      deployments:
+        - id: "[deployment-id]"
+          version: v1
+          phase: Canceled
+          phase_history:
+            - Canceled
+          artifact: ~
+          replicas: []
+        - id: "[deployment-id]"
+          version: v2
+          phase: Canceled
+          phase_history:
+            - Canceled
+          artifact: ~
+          replicas: []
+        - id: "[deployment-id]"
+          version: v3
+          phase: Ready
+          phase_history:
+            - Ready
+          artifact: ~
+          replicas:
+            - index: 0
+              phase: Ready
+              restart_attempts: 0
+              healthcheck_failures: 0
+              workload: Available
+              node: node-2
               workload_instance: "[workload-instance]"
 3-node-cancel:
   services:

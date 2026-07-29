@@ -139,7 +139,11 @@ fn retire_superseded_nonserving(
         let Some(status) = desired_statuses.get_mut(&deployment.meta.id) else {
             continue;
         };
-        match status.phase {
+        // Choose the retirement transition from the persisted phase. Normal
+        // lifecycle advancement may already have projected a queued deployment
+        // to Building in this pass, but Queued cannot transition directly to
+        // Draining.
+        match deployment.status.phase {
             DeploymentPhase::Queued => status.phase = DeploymentPhase::Canceled,
             DeploymentPhase::Building | DeploymentPhase::PendingReady => {
                 status.phase = DeploymentPhase::Draining;

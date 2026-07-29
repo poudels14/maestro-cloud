@@ -62,6 +62,36 @@ async fn store_backed_controller_advances_only_from_exact_replica_state()
 }
 
 #[tokio::test]
+async fn store_backed_controller_replaces_a_stale_queued_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(image_service()).await?;
+    world.reconcile(Timestamp(1_000)).await?;
+
+    world
+        .update::<Service>("Service", "api", |service| {
+            service.meta.generation = Generation(2);
+            service.spec.version = "replacement".to_string();
+        })
+        .await?;
+
+    let replaced = world.reconcile(Timestamp(2_000)).await?;
+    assert_eq!(replaced.created_deployments, 1);
+    assert_eq!(replaced.updated_deployments, 1);
+
+    let deployments = world.list::<Deployment>("Deployment").await?;
+    assert_eq!(deployments.len(), 2);
+    assert!(deployments.iter().any(|deployment| {
+        deployment.spec.service_generation == Generation(1)
+            && deployment.status.phase == DeploymentPhase::Canceled
+    }));
+    assert!(deployments.iter().any(|deployment| {
+        deployment.spec.service_generation == Generation(2)
+            && deployment.status.phase == DeploymentPhase::Queued
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn atomic_writer_conflict_creates_no_partial_lifecycle_generation()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new(image_service()).await?;

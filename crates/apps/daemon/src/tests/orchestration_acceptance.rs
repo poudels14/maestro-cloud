@@ -474,6 +474,12 @@ async fn shared_lifecycle_scenarios_drive_composed_operators()
         record_lifecycle_scenario!(
             &mut final_states,
             node_count,
+            "back-to-back-redeploy",
+            scenarios::back_to_back_redeploys_keep_only_latest_ready
+        );
+        record_lifecycle_scenario!(
+            &mut final_states,
+            node_count,
             "cancel",
             scenarios::queued_deployment_can_be_canceled
         );
