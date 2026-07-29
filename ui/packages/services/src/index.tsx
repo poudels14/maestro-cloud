@@ -10,6 +10,8 @@ export {
 export {
   attachPreviewResources,
   isSystemService,
+  previewEnabledServices,
+  previewServices,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,
@@ -17,6 +19,7 @@ export {
 } from "./serviceView";
 export type { Deployment, ReplicaState, Service } from "./types";
 export { createServicesFeature } from "./manifest";
+export { PreviewsPage } from "./PreviewsPage";
 export { OverviewTab } from "./OverviewTab";
 export { DeploymentsTab } from "./DeploymentsTab";
 export { LogsTab } from "./LogsTab";

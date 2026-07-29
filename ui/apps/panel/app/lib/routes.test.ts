@@ -8,3 +8,11 @@ test("cluster logs is not nested beneath the nodes page", () => {
   expect(clusterLogs).toBeDefined();
   expect(clusterLogs.parentRoute).toBe(router.routeTree);
 });
+
+test("PR previews has a routable panel page", () => {
+  const router = getRouter();
+  const previews = router.routesByPath["/previews"];
+
+  expect(previews).toBeDefined();
+  expect(previews.parentRoute).toBe(router.routeTree);
+});

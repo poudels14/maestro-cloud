@@ -45,9 +45,34 @@ function servicePreviews(services: Service[], baseServiceId: string): Service[] 
     );
 }
 
+function previewServices(services: Service[]): Service[] {
+  return services
+    .filter((service) => service.previewResource != null)
+    .sort((left, right) => {
+      const repository = left.previewResource!.spec.repository.localeCompare(
+        right.previewResource!.spec.repository
+      );
+      return (
+        repository ||
+        left.previewResource!.spec.pullRequestNumber - right.previewResource!.spec.pullRequestNumber
+      );
+    });
+}
+
+function previewEnabledServices(services: Service[]): Service[] {
+  return services
+    .filter((service) => service.previewResource == null && service.spec.preview != null)
+    .sort(
+      (left, right) =>
+        left.spec.name.localeCompare(right.spec.name) || left.meta.id.localeCompare(right.meta.id)
+    );
+}
+
 export {
   attachPreviewResources,
   isSystemService,
+  previewEnabledServices,
+  previewServices,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,

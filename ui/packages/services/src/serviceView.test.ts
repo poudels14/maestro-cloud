@@ -4,6 +4,8 @@ import type { Service } from "./types";
 import {
   attachPreviewResources,
   isSystemService,
+  previewEnabledServices,
+  previewServices,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,
@@ -70,6 +72,41 @@ test("groups previews under their base service in pull request order", () => {
   expect(servicePreviews(services, "api").map((service) => service.meta.id)).toEqual([
     "api-pr-3",
     "api-pr-20"
+  ]);
+});
+
+test("lists previews globally and identifies preview-enabled base services", () => {
+  const api = {
+    ...serviceResource("api"),
+    spec: {
+      ...serviceResource("api").spec,
+      name: "API",
+      preview: { closeGracePeriodSecs: 60, lifetimeSecs: 3600, replicas: 1 }
+    }
+  } satisfies ApiSchemas["Service"];
+  const worker = {
+    ...serviceResource("worker"),
+    spec: {
+      ...serviceResource("worker").spec,
+      name: "Worker",
+      preview: { closeGracePeriodSecs: 60, lifetimeSecs: 3600, replicas: 2 }
+    }
+  } satisfies ApiSchemas["Service"];
+  const services = attachPreviewResources(
+    [worker, serviceResource("worker-pr-20"), api, serviceResource("api-pr-3")],
+    [
+      previewResource("preview-20", "worker-pr-20", "worker", 20),
+      previewResource("preview-3", "api-pr-3", "api", 3)
+    ]
+  );
+
+  expect(previewServices(services).map((service) => service.meta.id)).toEqual([
+    "api-pr-3",
+    "worker-pr-20"
+  ]);
+  expect(previewEnabledServices(services).map((service) => service.meta.id)).toEqual([
+    "api",
+    "worker"
   ]);
 });
 
