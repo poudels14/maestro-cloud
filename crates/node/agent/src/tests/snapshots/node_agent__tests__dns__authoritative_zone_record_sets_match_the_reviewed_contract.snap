@@ -5,6 +5,7 @@ expression: lookups
 {
   "aliasA": {
     "authoritative": true,
+    "recursionAvailable": false,
     "responseCode": "noError",
     "answers": [
       {
@@ -35,6 +36,7 @@ expression: lookups
   },
   "apiA": {
     "authoritative": true,
+    "recursionAvailable": false,
     "responseCode": "noError",
     "answers": [
       {
@@ -57,6 +59,7 @@ expression: lookups
   },
   "apiAaaa": {
     "authoritative": true,
+    "recursionAvailable": false,
     "responseCode": "noError",
     "answers": [
       {
@@ -71,6 +74,7 @@ expression: lookups
   },
   "apiAny": {
     "authoritative": true,
+    "recursionAvailable": false,
     "responseCode": "noError",
     "answers": [
       {
@@ -101,6 +105,7 @@ expression: lookups
   },
   "metadataTxt": {
     "authoritative": true,
+    "recursionAvailable": false,
     "responseCode": "noError",
     "answers": [
       {
@@ -115,6 +120,7 @@ expression: lookups
   },
   "serviceSrv": {
     "authoritative": true,
+    "recursionAvailable": false,
     "responseCode": "noError",
     "answers": [
       {
