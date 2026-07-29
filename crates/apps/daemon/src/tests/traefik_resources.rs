@@ -19,6 +19,7 @@ use runtime::{HostPortPublication, PortProtocol};
 use crate::system_service_reconciler::SystemServiceReconciler;
 use crate::traefik_resources::{
     TRAEFIK_IMAGE, TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID, TraefikSystemResources,
+    preserve_client_identity,
 };
 
 use super::cluster_with_nodes;
@@ -192,14 +193,99 @@ async fn reconciles_create_update_and_removal_under_one_fence()
     Ok(())
 }
 
+#[tokio::test]
+async fn leader_changes_do_not_roll_traefik_credentials_but_ca_rotation_does()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("traefik-identity")?;
+    let (store, fenced, _session) = fenced_store(&cluster_id).await?;
+    let mut cluster = cluster_with_nodes(&[
+        ("master", NodeRole::Master),
+        ("hybrid", NodeRole::Hybrid),
+        ("control", NodeRole::ControlPlane),
+    ])?;
+    cluster.cluster_id = cluster_id.clone();
+
+    for desired in [
+        TraefikSystemResources::for_cluster(
+            &cluster,
+            &security_with_identity("test-ca", "master-client", "master-key"),
+        )?
+        .service,
+        TraefikSystemResources::for_cluster(
+            &cluster,
+            &security_with_identity("test-ca", "hybrid-client", "hybrid-key"),
+        )?
+        .service,
+    ] {
+        SystemServiceReconciler::new(
+            &cluster_id,
+            "Traefik",
+            TRAEFIK_SERVICE_ID,
+            TRAEFIK_MANAGED_OWNER,
+            Some(desired),
+        )?
+        .with_desired_adapter(preserve_client_identity)
+        .reconcile(&fenced, Timestamp(10_000))
+        .await?;
+    }
+
+    let service = read_service(&store, &cluster_id).await?;
+    assert_eq!(service.meta.generation.0, 1);
+    assert_secret_file(&service, "ca.pem", "test-ca")?;
+    assert_secret_file(&service, "client.pem", "master-client")?;
+    assert_secret_file(&service, "client-key.pem", "master-key")?;
+
+    let rotated = TraefikSystemResources::for_cluster(
+        &cluster,
+        &security_with_identity("rotated-ca", "rotated-client", "rotated-key"),
+    )?;
+    SystemServiceReconciler::new(
+        &cluster_id,
+        "Traefik",
+        TRAEFIK_SERVICE_ID,
+        TRAEFIK_MANAGED_OWNER,
+        Some(rotated.service),
+    )?
+    .with_desired_adapter(preserve_client_identity)
+    .reconcile(&fenced, Timestamp(20_000))
+    .await?;
+
+    let service = read_service(&store, &cluster_id).await?;
+    assert_eq!(service.meta.generation.0, 2);
+    assert_secret_file(&service, "ca.pem", "rotated-ca")?;
+    assert_secret_file(&service, "client.pem", "rotated-client")?;
+    assert_secret_file(&service, "client-key.pem", "rotated-key")?;
+    Ok(())
+}
+
 fn security() -> NodeCertificateBundle {
+    security_with_identity("test-ca", "test-client", "test-client-key")
+}
+
+fn security_with_identity(
+    trust_root: &str,
+    certificate: &str,
+    private_key: &str,
+) -> NodeCertificateBundle {
     NodeCertificateBundle {
-        trust_root_pem: "test-ca".to_owned(),
+        trust_root_pem: trust_root.to_owned(),
         identity: CertificateKeyPair {
-            certificate_pem: "test-client".to_owned(),
-            private_key_pem: SecretValue::new("test-client-key"),
+            certificate_pem: certificate.to_owned(),
+            private_key_pem: SecretValue::new(private_key),
         },
     }
+}
+
+fn assert_secret_file(
+    service: &Service,
+    name: &str,
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(SecretMountSpec::Files { files, .. }) = &service.spec.secrets else {
+        return Err("Traefik etcd credentials are not a file set".into());
+    };
+    assert_eq!(files.get(name).map(SecretValue::expose), Some(expected));
+    Ok(())
 }
 
 fn publication(port: u16) -> HostPortPublication {

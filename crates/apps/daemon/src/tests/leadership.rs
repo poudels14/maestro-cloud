@@ -8,7 +8,7 @@ use kernel_controller::{
     ControllerError, FencedStore, LeaderElector, LeaderIdentity, LeadershipLease,
     LeadershipObservation, LeadershipToken, StoreLeaderElector,
 };
-use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime};
+use kernel_store::{Clock, InMemoryStore, Keyspace, MonotonicTime, StoreError, TokioClock};
 use tokio::sync::{Notify, watch};
 
 use crate::leadership::run_leadership;
@@ -89,6 +89,55 @@ async fn leader_workload_stops_before_recampaign_and_resignation()
     Ok(())
 }
 
+#[tokio::test]
+async fn transient_campaign_failures_are_retried() -> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = kernel_api::ClusterId::new("leader-retry")?;
+    let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
+    let leader_key = Keyspace::new(&cluster_id).leader();
+    let elector = Arc::new(UnavailableCampaignElector::default());
+    let settings = DaemonRoleSettings::new(
+        Duration::from_secs(30),
+        Duration::from_secs(30),
+        Duration::from_secs(30),
+        Duration::from_secs(30),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+        1_000,
+        Duration::from_millis(100),
+        Duration::from_millis(20),
+        Duration::from_millis(10),
+        Duration::from_secs(1),
+    )?;
+    let identity = LeaderIdentity {
+        node_id: NodeId::new("master")?,
+        instance_id: NodeInstanceId::new("instance-1")?,
+    };
+    let (shutdown, shutdown_receiver) = watch::channel(false);
+    let task = tokio::spawn(run_leadership(
+        store,
+        leader_key,
+        elector.clone(),
+        identity,
+        None,
+        None,
+        Arc::new(TokioClock::new()),
+        settings,
+        shutdown_receiver,
+    ));
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while elector.attempts.load(Ordering::SeqCst) < 2 {
+            elector.attempted.notified().await;
+        }
+    })
+    .await?;
+    assert!(!task.is_finished());
+    shutdown.send(true)?;
+    tokio::time::timeout(Duration::from_secs(1), task).await???;
+    Ok(())
+}
+
 async fn wait(notify: &Notify) -> Result<(), tokio::time::error::Elapsed> {
     tokio::time::timeout(Duration::from_secs(1), notify.notified()).await
 }
@@ -147,6 +196,32 @@ impl LeaderElector for FailingOnceElector {
 
     async fn observe(&self) -> Result<LeadershipObservation, ControllerError> {
         self.inner.observe().await
+    }
+}
+
+#[derive(Default)]
+struct UnavailableCampaignElector {
+    attempts: AtomicU64,
+    attempted: Notify,
+}
+
+#[async_trait]
+impl LeaderElector for UnavailableCampaignElector {
+    async fn campaign(
+        &self,
+        _identity: LeaderIdentity,
+        _ttl: Duration,
+    ) -> Result<Option<Box<dyn LeadershipLease>>, ControllerError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        self.attempted.notify_waiters();
+        Err(StoreError::Unavailable {
+            message: "injected campaign timeout".to_owned(),
+        }
+        .into())
+    }
+
+    async fn observe(&self) -> Result<LeadershipObservation, ControllerError> {
+        Ok(LeadershipObservation::Vacant)
     }
 }
 

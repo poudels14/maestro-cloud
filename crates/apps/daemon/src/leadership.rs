@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, LeadershipLease};
-use kernel_store::{Clock, Store, StoreKey};
+use kernel_controller::{
+    ControllerError, FencedStore, LeaderElector, LeaderIdentity, LeadershipLease,
+};
+use kernel_store::{Clock, Store, StoreError, StoreKey};
 use tokio::sync::watch;
 
 use crate::RoleError;
@@ -46,14 +48,35 @@ pub(crate) async fn run_leadership(
                     }
                 }
                 () = clock.sleep_until(retry_at) => {
-                    lease = elector
+                    match elector
                         .campaign(identity.clone(), settings.leadership_ttl)
                         .await
-                        .map_err(|error| role_error("retry controller leadership campaign", error))?;
+                    {
+                        Ok(next_lease) => lease = next_lease,
+                        Err(error) if retryable_campaign_error(&error) => {
+                            tracing::warn!(
+                                error = %error,
+                                "controller leadership campaign temporarily failed"
+                            );
+                        }
+                        Err(error) => {
+                            return Err(role_error(
+                                "retry controller leadership campaign",
+                                error,
+                            ));
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+fn retryable_campaign_error(error: &ControllerError) -> bool {
+    matches!(
+        error,
+        ControllerError::Store(StoreError::Unavailable { .. })
+    )
 }
 
 fn shutdown_requested(shutdown: &watch::Receiver<bool>) -> bool {

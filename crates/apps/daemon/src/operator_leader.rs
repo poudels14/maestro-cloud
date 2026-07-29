@@ -20,7 +20,9 @@ use crate::operators::OperatorSuite;
 use crate::system_service_reconciler::SystemServiceReconciler;
 use crate::tailscale_reconciler::TailscaleResourceReconciler;
 use crate::tailscale_resources::TailscaleSystemResources;
-use crate::traefik_resources::{TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID, TraefikSystemResources};
+use crate::traefik_resources::{
+    TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID, TraefikSystemResources, preserve_client_identity,
+};
 use crate::{LeaderWorkload, OperatorSettings, RoleError};
 
 /// Side-effect integrations shared by leader-owned operators.
@@ -181,6 +183,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 "failed to construct Traefik resource reconciler: {error}"
             ))
         })?
+        .with_desired_adapter(preserve_client_identity)
         .reconcile(store.as_ref(), self.timestamp_clock.now())
         .await
         .map_err(|error| {

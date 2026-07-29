@@ -5,9 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clustertest::ClusterSetupCluster;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use kernel_api::{
-    Assignment, AssignmentPhase, ClusterInfo, Deployment, DeploymentPhase, NodeId, ReplicaState,
-    Service,
+    Assignment, AssignmentPhase, ClusterInfo, Deployment, DeploymentPhase, Generation, NodeId,
+    ReplicaState, Service,
 };
+use kernel_controller::LeaderIdentity;
 use kernel_store::{Keyspace, Store};
 use serde::Serialize;
 
@@ -46,13 +47,40 @@ async fn real_process_three_node_system_plane_is_reachable()
     {
         return Err("local DNS upstream never received a recursive query".into());
     }
-    cluster.await_traefik_ready().await?;
+    let initial_traefik_generation = cluster.await_traefik_ready().await?;
     cluster.assert_traefik_provider_root().await?;
+    let initial_leader = cluster.await_leader(None).await?;
+    let failed = cluster
+        .nodes
+        .iter()
+        .find(|node| node.node_id == initial_leader.node_id)
+        .map(|node| node.fixture.clone())
+        .ok_or_else(|| {
+            RealClusterError::new(format!(
+                "elected leader `{}` is not a cluster fixture node",
+                initial_leader.node_id
+            ))
+        })?;
+    cluster.stop_node(&failed).await?;
+    let replacement_leader = cluster.await_leader(Some(&initial_leader.node_id)).await?;
+    cluster.restart_node(&failed).await?;
+    cluster.await_mesh(&nodes.iter().cloned().collect()).await?;
+    let recovered_traefik_generation = cluster.await_traefik_ready().await?;
+    if recovered_traefik_generation != initial_traefik_generation {
+        return Err(format!(
+            "Traefik rolled from generation {} to {} when leadership moved from `{}` to `{}`",
+            initial_traefik_generation.0,
+            recovered_traefik_generation.0,
+            initial_leader.node_id,
+            replacement_leader.node_id,
+        )
+        .into());
+    }
     Ok(())
 }
 
 impl RealProcessCluster {
-    async fn await_traefik_ready(&mut self) -> Result<(), RealClusterError> {
+    async fn await_traefik_ready(&mut self) -> Result<Generation, RealClusterError> {
         let deadline = tokio::time::Instant::now() + SYSTEM_PLANE_TIMEOUT;
         let expected_nodes = self
             .cluster
@@ -73,65 +101,133 @@ impl RealProcessCluster {
                     .iter()
                     .find(|service| service.meta.id.as_str() == "maestro-system-traefik")
                 {
-                    if let Some(deployment_id) = service.status.active_deployment_id.as_ref() {
-                        let deployments = list_resources::<Deployment>(
-                            &store,
-                            &self.cluster.cluster_id,
-                            "Deployment",
-                        )
-                        .await
-                        .map_err(RealClusterError::from_display)?;
-                        let assignments = list_resources::<Assignment>(
-                            &store,
-                            &self.cluster.cluster_id,
-                            "Assignment",
-                        )
-                        .await
-                        .map_err(RealClusterError::from_display)?;
-                        let replicas = list_resources::<ReplicaState>(
-                            &store,
-                            &self.cluster.cluster_id,
-                            "ReplicaState",
-                        )
-                        .await
-                        .map_err(RealClusterError::from_display)?;
-                        let deployment = deployments
-                            .iter()
-                            .find(|deployment| deployment.meta.id == *deployment_id);
-                        let running_nodes = assignments
+                    let deployments = list_resources::<Deployment>(
+                        &store,
+                        &self.cluster.cluster_id,
+                        "Deployment",
+                    )
+                    .await
+                    .map_err(RealClusterError::from_display)?;
+                    let assignments = list_resources::<Assignment>(
+                        &store,
+                        &self.cluster.cluster_id,
+                        "Assignment",
+                    )
+                    .await
+                    .map_err(RealClusterError::from_display)?;
+                    let replicas = list_resources::<ReplicaState>(
+                        &store,
+                        &self.cluster.cluster_id,
+                        "ReplicaState",
+                    )
+                    .await
+                    .map_err(RealClusterError::from_display)?;
+                    let current_deployments = deployments
+                        .iter()
+                        .filter(|deployment| {
+                            deployment.spec.service_id == service.meta.id
+                                && deployment.spec.service_generation == service.meta.generation
+                        })
+                        .collect::<Vec<_>>();
+                    if let Some(deployment) = current_deployments.first().copied() {
+                        let current_assignments = assignments
                             .iter()
                             .filter(|assignment| {
-                                assignment.spec.deployment_id == *deployment_id
-                                    && assignment.status.phase == AssignmentPhase::Running
+                                assignment.spec.deployment_id == deployment.meta.id
+                            })
+                            .collect::<Vec<_>>();
+                        let assignment_ids = current_assignments
+                            .iter()
+                            .map(|assignment| assignment.meta.id.clone())
+                            .collect::<BTreeSet<_>>();
+                        let running_nodes = current_assignments
+                            .iter()
+                            .filter(|assignment| {
+                                assignment.status.phase == AssignmentPhase::Running
                             })
                             .map(|assignment| assignment.spec.node_id.clone())
                             .collect::<BTreeSet<NodeId>>();
-                        let ready_replicas = replicas
+                        let ready_assignments = replicas
                             .iter()
                             .filter(|replica| {
-                                replica.spec.deployment_id == *deployment_id
+                                replica.spec.deployment_id == deployment.meta.id
                                     && replica.status.phase == DeploymentPhase::Ready
+                                    && assignment_ids.contains(&replica.spec.assignment_id)
                             })
-                            .count();
+                            .map(|replica| replica.spec.assignment_id.clone())
+                            .collect::<BTreeSet<_>>();
+                        let active_is_current = service.status.active_deployment_id.as_ref()
+                            == Some(&deployment.meta.id);
                         last_observation = format!(
-                            "deployment={:?}; running_nodes={running_nodes:?}; ready_replicas={ready_replicas}",
-                            deployment.map(|deployment| deployment.status.phase)
+                            "service_generation={}; current_deployments={}; current_phase={:?}; active_is_current={active_is_current}; running_nodes={running_nodes:?}; ready_assignments={}/{}",
+                            service.meta.generation.0,
+                            current_deployments.len(),
+                            deployment.status.phase,
+                            ready_assignments.len(),
+                            assignment_ids.len(),
                         );
-                        if deployment.is_some_and(|deployment| {
-                            deployment.status.phase == DeploymentPhase::Ready
-                        }) && running_nodes == expected_nodes
-                            && ready_replicas == expected_nodes.len()
+                        if current_deployments.len() == 1
+                            && active_is_current
+                            && deployment.status.phase == DeploymentPhase::Ready
+                            && running_nodes == expected_nodes
+                            && assignment_ids.len() == expected_nodes.len()
+                            && ready_assignments == assignment_ids
                         {
-                            return Ok(());
+                            return Ok(service.meta.generation);
                         }
                     } else {
-                        last_observation = "Traefik service had no active deployment".to_owned();
+                        last_observation = format!(
+                            "service_generation={}; active_deployment={:?}; no deployment realizes the current generation",
+                            service.meta.generation.0, service.status.active_deployment_id
+                        );
                     }
                 }
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(RealClusterError::new(format!(
                     "Traefik did not become ready on every workload node: {last_observation}; logs: {}",
+                    self.cluster_logs()
+                )));
+            }
+            tokio::time::sleep(RETRY_DELAY).await;
+        }
+    }
+
+    async fn await_leader(
+        &mut self,
+        excluded_node: Option<&NodeId>,
+    ) -> Result<LeaderIdentity, RealClusterError> {
+        let deadline = tokio::time::Instant::now() + SYSTEM_PLANE_TIMEOUT;
+        let mut last_observation = "leader key was not observed".to_owned();
+        loop {
+            self.ensure_children_running()?;
+            if let Ok(store) = self.connect_store().await {
+                match store
+                    .get(&Keyspace::new(&self.cluster.cluster_id).leader())
+                    .await
+                {
+                    Ok(Some(stored)) => {
+                        match serde_json::from_slice::<LeaderIdentity>(&stored.value) {
+                            Ok(leader)
+                                if excluded_node.is_none_or(|node| leader.node_id != *node) =>
+                            {
+                                return Ok(leader);
+                            }
+                            Ok(leader) => {
+                                last_observation = format!("leader is still `{}`", leader.node_id);
+                            }
+                            Err(error) => {
+                                last_observation = format!("leader identity is invalid: {error}");
+                            }
+                        }
+                    }
+                    Ok(None) => last_observation = "leader key is vacant".to_owned(),
+                    Err(error) => last_observation = format!("leader lookup failed: {error}"),
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(RealClusterError::new(format!(
+                    "controller leadership did not converge: {last_observation}; logs: {}",
                     self.cluster_logs()
                 )));
             }

@@ -18,6 +18,9 @@ pub(crate) const TRAEFIK_IMAGE: &str =
     "traefik:v3.6.23@sha256:f5dba1e65167778cd5f8d1b463fc5d200f49d40c6458fc9f4b391a68ebfb9534";
 const TRAEFIK_VERSION: &str = "traefik-3.6.23";
 const ETCD_SECRET_DIRECTORY: &str = "/run/secrets/etcd";
+const ETCD_CA_FILE: &str = "ca.pem";
+const ETCD_CLIENT_CERTIFICATE_FILE: &str = "client.pem";
+const ETCD_CLIENT_KEY_FILE: &str = "client-key.pem";
 
 /// Ordinary service and daemon-only host publications for cluster ingress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,15 +128,15 @@ impl TraefikSystemResources {
                     mount_path: ETCD_SECRET_DIRECTORY.to_owned(),
                     files: BTreeMap::from([
                         (
-                            "ca.pem".to_owned(),
+                            ETCD_CA_FILE.to_owned(),
                             SecretValue::new(security.trust_root_pem.clone()),
                         ),
                         (
-                            "client.pem".to_owned(),
+                            ETCD_CLIENT_CERTIFICATE_FILE.to_owned(),
                             SecretValue::new(security.identity.certificate_pem.clone()),
                         ),
                         (
-                            "client-key.pem".to_owned(),
+                            ETCD_CLIENT_KEY_FILE.to_owned(),
                             security.identity.private_key_pem.clone(),
                         ),
                     ]),
@@ -179,6 +182,46 @@ impl TraefikSystemResources {
             })
             .collect()
     }
+}
+
+/// Retains the cluster-wide Traefik client identity across controller leaders.
+///
+/// Every control-plane node has a distinct etcd client certificate. The first
+/// leader seeds the shared Traefik Service with one valid identity; subsequent
+/// leaders retain it while the cluster trust root remains unchanged. A trust
+/// root rotation replaces the complete credential set and rolls the Service.
+pub(crate) fn preserve_client_identity(current: &Service, desired: &mut Service) {
+    let (
+        Some(SecretMountSpec::Files {
+            mount_path: current_mount_path,
+            files: current_files,
+        }),
+        Some(SecretMountSpec::Files {
+            mount_path: desired_mount_path,
+            files: desired_files,
+        }),
+    ) = (&current.spec.secrets, &mut desired.spec.secrets)
+    else {
+        return;
+    };
+    if current_mount_path != desired_mount_path
+        || current_files.get(ETCD_CA_FILE) != desired_files.get(ETCD_CA_FILE)
+    {
+        return;
+    }
+    let Some(certificate) = current_files.get(ETCD_CLIENT_CERTIFICATE_FILE) else {
+        return;
+    };
+    let Some(private_key) = current_files.get(ETCD_CLIENT_KEY_FILE) else {
+        return;
+    };
+    if !desired_files.contains_key(ETCD_CLIENT_CERTIFICATE_FILE)
+        || !desired_files.contains_key(ETCD_CLIENT_KEY_FILE)
+    {
+        return;
+    }
+    desired_files.insert(ETCD_CLIENT_CERTIFICATE_FILE.to_owned(), certificate.clone());
+    desired_files.insert(ETCD_CLIENT_KEY_FILE.to_owned(), private_key.clone());
 }
 
 fn managed_annotation() -> AnnotationKey {

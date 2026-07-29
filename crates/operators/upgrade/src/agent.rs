@@ -139,7 +139,17 @@ impl NodeUpgradeAgent {
             if *shutdown.borrow() || shutdown.has_changed().is_err() {
                 return Ok(());
             }
-            self.reconcile_once().await?;
+            match self.reconcile_once().await {
+                Ok(_) => {}
+                Err(error) if error.retryable() => {
+                    tracing::warn!(
+                        node_id = %self.settings.node_id,
+                        error = %error,
+                        "transient node upgrade reconciliation failure; retrying"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
             let deadline = self
                 .clock
                 .now()
@@ -474,4 +484,13 @@ pub enum NodeUpgradeAgentError {
         from: NodeUpgradeCommandState,
         to: NodeUpgradeCommandState,
     },
+}
+
+impl NodeUpgradeAgentError {
+    fn retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Store(kernel_store::StoreError::Unavailable { .. })
+        )
+    }
 }

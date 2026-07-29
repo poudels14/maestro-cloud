@@ -8,6 +8,8 @@ use kernel_store::{
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MAXIMUM_CONFLICT_RETRIES: usize = 8;
 
+type DesiredServiceAdapter = fn(&Service, &mut Service);
+
 /// Fenced create, update, and retirement for one daemon-owned ordinary Service.
 pub(crate) struct SystemServiceReconciler {
     name: &'static str,
@@ -15,6 +17,7 @@ pub(crate) struct SystemServiceReconciler {
     service_id: ServiceId,
     service_key: StoreKey,
     desired: Option<Service>,
+    desired_adapter: Option<DesiredServiceAdapter>,
 }
 
 impl SystemServiceReconciler {
@@ -44,7 +47,14 @@ impl SystemServiceReconciler {
             service_id,
             service_key,
             desired,
+            desired_adapter: None,
         })
+    }
+
+    /// Adapts a desired Service to stable cluster-owned state already in the store.
+    pub(crate) fn with_desired_adapter(mut self, adapter: DesiredServiceAdapter) -> Self {
+        self.desired_adapter = Some(adapter);
+        self
     }
 
     pub(crate) async fn reconcile(
@@ -68,7 +78,14 @@ impl SystemServiceReconciler {
                 .map_or(ExpectedVersion::Missing, |current| {
                     ExpectedVersion::Exact(current.version)
                 });
-            let replacement = converge(current, self.desired.as_ref(), self.name, self.owner, now)?;
+            let replacement = converge(
+                current,
+                self.desired.as_ref(),
+                self.desired_adapter,
+                self.name,
+                self.owner,
+                now,
+            )?;
             let Some(replacement) = replacement else {
                 store.verify_leadership().await?;
                 return Ok(());
@@ -130,6 +147,7 @@ struct StoredService {
 fn converge(
     current: Option<StoredService>,
     desired: Option<&Service>,
+    desired_adapter: Option<DesiredServiceAdapter>,
     name: &'static str,
     owner: &str,
     now: Timestamp,
@@ -154,6 +172,10 @@ fn converge(
             }
             if current.resource.meta.deletion_timestamp.is_some() {
                 return Err(SystemServiceReconcileError::ResourceTerminating { name });
+            }
+            let mut desired = desired.clone();
+            if let Some(adapter) = desired_adapter {
+                adapter(&current.resource, &mut desired);
             }
             let mut replacement = current.resource.clone();
             replacement.meta.revision = current.version.resource_revision();
