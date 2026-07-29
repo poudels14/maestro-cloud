@@ -385,7 +385,7 @@ fn source_path(output: &[u8]) -> Result<PathBuf, NixosUpgradeStagingError> {
     Ok(path)
 }
 
-fn parse_package_version(manifest: &str) -> Result<Version, NixosUpgradeStagingError> {
+pub(crate) fn parse_package_version(manifest: &str) -> Result<Version, NixosUpgradeStagingError> {
     let mut in_package = false;
     for line in manifest.lines().map(str::trim) {
         if line == "[package]" {
@@ -410,7 +410,7 @@ fn parse_package_version(manifest: &str) -> Result<Version, NixosUpgradeStagingE
     Err(rejected("Maestro Cargo manifest has no package.version"))
 }
 
-fn validate_source_version(
+pub(crate) fn validate_source_version(
     source: &Version,
     running: &Version,
     minimum: &Version,

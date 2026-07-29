@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use semver::Version;
 
-use crate::nixos::{NixosCommand, NixosCommandError, NixosCommandOutput, NixosCommandRunner};
+use crate::nixos::{
+    NixosCommand, NixosCommandError, NixosCommandOutput, NixosCommandRunner, parse_package_version,
+    validate_source_version,
+};
 use crate::{
     NixosUpgradeStager, NixosUpgradeStagerSettings, NixosUpgradeStagingError,
     ProcessNixosUpgradeStager,
@@ -143,6 +146,28 @@ fn stager_settings_reject_ambiguous_paths_and_configuration_names() {
         NixosUpgradeStagerSettings::new("/etc/maestro", "default", "../Cargo.toml", running,)
             .is_err()
     );
+}
+
+#[test]
+fn checked_in_manifests_support_the_0_6_1_upgrade_bridge() -> Result<(), Box<dyn std::error::Error>>
+{
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let legacy_manifest = std::fs::read_to_string(workspace.join("crates/apps/daemon/Cargo.toml"))?;
+    let current_manifest = std::fs::read_to_string(workspace.join("crates/apps/cli/Cargo.toml"))?;
+    let running = Version::new(0, 6, 1);
+    let minimum = Version::new(0, 6, 2);
+
+    validate_source_version(
+        &parse_package_version(&legacy_manifest)?,
+        &running,
+        &minimum,
+    )?;
+    validate_source_version(
+        &parse_package_version(&current_manifest)?,
+        &running,
+        &minimum,
+    )?;
+    Ok(())
 }
 
 fn settings() -> Result<NixosUpgradeStagerSettings, NixosUpgradeStagingError> {
