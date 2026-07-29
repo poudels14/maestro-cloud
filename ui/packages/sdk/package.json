@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tanstack/solid-query": "^5.101.2",
+    "nanoid": "^6.0.0",
     "solid-js": "^1.9.14"
   },
   "devDependencies": {

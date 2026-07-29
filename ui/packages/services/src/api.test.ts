@@ -71,7 +71,7 @@ test("passes optimistic service and deployment commands to the generated client"
     }
   ]);
   for (const call of calls) {
-    expect(call.args.at(-1)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(call.args.at(-1)).toMatch(/^[0-9A-Za-z]{24}$/);
   }
 });
 

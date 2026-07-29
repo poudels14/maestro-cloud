@@ -118,7 +118,7 @@ test("passes node, metrics, and webhook operations to the generated client", asy
     { operation: "test-webhook", args: ["deployments", {}] }
   ]);
   for (const call of calls.filter(({ operation }) => operation !== "metrics")) {
-    expect(call.args.at(-1)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(call.args.at(-1)).toMatch(/^[0-9A-Za-z]{24}$/);
   }
 });
 
