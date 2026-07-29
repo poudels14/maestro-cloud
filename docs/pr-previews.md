@@ -114,8 +114,14 @@ limit is reached, Maestro posts a quota state and admits the oldest open PR firs
 The public preview hostname requires one-time infrastructure configuration outside Maestro:
 
 1. Create a wildcard DNS record such as `*.preview.getbaton.ai` pointing at the existing tunnel.
-2. Add a wildcard Cloudflare Tunnel public-hostname rule forwarding to the Maestro ingress port.
+2. Add a wildcard Cloudflare Tunnel public-hostname rule whose service URL is
+   `http://maestro-system-traefik.<cluster-id>.maestro.internal:80`.
 3. Optionally protect the wildcard with a Cloudflare Access policy.
+
+Use the canonical service name above instead of a legacy container name such as `web` or a
+particular workload IP. Maestro publishes that record through its internal resolver with every
+ready Traefik replica, so tunnel connectors retain a stable, highly available origin as workloads
+move between nodes.
 
 The DNS wildcard and tunnel rule must exist before public preview links can serve traffic. Internal
 Maestro DNS continues to expose derived services through the cluster's canonical internal domain.

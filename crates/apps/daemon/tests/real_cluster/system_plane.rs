@@ -49,6 +49,7 @@ async fn real_process_three_node_system_plane_is_reachable()
     }
     let initial_traefik_generation = cluster.await_traefik_ready().await?;
     cluster.assert_traefik_provider_root().await?;
+    cluster.assert_ingress_origin_from_system_workload().await?;
     let initial_leader = cluster.await_leader(None).await?;
     let failed = cluster
         .nodes
@@ -250,6 +251,104 @@ impl RealProcessCluster {
             ))
         } else {
             Ok(())
+        }
+    }
+
+    async fn assert_ingress_origin_from_system_workload(&mut self) -> Result<(), RealClusterError> {
+        let origin_host = format!(
+            "maestro-system-traefik.{}.maestro.internal",
+            self.cluster.cluster_id
+        );
+        let origin = format!("http://{origin_host}/ping");
+        let deadline = tokio::time::Instant::now() + SYSTEM_PLANE_TIMEOUT;
+        let mut last_observation =
+            "no running system workload was available for the origin probe".to_owned();
+        loop {
+            self.ensure_children_running()?;
+            if let Some(gateway_pid) = self.current_tailscale_gateway_pid().await? {
+                let resolver_path = format!("/proc/{gateway_pid}/root/etc/resolv.conf");
+                let resolver = std::fs::read_to_string(&resolver_path)
+                    .map_err(RealClusterError::from_display)?
+                    .lines()
+                    .find_map(|line| {
+                        let mut fields = line.split_whitespace();
+                        (fields.next()? == "nameserver")
+                            .then(|| fields.next().map(str::to_owned))
+                            .flatten()
+                    });
+                if let Some(resolver) = resolver {
+                    let lookup = Command::new("nsenter")
+                        .args(["--target", &gateway_pid.to_string(), "--net", "--", "dig"])
+                        .args([
+                            "+time=1",
+                            "+tries=1",
+                            "+short",
+                            &format!("@{resolver}"),
+                            &origin_host,
+                            "A",
+                        ])
+                        .output()
+                        .map_err(RealClusterError::from_display)?;
+                    let addresses = String::from_utf8_lossy(&lookup.stdout)
+                        .lines()
+                        .filter_map(|line| line.parse::<std::net::Ipv4Addr>().ok())
+                        .collect::<BTreeSet<_>>();
+                    if lookup.status.success() && !addresses.is_empty() {
+                        let mut failed = None;
+                        for address in &addresses {
+                            let output = Command::new("nsenter")
+                                .args(["--target", &gateway_pid.to_string(), "--net", "--", "curl"])
+                                .args([
+                                    "--noproxy",
+                                    "*",
+                                    "--fail",
+                                    "--silent",
+                                    "--show-error",
+                                    "--connect-timeout",
+                                    "1",
+                                    "--max-time",
+                                    "2",
+                                    "--resolve",
+                                    &format!("{origin_host}:80:{address}"),
+                                    &origin,
+                                ])
+                                .output()
+                                .map_err(RealClusterError::from_display)?;
+                            if !output.status.success() {
+                                failed = Some(format!(
+                                    "curl to `{address}` exited with {}: {}",
+                                    output.status,
+                                    String::from_utf8_lossy(&output.stderr).trim()
+                                ));
+                                break;
+                            }
+                        }
+                        if let Some(failed) = failed {
+                            last_observation = failed;
+                        } else {
+                            return Ok(());
+                        }
+                    } else {
+                        last_observation = format!(
+                            "dig through `{resolver}` exited with {} and returned `{}`: {}",
+                            lookup.status,
+                            String::from_utf8_lossy(&lookup.stdout).trim(),
+                            String::from_utf8_lossy(&lookup.stderr).trim()
+                        );
+                    }
+                } else {
+                    last_observation =
+                        format!("system workload resolver `{resolver_path}` has no nameserver");
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(RealClusterError::new(format!(
+                    "canonical ingress origin `{origin}` was not reachable from a system workload: \
+                     {last_observation}; logs: {}",
+                    self.cluster_logs()
+                )));
+            }
+            tokio::time::sleep(RETRY_DELAY).await;
         }
     }
 
