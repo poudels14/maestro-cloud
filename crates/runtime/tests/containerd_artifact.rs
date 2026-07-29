@@ -76,6 +76,29 @@ async fn containerd_artifact_pull_export_import_and_prune_round_trip() {
         .unwrap(),
         imported
     );
+    let source_node_reference = ArtifactReference::new(format!(
+        "maestro.local/artifacts/source-node@{}",
+        content_digest(&imported)
+    ))
+    .unwrap();
+    let localized = tokio::time::timeout(
+        Duration::from_secs(30),
+        runtime.ensure_local(&source_node_reference),
+    )
+    .await
+    .expect("containerd local alias timed out")
+    .unwrap();
+    assert_eq!(localized.as_str(), source_node_reference.as_str());
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            runtime.resolve_digest(&source_node_reference),
+        )
+        .await
+        .expect("containerd local alias resolution timed out")
+        .unwrap(),
+        localized
+    );
 
     let preserved = tokio::time::timeout(
         Duration::from_secs(30),

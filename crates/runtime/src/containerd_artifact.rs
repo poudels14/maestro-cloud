@@ -127,6 +127,30 @@ impl ArtifactStore for ContainerdRuntime {
         }
     }
 
+    async fn ensure_local(
+        &self,
+        reference: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        match self.image(reference.as_str()).await {
+            Ok(image) => {
+                let image = self.host_platform_image(image, reference.as_str()).await?;
+                self.ensure_digest_alias(&image, reference.as_str()).await
+            }
+            Err(ArtifactStoreError::NotFound { .. }) => {
+                let digest = ArtifactDigest::new(reference.as_str().to_owned())?;
+                match select_image(&self.images().await?, &digest) {
+                    Ok(image) => {
+                        let image = self.host_platform_image(image, reference.as_str()).await?;
+                        self.ensure_digest_alias(&image, reference.as_str()).await
+                    }
+                    Err(ArtifactStoreError::NotFound { .. }) => self.pull(reference).await,
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     async fn contains(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactStoreError> {
         match select_image(&self.images().await?, digest) {
             Ok(_) => Ok(true),
