@@ -16,6 +16,7 @@ hex.workspace = true
 ignore = { workspace = true, optional = true }
 kernel-api = { version = "0.1.0", path = "../kernel/api" }
 libc.workspace = true
+oci-spec = { workspace = true, optional = true }
 prost.workspace = true
 prost-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -37,7 +38,7 @@ workspace = true
 default = ["docker", "containerd"]
 test-util = ["dep:parking_lot"]
 docker = ["dep:bytes", "dep:docker", "dep:ignore", "dep:tar", "dep:tokio-util"]
-containerd = ["dep:containerd", "dep:flate2", "dep:tar"]
+containerd = ["dep:containerd", "dep:flate2", "dep:oci-spec", "dep:tar"]
 
 [dev-dependencies]
 parking_lot.workspace = true

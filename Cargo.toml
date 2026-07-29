@@ -43,6 +43,7 @@ libc = "=0.2.186"
 netlink-packet-route = "=0.30.0"
 nix = "=0.30.1"
 opentelemetry-proto = { version = "=0.32.0", default-features = false }
+oci-spec = "=0.10.0"
 parking_lot = "=0.12.5"
 prost = "=0.14.4"
 prost-types = "=0.14.4"

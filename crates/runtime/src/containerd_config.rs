@@ -5,7 +5,7 @@ use prost_types::Any;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::containerd_image::ContainerdImageConfiguration;
+use crate::containerd_image::ImageDefaults;
 use crate::containerd_resolver::resolver_path;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{container_name, metadata_labels};
@@ -26,7 +26,7 @@ pub(crate) fn fingerprint(spec: &WorkloadSpec) -> Result<String, RuntimeError> {
 
 pub(crate) fn container_record(
     spec: &WorkloadSpec,
-    image: &ContainerdImageConfiguration,
+    image: &ImageDefaults,
     settings: &ContainerdRuntimeSettings,
     snapshot_key: String,
     fingerprint: String,
@@ -71,7 +71,7 @@ pub(crate) fn validate_runtime_features(workload: &ContainerWorkload) -> Result<
 
 fn oci_spec(
     workload: &ContainerWorkload,
-    image: &ContainerdImageConfiguration,
+    image: &ImageDefaults,
     settings: &ContainerdRuntimeSettings,
 ) -> Result<Value, RuntimeError> {
     let command = workload
@@ -160,10 +160,7 @@ fn oci_spec(
     }))
 }
 
-fn environment(
-    configuration: &WorkloadConfiguration,
-    image: &ContainerdImageConfiguration,
-) -> Vec<String> {
+fn environment(configuration: &WorkloadConfiguration, image: &ImageDefaults) -> Vec<String> {
     let mut variables = image
         .environment
         .iter()

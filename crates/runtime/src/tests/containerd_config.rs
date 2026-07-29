@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::containerd_config::{container_record, fingerprint};
-use crate::containerd_image::ContainerdImageConfiguration;
+use crate::containerd_image::ImageDefaults;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_volume::managed_volume_path;
 use crate::{
@@ -13,7 +13,7 @@ use super::containerd_fixture::container_spec;
 #[test]
 fn container_record_preserves_identity_and_oci_process_configuration() {
     let spec = container_spec();
-    let image = ContainerdImageConfiguration {
+    let image = ImageDefaults {
         environment: vec!["IMAGE=yes".to_owned(), "PLAIN=image".to_owned()],
         entrypoint: vec!["/image-entrypoint".to_owned()],
         command: vec!["image-argument".to_owned()],
@@ -86,7 +86,7 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
     workload.command = None;
     workload.configuration.user = None;
     workload.configuration.mounts.clear();
-    let image = ContainerdImageConfiguration {
+    let image = ImageDefaults {
         environment: Vec::new(),
         entrypoint: vec!["/image-entrypoint".to_owned()],
         command: vec!["image-argument".to_owned()],
@@ -183,7 +183,7 @@ fn container_record_rejects_host_port_publication_without_capability() {
     assert_eq!(
         container_record(
             &spec,
-            &ContainerdImageConfiguration {
+            &ImageDefaults {
                 environment: Vec::new(),
                 entrypoint: vec!["/bin/true".to_owned()],
                 command: Vec::new(),

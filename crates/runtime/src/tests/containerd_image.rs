@@ -1,11 +1,12 @@
 use kernel_api::CommandSpec;
+use oci_spec::image::ImageConfiguration;
 
 use crate::RuntimeError;
-use crate::containerd_image::{ContainerdImageConfiguration, chain_id};
+use crate::containerd_image::{ImageDefaults, chain_id};
 
 #[test]
 fn image_configuration_combines_entrypoint_and_command() {
-    let configuration = ContainerdImageConfiguration {
+    let configuration = ImageDefaults {
         environment: Vec::new(),
         entrypoint: vec!["/bin/service".to_owned()],
         command: vec!["--serve".to_owned()],
@@ -17,6 +18,38 @@ fn image_configuration_combines_entrypoint_and_command() {
         CommandSpec {
             executable: "/bin/service".to_owned(),
             arguments: vec!["--serve".to_owned()],
+        }
+    );
+}
+
+#[test]
+fn oci_image_defaults_use_standard_config_keys() {
+    let configuration: ImageConfiguration = serde_json::from_value(serde_json::json!({
+        "architecture": "amd64",
+        "os": "linux",
+        "config": {
+            "Env": ["IMAGE=yes"],
+            "Entrypoint": ["/usr/bin/env"],
+            "Cmd": ["httpd-foreground"],
+            "WorkingDir": "/srv/http",
+            "User": "33:33"
+        },
+        "rootfs": {
+            "type": "layers",
+            "diff_ids": ["sha256:a"]
+        }
+    }))
+    .unwrap();
+
+    let defaults = ImageDefaults::from_oci(&configuration);
+    assert_eq!(defaults.environment, ["IMAGE=yes"]);
+    assert_eq!(defaults.working_directory.as_deref(), Some("/srv/http"));
+    assert_eq!(defaults.user, "33:33");
+    assert_eq!(
+        defaults.command().unwrap(),
+        CommandSpec {
+            executable: "/usr/bin/env".to_owned(),
+            arguments: vec!["httpd-foreground".to_owned()],
         }
     );
 }

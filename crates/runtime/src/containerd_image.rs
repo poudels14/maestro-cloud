@@ -2,6 +2,10 @@ use containerd::services::v1::{GetImageRequest, ReadContentRequest};
 use containerd::tonic::{Code, Status, transport::Channel};
 use containerd::types::Descriptor;
 use kernel_api::{CommandSpec, WorkloadId};
+use oci_spec::image::{
+    Config as OciConfig, Descriptor as OciDescriptor, ImageConfiguration, ImageIndex,
+    ImageManifest, Os,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -13,26 +17,37 @@ const OCI_INDEX: &str = "application/vnd.oci.image.index.v1+json";
 const DOCKER_INDEX: &str = "application/vnd.docker.distribution.manifest.list.v2+json";
 
 pub(crate) struct ContainerdImage {
-    pub(crate) configuration: ContainerdImageConfiguration,
+    pub(crate) configuration: ImageDefaults,
     pub(crate) snapshot_parent: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub(crate) struct ContainerdImageConfiguration {
-    #[serde(default)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ImageDefaults {
     pub(crate) environment: Vec<String>,
-    #[serde(default)]
     pub(crate) entrypoint: Vec<String>,
-    #[serde(default)]
     pub(crate) command: Vec<String>,
-    #[serde(default)]
     pub(crate) working_directory: Option<String>,
-    #[serde(default)]
     pub(crate) user: String,
 }
 
-impl ContainerdImageConfiguration {
+impl ImageDefaults {
+    pub(crate) fn from_oci(configuration: &ImageConfiguration) -> Self {
+        let config = configuration.config().as_ref();
+        Self {
+            environment: optional_values(config.map(OciConfig::env)),
+            entrypoint: optional_values(config.map(OciConfig::entrypoint)),
+            command: optional_values(config.map(OciConfig::cmd)),
+            working_directory: config
+                .and_then(|config| config.working_dir().as_ref())
+                .filter(|directory| !directory.is_empty())
+                .cloned(),
+            user: config
+                .and_then(|config| config.user().as_ref())
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+
     pub(crate) fn command(&self) -> Result<CommandSpec, RuntimeError> {
         let mut arguments = self.entrypoint.clone();
         arguments.extend(self.command.clone());
@@ -45,6 +60,10 @@ impl ContainerdImageConfiguration {
             arguments: arguments.collect(),
         })
     }
+}
+
+fn optional_values(values: Option<&Option<Vec<String>>>) -> Vec<String> {
+    values.and_then(Option::as_ref).cloned().unwrap_or_default()
 }
 
 pub(crate) async fn load_image(
@@ -71,12 +90,12 @@ pub(crate) async fn load_image(
         message: format!("containerd image `{reference}` has no target descriptor"),
     })?;
     let manifest = resolve_manifest(channel.clone(), namespace, target).await?;
-    let config_descriptor = manifest.config.into_descriptor();
+    let config_descriptor = containerd_descriptor(manifest.config())?;
     let configuration =
-        read_json::<OciImageConfiguration>(channel, namespace, &config_descriptor).await?;
+        read_json::<ImageConfiguration>(channel, namespace, &config_descriptor).await?;
     Ok(ContainerdImage {
-        snapshot_parent: chain_id(&configuration.rootfs.diff_ids)?,
-        configuration: configuration.config,
+        snapshot_parent: chain_id(configuration.rootfs().diff_ids())?,
+        configuration: ImageDefaults::from_oci(&configuration),
     })
 }
 
@@ -84,18 +103,18 @@ async fn resolve_manifest(
     channel: Channel,
     namespace: &str,
     target: Descriptor,
-) -> Result<OciManifest, RuntimeError> {
+) -> Result<ImageManifest, RuntimeError> {
     let descriptor = if target.media_type == OCI_INDEX || target.media_type == DOCKER_INDEX {
-        let index = read_json::<OciIndex>(channel.clone(), namespace, &target).await?;
-        index
-            .manifests
-            .into_iter()
-            .find(|descriptor| descriptor.matches_host())
+        let index = read_json::<ImageIndex>(channel.clone(), namespace, &target).await?;
+        let descriptor = index
+            .manifests()
+            .iter()
+            .find(|descriptor| matches_host(descriptor))
             .ok_or_else(|| RuntimeError::Rejected {
                 message: "containerd image index has no manifest for this Linux architecture"
                     .to_owned(),
-            })?
-            .into_descriptor()
+            })?;
+        containerd_descriptor(descriptor)?
     } else {
         target
     };
@@ -204,57 +223,24 @@ fn image_error(error: Status, reference: &str, workload_id: &WorkloadId) -> Runt
     }
 }
 
-#[derive(Deserialize)]
-struct OciIndex {
-    manifests: Vec<OciDescriptor>,
+fn matches_host(descriptor: &OciDescriptor) -> bool {
+    descriptor.platform().as_ref().is_some_and(|platform| {
+        platform.os() == &Os::Linux && platform.architecture().to_string() == host_architecture()
+    })
 }
 
-#[derive(Deserialize)]
-struct OciManifest {
-    config: OciDescriptor,
-}
-
-#[derive(Deserialize)]
-struct OciImageConfiguration {
-    config: ContainerdImageConfiguration,
-    rootfs: OciRootFs,
-}
-
-#[derive(Deserialize)]
-struct OciRootFs {
-    diff_ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OciDescriptor {
-    media_type: String,
-    digest: String,
-    size: i64,
-    platform: Option<OciPlatform>,
-}
-
-impl OciDescriptor {
-    fn matches_host(&self) -> bool {
-        self.platform.as_ref().is_some_and(|platform| {
-            platform.os == "linux" && platform.architecture == host_architecture()
-        })
-    }
-
-    fn into_descriptor(self) -> Descriptor {
-        Descriptor {
-            media_type: self.media_type,
-            digest: self.digest,
-            size: self.size,
-            annotations: Default::default(),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct OciPlatform {
-    os: String,
-    architecture: String,
+fn containerd_descriptor(descriptor: &OciDescriptor) -> Result<Descriptor, RuntimeError> {
+    Ok(Descriptor {
+        media_type: descriptor.media_type().to_string(),
+        digest: descriptor.digest().to_string(),
+        size: i64::try_from(descriptor.size()).map_err(|_| RuntimeError::Rejected {
+            message: format!(
+                "containerd metadata blob `{}` exceeds the supported descriptor size",
+                descriptor.digest()
+            ),
+        })?,
+        annotations: descriptor.annotations().clone().unwrap_or_default(),
+    })
 }
 
 fn host_architecture() -> &'static str {
