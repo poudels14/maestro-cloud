@@ -1,6 +1,6 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
-expression: openapi_document()
+expression: document
 ---
 {
   "components": {
@@ -6630,7 +6630,7 @@ expression: openapi_document()
   },
   "info": {
     "title": "Maestro Cloud API",
-    "version": "0.6.4"
+    "version": "<release-version>"
   },
   "openapi": "3.0.4",
   "paths": {}

@@ -30,5 +30,15 @@ fn registry_distinguishes_unknown_kinds_from_malformed_builtins() {
 
 #[test]
 fn openapi_document_matches_the_reviewed_contract() {
-    insta::assert_json_snapshot!(openapi_document());
+    let mut document = openapi_document();
+    let version = document
+        .pointer_mut("/info/version")
+        .expect("OpenAPI release version");
+    assert!(
+        version.as_str().is_some_and(|version| !version.is_empty()),
+        "OpenAPI release version must be a non-empty string"
+    );
+    *version = serde_json::json!("<release-version>");
+
+    insta::assert_json_snapshot!(document);
 }
