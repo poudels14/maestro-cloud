@@ -9,6 +9,7 @@ export {
 } from "./queries";
 export {
   attachPreviewResources,
+  isSystemService,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,

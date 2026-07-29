@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { EllipsisVertical, Trash2 } from "lucide-solid";
 import type { Service } from "./types";
-import { serviceDisplayStatus } from "./serviceView";
+import { isSystemService, serviceDisplayStatus } from "./serviceView";
 import { StatusBadge } from "@maestro/kit";
 
 function ServiceCard(props: { service: Service; onClick: () => void; onDelete: () => void }) {
@@ -41,24 +41,26 @@ function ServiceCard(props: { service: Service; onClick: () => void; onDelete: (
             </span>
           </Show>
           <StatusBadge status={status()} />
-          <div onClick={(e: MouseEvent) => e.stopPropagation()}>
-            <DropdownMenu>
-              <DropdownMenu.Trigger class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-[color,background-color,transform] duration-150 ease-out-strong active:scale-[0.96] outline-none">
-                <EllipsisVertical class="size-4" />
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-[160px]">
-                  <DropdownMenu.Item
-                    class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
-                    onSelect={() => props.onDelete()}
-                  >
-                    <Trash2 class="size-3.5" />
-                    Remove service
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu>
-          </div>
+          <Show when={!isSystemService(props.service)}>
+            <div onClick={(e: MouseEvent) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenu.Trigger class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100 transition-[color,background-color,transform] duration-150 ease-out-strong active:scale-[0.96] outline-none">
+                  <EllipsisVertical class="size-4" />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-[160px]">
+                    <DropdownMenu.Item
+                      class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+                      onSelect={() => props.onDelete()}
+                    >
+                      <Trash2 class="size-3.5" />
+                      Remove service
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu>
+            </div>
+          </Show>
         </div>
       </div>
     </div>

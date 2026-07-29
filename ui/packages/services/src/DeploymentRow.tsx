@@ -9,6 +9,7 @@ import { DeploymentMenu } from "./DeploymentMenu";
 
 type Props = {
   deployment: Deployment;
+  actionsEnabled: boolean;
   isLatest: boolean;
   isSelected: boolean;
   onOpen: () => void;
@@ -78,15 +79,17 @@ function DeploymentRow(props: Props) {
           >
             {formatDateTime(props.deployment.status.createdAt)}
           </span>
-          <div onClick={(event) => event.stopPropagation()}>
-            <DeploymentMenu
-              status={phase()}
-              onCancel={props.onCancel}
-              onRemove={props.onRemove}
-              onRedeploy={props.onRedeploy}
-              onRestart={props.onRestart}
-            />
-          </div>
+          <Show when={props.actionsEnabled}>
+            <div onClick={(event) => event.stopPropagation()}>
+              <DeploymentMenu
+                status={phase()}
+                onCancel={props.onCancel}
+                onRemove={props.onRemove}
+                onRedeploy={props.onRedeploy}
+                onRestart={props.onRestart}
+              />
+            </div>
+          </Show>
         </div>
       </div>
     </div>

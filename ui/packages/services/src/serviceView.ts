@@ -27,6 +27,10 @@ function serviceHasBuild(service: Service): boolean {
   return service.spec.artifact.type === "build";
 }
 
+function isSystemService(service: Service): boolean {
+  return service.meta.id.startsWith("maestro-system-");
+}
+
 function userServices(services: Service[]): Service[] {
   return services.filter((service) => service.previewResource == null);
 }
@@ -43,6 +47,7 @@ function servicePreviews(services: Service[], baseServiceId: string): Service[] 
 
 export {
   attachPreviewResources,
+  isSystemService,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,

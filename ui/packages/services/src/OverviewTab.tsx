@@ -3,7 +3,7 @@ import { GitPullRequest } from "lucide-solid";
 import type { ServicesApi } from "./api";
 import type { Service } from "./types";
 import { secretNames } from "./secretView";
-import { serviceDisplayStatus, servicePreviews } from "./serviceView";
+import { isSystemService, serviceDisplayStatus, servicePreviews } from "./serviceView";
 import { StatusBadge } from "@maestro/kit";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
@@ -114,7 +114,7 @@ function OverviewTab(props: {
 
       {props.ingress}
 
-      <Show when={!isPreview()}>
+      <Show when={!isPreview() && !isSystemService(props.service)}>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           <ReplicasEditor api={props.api} service={props.service} />
           <FreezeToggle api={props.api} service={props.service} />

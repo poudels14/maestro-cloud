@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@maestro/kit";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
 import type { Deployment, Service } from "./types";
+import { isSystemService } from "./serviceView";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
@@ -158,6 +159,7 @@ function DeploymentsTab(props: {
                 {(deployment, index) => (
                   <DeploymentRow
                     deployment={deployment}
+                    actionsEnabled={!isSystemService(props.service)}
                     isLatest={index() === 0}
                     isSelected={selectedId() === deployment.meta.id}
                     onOpen={() =>

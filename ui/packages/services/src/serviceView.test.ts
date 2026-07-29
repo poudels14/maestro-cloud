@@ -3,6 +3,7 @@ import type { ApiSchemas } from "@maestro/api-client";
 import type { Service } from "./types";
 import {
   attachPreviewResources,
+  isSystemService,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,
@@ -99,4 +100,6 @@ test("projects service status and artifact capabilities from resource fields", (
   expect(serviceDisplayStatus(deleting)).toBe("TERMINATED");
   expect(serviceHasBuild(idle)).toBe(false);
   expect(serviceHasBuild(build)).toBe(true);
+  expect(isSystemService(serviceResource("maestro-system-traefik") as Service)).toBe(true);
+  expect(isSystemService(idle)).toBe(false);
 });

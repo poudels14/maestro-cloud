@@ -6,7 +6,7 @@ import { Rocket } from "lucide-solid";
 import type { ServicesApi } from "./api";
 import type { Service } from "./types";
 import { serviceQueryKeys, servicesQuery } from "./queries";
-import { userServices as visibleUserServices } from "./serviceView";
+import { isSystemService, userServices as visibleUserServices } from "./serviceView";
 import { ErrorBanner, SectionHeader } from "@maestro/kit";
 import { ServiceCard } from "./ServiceCard";
 import { ConfirmDialog } from "@maestro/kit";
@@ -26,6 +26,11 @@ function ServicesGrid(props: { api: ServicesApi }) {
   }));
 
   const userServices = () => visibleUserServices(services.data ?? []);
+  const deleteError = () => {
+    const error = deleteMutation.error;
+    if (!error) return null;
+    return error instanceof Error ? error.message : "Failed to remove service";
+  };
 
   const openService = (service: Service) =>
     navigate({
@@ -62,7 +67,10 @@ function ServicesGrid(props: { api: ServicesApi }) {
                 <ServiceCard
                   service={service}
                   onClick={() => openService(service)}
-                  onDelete={() => setDeleteTarget(service)}
+                  onDelete={() => {
+                    deleteMutation.reset();
+                    setDeleteTarget(service);
+                  }}
                 />
               )}
             </For>
@@ -78,6 +86,9 @@ function ServicesGrid(props: { api: ServicesApi }) {
             Are you sure you want to remove{" "}
             <span class="font-medium text-gray-700">{deleteTarget()?.spec.name}</span>? This will
             delete all deployments and cannot be undone.
+            <Show when={deleteError()}>
+              {(error) => <span class="mt-3 block text-red-600">{error()}</span>}
+            </Show>
           </>
         }
         confirmLabel="Remove"
@@ -85,7 +96,9 @@ function ServicesGrid(props: { api: ServicesApi }) {
         busy={deleteMutation.isPending}
         onConfirm={() => {
           const target = deleteTarget();
-          if (target) deleteMutation.mutate(target);
+          if (target && !isSystemService(target)) {
+            deleteMutation.mutate(target);
+          }
         }}
         onCancel={() => setDeleteTarget(null)}
       />
