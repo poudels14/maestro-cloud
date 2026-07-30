@@ -2,9 +2,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use cluster::TailscaleAuthKeyRecord;
-use kernel_api::{
-    FirewallPolicy, FirewallPolicyId, Generation, Object, Service, ServiceId, Timestamp,
-};
+use kernel_api::{Generation, Object, Service, ServiceId, Timestamp};
 use kernel_controller::{ControllerError, FencedStore, TimestampClock};
 use kernel_store::{
     Compare, ExpectedVersion, Keyspace, Mutation, StoreKey, Transaction, TransactionOutcome,
@@ -15,15 +13,13 @@ use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 
 use crate::tailscale_resources::{TailscaleResourceError, TailscaleSystemResources};
-use crate::tailscale_resources::{is_managed, resource_ids};
+use crate::tailscale_resources::{is_managed, resource_id};
 
 const MAXIMUM_CONFLICT_RETRIES: usize = 8;
 
 pub(crate) struct TailscaleResourceReconciler {
     service_id: ServiceId,
-    policy_id: FirewallPolicyId,
     service_key: StoreKey,
-    policy_key: StoreKey,
     auth_key: StoreKey,
     auth_controls: kernel_store::StorePrefix,
     desired: Option<TailscaleSystemResources>,
@@ -35,16 +31,13 @@ impl TailscaleResourceReconciler {
         desired: Option<TailscaleSystemResources>,
     ) -> Result<Self, TailscaleReconcileError> {
         let keyspace = Keyspace::new(cluster_id);
-        let (service_id, policy_id) = resource_ids()?;
+        let service_id = resource_id()?;
         let service_kind = kernel_api::ResourceKind::new("Service")?;
-        let policy_kind = kernel_api::ResourceKind::new("FirewallPolicy")?;
         Ok(Self {
             service_key: keyspace.resource(&service_kind, &service_id.clone().into()),
-            policy_key: keyspace.resource(&policy_kind, &policy_id.clone().into()),
             auth_key: keyspace.tailscale_auth_key(),
             auth_controls: keyspace.tailscale_controls(),
             service_id,
-            policy_id,
             desired,
         })
     }
@@ -93,33 +86,18 @@ impl TailscaleResourceReconciler {
         for _ in 0..MAXIMUM_CONFLICT_RETRIES {
             let current_service =
                 read_resource::<Service>(store, &self.service_key, "Service").await?;
-            let current_policy =
-                read_resource::<FirewallPolicy>(store, &self.policy_key, "FirewallPolicy").await?;
             validate_id(current_service.as_ref(), &self.service_id, "Service")?;
-            validate_id(current_policy.as_ref(), &self.policy_id, "FirewallPolicy")?;
 
-            let compares = vec![
-                compare(&self.service_key, current_service.as_ref()),
-                compare(&self.policy_key, current_policy.as_ref()),
-            ];
+            let compares = vec![compare(&self.service_key, current_service.as_ref())];
             let service_write = converge(
                 current_service,
                 desired.as_ref().map(|desired| &desired.service),
                 now,
                 "Service",
             )?;
-            let policy_write = converge(
-                current_policy,
-                desired.as_ref().map(|desired| &desired.firewall_policy),
-                now,
-                "FirewallPolicy",
-            )?;
             let mut mutations = Vec::new();
             if let Some(service) = service_write {
                 mutations.push(put(&self.service_key, &service, "Service")?);
-            }
-            if let Some(policy) = policy_write {
-                mutations.push(put(&self.policy_key, &policy, "FirewallPolicy")?);
             }
             if mutations.is_empty() {
                 store.verify_leadership().await?;

@@ -3,16 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use cluster::ClusterConfig;
 use firewall::{SystemHostAccess, SystemHostEndpoint};
 use kernel_api::{
-    AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, FirewallDirection, FirewallPolicy,
-    FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, FirewallRule, FirewallSubject,
-    FirewallVerdict, Generation, HealthCheckSpec, HealthProbe, NodeApiAccess, Object, ObjectMeta,
-    OwnerReference, Ownership, PlacementConstraint, ReplicaSpread, ResourceId, ResourceKind,
-    ResourceName, ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId,
-    ServiceSpec, ServiceStatus, TransportProtocol, VolumeAccess, VolumeMountSpec, VolumeSource,
+    AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, Generation, HealthCheckSpec,
+    HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ReplicaSpread,
+    ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec,
+    ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource,
 };
 
 const GATEWAY_SERVICE_ID: &str = "maestro-system-tailscale-gateway";
-const GATEWAY_POLICY_ID: &str = "maestro-system-tailscale-egress";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "tailscale-gateway";
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
@@ -95,8 +92,6 @@ wait "$containerboot_pid"
 pub(crate) struct TailscaleSystemResources {
     /// Highly available subnet-router service.
     pub(crate) service: Service,
-    /// Workload egress policy attached to the subnet routers.
-    pub(crate) firewall_policy: FirewallPolicy,
     /// Protected daemon API access granted only to running gateway replicas.
     pub(crate) system_host_access: SystemHostAccess,
 }
@@ -229,48 +224,8 @@ impl TailscaleSystemResources {
         };
         service.spec.validate()?;
 
-        let firewall_policy = Object {
-            meta: ObjectMeta {
-                id: FirewallPolicyId::new(GATEWAY_POLICY_ID)?,
-                labels: BTreeMap::new(),
-                annotations,
-                revision: ResourceRevision::default(),
-                generation: Generation(1),
-                owner_refs: vec![OwnerReference {
-                    resource: ResourceId::new(
-                        ResourceKind::new("Service")?,
-                        ResourceName::from(service_id.clone()),
-                    ),
-                    ownership: Ownership::Controller,
-                }],
-                finalizers: BTreeSet::new(),
-                deletion_timestamp: None,
-            },
-            spec: FirewallPolicySpec {
-                direction: FirewallDirection::Egress,
-                subject: FirewallSubject::Service(service_id),
-                rules: routes
-                    .iter()
-                    .map(|route| FirewallRule {
-                        cidr: route.clone(),
-                        protocol: TransportProtocol::Any,
-                        ports: Vec::new(),
-                        verdict: FirewallVerdict::Allow,
-                    })
-                    .collect(),
-                // Tailscale coordination, DERP, STUN, and direct peers use a
-                // changing public endpoint set, so the remaining egress stays open.
-                default_verdict: FirewallVerdict::Allow,
-            },
-            status: FirewallPolicyStatus {
-                applied_generation: Generation::default(),
-                ruleset_digest: None,
-                conditions: Vec::new(),
-            },
-        };
         Ok(Some(Self {
             service,
-            firewall_policy,
             system_host_access,
         }))
     }
@@ -308,12 +263,8 @@ pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool 
         .is_some_and(|value| value == MANAGED_VALUE)
 }
 
-pub(crate) fn resource_ids() -> Result<(ServiceId, FirewallPolicyId), kernel_api::InvalidIdentifier>
-{
-    Ok((
-        ServiceId::new(GATEWAY_SERVICE_ID)?,
-        FirewallPolicyId::new(GATEWAY_POLICY_ID)?,
-    ))
+pub(crate) fn resource_id() -> Result<ServiceId, kernel_api::InvalidIdentifier> {
+    ServiceId::new(GATEWAY_SERVICE_ID)
 }
 
 fn managed_annotation() -> AnnotationKey {

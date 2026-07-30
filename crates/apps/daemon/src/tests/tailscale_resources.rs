@@ -4,9 +4,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use cluster::TailscaleAuthKeyRecord;
 use kernel_api::{
-    ArtifactTemplate, ClusterId, ExecPolicy, FirewallDirection, FirewallPolicy, FirewallSubject,
-    FirewallVerdict, HealthProbe, NodeId, NodeInstanceId, NodeRole, ReplicaSpread, ResourceKind,
-    ResourceName, SecretValue, Service, Timestamp, TransportProtocol, VolumeSource,
+    ArtifactTemplate, ClusterId, ExecPolicy, FirewallPolicy, HealthProbe, NodeId, NodeInstanceId,
+    NodeRole, ReplicaSpread, ResourceKind, ResourceName, SecretValue, Service, Timestamp,
+    VolumeSource,
 };
 use kernel_controller::{
     ControllerError, FencedStore, LeaderIdentity, LeadershipToken, TimestampClock,
@@ -23,7 +23,7 @@ use crate::tailscale_resources::{AUTH_SCRIPT, TAILSCALE_IMAGE, TailscaleSystemRe
 use super::cluster_with_nodes;
 
 #[test]
-fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::error::Error>> {
+fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster =
         cluster_with_nodes(&[("node-a", NodeRole::Master), ("node-b", NodeRole::Worker)])?;
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
@@ -190,28 +190,6 @@ fn builds_pinned_gateway_and_cluster_egress_policy() -> Result<(), Box<dyn std::
         required(service.spec.health_check, "gateway health check")?.probe,
         HealthProbe::Http { port: 9_002, ref path } if path == "/healthz"
     ));
-
-    let policy = resources.firewall_policy;
-    assert_eq!(policy.spec.direction, FirewallDirection::Egress);
-    assert_eq!(
-        policy.spec.subject,
-        FirewallSubject::Service(service.meta.id)
-    );
-    assert_eq!(policy.spec.default_verdict, FirewallVerdict::Allow);
-    assert_eq!(
-        policy
-            .spec
-            .rules
-            .iter()
-            .map(|rule| rule.cidr.as_str())
-            .collect::<Vec<_>>(),
-        ["172.22.0.0/24", "172.22.1.0/24"]
-    );
-    assert!(policy.spec.rules.iter().all(|rule| {
-        rule.protocol == TransportProtocol::Any
-            && rule.ports.is_empty()
-            && rule.verdict == FirewallVerdict::Allow
-    }));
     Ok(())
 }
 
@@ -244,14 +222,14 @@ fn untagged_gateway_omits_the_advertise_tags_argument() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn omitting_tailscale_omits_both_resources() -> Result<(), Box<dyn std::error::Error>> {
+fn omitting_tailscale_omits_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
     let cluster = cluster_with_nodes(&[("node-a", NodeRole::Master)])?;
     assert!(TailscaleSystemResources::from_cluster(&cluster)?.is_none());
     Ok(())
 }
 
 #[tokio::test]
-async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
+async fn reconciles_enable_update_and_removal_as_fenced_writes()
 -> Result<(), Box<dyn std::error::Error>> {
     let cluster_id = ClusterId::new("tailscale-reconcile")?;
     let (store, fenced, _session) = fenced_store(&cluster_id).await?;
@@ -273,9 +251,12 @@ async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
     let reconciler = TailscaleResourceReconciler::new(&cluster_id, Some(desired))?;
     reconciler.reconcile(&fenced, Timestamp(10_000)).await?;
     let service: Service = read(&store, &cluster_id, "Service").await?;
-    let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
     assert_eq!(service.meta.generation.0, 1);
-    assert_eq!(policy.meta.generation.0, 1);
+    assert!(
+        list::<FirewallPolicy>(&store, &cluster_id, "FirewallPolicy")
+            .await?
+            .is_empty()
+    );
 
     put_auth_key(
         &store,
@@ -306,22 +287,28 @@ async fn reconciles_enable_update_and_removal_as_one_fenced_pair()
         .reconcile(&fenced, Timestamp(20_000))
         .await?;
     let service: Service = read(&store, &cluster_id, "Service").await?;
-    let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
     assert_eq!(service.meta.generation.0, 3);
     assert_eq!(service.spec.replicas, 1);
     assert_eq!(
         gateway_auth_key(&service),
         "tskey-auth-live-rotation-secret"
     );
-    assert_eq!(policy.meta.generation.0, 1);
+    assert!(
+        list::<FirewallPolicy>(&store, &cluster_id, "FirewallPolicy")
+            .await?
+            .is_empty()
+    );
 
     TailscaleResourceReconciler::new(&cluster_id, None)?
         .reconcile(&fenced, Timestamp(30_000))
         .await?;
     let service: Service = read(&store, &cluster_id, "Service").await?;
-    let policy: FirewallPolicy = read(&store, &cluster_id, "FirewallPolicy").await?;
     assert_eq!(service.meta.deletion_timestamp, Some(Timestamp(30_000)));
-    assert_eq!(policy.meta.deletion_timestamp, Some(Timestamp(30_000)));
+    assert!(
+        list::<FirewallPolicy>(&store, &cluster_id, "FirewallPolicy")
+            .await?
+            .is_empty()
+    );
     Ok(())
 }
 
