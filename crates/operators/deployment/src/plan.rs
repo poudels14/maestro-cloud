@@ -344,7 +344,9 @@ fn advance_readiness(
     } else if all_ready(deployment, &slots, replicas, count) {
         desired.phase = DeploymentPhase::Ready;
         desired.ready_at.get_or_insert(now);
-    } else if slots.len() == usize::try_from(count).unwrap_or(usize::MAX) {
+    } else if desired.phase != DeploymentPhase::Ready
+        && slots.len() == usize::try_from(count).unwrap_or(usize::MAX)
+    {
         desired.phase = DeploymentPhase::PendingReady;
     }
 }

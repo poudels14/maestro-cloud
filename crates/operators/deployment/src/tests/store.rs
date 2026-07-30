@@ -92,6 +92,51 @@ async fn store_backed_controller_replaces_a_stale_queued_generation()
 }
 
 #[tokio::test]
+async fn temporarily_unready_active_replica_does_not_block_redeploy()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(image_service()).await?;
+    world.reconcile(Timestamp(1_000)).await?;
+    world.reconcile(Timestamp(2_000)).await?;
+    let deployment = world.one::<Deployment>("Deployment").await?;
+    let assignment = crate::tests::plan_support::assignment(&deployment, "assignment-1", 1);
+    world
+        .put("Assignment", &assignment.meta.id, &assignment)
+        .await?;
+    world.reconcile(Timestamp(3_000)).await?;
+    let replica = ready_replica(&deployment, &assignment.meta.id);
+    world
+        .put("ReplicaState", &replica.meta.id, &replica)
+        .await?;
+    world.reconcile(Timestamp(4_000)).await?;
+
+    world
+        .update::<ReplicaState>("ReplicaState", replica.meta.id.as_str(), |replica| {
+            replica.status.phase = DeploymentPhase::PendingReady;
+            replica.status.restart_attempts = 1;
+        })
+        .await?;
+    world
+        .update::<Service>("Service", "api", |service| {
+            service.meta.generation = Generation(2);
+            service.spec.version = "replacement".to_string();
+        })
+        .await?;
+
+    let redeployed = world.reconcile(Timestamp(5_000)).await?;
+    assert_eq!(redeployed.created_deployments, 1);
+    let deployments = world.list::<Deployment>("Deployment").await?;
+    assert!(deployments.iter().any(|deployment| {
+        deployment.spec.service_generation == Generation(1)
+            && deployment.status.phase == DeploymentPhase::Ready
+    }));
+    assert!(deployments.iter().any(|deployment| {
+        deployment.spec.service_generation == Generation(2)
+            && deployment.status.phase == DeploymentPhase::Queued
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn atomic_writer_conflict_creates_no_partial_lifecycle_generation()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new(image_service()).await?;
