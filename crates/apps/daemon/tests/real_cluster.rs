@@ -26,6 +26,8 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 
 #[path = "real_cluster/dns.rs"]
 mod dns;
+#[path = "real_cluster/ingress.rs"]
+mod ingress;
 #[path = "real_cluster/network.rs"]
 mod network;
 #[path = "real_cluster/scenario.rs"]

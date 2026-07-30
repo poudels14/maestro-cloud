@@ -1,5 +1,8 @@
 use kernel_api::{Assignment, ClusterId, DnsRecord, DnsRecordId, ReplicaState, Service};
 
+/// Comma-separated short DNS names published for an annotated Service.
+pub const DNS_ALIASES_ANNOTATION: &str = "dns.maestro.dev/aliases";
+
 /// DNS publication policy applied to every generated service record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DnsSettings {
