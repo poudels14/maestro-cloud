@@ -18,8 +18,8 @@ use runtime::{HostPortPublication, PortProtocol};
 
 use crate::system_service_reconciler::SystemServiceReconciler;
 use crate::traefik_resources::{
-    TRAEFIK_IMAGE, TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID, TraefikSystemResources,
-    preserve_client_identity,
+    TRAEFIK_DNS_ALIAS, TRAEFIK_IMAGE, TRAEFIK_MANAGED_OWNER, TRAEFIK_SERVICE_ID,
+    TraefikSystemResources, preserve_client_identity,
 };
 
 use super::cluster_with_nodes;
@@ -35,6 +35,16 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
     let resources = TraefikSystemResources::for_cluster(&cluster, &security())?;
     let service = &resources.service;
     assert_eq!(service.meta.id.as_str(), TRAEFIK_SERVICE_ID);
+    assert_eq!(
+        service
+            .meta
+            .annotations
+            .get(&kernel_api::AnnotationKey(
+                dns::DNS_ALIASES_ANNOTATION.to_owned()
+            ))
+            .map(String::as_str),
+        Some(TRAEFIK_DNS_ALIAS)
+    );
     assert_eq!(service.spec.name, "Traefik");
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.node_api, NodeApiAccess::IdentityAndTelemetry);

@@ -1,13 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use kernel_api::{
-    Assignment, DeploymentPhase, DnsRecordSpec, DnsRecordValue, ReplicaState, Service,
-    assignment_workload_address,
+    AnnotationKey, Assignment, DeploymentPhase, DnsRecordSpec, DnsRecordValue, ReplicaState,
+    Service, assignment_workload_address,
 };
 
-use crate::validation::{replica_name, service_name};
-use crate::{DnsPlanError, DnsSettings};
+use crate::validation::{alias_name, replica_name, service_name};
+use crate::{DNS_ALIASES_ANNOTATION, DnsPlanError, DnsSettings};
 
 pub(crate) fn desired_specs(
     cluster_id: &kernel_api::ClusterId,
@@ -79,6 +79,16 @@ pub(crate) fn desired_specs(
     addresses.dedup();
     let mut specs = Vec::new();
     let service_name = service_name(&service.meta.id, cluster_id)?;
+    let aliases = service
+        .meta
+        .annotations
+        .get(&AnnotationKey(DNS_ALIASES_ANNOTATION.to_owned()))
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty())
+        .map(|alias| alias_name(alias, cluster_id))
+        .collect::<Result<BTreeSet<_>, _>>()?;
     let ipv4 = addresses
         .iter()
         .filter_map(|address| match address {
@@ -89,9 +99,14 @@ pub(crate) fn desired_specs(
     if !ipv4.is_empty() {
         specs.push(DnsRecordSpec {
             name: service_name.clone(),
-            values: ipv4,
+            values: ipv4.clone(),
             ttl_secs: settings.ttl_secs,
         });
+        specs.extend(aliases.iter().cloned().map(|name| DnsRecordSpec {
+            name,
+            values: ipv4.clone(),
+            ttl_secs: settings.ttl_secs,
+        }));
     }
     let ipv6 = addresses
         .into_iter()
@@ -103,9 +118,14 @@ pub(crate) fn desired_specs(
     if !ipv6.is_empty() {
         specs.push(DnsRecordSpec {
             name: service_name,
-            values: ipv6,
+            values: ipv6.clone(),
             ttl_secs: settings.ttl_secs,
         });
+        specs.extend(aliases.into_iter().map(|name| DnsRecordSpec {
+            name,
+            values: ipv6.clone(),
+            ttl_secs: settings.ttl_secs,
+        }));
     }
     for (assignment, address) in addressed {
         specs.push(DnsRecordSpec {

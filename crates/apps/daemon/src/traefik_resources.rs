@@ -13,6 +13,7 @@ use runtime::{HostPortPublication, PortProtocol};
 
 pub(crate) const TRAEFIK_SERVICE_ID: &str = "maestro-system-traefik";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
+pub(crate) const TRAEFIK_DNS_ALIAS: &str = "web";
 pub(crate) const TRAEFIK_MANAGED_OWNER: &str = "traefik";
 pub(crate) const TRAEFIK_IMAGE: &str =
     "traefik:v3.6.23@sha256:f5dba1e65167778cd5f8d1b463fc5d200f49d40c6458fc9f4b391a68ebfb9534";
@@ -89,10 +90,13 @@ impl TraefikSystemResources {
             meta: ObjectMeta {
                 id: service_id.clone(),
                 labels: BTreeMap::new(),
-                annotations: BTreeMap::from([(
-                    managed_annotation(),
-                    TRAEFIK_MANAGED_OWNER.to_owned(),
-                )]),
+                annotations: BTreeMap::from([
+                    (managed_annotation(), TRAEFIK_MANAGED_OWNER.to_owned()),
+                    (
+                        AnnotationKey(dns::DNS_ALIASES_ANNOTATION.to_owned()),
+                        TRAEFIK_DNS_ALIAS.to_owned(),
+                    ),
+                ]),
                 revision: ResourceRevision::default(),
                 generation: Generation(1),
                 owner_refs: Vec::new(),

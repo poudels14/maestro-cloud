@@ -19,6 +19,10 @@ pub(crate) fn replica_name(
     fqdn(&workload_hostname(service_id, replica_index), cluster_id)
 }
 
+pub(crate) fn alias_name(alias: &str, cluster_id: &ClusterId) -> Result<String, DnsPlanError> {
+    fqdn(alias, cluster_id)
+}
+
 fn fqdn(host: &str, cluster_id: &ClusterId) -> Result<String, DnsPlanError> {
     let name = format!("{host}.{}.{ZONE}", cluster_id.as_str());
     let relative = name.trim_end_matches('.');

@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::unix::fs::PermissionsExt;
 
-use kernel_api::WorkloadId;
+use kernel_api::{ClusterId, WorkloadId};
 
 use crate::containerd_resolver::prepare_resolver_file;
 
@@ -13,13 +13,14 @@ async fn containerd_resolver_file_is_private_readable_and_replaceable() {
         root.path(),
         &workload_id,
         IpAddr::V4(Ipv4Addr::new(10, 42, 0, 1)),
+        &ClusterId::new("cluster-1").unwrap(),
     )
     .await
     .unwrap();
 
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "nameserver 10.42.0.1\n"
+        "search cluster-1.maestro.internal\nnameserver 10.42.0.1\n"
     );
     assert_eq!(
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -34,10 +35,18 @@ async fn containerd_resolver_file_is_private_readable_and_replaceable() {
         0o700
     );
 
-    prepare_resolver_file(root.path(), &workload_id, IpAddr::V6(Ipv6Addr::LOCALHOST))
-        .await
-        .unwrap();
-    assert_eq!(std::fs::read_to_string(path).unwrap(), "nameserver ::1\n");
+    prepare_resolver_file(
+        root.path(),
+        &workload_id,
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        &ClusterId::new("cluster-2").unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "search cluster-2.maestro.internal\nnameserver ::1\n"
+    );
 }
 
 #[tokio::test]
@@ -53,6 +62,7 @@ async fn containerd_resolver_rejects_a_symlinked_workload_directory() {
             root.path(),
             &WorkloadId::new("workload-1").unwrap(),
             IpAddr::V4(Ipv4Addr::LOCALHOST),
+            &ClusterId::new("cluster-1").unwrap(),
         )
         .await
         .is_err()

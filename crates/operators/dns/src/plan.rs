@@ -39,6 +39,7 @@ pub fn plan(input: DnsInput) -> Result<DnsPlan, DnsPlanError> {
     let replica_values = replicas.values().cloned().collect::<Vec<_>>();
     let mut output = DnsPlan::default();
     let mut deleted = orphaned.into_iter().collect::<BTreeSet<_>>();
+    let mut desired_owners = BTreeMap::<DnsRecordId, ServiceId>::new();
     for service in services.values() {
         let existing = records_by_service
             .get(&service.meta.id)
@@ -61,6 +62,14 @@ pub fn plan(input: DnsInput) -> Result<DnsPlan, DnsPlanError> {
         let mut desired_ids = BTreeSet::new();
         for spec in specs {
             let desired = new_record(&input.cluster_id, service, spec)?;
+            if desired_owners
+                .insert(desired.meta.id.clone(), service.meta.id.clone())
+                .is_some_and(|owner| owner != service.meta.id)
+            {
+                return Err(DnsPlanError::RecordIdentityCollision {
+                    record_id: desired.meta.id,
+                });
+            }
             desired_ids.insert(desired.meta.id.clone());
             if let Some(current) = records.get(&desired.meta.id) {
                 if !is_managed(current)

@@ -154,6 +154,12 @@ fn host_config(
             .configuration
             .dns_server
             .map(|server| vec![server.to_string()]),
+        dns_search: container.configuration.dns_server.map(|_| {
+            vec![format!(
+                "{}.maestro.internal",
+                container.configuration.metadata.cluster_id
+            )]
+        }),
         port_bindings,
         restart_policy: Some(RestartPolicy {
             name: Some(RestartPolicyNameEnum::NO),

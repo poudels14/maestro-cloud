@@ -34,6 +34,10 @@ fn docker_config_preserves_identity_and_disables_runtime_restarts() {
     assert_eq!(host.network_mode, None);
     assert_eq!(host.dns, Some(vec!["10.42.0.1".to_owned()]));
     assert_eq!(
+        host.dns_search,
+        Some(vec!["cluster-1.maestro.internal".to_owned()])
+    );
+    assert_eq!(
         host.restart_policy.unwrap().name,
         Some(RestartPolicyNameEnum::NO)
     );

@@ -292,7 +292,7 @@ fn render_route(
         let affinity_service = format!("{service}-a-{node_label}");
         insert_servers(stage, &affinity_service, &node_targets);
         let affinity_router = format!("{router}-a-{node_label}");
-        let token = affinity_token(cluster_id, node_id);
+        let token = node_affinity_token(cluster_id, node_id);
         insert_router(
             routers,
             &affinity_router,
@@ -388,7 +388,8 @@ fn short_hash(parts: &[&str]) -> String {
         .collect()
 }
 
-fn affinity_token(cluster_id: &ClusterId, node_id: &NodeId) -> String {
+/// Returns the opaque token accepted by a route's configured affinity header.
+pub fn node_affinity_token(cluster_id: &ClusterId, node_id: &NodeId) -> String {
     let mut hash = Sha256::new();
     hash.update(AFFINITY_DOMAIN);
     hash.update(cluster_id.as_str().as_bytes());

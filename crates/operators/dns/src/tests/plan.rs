@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
-    ClusterId, DeploymentId, DeploymentPhase, DnsRecord, ExecPolicy, Generation, NodeApiAccess,
-    NodeId, Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
+    AnnotationKey, ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec,
+    AssignmentStatus, ClusterId, DeploymentId, DeploymentPhase, DnsRecord, ExecPolicy, Generation,
+    NodeApiAccess, NodeId, Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
     ReplicaStateSpec, ReplicaStateStatus, ResourceRevision, RolloutState, Service, ServiceId,
     ServiceSpec, ServiceStatus, Timestamp,
 };
 
-use crate::{DnsInput, DnsPlanError, DnsSettings, plan};
+use crate::{DNS_ALIASES_ANNOTATION, DnsInput, DnsPlanError, DnsSettings, plan};
 
 #[test]
 fn ready_service_generates_stable_and_replica_record_sets() {
@@ -29,6 +29,38 @@ fn record_projection_is_independent_of_assignment_input_order() {
     reversed.replicas.reverse();
     let second = plan(reversed).expect("second plan").create_records;
     assert_eq!(first, second);
+}
+
+#[test]
+fn annotated_service_publishes_short_address_aliases() {
+    let mut world = World::ready();
+    world.service.meta.annotations.insert(
+        AnnotationKey(DNS_ALIASES_ANNOTATION.to_owned()),
+        "web, web".to_owned(),
+    );
+
+    let records = plan(world.input()).expect("DNS plan").create_records;
+    let alias = records
+        .iter()
+        .find(|record| {
+            record.spec.name == "web.cluster-1.maestro.internal."
+                && matches!(
+                    record.spec.values.first(),
+                    Some(kernel_api::DnsRecordValue::A(_))
+                )
+        })
+        .expect("web IPv4 alias");
+    assert_eq!(
+        alias.spec.values,
+        [kernel_api::DnsRecordValue::A(Ipv4Addr::new(10, 42, 1, 10))]
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.spec.name == "web.cluster-1.maestro.internal.")
+            .count(),
+        2
+    );
 }
 
 #[test]

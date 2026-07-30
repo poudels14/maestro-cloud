@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use kernel_api::WorkloadId;
+use kernel_api::{ClusterId, WorkloadId};
 
 use crate::RuntimeError;
 use crate::containerd_io::task_paths;
@@ -19,10 +19,12 @@ pub(crate) async fn prepare_resolver_file(
     root: &Path,
     workload_id: &WorkloadId,
     dns_server: IpAddr,
+    cluster_id: &ClusterId,
 ) -> Result<PathBuf, RuntimeError> {
     let path = resolver_path(root, workload_id);
     let prepared = path.clone();
-    tokio::task::spawn_blocking(move || write_resolver(&prepared, dns_server))
+    let search_domain = format!("{}.maestro.internal", cluster_id.as_str());
+    tokio::task::spawn_blocking(move || write_resolver(&prepared, dns_server, &search_domain))
         .await
         .map_err(|error| RuntimeError::Unavailable {
             message: format!("containerd resolver preparation task failed: {error}"),
@@ -30,7 +32,11 @@ pub(crate) async fn prepare_resolver_file(
     Ok(path)
 }
 
-fn write_resolver(path: &Path, dns_server: IpAddr) -> Result<(), RuntimeError> {
+fn write_resolver(
+    path: &Path,
+    dns_server: IpAddr,
+    search_domain: &str,
+) -> Result<(), RuntimeError> {
     let directory = path.parent().ok_or_else(|| RuntimeError::InvalidSpec {
         message: format!(
             "containerd resolver path `{}` has no parent",
@@ -56,7 +62,7 @@ fn write_resolver(path: &Path, dns_server: IpAddr) -> Result<(), RuntimeError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_error("remove stale", &temporary, error)),
     }
-    let result = install_resolver(&temporary, path, dns_server);
+    let result = install_resolver(&temporary, path, dns_server, search_domain);
     if result.is_err() {
         let _cleanup = fs::remove_file(&temporary);
     }
@@ -67,6 +73,7 @@ fn install_resolver(
     temporary: &Path,
     destination: &Path,
     dns_server: IpAddr,
+    search_domain: &str,
 ) -> Result<(), RuntimeError> {
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -74,7 +81,8 @@ fn install_resolver(
         .mode(0o644)
         .open(temporary)
         .map_err(|error| io_error("create", temporary, error))?;
-    writeln!(file, "nameserver {dns_server}")
+    writeln!(file, "search {search_domain}")
+        .and_then(|()| writeln!(file, "nameserver {dns_server}"))
         .and_then(|()| file.sync_all())
         .map_err(|error| io_error("write", temporary, error))?;
     drop(file);

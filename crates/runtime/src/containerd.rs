@@ -172,8 +172,13 @@ impl WorkloadRuntime for ContainerdRuntime {
                     prepare_managed_volumes(&self.settings.state_root, &workload.configuration)
                         .await?;
                     if let Some(dns_server) = workload.configuration.dns_server {
-                        prepare_resolver_file(&self.settings.state_root, workload_id, dns_server)
-                            .await?;
+                        prepare_resolver_file(
+                            &self.settings.state_root,
+                            workload_id,
+                            dns_server,
+                            &workload.configuration.metadata.cluster_id,
+                        )
+                        .await?;
                     }
                     return Ok(handle);
                 }
@@ -224,7 +229,13 @@ impl WorkloadRuntime for ContainerdRuntime {
         )?;
         prepare_managed_volumes(&self.settings.state_root, &workload.configuration).await?;
         if let Some(dns_server) = workload.configuration.dns_server {
-            prepare_resolver_file(&self.settings.state_root, workload_id, dns_server).await?;
+            prepare_resolver_file(
+                &self.settings.state_root,
+                workload_id,
+                dns_server,
+                &workload.configuration.metadata.cluster_id,
+            )
+            .await?;
         }
         let result = containerd::services::v1::containers_client::ContainersClient::new(
             self.channel.clone(),

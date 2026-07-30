@@ -29,7 +29,7 @@ pub use reconciler::{IngressBlocklistReconciler, IngressReconciler};
 pub use routing::active_routing;
 pub use traefik::{
     TRAEFIK_BLOCKED_ROUTER_PREFIX, TraefikBackend, TraefikBlocklistConfig, TraefikCutover,
-    TraefikProvider, TraefikStage, traefik_service_router_prefix,
+    TraefikProvider, TraefikStage, node_affinity_token, traefik_service_router_prefix,
 };
 pub use traefik_store::StoreTraefikProvider;
 pub use validation::validate_route_spec;
