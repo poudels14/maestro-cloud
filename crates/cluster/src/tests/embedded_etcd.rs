@@ -177,7 +177,7 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
         .try_into()
         .map_err(|_| "expected three provider configurations")?;
     let settings = EmbeddedEtcdSettings::new(
-        Duration::from_secs(30),
+        Duration::from_secs(2),
         Duration::from_secs(2),
         Duration::from_millis(100),
         Duration::from_secs(1),
@@ -232,6 +232,27 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
     let runtime_2 = provider_2.start(StoreStartMode::Restart).await?;
     assert_eq!(
         runtime_2.store().get(&key).await?.map(|value| value.value),
+        Some(b"survived-node-loss".to_vec())
+    );
+
+    runtime_3.shutdown(StoreShutdown::Immediate).await?;
+    runtime_2.shutdown(StoreShutdown::Immediate).await?;
+    runtime_1.shutdown(StoreShutdown::Immediate).await?;
+
+    let restart_1 = async {
+        let runtime = provider_1.start(StoreStartMode::Restart).await?;
+        Ok::<_, StoreProviderError>(runtime)
+    };
+    let restart_peers = async {
+        tokio::time::sleep(settings.startup_timeout() + Duration::from_secs(1)).await;
+        tokio::try_join!(
+            provider_2.start(StoreStartMode::Restart),
+            provider_3.start(StoreStartMode::Restart)
+        )
+    };
+    let (runtime_1, (runtime_2, runtime_3)) = tokio::try_join!(restart_1, restart_peers)?;
+    assert_eq!(
+        runtime_3.store().get(&key).await?.map(|value| value.value),
         Some(b"survived-node-loss".to_vec())
     );
 

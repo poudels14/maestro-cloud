@@ -1,4 +1,5 @@
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
 
 use kernel_api::{NodeFirewallSpec, NodeId};
 
@@ -34,5 +35,28 @@ async fn nftables_backend_checks_then_applies_the_exact_script()
 
     assert_eq!(std::fs::read_to_string(calls)?, "--check -f -\n-f -\n");
     assert_eq!(std::fs::read_to_string(inputs)?, script.repeat(2));
+    Ok(())
+}
+
+#[tokio::test]
+async fn nftables_backend_times_out_a_stuck_process() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let binary = directory.path().join("nft-test");
+    std::fs::write(&binary, "#!/bin/sh\nsleep 60\n")?;
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700))?;
+    let backend =
+        NftablesFirewallBackend::with_binary_and_timeout(binary, Duration::from_millis(50));
+
+    let error = backend
+        .apply(&NodeFirewallSpec {
+            node_id: NodeId::new("node-1")?,
+            table_name: "maestro_firewall".to_string(),
+            script: "table inet maestro_firewall {}\n".to_string(),
+            digest: "digest-is-verified-by-the-agent".to_string(),
+        })
+        .await
+        .expect_err("a stuck nft process must time out");
+
+    assert!(error.message().contains("execution deadline"));
     Ok(())
 }

@@ -16,7 +16,7 @@ use crate::{
     embedded_etcd_files::materialize_security,
     embedded_etcd_membership::{activate_member, remove_member, stage_member},
     embedded_etcd_plan::{EtcdLaunchMode, EtcdStartPlan},
-    embedded_etcd_process::{EtcdProcess, RunningEtcd, connect_store},
+    embedded_etcd_process::{EtcdProcess, ReadinessDeadline, RunningEtcd, connect_store},
 };
 
 pub(crate) const LOCAL_STATE_FORMAT_VERSION: u8 = 1;
@@ -122,12 +122,23 @@ impl EmbeddedEtcdProvider {
         mode: EtcdLaunchMode,
     ) -> Result<Box<dyn StoreRuntime>, StoreProviderError> {
         prepare_local_state(&self.config, &mode)?;
+        let readiness_deadline = match &mode {
+            EtcdLaunchMode::Start(StoreStartMode::Restart) => ReadinessDeadline::Persistent,
+            EtcdLaunchMode::Start(StoreStartMode::Bootstrap | StoreStartMode::Join(_))
+            | EtcdLaunchMode::Recover => ReadinessDeadline::Bounded,
+        };
         let security = materialize_security(&self.config)?;
         let plan = EtcdStartPlan::build(&self.config, mode, &security)?;
         let mut process =
             EtcdProcess::spawn(&self.binary, &plan, &self.config.local_member().node_id)?;
         if let Err(error) = process
-            .wait_until_ready(&self.config, &plan, self.settings, self.clock.as_ref())
+            .wait_until_ready(
+                &self.config,
+                &plan,
+                self.settings,
+                readiness_deadline,
+                self.clock.as_ref(),
+            )
             .await
         {
             let _ = process

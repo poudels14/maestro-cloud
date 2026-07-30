@@ -28,6 +28,12 @@ pub(crate) struct RunningEtcd {
     clock: Arc<dyn Clock>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadinessDeadline {
+    Bounded,
+    Persistent,
+}
+
 impl RunningEtcd {
     pub fn new(process: EtcdProcess, store: EtcdStore, clock: Arc<dyn Clock>) -> Self {
         Self {
@@ -112,17 +118,13 @@ impl EtcdProcess {
         config: &StoreProviderConfig,
         plan: &EtcdStartPlan,
         settings: EmbeddedEtcdSettings,
+        readiness_deadline: ReadinessDeadline,
         clock: &dyn Clock,
     ) -> Result<(), StoreProviderError> {
-        let deadline = clock.now().saturating_add(settings.startup_timeout());
+        let mut deadline = clock.now().saturating_add(settings.startup_timeout());
         let mut delay = settings.initial_retry_delay();
         let mut last_error = "readiness was not observed".to_owned();
         loop {
-            if clock.now() >= deadline {
-                return Err(StoreProviderError::Unavailable {
-                    reason: format!("startup deadline elapsed: {last_error}"),
-                });
-            }
             if let Some(status) =
                 self.child
                     .try_wait()
@@ -137,6 +139,24 @@ impl EtcdProcess {
                         self.recent_output()
                     ),
                 });
+            }
+            if clock.now() >= deadline {
+                match readiness_deadline {
+                    ReadinessDeadline::Bounded => {
+                        return Err(StoreProviderError::Unavailable {
+                            reason: format!("startup deadline elapsed: {last_error}"),
+                        });
+                    }
+                    ReadinessDeadline::Persistent => {
+                        tracing::warn!(
+                            error = %last_error,
+                            retry_after = ?settings.startup_timeout(),
+                            "restarted store member still lacks quorum; keeping it running"
+                        );
+                        deadline = clock.now().saturating_add(settings.startup_timeout());
+                        delay = settings.initial_retry_delay();
+                    }
+                }
             }
 
             let probe_deadline = std::cmp::min(
@@ -156,11 +176,6 @@ impl EtcdProcess {
                 Ok(()) => return Ok(()),
                 Err(error) => {
                     last_error = error;
-                    if clock.now() >= deadline {
-                        return Err(StoreProviderError::Unavailable {
-                            reason: format!("startup deadline elapsed: {last_error}"),
-                        });
-                    }
                     let wake = std::cmp::min(deadline, clock.now().saturating_add(delay));
                     clock.sleep_until(wake).await;
                     delay = delay.saturating_mul(2).min(settings.maximum_retry_delay());
