@@ -193,6 +193,7 @@ fn render_blocklist(
                 TRAEFIK_BLOCKED_SERVICE_LABEL.to_owned(),
             ),
             (format!("{prefix}/entryPoints/0"), "web".to_owned()),
+            (format!("{prefix}/entryPoints/1"), "tunnel".to_owned()),
             (format!("{prefix}/priority"), "10000".to_owned()),
             (
                 format!("{prefix}/middlewares/0"),
@@ -327,6 +328,10 @@ fn insert_router(
         (
             format!("http/routers/{label}/entryPoints/0"),
             "web".to_string(),
+        ),
+        (
+            format!("http/routers/{label}/entryPoints/1"),
+            "tunnel".to_string(),
         ),
         (
             format!("http/routers/{label}/priority"),

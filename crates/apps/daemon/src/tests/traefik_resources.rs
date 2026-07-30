@@ -76,6 +76,7 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
         "--providers.etcd.tls.cert=/run/secrets/etcd/client.pem",
         "--providers.etcd.tls.key=/run/secrets/etcd/client-key.pem",
         "--entrypoints.web.address=:80",
+        "--entrypoints.tunnel.address=:8888",
         "--entrypoints.websecure.address=:443",
         "--accesslog.format=json",
     ] {
@@ -104,6 +105,7 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
         service.spec.health_check.as_ref().map(|check| &check.probe),
         Some(HealthProbe::Http { port: 80, path }) if path == "/ping"
     ));
+    assert_eq!(service.spec.exposed_ports, [80, 443, 8888]);
     let Some(SecretMountSpec::Files { mount_path, files }) = &service.spec.secrets else {
         return Err("Traefik etcd credentials are not a file set".into());
     };

@@ -53,6 +53,18 @@ async fn traefik_backend_stages_services_before_atomic_router_cutover()
             .values()
             .any(|value| value.contains("PathPrefix(`/v1`)"))
     );
+    assert!(
+        cutover
+            .routers
+            .iter()
+            .any(|(key, value)| key.ends_with("/entryPoints/0") && value == "web")
+    );
+    assert!(
+        cutover
+            .routers
+            .iter()
+            .any(|(key, value)| key.ends_with("/entryPoints/1") && value == "tunnel")
+    );
     Ok(())
 }
 
@@ -207,6 +219,12 @@ async fn blocklist_rendering_chunks_forwarding_aware_rules_and_all_denial_backen
             .keys()
             .filter(|key| key.starts_with("http/routers/"))
             .all(|key| key.starts_with("http/routers/maestro.internal-blocked-"))
+    );
+    assert!(
+        config
+            .entries
+            .iter()
+            .any(|(key, value)| key.ends_with("/entryPoints/1") && value == "tunnel")
     );
 
     backend

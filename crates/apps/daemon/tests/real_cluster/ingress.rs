@@ -102,10 +102,10 @@ impl RealProcessCluster {
                                 "--max-time",
                                 "2",
                                 "--resolve",
-                                &format!("{AFFINITY_HOST}:80:{ingress_address}"),
+                                &format!("{AFFINITY_HOST}:8888:{ingress_address}"),
                                 "--header",
                                 &format!("{AFFINITY_HEADER}: {token}"),
-                                &format!("http://{AFFINITY_HOST}/node"),
+                                &format!("http://{AFFINITY_HOST}:8888/node"),
                             ])
                             .output()
                             .map_err(RealClusterError::from_display)?;

@@ -77,6 +77,7 @@ impl TraefikSystemResources {
                 format!("--providers.etcd.tls.cert={ETCD_SECRET_DIRECTORY}/client.pem"),
                 format!("--providers.etcd.tls.key={ETCD_SECRET_DIRECTORY}/client-key.pem"),
                 "--entrypoints.web.address=:80".to_owned(),
+                "--entrypoints.tunnel.address=:8888".to_owned(),
                 "--entrypoints.websecure.address=:443".to_owned(),
                 "--ping=true".to_owned(),
                 "--ping.entrypoint=web".to_owned(),
@@ -112,7 +113,7 @@ impl TraefikSystemResources {
                 preview: None,
                 command: Some(command),
                 replicas,
-                exposed_ports: vec![80, 443],
+                exposed_ports: vec![80, 443, 8888],
                 health_check: Some(HealthCheckSpec {
                     probe: HealthProbe::Http {
                         port: 80,

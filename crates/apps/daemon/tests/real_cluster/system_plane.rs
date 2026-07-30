@@ -259,7 +259,7 @@ impl RealProcessCluster {
         let origin_host = "web";
         let search_domain = format!("{}.maestro.internal", self.cluster.cluster_id);
         let origin_fqdn = format!("{origin_host}.{search_domain}");
-        let origin = format!("http://{origin_host}:80/ping");
+        let origins = [80, 8888].map(|port| format!("http://{origin_host}:{port}/ping"));
         let deadline = tokio::time::Instant::now() + SYSTEM_PLANE_TIMEOUT;
         let mut last_observation =
             "no running system workload was available for the origin probe".to_owned();
@@ -306,30 +306,51 @@ impl RealProcessCluster {
                     if lookup.status.success() && !addresses.is_empty() {
                         let mut failed = None;
                         for address in &addresses {
-                            let output = Command::new("nsenter")
-                                .args(["--target", &gateway_pid.to_string(), "--net", "--", "curl"])
-                                .args([
-                                    "--noproxy",
-                                    "*",
-                                    "--fail",
-                                    "--silent",
-                                    "--show-error",
-                                    "--connect-timeout",
-                                    "1",
-                                    "--max-time",
-                                    "2",
-                                    "--resolve",
-                                    &format!("{origin_host}:80:{address}"),
-                                    &origin,
-                                ])
-                                .output()
-                                .map_err(RealClusterError::from_display)?;
-                            if !output.status.success() {
-                                failed = Some(format!(
-                                    "curl to `{address}` exited with {}: {}",
-                                    output.status,
-                                    String::from_utf8_lossy(&output.stderr).trim()
-                                ));
+                            for (port, origin) in [80, 8888].into_iter().zip(&origins) {
+                                let output = Command::new("nsenter")
+                                    .args([
+                                        "--target",
+                                        &gateway_pid.to_string(),
+                                        "--net",
+                                        "--",
+                                        "curl",
+                                    ])
+                                    .args([
+                                        "--noproxy",
+                                        "*",
+                                        "--silent",
+                                        "--show-error",
+                                        "--output",
+                                        "/dev/null",
+                                        "--write-out",
+                                        "%{http_code}",
+                                        "--connect-timeout",
+                                        "1",
+                                        "--max-time",
+                                        "2",
+                                        "--resolve",
+                                        &format!("{origin_host}:{port}:{address}"),
+                                        origin,
+                                    ])
+                                    .output()
+                                    .map_err(RealClusterError::from_display)?;
+                                let http_status =
+                                    String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                                let accepted = output.status.success()
+                                    && http_status.len() == 3
+                                    && http_status != "000"
+                                    && (port != 80 || http_status == "200");
+                                if !accepted {
+                                    failed = Some(format!(
+                                        "curl to `{address}:{port}` exited with {} and returned \
+                                         HTTP `{http_status}`: {}",
+                                        output.status,
+                                        String::from_utf8_lossy(&output.stderr).trim()
+                                    ));
+                                    break;
+                                }
+                            }
+                            if failed.is_some() {
                                 break;
                             }
                         }
@@ -353,8 +374,8 @@ impl RealProcessCluster {
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(RealClusterError::new(format!(
-                    "canonical ingress origin `{origin}` was not reachable from a system workload: \
-                     {last_observation}; logs: {}",
+                    "stable ingress origins `{origins:?}` were not reachable from a system \
+                     workload: {last_observation}; logs: {}",
                     self.cluster_logs()
                 )));
             }
