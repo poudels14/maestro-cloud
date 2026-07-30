@@ -2890,6 +2890,11 @@ export interface components {
             repository: string;
             /** @description Derived service identity owned by this preview. */
             serviceId: components["schemas"]["ServiceId"];
+            /**
+             * @description Human-readable pull-request title.
+             * @default
+             */
+            title: string;
         };
         /** @description Observed derived resource and teardown state of a preview. */
         PreviewStatus: {

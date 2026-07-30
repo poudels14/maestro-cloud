@@ -29,6 +29,7 @@ async fn preview_routes_expose_revisioned_source_status() -> Result<(), Box<dyn 
             base_service_id: ServiceId::new("api")?,
             repository: "owner/repo".to_string(),
             pull_request_number: 42,
+            title: "Add pagination".to_string(),
             head_revision: "abc123".to_string(),
             service_id: ServiceId::new("preview-api-42")?,
             close_grace_period_secs: 300,

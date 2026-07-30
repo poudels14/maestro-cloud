@@ -16,6 +16,9 @@ pub struct PreviewSpec {
     pub repository: String,
     /// Pull-request number within the repository.
     pub pull_request_number: u64,
+    /// Human-readable pull-request title.
+    #[serde(default)]
+    pub title: String,
     /// Current pull-request head revision.
     pub head_revision: String,
     /// Derived service identity owned by this preview.

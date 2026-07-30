@@ -320,6 +320,7 @@ fn new_preview(candidate: &Candidate<'_>) -> Result<Preview, PreviewSourcePlanEr
             base_service_id: candidate.base.service.meta.id.clone(),
             repository: candidate.base.repository.clone(),
             pull_request_number: candidate.pull_request.number,
+            title: candidate.pull_request.title.clone(),
             head_revision: candidate.pull_request.head_revision.clone(),
             service_id,
             close_grace_period_secs: policy.close_grace_period_secs,
@@ -342,6 +343,7 @@ fn update_open_preview(
     let mut desired = current.clone();
     desired.meta.deletion_timestamp = None;
     desired.spec.repository.clone_from(&base.repository);
+    desired.spec.title.clone_from(&pull_request.title);
     desired
         .spec
         .head_revision

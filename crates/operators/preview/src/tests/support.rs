@@ -87,6 +87,7 @@ pub(super) fn preview() -> Preview {
             base_service_id: ServiceId::new("api").unwrap(),
             repository: "acme/api".to_string(),
             pull_request_number: 42,
+            title: "Add pagination".to_string(),
             head_revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
             service_id: ServiceId::new("api-pr-42").unwrap(),
             close_grace_period_secs: 10,
