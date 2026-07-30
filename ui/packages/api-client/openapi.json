@@ -7919,7 +7919,7 @@
   },
   "info": {
     "title": "Maestro Cloud API",
-    "version": "0.6.10"
+    "version": "0.6.11"
   },
   "openapi": "3.0.4",
   "paths": {
