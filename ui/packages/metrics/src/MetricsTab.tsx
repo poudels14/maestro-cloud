@@ -43,6 +43,9 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
       <Show when={metrics.isError}>
         <ErrorBanner message="Failed to load metrics" onRetry={() => metrics.refetch()} />
       </Show>
+      <Show when={traffic.isError}>
+        <ErrorBanner message="Failed to load HTTP traffic metrics" onRetry={() => traffic.refetch()} />
+      </Show>
       <div class="flex justify-end">
         <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
           <For each={TIME_RANGES}>
@@ -65,7 +68,7 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
         </div>
       </div>
 
-      <ChartCard title="CPU Usage">
+      <ChartCard title="CPU usage">
         <TimelineChart
           data={cpuData()}
           label="CPU"
@@ -100,7 +103,7 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
       </ChartCard>
 
       <ChartCard
-        title="HTTP Requests"
+        title="HTTP requests"
         legend={[
           { color: "bg-indigo-500", label: "Total" },
           { color: "bg-red-500", label: "Errors (4xx/5xx)" }
@@ -144,7 +147,7 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
       </ChartCard>
 
       <ChartCard
-        title="HTTP Bandwidth"
+        title="HTTP bandwidth"
         legend={[
           { color: "bg-emerald-500", label: "In" },
           { color: "bg-orange-500", label: "Out" }

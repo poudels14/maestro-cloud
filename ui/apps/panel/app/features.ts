@@ -3,7 +3,7 @@ import { createFirewallApi, createFirewallFeature } from "@maestro/firewall";
 import { createIngressApi, createIngressFeature } from "@maestro/ingress";
 import { createLogsApi, createLogsFeature } from "@maestro/logs";
 import { createMetricsApi, createMetricsFeature } from "@maestro/metrics";
-import { createServicesApi, createServicesFeature, userServices } from "@maestro/services";
+import { createServicesApi, createServicesFeature, nonPreviewServices } from "@maestro/services";
 import { composeFeatureManifests } from "@maestro/sdk";
 import { apiClient, apiRequestError } from "./lib/client";
 
@@ -22,7 +22,7 @@ const ingressFeature = createIngressFeature(ingressApi, logsApi);
 const logsFeature = createLogsFeature(logsApi, {
   listNodes: clusterApi.listNodes,
   listServices: async () =>
-    userServices(await servicesApi.listServices()).map((service) => ({
+    nonPreviewServices(await servicesApi.listServices()).map((service) => ({
       id: service.meta.id,
       name: service.spec.name
     }))

@@ -1,14 +1,12 @@
 import { createSignal, For, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "@maestro/sdk";
-import clsx from "clsx";
 import { Pencil, Plus, Send, Trash2 } from "lucide-solid";
 import type { ClusterApi } from "./api";
 import { clusterQueryKeys, webhooksQuery } from "./queries";
 import type { Webhook } from "./types";
 import { EVENT_OPTIONS, WebhookForm } from "./WebhookForm";
-import { SectionHeader } from "@maestro/kit";
-import { ConfirmDialog } from "@maestro/kit";
+import { ConfirmDialog, ErrorBanner, SectionHeader } from "@maestro/kit";
 
 function Webhooks(props: { api: ClusterApi }) {
   const queryClient = useQueryClient();
@@ -42,9 +40,11 @@ function Webhooks(props: { api: ClusterApi }) {
         </p>
       </div>
       <Show when={actionError()}>
-        <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
-          {actionError()}
-        </div>
+        {(message) => (
+          <div class="mb-3">
+            <ErrorBanner message={message()} />
+          </div>
+        )}
       </Show>
       <div class="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
         <Show
@@ -160,17 +160,7 @@ function WebhookRow(props: {
           </Show>
           <For each={props.webhook.spec.events}>
             {(event) => (
-              <span
-                class={clsx("text-[11px] font-medium px-1.5 py-0.5 rounded", {
-                  "bg-sky-50 text-sky-700 border border-sky-200": event === "deploymentTransition",
-                  "bg-emerald-50 text-emerald-700 border border-emerald-200":
-                    event === "nodeAvailability",
-                  "bg-violet-50 text-violet-700 border border-violet-200":
-                    event === "previewTransition",
-                  "bg-amber-50 text-amber-700 border border-amber-200":
-                    event === "upgradeTransition"
-                })}
-              >
+              <span class="text-[11px] font-medium px-1.5 py-0.5 rounded border border-indigo-100 bg-indigo-50/60 text-indigo-700">
                 {EVENT_OPTIONS.find((option) => option.value === event)?.label ?? event}
               </span>
             )}

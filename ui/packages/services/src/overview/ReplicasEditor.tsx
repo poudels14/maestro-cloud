@@ -1,5 +1,6 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { Minus, Plus, RotateCcw } from "lucide-solid";
 import type { ServicesApi } from "../api";
 import { serviceQueryKeys } from "../queries";
 import type { Service } from "../types";
@@ -67,7 +68,7 @@ function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
             type="button"
             onClick={applyReplicas}
             disabled={busy()}
-            class="mr-1 px-2 py-1 text-xs font-medium rounded-md bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:bg-gray-100 disabled:text-gray-400 transition-colors"
+            class="mr-1 px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 disabled:bg-indigo-300 transition-colors"
           >
             Save
           </button>
@@ -76,9 +77,10 @@ function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
           type="button"
           onClick={() => setReplicasInput(Math.max(configuredReplicas(), replicasInput() - 1))}
           disabled={busy() || replicasInput() <= configuredReplicas()}
+          aria-label="Decrease replicas"
           class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
         >
-          −
+          <Minus class="size-3.5" />
         </button>
         <input
           type="number"
@@ -86,16 +88,17 @@ function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
           max={MAX_REPLICAS}
           value={replicasInput()}
           onInput={(e) => setReplicasInput(Number(e.currentTarget.value))}
-          class="w-12 text-center text-sm font-mono text-gray-800 border border-gray-200 rounded-md py-0.5 outline-none focus:border-indigo-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          class="w-12 text-center text-sm font-mono text-gray-800 border border-gray-200 rounded-md py-0.5 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           disabled={busy()}
         />
         <button
           type="button"
           onClick={() => setReplicasInput(Math.min(MAX_REPLICAS, replicasInput() + 1))}
           disabled={busy() || replicasInput() >= MAX_REPLICAS}
+          aria-label="Increase replicas"
           class="size-6 flex items-center justify-center text-gray-500 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-30 rounded-md"
         >
-          +
+          <Plus class="size-3.5" />
         </button>
         <button
           type="button"
@@ -107,7 +110,7 @@ function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
           title="Revert to configured value"
           class="ml-1 size-6 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 rounded-md"
         >
-          ↺
+          <RotateCcw class="size-3" />
         </button>
       </div>
     </div>

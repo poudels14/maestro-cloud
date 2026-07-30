@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import { createSignal, Show } from "solid-js";
-import { IngressInfo } from "@maestro/ingress";
+import { IngressInfo, ingressRoutesQuery, routePublicUrl } from "@maestro/ingress";
 import { MetricsTab } from "@maestro/metrics";
 import { useQuery } from "@maestro/sdk";
 import {
@@ -15,7 +15,7 @@ import { SessionControls } from "../components/SessionControls";
 import { showErrorToast } from "../components/AppToasts";
 import { ingressApi, logsApi, metricsApi, servicesApi } from "../features";
 
-const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs"]);
+const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs", "pull-requests"]);
 
 export const Route = createFileRoute("/services/$serviceId/$tab")({
   validateSearch: (
@@ -42,7 +42,15 @@ function ServiceDetailPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const services = useQuery(() => servicesQuery(servicesApi));
+  const ingressRoutes = useQuery(() => ingressRoutesQuery(ingressApi));
   const [drawerOpen, setDrawerOpen] = createSignal(false);
+
+  const previewUrl = (serviceId: string) => {
+    const route = (ingressRoutes.data ?? []).find(
+      (candidate) => candidate.serviceId === serviceId
+    );
+    return route ? routePublicUrl(route) : null;
+  };
 
   const tab = () => {
     const raw = params().tab;
@@ -101,6 +109,7 @@ function ServiceDetailPage() {
             service={service()}
             services={services.data ?? []}
             tab={tab()}
+            previewUrl={previewUrl}
             navigateTab={navigateTab}
             onOpenDrawer={() => setDrawerOpen(true)}
             onError={showErrorToast}

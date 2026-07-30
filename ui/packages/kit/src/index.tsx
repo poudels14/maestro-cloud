@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
-import { Show, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 
 export { ConfirmDialog } from "./ConfirmDialog";
 export { SidebarNavItem, SidebarSection } from "./Sidebar";
@@ -121,6 +121,32 @@ export function Card(props: { class?: string; children: JSX.Element }) {
       )}
     >
       {props.children}
+    </div>
+  );
+}
+
+export function CardSkeleton(props: { rows?: number; class?: string }) {
+  return (
+    <div
+      class={clsx(
+        "bg-white rounded-lg border border-gray-200 divide-y divide-gray-100",
+        props.class
+      )}
+    >
+      <For each={Array.from({ length: props.rows ?? 4 })}>
+        {(_, index) => (
+          <div class="px-4 py-3 flex items-center justify-between gap-6 animate-pulse">
+            <span
+              class="h-3 rounded bg-gray-100"
+              style={{ width: `${[30, 40, 25, 35][index() % 4]}%` }}
+            />
+            <span
+              class="h-3 rounded bg-gray-100"
+              style={{ width: `${[15, 20, 25, 10][index() % 4]}%` }}
+            />
+          </div>
+        )}
+      </For>
     </div>
   );
 }

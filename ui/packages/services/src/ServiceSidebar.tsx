@@ -3,7 +3,11 @@ import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import { SidebarSection, StatusDot } from "@maestro/kit";
 import type { Service } from "./types";
-import { serviceDisplayStatus, userServices as visibleUserServices } from "./serviceView";
+import {
+  serviceDisplayStatus,
+  systemServices as visibleSystemServices,
+  userServices as visibleUserServices
+} from "./serviceView";
 
 function ServiceSidebar(props: {
   services: Service[];
@@ -16,6 +20,9 @@ function ServiceSidebar(props: {
   onCloseMobile?: () => void;
 }) {
   const userServices = () => visibleUserServices(props.services);
+  const systemServices = () => visibleSystemServices(props.services);
+  const selectedId = () =>
+    props.selected?.previewResource?.spec.baseServiceId ?? props.selected?.meta.id ?? null;
 
   return (
     <>
@@ -64,7 +71,20 @@ function ServiceSidebar(props: {
                 {(service) => (
                   <SidebarServiceItem
                     service={service}
-                    selected={service.meta.id === props.selected?.meta.id}
+                    selected={service.meta.id === selectedId()}
+                    onClick={() => props.onSelect(service)}
+                  />
+                )}
+              </For>
+            </SidebarSection>
+          </Show>
+          <Show when={systemServices().length > 0}>
+            <SidebarSection title="System" count={systemServices().length}>
+              <For each={systemServices()}>
+                {(service) => (
+                  <SidebarServiceItem
+                    service={service}
+                    selected={service.meta.id === selectedId()}
                     onClick={() => props.onSelect(service)}
                   />
                 )}

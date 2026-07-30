@@ -10,11 +10,13 @@ export {
 export {
   attachPreviewResources,
   isSystemService,
+  nonPreviewServices,
   previewEnabledServices,
   previewServices,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,
+  systemServices,
   userServices
 } from "./serviceView";
 export type { Deployment, ReplicaState, Service } from "./types";

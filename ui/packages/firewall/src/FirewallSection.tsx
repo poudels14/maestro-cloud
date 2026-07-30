@@ -1,6 +1,15 @@
 import { For, Show } from "solid-js";
 import { createStore } from "solid-js/store";
-import { FlaskConical, Loader2, Plus, ShieldCheck, Trash2 } from "lucide-solid";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  FlaskConical,
+  Loader2,
+  Lock,
+  Plus,
+  ShieldCheck,
+  Trash2
+} from "lucide-solid";
 import clsx from "clsx";
 import { useQuery } from "@maestro/sdk";
 import { ConfirmDialog } from "@maestro/kit";
@@ -51,6 +60,10 @@ function FirewallSection(props: { api: FirewallApi }) {
   const isManaged = () => (selectedPolicy()?.meta.ownerRefs?.length ?? 0) > 0;
   const isDeleting = () => selectedPolicy()?.meta.deletionTimestamp != null;
   const readOnly = () => isManaged() || isDeleting();
+  const egressPolicies = () =>
+    (policies.data ?? []).filter((policy) => policy.spec.direction === "egress");
+  const hostInputPolicies = () =>
+    (policies.data ?? []).filter((policy) => policy.spec.direction === "hostInput");
 
   const selectPolicy = (policy: FirewallPolicy) => {
     setEditor({
@@ -153,17 +166,17 @@ function FirewallSection(props: { api: FirewallApi }) {
 
   return (
     <section>
-      <div class="mb-4 flex items-end justify-between gap-3">
+      <div class="mb-5 flex items-end justify-between gap-3">
         <div>
-          <h1 class="text-lg font-semibold text-gray-900">Firewall policies</h1>
-          <p class="mt-1 text-xs text-gray-500">
+          <h1 class="text-lg font-semibold text-gray-900">Firewall</h1>
+          <p class="mt-1 text-sm text-gray-400">
             Ordered workload-egress and host-input rules compiled for every affected node.
           </p>
         </div>
         <button
           type="button"
           onClick={createPolicy}
-          class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-500"
         >
           <Plus class="size-3.5" /> New policy
         </button>
@@ -175,77 +188,87 @@ function FirewallSection(props: { api: FirewallApi }) {
         </div>
       </Show>
 
-      <div class="grid items-start gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
-        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div class="border-b border-gray-200 bg-gray-50 px-3 py-2 text-[11px] font-medium text-gray-500">
-            {policies.data?.length ?? 0} policies
-          </div>
-          <For each={policies.data ?? []}>
-            {(policy) => (
-              <button
-                type="button"
-                onClick={() => selectPolicy(policy)}
-                class={clsx(
-                  "block w-full border-b border-gray-100 px-3 py-3 text-left last:border-b-0 hover:bg-gray-50",
-                  editor.selectedId === policy.meta.id && !editor.creating && "bg-indigo-50"
-                )}
-              >
-                <div class="flex items-center justify-between gap-2">
-                  <span class="truncate font-mono text-xs font-medium text-gray-800">
-                    {policy.meta.id}
-                  </span>
-                  <PolicyStatus policy={policy} />
-                </div>
-                <div class="mt-1 truncate text-[10px] text-gray-500">
-                  {directionLabel(policy.spec.direction)} · {subjectLabel(policy)}
-                </div>
-              </button>
-            )}
-          </For>
+      <div class="grid items-start gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-[0_1px_2px_rgb(0_0_0/0.04)]">
+          <PolicyGroup
+            title="Workload egress"
+            icon={<ArrowUpRight class="size-3 text-gray-400" />}
+            policies={egressPolicies()}
+            selectedId={editor.creating ? null : editor.selectedId}
+            onSelect={selectPolicy}
+          />
+          <PolicyGroup
+            title="Host input"
+            icon={<ArrowDownLeft class="size-3 text-gray-400" />}
+            policies={hostInputPolicies()}
+            selectedId={editor.creating ? null : editor.selectedId}
+            onSelect={selectPolicy}
+          />
           <Show when={!policies.isLoading && (policies.data?.length ?? 0) === 0}>
-            <div class="px-3 py-10 text-center text-xs text-gray-400">No policies yet.</div>
+            <div class="px-3 py-12 text-center">
+              <ShieldCheck class="mx-auto size-7 text-gray-200" />
+              <p class="mt-2 text-xs text-gray-400">No policies yet.</p>
+            </div>
           </Show>
         </div>
 
         <Show
           when={isEditing()}
           fallback={
-            <div class="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-20 text-center">
+            <div class="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-24 text-center">
               <ShieldCheck class="mx-auto size-8 text-gray-300" />
-              <p class="mt-3 text-sm font-medium text-gray-500">
-                Select a policy or create a new one.
+              <p class="mt-3 text-sm font-medium text-gray-500">No policy selected</p>
+              <p class="mt-1 text-xs text-gray-400">
+                Pick a policy from the list or create a new one to edit its rules.
               </p>
             </div>
           }
         >
-          <div class="rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
+          <div class="rounded-xl border border-gray-200 bg-white p-4 shadow-[0_1px_2px_rgb(0_0_0/0.04)] sm:p-5">
             <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 class="text-sm font-semibold text-gray-900">
-                  {editor.creating ? "New firewall policy" : editor.draft.id}
-                </h2>
-                <Show when={isManaged()}>
-                  <p class="mt-1 text-[11px] text-amber-600">
-                    This policy is managed by another resource. It can be inspected and dry-run, but
-                    edited only through its owner.
-                  </p>
-                </Show>
-                <Show when={isDeleting()}>
-                  <p class="mt-1 text-[11px] text-amber-600">Deletion is in progress.</p>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <h2
+                    class={clsx("truncate text-sm font-semibold text-gray-900", {
+                      "font-mono": !editor.creating
+                    })}
+                  >
+                    {editor.creating ? "New firewall policy" : editor.draft.id}
+                  </h2>
+                  <Show when={selectedPolicy()}>
+                    {(policy) => <PolicyStatus policy={policy()} />}
+                  </Show>
+                </div>
+                <Show when={selectedPolicy()}>
+                  {(policy) => <PolicyEvidence policy={policy()} />}
                 </Show>
               </div>
               <Show when={selectedPolicy() && !readOnly()}>
                 <button
                   type="button"
                   onClick={() => setEditor("confirmDelete", true)}
-                  class="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50"
+                  class="inline-flex items-center gap-1.5 rounded-md border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600"
                 >
-                  <Trash2 class="size-3" /> Delete
+                  <Trash2 class="size-3.5" /> Delete
                 </button>
               </Show>
             </div>
 
-            <Show when={selectedPolicy()}>{(policy) => <PolicyEvidence policy={policy()} />}</Show>
+            <Show when={isManaged()}>
+              <div class="mb-5 flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <Lock class="mt-px size-3.5 shrink-0 text-amber-500" />
+                <p class="text-xs leading-5 text-amber-700">
+                  This policy is managed by another resource. You can inspect and dry-run it, but
+                  changes must go through its owner.
+                </p>
+              </div>
+            </Show>
+            <Show when={isDeleting()}>
+              <div class="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-700">
+                Deletion is in progress — the policy stops governing traffic once the next ruleset
+                generation is applied.
+              </div>
+            </Show>
 
             <FirewallPolicyForm
               draft={editor.draft}
@@ -278,11 +301,11 @@ function FirewallSection(props: { api: FirewallApi }) {
                 type="button"
                 disabled={editor.operation != null || isDeleting()}
                 onClick={() => runOperation("dry-run")}
-                class="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                class="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 <Show
                   when={editor.operation === "dry-run"}
-                  fallback={<FlaskConical class="size-3.5" />}
+                  fallback={<FlaskConical class="size-3.5 text-gray-400" />}
                 >
                   <Loader2 class="size-3.5 animate-spin" />
                 </Show>
@@ -293,7 +316,7 @@ function FirewallSection(props: { api: FirewallApi }) {
                   type="button"
                   disabled={editor.operation != null}
                   onClick={() => runOperation("save")}
-                  class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:bg-indigo-300"
+                  class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-500 disabled:bg-indigo-300"
                 >
                   <Show when={editor.operation === "save"}>
                     <Loader2 class="size-3.5 animate-spin" />
@@ -327,6 +350,58 @@ function FirewallSection(props: { api: FirewallApi }) {
   );
 }
 
+function PolicyGroup(props: {
+  title: string;
+  icon: import("solid-js").JSX.Element;
+  policies: FirewallPolicy[];
+  selectedId: string | null;
+  onSelect: (policy: FirewallPolicy) => void;
+}) {
+  return (
+    <Show when={props.policies.length > 0}>
+      <div class="border-b border-gray-100 last:border-b-0">
+        <div class="flex items-center justify-between gap-2 bg-gray-50/80 px-3 py-1.5">
+          <span class="inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-gray-400">
+            {props.icon}
+            {props.title}
+          </span>
+          <span class="text-[10px] tabular-nums text-gray-300">{props.policies.length}</span>
+        </div>
+        <For each={props.policies}>
+          {(policy) => (
+            <button
+              type="button"
+              onClick={() => props.onSelect(policy)}
+              class={clsx(
+                "relative block w-full border-t border-gray-100 px-3 py-2.5 text-left first:border-t-0",
+                {
+                  "bg-indigo-50/70": props.selectedId === policy.meta.id,
+                  "hover:bg-gray-50": props.selectedId !== policy.meta.id
+                }
+              )}
+            >
+              <Show when={props.selectedId === policy.meta.id}>
+                <span class="absolute inset-y-2 left-0 w-0.5 rounded-r bg-indigo-500" />
+              </Show>
+              <div class="flex items-center justify-between gap-2">
+                <span class="truncate font-mono text-xs font-medium text-gray-800">
+                  {policy.meta.id}
+                </span>
+                <PolicyStatus policy={policy} />
+              </div>
+              <div class="mt-0.5 truncate text-[11px] text-gray-400">
+                {subjectLabel(policy)} · {policy.spec.rules?.length ?? 0}{" "}
+                {(policy.spec.rules?.length ?? 0) === 1 ? "rule" : "rules"} · default{" "}
+                {policy.spec.defaultVerdict}
+              </div>
+            </button>
+          )}
+        </For>
+      </div>
+    </Show>
+  );
+}
+
 function PolicyStatus(props: { policy: FirewallPolicy }) {
   const state = () => {
     if (props.policy.meta.deletionTimestamp != null) return "deleting";
@@ -340,11 +415,15 @@ function PolicyStatus(props: { policy: FirewallPolicy }) {
   };
   return (
     <span
-      class={clsx("rounded-full px-1.5 py-0.5 text-[9px] font-medium", {
-        "bg-emerald-50 text-emerald-700": state() === "applied",
-        "bg-amber-50 text-amber-700": state() === "pending" || state() === "deleting",
-        "bg-red-50 text-red-700": state() === "error"
-      })}
+      class={clsx(
+        "shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium leading-none",
+        {
+          "border-emerald-100 bg-emerald-50 text-emerald-700": state() === "applied",
+          "border-amber-100 bg-amber-50 text-amber-700":
+            state() === "pending" || state() === "deleting",
+          "border-red-100 bg-red-50 text-red-700": state() === "error"
+        }
+      )}
     >
       {state()}
     </span>
@@ -352,37 +431,37 @@ function PolicyStatus(props: { policy: FirewallPolicy }) {
 }
 
 function PolicyEvidence(props: { policy: FirewallPolicy }) {
+  const failing = () =>
+    (props.policy.status.conditions ?? []).filter(
+      (condition) => condition.status !== "true" && condition.message
+    );
   return (
-    <div class="mb-5 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-[10px] text-gray-500">
-      <div class="flex flex-wrap gap-x-4 gap-y-1">
+    <>
+      <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-400">
         <span>
-          generation <span class="font-mono text-gray-700">{props.policy.meta.generation}</span>
+          generation <span class="font-mono text-gray-600">{props.policy.meta.generation}</span>
         </span>
         <span>
           applied{" "}
-          <span class="font-mono text-gray-700">{props.policy.status.appliedGeneration}</span>
+          <span class="font-mono text-gray-600">{props.policy.status.appliedGeneration}</span>
         </span>
         <Show when={props.policy.status.rulesetDigest}>
           {(digest) => (
             <span title={digest()}>
-              ruleset <span class="font-mono text-gray-700">{digest().slice(0, 12)}</span>
+              ruleset <span class="font-mono text-gray-600">{digest().slice(0, 12)}</span>
             </span>
           )}
         </Show>
       </div>
-      <For each={props.policy.status.conditions ?? []}>
+      <For each={failing()}>
         {(condition) => (
-          <div class="mt-1">
-            <span class="font-medium text-gray-600">{condition.type}</span>: {condition.message}
+          <div class="mt-1.5 text-[11px] text-amber-600">
+            <span class="font-medium">{condition.type}</span>: {condition.message}
           </div>
         )}
       </For>
-    </div>
+    </>
   );
-}
-
-function directionLabel(direction: FirewallPolicy["spec"]["direction"]) {
-  return direction === "egress" ? "workload egress" : "host input";
 }
 
 function subjectLabel(policy: FirewallPolicy) {

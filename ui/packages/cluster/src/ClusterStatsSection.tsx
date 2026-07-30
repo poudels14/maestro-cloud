@@ -5,7 +5,7 @@ import { AlertTriangle } from "lucide-solid";
 import type { ClusterApi } from "./api";
 import type { BackupStats, ControllerStats, SinkStats } from "./types";
 import { formatBytes } from "@maestro/kit";
-import { ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
+import { CardSkeleton, ErrorBanner, SectionHeader, timeAgo } from "@maestro/kit";
 import { clusterStatsQuery } from "./queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
@@ -28,6 +28,10 @@ function ClusterStatsSection(props: { api: ClusterApi }) {
 
       <Show when={stats.isError}>
         <ErrorBanner message="Failed to load cluster stats" onRetry={() => stats.refetch()} />
+      </Show>
+
+      <Show when={stats.isLoading}>
+        <CardSkeleton rows={7} />
       </Show>
 
       <Show when={stats.data}>

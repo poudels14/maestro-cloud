@@ -1,4 +1,4 @@
-import { GitPullRequest, LayoutGrid } from "lucide-solid";
+import { LayoutGrid } from "lucide-solid";
 import { defineFeatureManifest } from "@maestro/sdk";
 import type { ServicesApi } from "./api";
 import { PreviewsPage } from "./PreviewsPage";
@@ -20,13 +20,6 @@ function createServicesFeature(api: ServicesApi) {
         icon: LayoutGrid,
         section: "node",
         order: 30
-      },
-      {
-        path: "/previews",
-        label: "PR Previews",
-        icon: GitPullRequest,
-        section: "node",
-        order: 40
       }
     ]
   });

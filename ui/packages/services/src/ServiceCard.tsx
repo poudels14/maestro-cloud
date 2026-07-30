@@ -7,6 +7,8 @@ import { StatusBadge } from "@maestro/kit";
 
 function ServiceCard(props: { service: Service; onClick: () => void; onDelete: () => void }) {
   const status = () => serviceDisplayStatus(props.service);
+  const replicas = () => props.service.status.replicaOverride ?? props.service.spec.replicas;
+  const exposedPorts = () => props.service.spec.exposedPorts ?? [];
   const sourceName = () => {
     const artifact = props.service.spec.artifact;
     if (artifact.type === "build" && artifact.source.type === "git") {
@@ -33,8 +35,23 @@ function ServiceCard(props: { service: Service; onClick: () => void; onDelete: (
             </span>
           </div>
           <p class="text-sm text-gray-500 truncate">{sourceName()}</p>
+          <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
+            <span>
+              {replicas()} {replicas() === 1 ? "replica" : "replicas"}
+            </span>
+            <Show when={exposedPorts().length > 0}>
+              <span class="tabular-nums">
+                {exposedPorts().length === 1 ? "port" : "ports"} {exposedPorts().join(", ")}
+              </span>
+            </Show>
+          </div>
         </div>
         <div class="flex items-center gap-2 shrink-0">
+          <Show when={isSystemService(props.service)}>
+            <span class="inline-flex items-center text-[10px] font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5">
+              system
+            </span>
+          </Show>
           <Show when={props.service.status.rollout === "frozen"}>
             <span class="inline-flex items-center text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
               frozen

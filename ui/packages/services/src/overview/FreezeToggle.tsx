@@ -28,7 +28,7 @@ function FreezeToggle(props: { api: ServicesApi; service: Service }) {
         onClick={() => mutation.mutate(!frozen())}
         disabled={mutation.isPending}
         class={clsx(
-          "shrink-0 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors outline-none",
+          "shrink-0 px-3 py-1.5 text-xs font-medium rounded-md transition-colors outline-none",
           {
             "bg-amber-100 text-amber-700 hover:bg-amber-200": frozen(),
             "bg-gray-100 text-gray-600 hover:bg-gray-200": !frozen()

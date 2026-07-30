@@ -7,5 +7,7 @@ export type {
   TrafficBreakdownEntry
 } from "./api";
 export { IngressInfo } from "./IngressInfo";
+export { routeHostnames, routePublicUrl } from "./routeView";
+export { ingressRoutesQuery } from "./queries";
 export { createIngressFeature } from "./manifest";
 export { TrafficPage } from "./TrafficPage";

@@ -18,21 +18,29 @@ function HttpLogsPage(props: { api: LogsApi }) {
     });
 
   return (
-    <LogViewer
-      api={props.api}
-      serviceId="maestro-ingress"
-      deploymentId={null}
-      isSystem
-      phase="deploy"
-      showHistogram
-      histogramGroupBy="status"
-      fillHeight
-      query={search().query ?? ""}
-      requiredQuery={INGRESS_ACCESS_LOG_QUERY}
-      onQueryChange={(value) => setUrlSearch({ query: value || undefined })}
-      {...(search().range ? { range: search().range } : {})}
-      onRangeChange={(value) => setUrlSearch({ range: value === "1h" ? undefined : value })}
-    />
+    <div class="h-full min-h-0 flex flex-col gap-3">
+      <div class="shrink-0">
+        <h1 class="text-lg font-semibold text-gray-900">HTTP logs</h1>
+        <p class="mt-1 text-xs text-gray-500">Ingress access logs for every public request.</p>
+      </div>
+      <div class="min-h-0 flex-1">
+        <LogViewer
+          api={props.api}
+          serviceId="maestro-ingress"
+          deploymentId={null}
+          isSystem
+          phase="deploy"
+          showHistogram
+          histogramGroupBy="status"
+          fillHeight
+          query={search().query ?? ""}
+          requiredQuery={INGRESS_ACCESS_LOG_QUERY}
+          onQueryChange={(value) => setUrlSearch({ query: value || undefined })}
+          {...(search().range ? { range: search().range } : {})}
+          onRangeChange={(value) => setUrlSearch({ range: value === "1h" ? undefined : value })}
+        />
+      </div>
+    </div>
   );
 }
 

@@ -41,12 +41,15 @@ function DeploymentRow(props: Props) {
           props.onOpen();
         }
       }}
-      class={clsx("px-4 sm:px-5 py-3 transition-colors cursor-pointer outline-none", {
+      class={clsx("relative px-4 sm:px-5 py-3 transition-colors cursor-pointer outline-none", {
         "bg-indigo-50/60": props.isSelected,
-        "bg-emerald-100 hover:bg-emerald-100/80": props.isLatest && isLive() && !props.isSelected,
+        "bg-emerald-50/60 hover:bg-emerald-50": props.isLatest && isLive() && !props.isSelected,
         "hover:bg-gray-50": !props.isSelected && !(props.isLatest && isLive())
       })}
     >
+      <Show when={props.isLatest && isLive() && !props.isSelected}>
+        <span class="absolute inset-y-2 left-0 w-0.5 rounded-r bg-emerald-400" />
+      </Show>
       <div class="flex items-start gap-3">
         <div class="pt-1">
           <StatusDot status={phase()} />

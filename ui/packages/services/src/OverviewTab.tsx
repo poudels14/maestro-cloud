@@ -1,21 +1,14 @@
 import { For, Show, type JSX } from "solid-js";
-import { GitPullRequest } from "lucide-solid";
 import type { ServicesApi } from "./api";
 import type { Service } from "./types";
 import { secretNames } from "./secretView";
-import { isSystemService, serviceDisplayStatus, servicePreviews } from "./serviceView";
-import { StatusBadge } from "@maestro/kit";
+import { isSystemService } from "./serviceView";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { VolumesList } from "./overview/VolumesList";
 import { FreezeToggle } from "./overview/FreezeToggle";
 
-function OverviewTab(props: {
-  api: ServicesApi;
-  service: Service;
-  services: Service[];
-  ingress: JSX.Element;
-}) {
+function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.Element }) {
   const artifact = () => props.service.spec.artifact;
   const sourceItems = () => {
     const value = artifact();
@@ -50,7 +43,7 @@ function OverviewTab(props: {
   const deployItems = () => {
     const spec = props.service.spec;
     const items: { label: string; value: string }[] = [];
-    if (spec.command) {
+    if (spec.command && !isSystemService(props.service)) {
       items.push({
         label: "Command",
         value: `${spec.command.executable} ${(spec.command.arguments ?? []).join(" ")}`.trim()
@@ -90,15 +83,14 @@ function OverviewTab(props: {
       value
     }));
   const secretKeys = () => secretNames(props.service.spec.secrets);
-  const previews = () => servicePreviews(props.services, props.service.meta.id);
   const isPreview = () => props.service.previewResource != null;
 
   return (
     <div class="space-y-6">
-      <ConfigSection title="Deploy" items={[...sourceItems(), ...deployItems()]} />
+      <ConfigSection title="Source" items={sourceItems()} />
 
-      <Show when={!isPreview() && previews().length > 0}>
-        <PreviewsList previews={previews()} />
+      <Show when={deployItems().length > 0}>
+        <ConfigSection title="Runtime" items={deployItems()} />
       </Show>
 
       <Show when={buildEnvItems().length > 0}>
@@ -142,44 +134,6 @@ function OverviewTab(props: {
   );
 }
 
-function PreviewsList(props: { previews: Service[] }) {
-  return (
-    <div>
-      <h4 class="mb-2 text-xs font-medium text-gray-400">Previews</h4>
-      <div class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
-        <For each={props.previews}>
-          {(preview) => {
-            const resource = () => preview.previewResource!;
-            return (
-              <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
-                <a
-                  href={`/services/${encodeURIComponent(preview.meta.id)}/overview`}
-                  class="flex min-w-0 flex-1 items-start gap-2.5 outline-none hover:text-indigo-600"
-                >
-                  <GitPullRequest class="mt-0.5 size-4 shrink-0 text-gray-400" />
-                  <span class="min-w-0">
-                    <span class="block truncate text-sm font-medium text-gray-800">
-                      PR #{resource().spec.pullRequestNumber} · {resource().spec.repository}
-                    </span>
-                    <span class="block truncate text-xs text-gray-400">
-                      {resource().spec.headRevision.slice(0, 12)} · expires{" "}
-                      {formatDate(resource().spec.expiresAt)}
-                    </span>
-                  </span>
-                </a>
-                <div class="flex items-center gap-2 pl-6 sm:pl-0">
-                  <span class="text-xs font-medium text-gray-500">{resource().status.phase}</span>
-                  <StatusBadge status={serviceDisplayStatus(preview)} />
-                </div>
-              </div>
-            );
-          }}
-        </For>
-      </div>
-    </div>
-  );
-}
-
 function SecretsList(props: { keys: string[] }) {
   return (
     <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
@@ -193,10 +147,6 @@ function SecretsList(props: { keys: string[] }) {
       </For>
     </div>
   );
-}
-
-function formatDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleDateString();
 }
 
 export { OverviewTab };

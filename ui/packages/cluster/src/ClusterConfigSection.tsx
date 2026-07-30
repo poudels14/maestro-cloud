@@ -3,7 +3,7 @@ import { useQuery } from "@maestro/sdk";
 import type { ClusterApi } from "./api";
 import { clusterConfigQuery } from "./queries";
 import type { MaskedConfig } from "./types";
-import { ErrorBanner, SectionHeader } from "@maestro/kit";
+import { CardSkeleton, ErrorBanner, SectionHeader } from "@maestro/kit";
 
 function ClusterConfigSection(props: { api: ClusterApi }) {
   const config = useQuery(() => clusterConfigQuery(props.api));
@@ -13,6 +13,9 @@ function ClusterConfigSection(props: { api: ClusterApi }) {
       <SectionHeader class="mb-4">Cluster config</SectionHeader>
       <Show when={config.error}>
         <ErrorBanner message="Failed to load cluster config" onRetry={() => config.refetch()} />
+      </Show>
+      <Show when={config.isLoading}>
+        <CardSkeleton rows={6} />
       </Show>
       <Show when={config.data}>
         {(data) => (

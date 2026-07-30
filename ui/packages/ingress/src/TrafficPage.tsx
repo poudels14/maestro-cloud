@@ -108,6 +108,12 @@ function TrafficPage(props: { api: IngressApi; logsApi: LogsApi }) {
 
   return (
     <div class="space-y-4">
+      <div>
+        <h1 class="text-lg font-semibold text-gray-900">Traffic</h1>
+        <p class="mt-1 text-sm text-gray-400">
+          Public ingress requests, top clients, and the cluster-wide IP blocklist.
+        </p>
+      </div>
       <Show when={traffic.isError}>
         <ErrorBanner message="Failed to load ingress traffic" onRetry={() => traffic.refetch()} />
       </Show>

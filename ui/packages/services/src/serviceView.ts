@@ -31,8 +31,16 @@ function isSystemService(service: Service): boolean {
   return service.meta.id.startsWith("maestro-system-");
 }
 
-function userServices(services: Service[]): Service[] {
+function nonPreviewServices(services: Service[]): Service[] {
   return services.filter((service) => service.previewResource == null);
+}
+
+function userServices(services: Service[]): Service[] {
+  return nonPreviewServices(services).filter((service) => !isSystemService(service));
+}
+
+function systemServices(services: Service[]): Service[] {
+  return nonPreviewServices(services).filter((service) => isSystemService(service));
 }
 
 function servicePreviews(services: Service[], baseServiceId: string): Service[] {
@@ -71,10 +79,12 @@ function previewEnabledServices(services: Service[]): Service[] {
 export {
   attachPreviewResources,
   isSystemService,
+  nonPreviewServices,
   previewEnabledServices,
   previewServices,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,
+  systemServices,
   userServices
 };

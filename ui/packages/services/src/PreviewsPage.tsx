@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { GitPullRequest } from "lucide-solid";
-import { ErrorBanner, formatDateTime, SectionHeader, StatusBadge } from "@maestro/kit";
+import { ErrorBanner, formatDateTime, StatusBadge } from "@maestro/kit";
 import { useQuery } from "@maestro/sdk";
 import type { ServicesApi } from "./api";
 import { servicesQuery } from "./queries";
@@ -34,7 +34,7 @@ function PreviewsPage(props: { api: ServicesApi }) {
         fallback={<div class="py-20 text-center text-sm text-gray-400">Loading previews…</div>}
       >
         <div class="mb-5">
-          <SectionHeader>PR Previews</SectionHeader>
+          <h1 class="text-lg font-semibold text-gray-900">Pull request previews</h1>
           <p class="mt-1 text-sm text-gray-400">
             Ephemeral services created for open pull requests.
           </p>
@@ -116,10 +116,12 @@ function PreviewRow(props: { service: Service; onOpen: () => void }) {
             >
               PR #{preview().spec.pullRequestNumber}
             </a>
-            <span class="truncate text-gray-500">· {preview().spec.repository}</span>
+            <span class="truncate text-gray-500">
+              · {preview().spec.title || preview().spec.repository}
+            </span>
           </span>
           <span class="block truncate text-xs text-gray-400">
-            {preview().spec.headRevision.slice(0, 12)} · expires{" "}
+            {preview().spec.repository} · {preview().spec.headRevision.slice(0, 12)} · expires{" "}
             {formatDateTime(preview().spec.expiresAt, true)}
           </span>
         </span>

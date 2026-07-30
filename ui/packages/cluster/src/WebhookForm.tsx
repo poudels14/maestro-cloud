@@ -123,7 +123,7 @@ function WebhookForm(props: {
             value={id()}
             onInput={(event) => setId(event.currentTarget.value)}
             disabled={mutation.isPending || Boolean(current)}
-            class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300 disabled:bg-gray-100"
+            class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-100"
           />
           <input
             type="text"
@@ -131,14 +131,14 @@ function WebhookForm(props: {
             value={name()}
             onInput={(event) => setName(event.currentTarget.value)}
             disabled={mutation.isPending}
-            class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
+            class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
           />
         </div>
         <select
           value={format()}
           onChange={(event) => setFormat(event.currentTarget.value as WebhookFormat)}
           disabled={mutation.isPending}
-          class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
+          class="w-full px-2.5 py-1.5 text-sm text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
         >
           <option value="slack">Slack incoming webhook</option>
           <option value="maestro">Native Maestro (signed JSON)</option>
@@ -154,7 +154,7 @@ function WebhookForm(props: {
           onInput={(event) => setEndpoint(event.currentTarget.value)}
           disabled={mutation.isPending}
           autocomplete="off"
-          class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
+          class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
         />
         <Show when={format() === "maestro"}>
           <input
@@ -168,7 +168,7 @@ function WebhookForm(props: {
             onInput={(event) => setSigningSecret(event.currentTarget.value)}
             disabled={mutation.isPending}
             autocomplete="new-password"
-            class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-300"
+            class="w-full px-2.5 py-1.5 text-sm font-mono text-gray-800 border border-gray-200 bg-white rounded-md outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
           />
         </Show>
         <OptionGroup
@@ -191,7 +191,7 @@ function WebhookForm(props: {
             checked={enabled()}
             onChange={(event) => setEnabled(event.currentTarget.checked)}
             disabled={mutation.isPending}
-            class="size-3.5"
+            class="size-3.5 accent-indigo-600"
           />
           Delivery enabled
         </label>
@@ -200,7 +200,7 @@ function WebhookForm(props: {
             type="button"
             onClick={save}
             disabled={mutation.isPending}
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300"
+            class="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-500 disabled:bg-indigo-300"
           >
             {current ? "Update" : "Save"}
           </button>
@@ -236,7 +236,7 @@ function OptionGroup<Value extends string>(props: {
               checked={props.selected().includes(option.value)}
               onChange={() => props.toggle(option.value)}
               disabled={props.disabled}
-              class="size-3.5"
+              class="size-3.5 accent-indigo-600"
             />
             {option.label}
           </label>
