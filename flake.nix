@@ -19,7 +19,7 @@
       };
     rustToolchainFor = pkgs: pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
     rewriteVersion =
-      (builtins.fromTOML (builtins.readFile ./crates/apps/cli/Cargo.toml)).package.version;
+      (builtins.fromTOML (builtins.readFile ./crates/kernel/api/Cargo.toml)).package.version;
   in {
     packages = forAllSystems (
       system: let
@@ -32,6 +32,7 @@
         rewritePackage = import ./nix/rewrite-package.nix {
           inherit pkgs rustToolchain;
           panel = rewritePanel;
+          version = rewriteVersion;
         };
       in {
         default = rewritePackage;
@@ -52,6 +53,7 @@
           rustToolchain = (rustToolchainFor pkgs).override {
             targets = [staticTarget];
           };
+          version = rewriteVersion;
         };
         rewriteDaemonImage = import ./nix/rewrite-daemon-image.nix {
           inherit pkgs;

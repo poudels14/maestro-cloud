@@ -1,6 +1,6 @@
 [package]
 name = "maestro-cli"
-version = "0.6.12"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -27,7 +27,7 @@ ignore.workspace = true
 jsonwebtoken.workspace = true
 json5.workspace = true
 ipnet.workspace = true
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 libc.workspace = true
 logs = { version = "0.1.0", path = "../../observability/logs" }
 reqwest = { workspace = true, features = ["json"] }

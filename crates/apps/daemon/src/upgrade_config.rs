@@ -32,7 +32,6 @@ pub(crate) fn configure_nixos_upgrade(
     let mut settings = NixosUpgradeStagerSettings::new(
         config.flake.clone(),
         config.configuration.clone(),
-        config.manifest_relative_path.clone(),
         running_version.clone(),
     )?;
     if let (Some(nix), Some(rebuild)) = (&config.nix_binary, &config.nixos_rebuild_binary) {

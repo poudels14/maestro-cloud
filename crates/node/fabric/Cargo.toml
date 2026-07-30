@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 opentelemetry-proto = { workspace = true, default-features = false, features = ["gen-tonic", "trace", "logs", "metrics"] }
 prost.workspace = true
 subtle.workspace = true

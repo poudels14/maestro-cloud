@@ -402,11 +402,6 @@ fn nixos_upgrade_launch_config_requires_hermetic_binary_pairs()
         .get("nixosUpgrade")
         .ok_or("NixOS upgrade config missing")?;
     assert_eq!(upgrade.get("configuration"), Some(&"default".into()));
-    assert_eq!(
-        upgrade.get("manifestRelativePath"),
-        Some(&"crates/apps/cli/Cargo.toml".into())
-    );
-
     let upgrade = launch
         .nixos_upgrade
         .as_mut()

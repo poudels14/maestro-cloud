@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -8,24 +8,17 @@ use semver::Version;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
-const MAX_MANIFEST_BYTES: u64 = 64 * 1_024;
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1_024;
 
 /// Validated source selected by a staged NixOS boot generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NixosUpgradeSource {
-    path: PathBuf,
     version: Version,
 }
 
 impl NixosUpgradeSource {
-    pub(crate) fn new(path: PathBuf, version: Version) -> Self {
-        Self { path, version }
-    }
-
-    /// Returns the immutable source path evaluated from the updated flake.
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub(crate) fn new(version: Version) -> Self {
+        Self { version }
     }
 
     /// Returns the Maestro version declared by the evaluated source.
@@ -54,24 +47,21 @@ pub trait NixosUpgradeStager: Send + Sync {
 pub struct NixosUpgradeStagerSettings {
     flake: PathBuf,
     configuration: String,
-    manifest_relative_path: PathBuf,
     running_version: Version,
     nix_binary: PathBuf,
     nixos_rebuild_binary: PathBuf,
 }
 
 impl NixosUpgradeStagerSettings {
-    /// Validates one flake selection and the manifest used to verify source versions.
+    /// Validates one flake selection used to build and verify upgrades.
     pub fn new(
         flake: impl Into<PathBuf>,
         configuration: impl Into<String>,
-        manifest_relative_path: impl Into<PathBuf>,
         running_version: Version,
     ) -> Result<Self, NixosUpgradeStagingError> {
         let settings = Self {
             flake: flake.into(),
             configuration: configuration.into(),
-            manifest_relative_path: manifest_relative_path.into(),
             running_version,
             nix_binary: PathBuf::from("nix"),
             nixos_rebuild_binary: PathBuf::from("nixos-rebuild"),
@@ -80,14 +70,9 @@ impl NixosUpgradeStagerSettings {
         Ok(settings)
     }
 
-    /// Selects the standard Maestro NixOS flake and canonical release manifest.
+    /// Selects the standard Maestro NixOS flake and canonical release version.
     pub fn production(running_version: Version) -> Result<Self, NixosUpgradeStagingError> {
-        Self::new(
-            "/etc/maestro",
-            "default",
-            "crates/apps/cli/Cargo.toml",
-            running_version,
-        )
+        Self::new("/etc/maestro", "default", running_version)
     }
 
     /// Replaces process paths for hermetic packaging without changing arguments.
@@ -118,16 +103,6 @@ impl NixosUpgradeStagerSettings {
                 "NixOS configuration must contain only ASCII letters, digits, '-' or '_'",
             ));
         }
-        if self.manifest_relative_path.as_os_str().is_empty()
-            || !self
-                .manifest_relative_path
-                .components()
-                .all(|component| matches!(component, Component::Normal(_)))
-        {
-            return Err(rejected(
-                "NixOS source manifest must be a non-empty relative path without traversal",
-            ));
-        }
         if self.nix_binary.as_os_str().is_empty()
             || self.nixos_rebuild_binary.as_os_str().is_empty()
         {
@@ -136,9 +111,9 @@ impl NixosUpgradeStagerSettings {
         Ok(())
     }
 
-    fn source_attribute(&self) -> OsString {
+    fn version_attribute(&self) -> OsString {
         format!(
-            "{}#nixosConfigurations.{}.config.services.maestro.source",
+            "{}#nixosConfigurations.{}.config.services.maestro.package.version",
             self.flake.display(),
             self.configuration
         )
@@ -188,21 +163,19 @@ impl NixosUpgradeStager for ProcessNixosUpgradeStager {
             ))
             .await
             .map_err(|error| unavailable("update NixOS flake", error))?;
-        let evaluated = self
+        let evaluated_version = self
             .runner
             .run(NixosCommand::new(
                 self.settings.nix_binary.clone(),
                 [
                     OsString::from("eval"),
                     OsString::from("--raw"),
-                    self.settings.source_attribute(),
+                    self.settings.version_attribute(),
                 ],
             ))
             .await
-            .map_err(|error| unavailable("evaluate updated Maestro source", error))?;
-        let source = source_path(&evaluated.stdout)?;
-        let manifest = read_manifest(&source.join(&self.settings.manifest_relative_path)).await?;
-        let source_version = parse_package_version(&manifest)?;
+            .map_err(|error| unavailable("evaluate updated Maestro version", error))?;
+        let source_version = parse_maestro_version(&evaluated_version.stdout)?;
         validate_source_version(
             &source_version,
             &self.settings.running_version,
@@ -219,7 +192,7 @@ impl NixosUpgradeStager for ProcessNixosUpgradeStager {
             ))
             .await
             .map_err(|error| unavailable("build NixOS boot generation", error))?;
-        Ok(NixosUpgradeSource::new(source, source_version))
+        Ok(NixosUpgradeSource::new(source_version))
     }
 }
 
@@ -323,91 +296,12 @@ async fn read_bounded(
     }
 }
 
-async fn read_manifest(path: &Path) -> Result<String, NixosUpgradeStagingError> {
-    let path_metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
-        unavailable(
-            format!("inspect source manifest `{}`", path.display()),
-            error,
-        )
-    })?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
-        return Err(rejected(format!(
-            "updated Maestro source manifest `{}` must be a regular file",
-            path.display()
-        )));
-    }
-    let file = tokio::fs::File::open(path).await.map_err(|error| {
-        unavailable(format!("open source manifest `{}`", path.display()), error)
-    })?;
-    let metadata = file.metadata().await.map_err(|error| {
-        unavailable(
-            format!("inspect open source manifest `{}`", path.display()),
-            error,
-        )
-    })?;
-    if metadata.len() > MAX_MANIFEST_BYTES {
-        return Err(rejected(format!(
-            "updated Maestro source manifest `{}` exceeds {MAX_MANIFEST_BYTES} bytes",
-            path.display()
-        )));
-    }
-    let mut manifest = Vec::new();
-    file.take(MAX_MANIFEST_BYTES.saturating_add(1))
-        .read_to_end(&mut manifest)
-        .await
-        .map_err(|error| {
-            unavailable(format!("read source manifest `{}`", path.display()), error)
-        })?;
-    if manifest.len() as u64 > MAX_MANIFEST_BYTES {
-        return Err(rejected(format!(
-            "updated Maestro source manifest `{}` exceeds {MAX_MANIFEST_BYTES} bytes",
-            path.display()
-        )));
-    }
-    String::from_utf8(manifest).map_err(|_| {
-        rejected(format!(
-            "updated Maestro source manifest `{}` is not valid UTF-8",
-            path.display()
-        ))
-    })
-}
-
-fn source_path(output: &[u8]) -> Result<PathBuf, NixosUpgradeStagingError> {
+fn parse_maestro_version(output: &[u8]) -> Result<Version, NixosUpgradeStagingError> {
     let value = std::str::from_utf8(output)
-        .map_err(|_| rejected("updated services.maestro.source is not valid UTF-8"))?
+        .map_err(|_| rejected("evaluated Maestro version is not valid UTF-8"))?
         .trim();
-    let path = PathBuf::from(value);
-    if value.is_empty() || !path.is_absolute() {
-        return Err(rejected(format!(
-            "updated services.maestro.source must be an absolute path, got `{value}`"
-        )));
-    }
-    Ok(path)
-}
-
-pub(crate) fn parse_package_version(manifest: &str) -> Result<Version, NixosUpgradeStagingError> {
-    let mut in_package = false;
-    for line in manifest.lines().map(str::trim) {
-        if line == "[package]" {
-            in_package = true;
-            continue;
-        }
-        if in_package && line.starts_with('[') {
-            break;
-        }
-        if in_package
-            && let Some((key, value)) = line.split_once('=')
-            && key.trim() == "version"
-        {
-            let value = value.trim().trim_matches('"');
-            return Version::parse(value).map_err(|error| {
-                rejected(format!(
-                    "invalid Maestro package version `{value}`: {error}"
-                ))
-            });
-        }
-    }
-    Err(rejected("Maestro Cargo manifest has no package.version"))
+    Version::parse(value)
+        .map_err(|error| rejected(format!("invalid Maestro version `{value}`: {error}")))
 }
 
 pub(crate) fn validate_source_version(

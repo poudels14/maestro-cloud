@@ -1,2 +1,2 @@
-/// Maestro product version sourced from the operator CLI package manifest.
-pub const MAESTRO_VERSION: &str = env!("MAESTRO_VERSION");
+/// Canonical Maestro product version used by every shipped binary and package.
+pub const MAESTRO_VERSION: &str = env!("CARGO_PKG_VERSION");

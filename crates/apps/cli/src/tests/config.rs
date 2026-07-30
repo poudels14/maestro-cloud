@@ -381,7 +381,6 @@ async fn production_launch_policy_resolves_secrets_and_preserves_operational_set
             "nixos-upgrade": {
                 flake: "/etc/maestro",
                 configuration: "production",
-                "manifest-relative-path": "crates/apps/cli/Cargo.toml",
                 "nix-binary": "/nix/store/nix/bin/nix",
                 "nixos-rebuild-binary": "/run/current-system/sw/bin/nixos-rebuild",
                 "systemctl-binary": "/run/current-system/sw/bin/systemctl"

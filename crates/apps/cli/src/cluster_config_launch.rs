@@ -1,4 +1,4 @@
-use std::path::{Component, Path};
+use std::path::Path;
 
 use cluster::{
     ClusterLaunchPolicy, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
@@ -110,7 +110,6 @@ pub(crate) async fn convert_launch_policy(
             Ok::<_, CliError>(NixosUpgradeLaunchConfig {
                 flake: input.flake.clone(),
                 configuration: input.configuration.clone(),
-                manifest_relative_path: input.manifest_relative_path.clone(),
                 nix_binary: input.nix_binary.clone(),
                 nixos_rebuild_binary: input.nixos_rebuild_binary.clone(),
                 systemctl_binary: input.systemctl_binary.clone(),
@@ -239,17 +238,6 @@ fn validate_nixos_upgrade_input(input: &NixosUpgradeInput) -> Result<(), CliErro
         return Err(invalid(
             "nixos-upgrade.configuration",
             "must contain only ASCII letters, digits, '-' or '_'",
-        ));
-    }
-    if input.manifest_relative_path.as_os_str().is_empty()
-        || !input
-            .manifest_relative_path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(invalid(
-            "nixos-upgrade.manifest-relative-path",
-            "must be a non-empty relative path without traversal",
         ));
     }
     if input.nix_binary.is_some() != input.nixos_rebuild_binary.is_some() {

@@ -10,7 +10,7 @@ test-util = []
 
 [dependencies]
 async-trait.workspace = true
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 node-agent = { version = "0.1.0", path = "../../node/agent" }
 reqwest.workspace = true
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }

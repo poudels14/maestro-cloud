@@ -10,7 +10,7 @@ async-trait.workspace = true
 base64.workspace = true
 flate2.workspace = true
 hex.workspace = true
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }

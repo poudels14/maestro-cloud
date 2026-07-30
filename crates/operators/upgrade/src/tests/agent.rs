@@ -401,10 +401,7 @@ impl NixosUpgradeStager for FakeStager {
         if let Some(error) = lock(&self.failure).take() {
             Err(error)
         } else {
-            Ok(NixosUpgradeSource::new(
-                PathBuf::from("/nix/store/maestro"),
-                minimum_version.clone(),
-            ))
+            Ok(NixosUpgradeSource::new(minimum_version.clone()))
         }
     }
 }

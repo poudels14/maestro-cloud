@@ -9,7 +9,7 @@ publish = false
 async-trait.workspace = true
 chrono.workspace = true
 duckdb = { workspace = true, features = ["bundled", "json", "parquet"] }
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 logql = { version = "0.1.0", path = "../logql" }
 logs = { version = "0.1.0", path = "../logs" }
 metrics = { version = "0.1.0", path = "../metrics" }

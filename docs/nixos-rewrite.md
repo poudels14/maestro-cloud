@@ -107,6 +107,11 @@ explicitly.
 Linux release tags publish deterministic static-musl bundles for x86_64 and
 ARM64. Build the bundle for the current Linux architecture and verify it with:
 
+Set the `kernel-api` package version in `crates/kernel/api/Cargo.toml` for a
+release. `kernel_api::MAESTRO_VERSION`, every shipped binary, Nix package, and
+generated API document read that same Cargo version. Other Cargo packages keep
+independent internal versions.
+
 ```sh
 nix build .#rewrite-static-bundle
 (cd result && sha256sum --check *.sha256)

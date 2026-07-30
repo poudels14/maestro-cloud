@@ -110,8 +110,6 @@ pub(crate) struct NixosUpgradeInput {
     pub(crate) flake: PathBuf,
     #[serde(default = "default_nixos_configuration")]
     pub(crate) configuration: String,
-    #[serde(default = "default_manifest_relative_path")]
-    pub(crate) manifest_relative_path: PathBuf,
     #[serde(default)]
     pub(crate) nix_binary: Option<PathBuf>,
     #[serde(default)]
@@ -134,10 +132,6 @@ const fn default_depot_timeout_secs() -> u64 {
 
 fn default_nixos_configuration() -> String {
     "default".to_owned()
-}
-
-fn default_manifest_relative_path() -> PathBuf {
-    PathBuf::from("crates/apps/cli/Cargo.toml")
 }
 
 #[derive(Debug, Deserialize)]

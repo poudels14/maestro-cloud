@@ -13,7 +13,7 @@ etcd-client = { workspace = true, features = ["tls"] }
 hex.workspace = true
 hkdf.workspace = true
 hmac.workspace = true
-kernel-api = { version = "0.1.0", path = "../kernel/api" }
+kernel-api = { path = "../kernel/api" }
 kernel-store = { version = "0.1.0", path = "../kernel/store" }
 nix = { workspace = true, features = ["signal", "process"] }
 rcgen = { workspace = true, features = ["pem", "x509-parser"] }

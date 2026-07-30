@@ -9,7 +9,7 @@ publish = false
 async-trait.workspace = true
 hex.workspace = true
 hmac.workspace = true
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 reqwest.workspace = true

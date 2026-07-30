@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
@@ -15,18 +15,15 @@ use crate::{
 #[tokio::test]
 async fn process_stager_validates_source_before_building_the_boot_generation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let source = tempfile::tempdir()?;
-    write_manifest(source.path(), "2.1.0").await?;
     let runner = Arc::new(RecordingRunner::new([
         Ok(output(Vec::new())),
-        Ok(output(source.path().to_string_lossy().as_bytes().to_vec())),
+        Ok(output(b"2.1.0".to_vec())),
         Ok(output(Vec::new())),
     ]));
     let stager = ProcessNixosUpgradeStager::with_runner(settings()?, runner.clone());
 
     let staged = stager.stage(&Version::new(2, 0, 0)).await?;
 
-    assert_eq!(staged.path(), source.path());
     assert_eq!(staged.version(), &Version::new(2, 1, 0));
     assert_eq!(
         runner.commands(),
@@ -40,7 +37,7 @@ async fn process_stager_validates_source_before_building_the_boot_generation()
                 [
                     "eval",
                     "--raw",
-                    "/etc/maestro#nixosConfigurations.default.config.services.maestro.source",
+                    "/etc/maestro#nixosConfigurations.default.config.services.maestro.package.version",
                 ],
             ),
             command(
@@ -55,11 +52,9 @@ async fn process_stager_validates_source_before_building_the_boot_generation()
 #[tokio::test]
 async fn process_stager_rejects_a_stale_source_before_rebuilding()
 -> Result<(), Box<dyn std::error::Error>> {
-    let source = tempfile::tempdir()?;
-    write_manifest(source.path(), "1.0.0").await?;
     let runner = Arc::new(RecordingRunner::new([
         Ok(output(Vec::new())),
-        Ok(output(source.path().to_string_lossy().as_bytes().to_vec())),
+        Ok(output(b"1.0.0".to_vec())),
     ]));
     let stager = ProcessNixosUpgradeStager::with_runner(settings()?, runner.clone());
 
@@ -77,11 +72,9 @@ async fn process_stager_rejects_a_stale_source_before_rebuilding()
 #[tokio::test]
 async fn process_stager_rejects_a_source_below_the_requested_minimum()
 -> Result<(), Box<dyn std::error::Error>> {
-    let source = tempfile::tempdir()?;
-    write_manifest(source.path(), "1.1.0").await?;
     let runner = Arc::new(RecordingRunner::new([
         Ok(output(Vec::new())),
-        Ok(output(source.path().to_string_lossy().as_bytes().to_vec())),
+        Ok(output(b"1.1.0".to_vec())),
     ]));
     let stager = ProcessNixosUpgradeStager::with_runner(settings()?, runner.clone());
 
@@ -119,52 +112,15 @@ async fn process_stager_classifies_command_failure_as_unavailable()
 }
 
 #[test]
-fn stager_settings_reject_ambiguous_paths_and_configuration_names() {
+fn stager_settings_reject_ambiguous_flakes_and_configuration_names() {
     let running = Version::new(1, 0, 0);
-    assert!(
-        NixosUpgradeStagerSettings::new(
-            "etc/maestro",
-            "default",
-            "crates/apps/cli/Cargo.toml",
-            running.clone(),
-        )
-        .is_err()
-    );
-    assert!(
-        NixosUpgradeStagerSettings::new(
-            "/etc/maestro",
-            "default#other",
-            "crates/apps/cli/Cargo.toml",
-            running.clone(),
-        )
-        .is_err()
-    );
-    assert!(
-        NixosUpgradeStagerSettings::new("/etc/maestro", "default", "../Cargo.toml", running,)
-            .is_err()
-    );
+    assert!(NixosUpgradeStagerSettings::new("etc/maestro", "default", running.clone()).is_err());
+    assert!(NixosUpgradeStagerSettings::new("/etc/maestro", "default#other", running).is_err());
 }
 
 fn settings() -> Result<NixosUpgradeStagerSettings, NixosUpgradeStagingError> {
-    NixosUpgradeStagerSettings::new(
-        "/etc/maestro",
-        "default",
-        "crates/apps/cli/Cargo.toml",
-        Version::new(1, 0, 0),
-    )?
-    .with_binaries("/nix/bin/nix", "/nix/bin/nixos-rebuild")
-}
-
-async fn write_manifest(root: &Path, version: &str) -> Result<(), std::io::Error> {
-    let directory = root.join("crates/apps/cli");
-    tokio::fs::create_dir_all(&directory).await?;
-    tokio::fs::write(
-        directory.join("Cargo.toml"),
-        format!(
-            "[workspace]\nmembers = []\n\n[package]\nname = \"maestro-cli\"\nversion = \"{version}\"\n\n[dependencies]\n"
-        ),
-    )
-    .await
+    NixosUpgradeStagerSettings::new("/etc/maestro", "default", Version::new(1, 0, 0))?
+        .with_binaries("/nix/bin/nix", "/nix/bin/nixos-rebuild")
 }
 
 fn output(stdout: Vec<u8>) -> NixosCommandOutput {

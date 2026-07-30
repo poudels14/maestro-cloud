@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
-kernel-api = { version = "0.1.0", path = "../api" }
+kernel-api = { path = "../api" }
 kernel-store = { version = "0.1.0", path = "../store" }
 serde.workspace = true
 serde_json.workspace = true

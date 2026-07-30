@@ -16,7 +16,7 @@ futures-util.workspace = true
 ingress = { version = "0.1.0", path = "../../operators/ingress" }
 ipnet.workspace = true
 jsonwebtoken.workspace = true
-kernel-api = { version = "0.1.0", path = "../../kernel/api" }
+kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 logs = { version = "0.1.0", path = "../../observability/logs" }

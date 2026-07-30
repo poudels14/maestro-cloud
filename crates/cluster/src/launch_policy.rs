@@ -129,9 +129,6 @@ pub struct NixosUpgradeLaunchConfig {
     /// NixOS configuration selected from the flake.
     #[serde(default = "default_configuration")]
     pub configuration: String,
-    /// Maestro CLI manifest below `services.maestro.source`.
-    #[serde(default = "default_manifest_relative_path")]
-    pub manifest_relative_path: PathBuf,
     /// Optional hermetic path to the Nix executable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nix_binary: Option<PathBuf>,
@@ -144,12 +141,11 @@ pub struct NixosUpgradeLaunchConfig {
 }
 
 impl NixosUpgradeLaunchConfig {
-    /// Selects a flake with the standard configuration, manifest, and process paths.
+    /// Selects a flake with the standard configuration and process paths.
     pub fn new(flake: impl Into<PathBuf>) -> Self {
         Self {
             flake: flake.into(),
             configuration: default_configuration(),
-            manifest_relative_path: default_manifest_relative_path(),
             nix_binary: None,
             nixos_rebuild_binary: None,
             systemctl_binary: None,
@@ -171,8 +167,4 @@ const fn default_depot_timeout_secs() -> u64 {
 
 fn default_configuration() -> String {
     "default".to_owned()
-}
-
-fn default_manifest_relative_path() -> PathBuf {
-    PathBuf::from("crates/apps/cli/Cargo.toml")
 }

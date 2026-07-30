@@ -10,7 +10,7 @@ aes-gcm.workspace = true
 argon2.workspace = true
 async-trait.workspace = true
 etcd-client = { workspace = true, features = ["tls"] }
-kernel-api = { version = "0.1.0", path = "../api" }
+kernel-api = { path = "../api" }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sha2.workspace = true

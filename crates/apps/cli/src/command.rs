@@ -16,7 +16,7 @@ use crate::services_command::ServiceCommand;
 
 /// Rewritten Maestro operator command-line client.
 #[derive(Debug, Parser)]
-#[command(name = "maestro", version, about)]
+#[command(name = "maestro", version = kernel_api::MAESTRO_VERSION, about)]
 pub struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -3,6 +3,7 @@
   panel ? null,
   pkgs,
   rustToolchain,
+  version,
 }: let
   static = muslPkgs != null;
   packagePkgs =
@@ -21,8 +22,6 @@
     "--package"
     "migrate"
   ];
-  cliVersion = (builtins.fromTOML (builtins.readFile ../crates/apps/cli/Cargo.toml)).package.version;
-  version = cliVersion;
   source = pkgs.lib.fileset.toSource {
     root = ../.;
     fileset = pkgs.lib.fileset.unions [
