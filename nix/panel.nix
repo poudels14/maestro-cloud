@@ -1,10 +1,10 @@
 {
+  maestroVersion,
   pkgs,
-  rewriteVersion,
 }: let
   buildNodejs = pkgs.nodejs_22;
   pnpm = pkgs.pnpm_10.override {nodejs = buildNodejs;};
-  version = rewriteVersion;
+  version = maestroVersion;
   source = pkgs.lib.fileset.toSource {
     root = ../.;
     fileset = pkgs.lib.fileset.intersection
@@ -18,7 +18,7 @@
   };
 in
   pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
-    pname = "maestro-rewrite-panel";
+    pname = "maestro-panel";
     inherit version;
     src = source;
 
@@ -56,7 +56,7 @@ in
     '';
 
     meta = {
-      description = "Static production assets for the rewritten Maestro panel";
+      description = "Static production assets for the Maestro panel";
       platforms = pkgs.lib.platforms.all;
     };
   })

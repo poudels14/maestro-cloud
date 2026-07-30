@@ -1,10 +1,10 @@
 {
   daemonImage,
   imageArchitecture,
+  maestroPackage,
   pkgs,
-  rewritePackage,
 }: let
-  version = rewritePackage.version;
+  version = maestroPackage.version;
   system = pkgs.stdenv.hostPlatform.system;
   archiveName = "maestro-daemon-${version}-${system}.docker.tar.gz";
 in

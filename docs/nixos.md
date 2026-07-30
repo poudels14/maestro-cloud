@@ -1,19 +1,16 @@
-# Rewrite NixOS deployment
+# NixOS deployment
 
-The flake exposes the rewrite through the established Maestro entry points:
+The flake exposes Maestro through these production entry points:
 
 - `packages.<system>.default` installs `maestro`, `maestro-daemon`,
   `maestro-migrate`, and the static panel served by the daemon;
-- `packages.<system>.rewrite` is an explicit alias for the same package;
-- `packages.<system>.rewrite-panel` exposes the same static panel separately
-  for packaging inspection.
-- `apps.<system>.default`, `rewrite`, `daemon`, and `migrate` run those
+- `packages.<system>.panel` exposes the static panel separately for packaging
+  inspection;
+- `packages.<system>.static`, `release-bundle`, `daemon-image`, and
+  `daemon-image-bundle` expose Linux release artifacts;
+- `apps.<system>.default`, `daemon`, and `migrate` run the shipped
   binaries; and
 - `nixosModules.default` defines `services.maestro`.
-
-The explicit `rewrite` package and application aliases remain available for
-release inspection. The default package, application, and NixOS module are the
-canonical production entry points.
 
 ## Host configuration
 
@@ -40,7 +37,7 @@ store:
 }
 ```
 
-`services.maestro.config` now names the protected rewrite launch document, not
+`services.maestro.config` names the protected daemon launch document, not
 the shared JSON/JSONC config source. The launch document contains cluster
 private keys, application secrets, and the shared JWT signing key. It must be
 an absolute owner-only regular file such as
@@ -64,7 +61,7 @@ Control-plane launch documents should use
 `/run/current-system/sw/bin/etcd` for `etcdBinary`. The module installs the
 selected etcd package into the system profile, enables native containerd, and
 starts the containerd-backed BuildKit worker. It also installs Depot and exposes
-the nftables, network, Git, and NixOS tools used by rewrite adapters. The module
+the nftables, network, Git, and NixOS tools used by Maestro adapters. The module
 enables the `nix-command` and `flakes` features required by those adapters.
 
 Create a new master document directly from the validated cluster config:
@@ -101,9 +98,6 @@ nix run .# -- --help
 nix run .#migrate -- --help
 ```
 
-`nix build .#rewrite` and `nix run .#rewrite` select the same rewrite package
-explicitly.
-
 Linux release tags publish deterministic static-musl bundles for x86_64 and
 ARM64. Build the bundle for the current Linux architecture and verify it with:
 
@@ -113,7 +107,7 @@ generated API document read that same Cargo version. Other Cargo packages keep
 independent internal versions.
 
 ```sh
-nix build .#rewrite-static-bundle
+nix build .#release-bundle
 (cd result && sha256sum --check *.sha256)
 tar -xzf result/*.tar.gz
 ```
@@ -131,10 +125,10 @@ Release builds also publish a minimal, deterministic daemon image archive for
 each Linux architecture. Build and verify it locally with:
 
 ```sh
-nix build .#rewrite-daemon-image-bundle --out-link result-daemon-image
+nix build .#daemon-image-bundle --out-link result-daemon-image
 (cd result-daemon-image && sha256sum --check *.sha256)
 gzip -dc result-daemon-image/*.docker.tar.gz | docker load
-version=$(nix eval --raw .#rewrite-static.version)
+version=$(nix eval --raw .#static.version)
 docker run --rm "maestro-daemon:$version" --help
 ```
 

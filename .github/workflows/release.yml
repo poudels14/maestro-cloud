@@ -174,22 +174,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(nix eval --raw .#rewrite-static.version)
+          version=$(nix eval --raw .#static.version)
           test "$GITHUB_REF_NAME" = "v$version"
 
       - name: Build static release bundle
-        run: nix build .#rewrite-static-bundle --print-build-logs
+        run: nix build .#release-bundle --print-build-logs
 
       - name: Build daemon image bundle
         run: >-
-          nix build .#rewrite-daemon-image-bundle
+          nix build .#daemon-image-bundle
           --out-link result-daemon-image
           --print-build-logs
 
       - name: Check NixOS module
         run: >-
           nix build
-          .#checks.${{ matrix.system }}.rewrite-module
+          .#checks.${{ matrix.system }}.module
           --no-link
           --print-build-logs
 
@@ -205,7 +205,7 @@ jobs:
             sha256sum --check -- *.sha256
           )
           archive=$(find dist -maxdepth 1 -type f \
-            -name 'maestro-rewrite-*.tar.gz' -print -quit)
+            -name 'maestro-[0-9]*.tar.gz' -print -quit)
           test -n "$archive"
           tar -xzf "$archive" -C unpacked
           bundle=$(find unpacked -mindepth 1 -maxdepth 1 -type d -print -quit)
@@ -217,7 +217,7 @@ jobs:
           test -s "$bundle/share/doc/maestro/cutover.md"
           test -s "$bundle/share/doc/maestro/rehearsal-evidence.md"
           test -s "$bundle/share/doc/maestro/multi-node.md"
-          test -s "$bundle/share/doc/maestro/nixos-rewrite.md"
+          test -s "$bundle/share/doc/maestro/nixos.md"
           test -s "$bundle/share/doc/maestro/tailscale.md"
           test -s "$bundle/share/maestro-panel/index.html"
           image_count=0
@@ -231,7 +231,7 @@ jobs:
       - name: Upload release bundle
         uses: actions/upload-artifact@v7
         with:
-          name: maestro-rewrite-${{ matrix.system }}
+          name: maestro-${{ matrix.system }}
           path: dist/*
           if-no-files-found: error
 
@@ -246,7 +246,7 @@ jobs:
       - name: Download release bundles
         uses: actions/download-artifact@v7
         with:
-          pattern: maestro-rewrite-*
+          pattern: maestro-*
           path: dist
           merge-multiple: true
 

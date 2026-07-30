@@ -1,7 +1,7 @@
 {
   config,
+  maestroPackage,
   pkgs,
-  rewritePackage,
 }: let
   inherit (pkgs) lib;
   buildkit = config.systemd.services.buildkitd;
@@ -28,11 +28,11 @@ in
   assert lib.elem "multi-user.target" daemon.wantedBy;
   assert daemon.serviceConfig.UMask == "0077";
   assert daemon.serviceConfig.LimitNOFILE == 1048576;
-  assert config.services.maestro.package == rewritePackage;
+  assert config.services.maestro.package == maestroPackage;
   assert config.services.maestro.source != null;
   assert lib.any (package: lib.getName package == "depot") config.environment.systemPackages;
   assert lib.hasInfix "/bin/maestro-daemon" daemonCommand;
   assert lib.hasInfix "\"start\" \"/run/maestro/launch.json\"" daemonCommand;
-    pkgs.runCommand "maestro-rewrite-module-check" {} ''
+    pkgs.runCommand "maestro-module-check" {} ''
       touch "$out"
     ''

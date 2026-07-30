@@ -42,7 +42,7 @@ it is not a cluster correctness dependency.
 The Nix flake is the supported release path:
 
 ```sh
-nix build .#rewrite
+nix build
 nix flake check
 ```
 
@@ -50,7 +50,7 @@ nix flake check
 
 - `maestro` — operator CLI, including the `daemon` compatibility command;
 - `maestro-daemon` — host daemon and node-local administration; and
-- `maestro-migrate` — reviewed legacy-to-rewrite cutover migration.
+- `maestro-migrate` — reviewed legacy-to-Maestro cutover migration.
 
 For Rust development without packaging:
 
@@ -73,7 +73,7 @@ nix develop
 
 ## Host requirements
 
-A rewrite daemon host requires:
+A Maestro daemon host requires:
 
 - Linux with stable private IPv4 addressing and synchronized time;
 - native containerd;
@@ -84,7 +84,7 @@ A rewrite daemon host requires:
   run services whose build selects a Depot project.
 
 Control-plane nodes also require the configured etcd executable. The NixOS
-rewrite module provisions containerd, BuildKit, Depot, etcd, and the host tools
+module provisions containerd, BuildKit, Depot, etcd, and the host tools
 used by the production adapters.
 
 The runtime crate also contains a native Docker API backend for its supported
@@ -126,7 +126,7 @@ sudo maestro cluster bootstrap \
 
 The launch document contains private keys and cluster secrets, including the
 shared `jwt-secret-key`. It must remain an owner-only regular file outside the
-Nix store. Start it through the NixOS rewrite module, or directly while
+Nix store. Start it through the NixOS module, or directly while
 developing:
 
 ```sh
@@ -143,9 +143,9 @@ cluster config API never returns it.
 
 For multi-node admission, network requirements, verification, drain, restart,
 upgrade, and removal procedures, follow
-[Multi-node rewrite operations](docs/multi-node.md). For NixOS service and
+[Multi-node operations](docs/multi-node.md). For NixOS service and
 artifact packaging, follow
-[Rewrite NixOS deployment](docs/nixos-rewrite.md).
+[NixOS deployment](docs/nixos.md).
 
 ## Authenticate an operator CLI
 
@@ -336,8 +336,8 @@ pnpm --dir ui typecheck
 pnpm --dir ui build
 ```
 
-The release flake exposes the static panel as `.#rewrite-panel` and includes it
-in the rewrite package and daemon image. The daemon serves it from the API
+The release flake exposes the static panel as `.#panel` and includes it
+in the default package and daemon image. The daemon serves it from the API
 origin. Operators exchange an existing bearer token for a short-lived Secure,
 HttpOnly, SameSite=Strict browser cookie; the panel never stores the token.
 
@@ -356,7 +356,7 @@ Production cutover is not approved merely because the package builds.
 
 The cutover keeps the one-way data migration and does not preserve legacy API
 or runtime compatibility after migration. Migrated workloads are recreated
-under the rewrite runtime during the planned cutover window.
+under the Maestro runtime during the planned cutover window.
 
 ## Release artifacts
 
@@ -365,11 +365,11 @@ NixOS module, and a minimal daemon image containing the panel. Build the
 current architecture's bundles with:
 
 ```sh
-nix build .#rewrite-static-bundle
-nix build .#rewrite-daemon-image-bundle
+nix build .#release-bundle
+nix build .#daemon-image-bundle
 ```
 
-See [Rewrite NixOS deployment](docs/nixos-rewrite.md) for checksums, archive
+See [NixOS deployment](docs/nixos.md) for checksums, archive
 contents, image loading, module configuration, and runtime caveats.
 
 ## Verification
@@ -418,11 +418,11 @@ pretend to replace those cutover gates.
 
 ## Operator documentation
 
-- [Multi-node rewrite operations](docs/multi-node.md)
+- [Multi-node operations](docs/multi-node.md)
 - [Rewrite cutover migration](docs/cutover.md)
 - [Rewrite parity evidence](docs/parity-evidence.md)
 - [Production cutover rehearsal evidence](docs/rehearsal-evidence.md)
-- [Rewrite NixOS deployment](docs/nixos-rewrite.md)
+- [NixOS deployment](docs/nixos.md)
 - [Tailscale operator access](docs/tailscale.md)
 - [Pull-request previews](docs/pr-previews.md)
 - [Engineering guide](GUIDE.md)

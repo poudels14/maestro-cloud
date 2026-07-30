@@ -18,26 +18,25 @@
         overlays = [rustOverlay.overlays.default];
       };
     rustToolchainFor = pkgs: pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-    rewriteVersion =
+    maestroVersion =
       (builtins.fromTOML (builtins.readFile ./crates/kernel/api/Cargo.toml)).package.version;
   in {
     packages = forAllSystems (
       system: let
         pkgs = pkgsFor system;
         rustToolchain = rustToolchainFor pkgs;
-        rewritePanel = import ./nix/rewrite-panel.nix {
+        maestroPanel = import ./nix/panel.nix {
+          inherit maestroVersion;
           inherit pkgs;
-          inherit rewriteVersion;
         };
-        rewritePackage = import ./nix/rewrite-package.nix {
+        maestroPackage = import ./nix/package.nix {
           inherit pkgs rustToolchain;
-          panel = rewritePanel;
-          version = rewriteVersion;
+          panel = maestroPanel;
+          version = maestroVersion;
         };
       in {
-        default = rewritePackage;
-        rewrite = rewritePackage;
-        rewrite-panel = rewritePanel;
+        default = maestroPackage;
+        panel = maestroPanel;
       }
       // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (let
         muslPkgs =
@@ -47,17 +46,17 @@
           }
           .${system};
         staticTarget = muslPkgs.stdenv.hostPlatform.rust.rustcTarget;
-        staticRewrite = import ./nix/rewrite-package.nix {
+        staticPackage = import ./nix/package.nix {
           inherit muslPkgs pkgs;
-          panel = rewritePanel;
+          panel = maestroPanel;
           rustToolchain = (rustToolchainFor pkgs).override {
             targets = [staticTarget];
           };
-          version = rewriteVersion;
+          version = maestroVersion;
         };
-        rewriteDaemonImage = import ./nix/rewrite-daemon-image.nix {
+        daemonImage = import ./nix/daemon-image.nix {
+          maestroPackage = staticPackage;
           inherit pkgs;
-          rewritePackage = staticRewrite;
         };
         imageArchitecture =
           {
@@ -66,16 +65,16 @@
           }
           .${system};
       in {
-        rewrite-static = staticRewrite;
-        rewrite-static-bundle = import ./nix/rewrite-release-bundle.nix {
+        static = staticPackage;
+        release-bundle = import ./nix/release-bundle.nix {
+          maestroPackage = staticPackage;
           inherit pkgs;
-          rewritePackage = staticRewrite;
         };
-        rewrite-daemon-image = rewriteDaemonImage;
-        rewrite-daemon-image-bundle = import ./nix/rewrite-daemon-image-bundle.nix {
-          daemonImage = rewriteDaemonImage;
+        daemon-image = daemonImage;
+        daemon-image-bundle = import ./nix/daemon-image-bundle.nix {
+          inherit daemonImage;
           inherit imageArchitecture pkgs;
-          rewritePackage = staticRewrite;
+          maestroPackage = staticPackage;
         };
       })
     );
@@ -87,24 +86,23 @@
       };
     in {
       default = app self.packages.${system}.default "maestro";
-      rewrite = app self.packages.${system}.rewrite "maestro";
-      daemon = app self.packages.${system}.rewrite "maestro-daemon";
-      migrate = app self.packages.${system}.rewrite "maestro-migrate";
+      daemon = app self.packages.${system}.default "maestro-daemon";
+      migrate = app self.packages.${system}.default "maestro-migrate";
     });
 
     checks = forAllSystems (
       system: let
         pkgs = pkgsFor system;
-        rewritePackage = self.packages.${system}.rewrite;
+        maestroPackage = self.packages.${system}.default;
       in
         {
-          rewrite = rewritePackage;
+          package = maestroPackage;
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          rewrite-daemon-image-bundle =
-            self.packages.${system}.rewrite-daemon-image-bundle;
-          rewrite-module = import ./nix/rewrite-module-check.nix {
-            inherit pkgs rewritePackage;
+          daemon-image-bundle =
+            self.packages.${system}.daemon-image-bundle;
+          module = import ./nix/module-check.nix {
+            inherit maestroPackage pkgs;
             config = (nixpkgs.lib.nixosSystem {
               inherit system;
               modules = [
@@ -119,8 +117,8 @@
               ];
             }).config;
           };
-          rewrite-static-bundle =
-            self.packages.${system}.rewrite-static-bundle;
+          release-bundle =
+            self.packages.${system}.release-bundle;
         }
     );
 
@@ -163,7 +161,6 @@
       }
     );
 
-    nixosModules.default = import ./nix/rewrite-module.nix {inherit self;};
-    nixosModules.rewrite = self.nixosModules.default;
+    nixosModules.default = import ./nix/module.nix {inherit self;};
   };
 }

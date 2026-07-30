@@ -1,10 +1,10 @@
 {
+  maestroPackage,
   pkgs,
-  rewritePackage,
 }: let
-  version = rewritePackage.version;
+  version = maestroPackage.version;
   system = pkgs.stdenv.hostPlatform.system;
-  bundleName = "maestro-rewrite-${version}-${system}";
+  bundleName = "maestro-${version}-${system}";
 in
   pkgs.runCommand "${bundleName}-bundle" {
     nativeBuildInputs = with pkgs; [
@@ -17,22 +17,22 @@ in
     bundle_root="$TMPDIR/${bundleName}"
     mkdir -p "$bundle_root/bin" "$bundle_root/share/doc/maestro" "$out"
 
-    install -m755 ${rewritePackage}/bin/maestro "$bundle_root/bin/maestro"
-    install -m755 ${rewritePackage}/bin/maestro-daemon "$bundle_root/bin/maestro-daemon"
-    install -m755 ${rewritePackage}/bin/maestro-migrate "$bundle_root/bin/maestro-migrate"
+    install -m755 ${maestroPackage}/bin/maestro "$bundle_root/bin/maestro"
+    install -m755 ${maestroPackage}/bin/maestro-daemon "$bundle_root/bin/maestro-daemon"
+    install -m755 ${maestroPackage}/bin/maestro-migrate "$bundle_root/bin/maestro-migrate"
     install -m644 ${../LICENSE} "$bundle_root/LICENSE"
-    install -m644 ${rewritePackage}/share/doc/maestro/cutover.md \
+    install -m644 ${maestroPackage}/share/doc/maestro/cutover.md \
       "$bundle_root/share/doc/maestro/cutover.md"
-    install -m644 ${rewritePackage}/share/doc/maestro/rehearsal-evidence.md \
+    install -m644 ${maestroPackage}/share/doc/maestro/rehearsal-evidence.md \
       "$bundle_root/share/doc/maestro/rehearsal-evidence.md"
-    install -m644 ${rewritePackage}/share/doc/maestro/multi-node.md \
+    install -m644 ${maestroPackage}/share/doc/maestro/multi-node.md \
       "$bundle_root/share/doc/maestro/multi-node.md"
-    install -m644 ${rewritePackage}/share/doc/maestro/nixos-rewrite.md \
-      "$bundle_root/share/doc/maestro/nixos-rewrite.md"
-    install -m644 ${rewritePackage}/share/doc/maestro/tailscale.md \
+    install -m644 ${maestroPackage}/share/doc/maestro/nixos.md \
+      "$bundle_root/share/doc/maestro/nixos.md"
+    install -m644 ${maestroPackage}/share/doc/maestro/tailscale.md \
       "$bundle_root/share/doc/maestro/tailscale.md"
     mkdir -p "$bundle_root/share/maestro-panel"
-    cp -a ${rewritePackage}/share/maestro-panel/. \
+    cp -a ${maestroPackage}/share/maestro-panel/. \
       "$bundle_root/share/maestro-panel/"
     test -f "$bundle_root/share/maestro-panel/index.html"
     strip --strip-all "$bundle_root"/bin/*

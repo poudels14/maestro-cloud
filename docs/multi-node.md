@@ -1,4 +1,4 @@
-# Multi-node rewrite operations
+# Multi-node operations
 
 Maestro uses the host's private network for control traffic and a self-managed
 WireGuard mesh for workload traffic. Tailscale is an optional operator-access
@@ -133,7 +133,7 @@ Every node needs:
 
 Control-plane nodes also need the configured etcd executable. Nodes performing
 native builds need BuildKit; nodes selected for remote builds need the Depot
-CLI. The rewrite NixOS module provides both.
+CLI. The Maestro NixOS module provides both.
 
 Cloud security groups and upstream firewalls must allow:
 
@@ -162,7 +162,7 @@ sudo maestro cluster bootstrap \
 ```
 
 The command creates the cluster authority, master identity, secrets, initial
-store membership, and a create-only launch document. Start the rewrite daemon
+store membership, and a create-only launch document. Start the Maestro daemon
 with that launch document before admitting another node.
 
 Join each configured node through a running control-plane API:
@@ -188,8 +188,8 @@ document. A joining control-plane member is promoted only after it catches up.
 
 Bootstrap and join output files are create-only and owner-only. A retry verifies
 and reuses matching state; it does not overwrite a conflicting launch document.
-Use the NixOS rewrite module to supervise the daemon as described in
-[nixos-rewrite.md](nixos-rewrite.md).
+Use the NixOS module to supervise the daemon as described in
+[nixos.md](nixos.md).
 
 ## Verify formation
 
@@ -232,7 +232,7 @@ records and prints in chronological order before follow mode begins.
 
 ## Lifecycle constraints
 
-Cluster topology is initialization-fixed in the current rewrite. A join request
+Cluster topology is initialization-fixed in the current implementation. A join request
 must match one declared node's endpoint, hostname, role, subnet, pool, ports,
 and cluster identity. An undeclared node cannot join, and changing a launch
 document on one host does not mutate the authoritative topology.

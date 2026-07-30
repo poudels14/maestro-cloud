@@ -1,8 +1,8 @@
 {
   pkgs,
-  rewritePackage,
+  maestroPackage,
 }: let
-  version = rewritePackage.version;
+  version = maestroPackage.version;
 in
   pkgs.dockerTools.buildLayeredImage {
     name = "maestro-daemon";
@@ -12,8 +12,8 @@ in
 
     extraCommands = ''
       mkdir -p bin share/maestro-panel var/lib/maestro
-      install -m0555 ${rewritePackage}/bin/maestro-daemon bin/maestro-daemon
-      cp -a ${rewritePackage}/share/maestro-panel/. share/maestro-panel/
+      install -m0555 ${maestroPackage}/bin/maestro-daemon bin/maestro-daemon
+      cp -a ${maestroPackage}/share/maestro-panel/. share/maestro-panel/
       test -f share/maestro-panel/index.html
       chmod 0700 var/lib/maestro
     '';
@@ -29,6 +29,6 @@ in
     };
 
     meta = {
-      description = "Minimal image containing the rewritten daemon and static panel";
+      description = "Minimal image containing the Maestro daemon and static panel";
     };
   }

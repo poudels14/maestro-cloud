@@ -32,7 +32,7 @@
     ];
   };
   binaries = rustPlatform.buildRustPackage {
-    pname = "maestro-rewrite-binaries";
+    pname = "maestro-binaries";
     inherit version;
     src = source;
 
@@ -84,8 +84,8 @@
   };
   packageName =
     if static
-    then "maestro-rewrite-${packagePkgs.stdenv.hostPlatform.rust.rustcTarget}"
-    else "maestro-rewrite";
+    then "maestro-${packagePkgs.stdenv.hostPlatform.rust.rustcTarget}"
+    else "maestro";
 in
   pkgs.runCommand "${packageName}-${version}" {
     inherit version;
@@ -93,7 +93,7 @@ in
       inherit binaries;
     };
     meta = {
-      description = "Rewritten Maestro operator, daemon, and cutover tools";
+      description = "Maestro operator, daemon, and migration tools";
       mainProgram = "maestro";
     };
   } ''
@@ -103,7 +103,7 @@ in
     install -m644 ${../docs/rehearsal-evidence.md} \
       "$out/share/doc/maestro/rehearsal-evidence.md"
     install -m644 ${../docs/multi-node.md} "$out/share/doc/maestro/multi-node.md"
-    install -m644 ${../docs/nixos-rewrite.md} "$out/share/doc/maestro/nixos-rewrite.md"
+    install -m644 ${../docs/nixos.md} "$out/share/doc/maestro/nixos.md"
     install -m644 ${../docs/tailscale.md} "$out/share/doc/maestro/tailscale.md"
     ${pkgs.lib.optionalString (panel != null) ''
       mkdir -p "$out/share/maestro-panel"

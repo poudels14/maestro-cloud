@@ -14,7 +14,7 @@ in {
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      description = "Maestro rewrite package to run";
+      description = "Maestro package to run";
     };
 
     source = lib.mkOption {
