@@ -29,32 +29,29 @@ grants a specific operator group access to them:
 ```json
 {
   "groups": {
-    "group:maestro-operators": [
-      "alice@example.com",
-      "bob@example.com",
-    ],
+    "group:maestro-operators": ["alice@example.com", "bob@example.com"]
   },
   "tagOwners": {
-    "tag:maestro-gateway": ["autogroup:admin"],
+    "tag:maestro-gateway": ["autogroup:admin"]
   },
   "autoApprovers": {
     "routes": {
       "172.22.1.0/24": ["tag:maestro-gateway"],
-      "172.22.2.0/24": ["tag:maestro-gateway"],
-    },
+      "172.22.2.0/24": ["tag:maestro-gateway"]
+    }
   },
   "grants": [
     {
       "src": ["group:maestro-operators"],
       "dst": ["tag:maestro-gateway"],
-      "ip": ["tcp:80"],
+      "ip": ["tcp:80"]
     },
     {
       "src": ["group:maestro-operators"],
       "dst": ["172.22.1.0/24", "172.22.2.0/24"],
-      "ip": ["*"],
-    },
-  ],
+      "ip": ["*"]
+    }
+  ]
 }
 ```
 
@@ -97,7 +94,7 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
 {
   "jwt-secret-key": "<at-least-32-bytes>",
   "cluster": {
-    "name": "prod",
+    "name": "prod"
     // nodes, ports, allowlists, and join-secret omitted
   },
   "tailscale": {

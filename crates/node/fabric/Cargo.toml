@@ -7,7 +7,12 @@ publish = false
 
 [dependencies]
 kernel-api = { path = "../../kernel/api" }
-opentelemetry-proto = { workspace = true, default-features = false, features = ["gen-tonic", "trace", "logs", "metrics"] }
+opentelemetry-proto = { workspace = true, default-features = false, features = [
+  "gen-tonic",
+  "trace",
+  "logs",
+  "metrics"
+] }
 prost.workspace = true
 subtle.workspace = true
 thiserror.workspace = true

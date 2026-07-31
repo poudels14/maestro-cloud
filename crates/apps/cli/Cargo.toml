@@ -15,7 +15,7 @@ aws-config = { workspace = true, features = [
   "credentials-process",
   "default-https-client",
   "rt-tokio",
-  "sso",
+  "sso"
 ] }
 aws-sdk-secretsmanager.workspace = true
 clap.workspace = true
@@ -44,7 +44,11 @@ tempfile.workspace = true
 thiserror.workspace = true
 tar.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "time"] }
-tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { workspace = true, default-features = false, features = [
+  "connect",
+  "handshake",
+  "rustls-tls-webpki-roots"
+] }
 uuid.workspace = true
 webpki-roots.workspace = true
 time.workspace = true

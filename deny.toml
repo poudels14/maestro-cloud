@@ -3,13 +3,13 @@ targets = [
   "aarch64-apple-darwin",
   "aarch64-unknown-linux-gnu",
   "x86_64-apple-darwin",
-  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-gnu"
 ]
 all-features = true
 
 [advisories]
 ignore = [
-  { id = "RUSTSEC-2024-0436", reason = "transitive netlink dependency with no safe upgrade" },
+  { id = "RUSTSEC-2024-0436", reason = "transitive netlink dependency with no safe upgrade" }
 ]
 
 [licenses]
@@ -29,11 +29,9 @@ allow = [
   "MPL-2.0",
   "Unicode-3.0",
   "Unlicense",
-  "Zlib",
+  "Zlib"
 ]
-exceptions = [
-  { allow = ["LGPL-2.1-or-later"], crate = "wireguard-control@2.0.0" },
-]
+exceptions = [{ allow = ["LGPL-2.1-or-later"], crate = "wireguard-control@2.0.0" }]
 
 [licenses.private]
 ignore = true

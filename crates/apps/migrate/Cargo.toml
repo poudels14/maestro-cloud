@@ -36,7 +36,9 @@ zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 node-agent = { version = "0.1.0", path = "../../node/agent" }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = [
+  "test-util"
+] }
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 

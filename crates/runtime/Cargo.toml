@@ -28,7 +28,15 @@ tempfile.workspace = true
 parking_lot = { workspace = true, optional = true }
 thiserror.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = [
+  "fs",
+  "io-util",
+  "macros",
+  "process",
+  "rt",
+  "sync",
+  "time"
+] }
 tokio-util = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 

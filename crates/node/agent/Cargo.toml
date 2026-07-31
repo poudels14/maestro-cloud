@@ -21,7 +21,15 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = [
+  "io-util",
+  "macros",
+  "net",
+  "process",
+  "rt",
+  "sync",
+  "time"
+] }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["codegen", "router", "transport"] }
 tracing.workspace = true
@@ -33,7 +41,9 @@ workspace = true
 
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = [
+  "test-util"
+] }
 tempfile.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

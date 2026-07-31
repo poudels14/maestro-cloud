@@ -32,7 +32,11 @@ sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
-tokio-tungstenite = { workspace = true, default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { workspace = true, default-features = false, features = [
+  "connect",
+  "handshake",
+  "rustls-tls-webpki-roots"
+] }
 tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true, features = ["fs"] }
 webhook = { version = "0.1.0", path = "../../operators/webhook" }
@@ -42,7 +46,9 @@ http-body-util.workspace = true
 logs = { version = "0.1.0", path = "../../observability/logs", features = ["test-util"] }
 metrics = { version = "0.1.0", path = "../../observability/metrics", features = ["test-util"] }
 rcgen = { workspace = true, features = ["pem"] }
-runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = ["test-util"] }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = [
+  "test-util"
+] }
 tempfile.workspace = true
 
 [lints]
