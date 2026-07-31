@@ -190,7 +190,7 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
     let (ticket_2, staged_2) = await_staging(
         &provider_1,
         StoreMember {
-            node_id: NodeId::new("node-2")?,
+            node_id: NodeId::new("control-a")?,
             host_address: Ipv4Addr::new(127, 0, 0, 2),
         },
     )
@@ -199,12 +199,12 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
     let runtime_2 = provider_2
         .start(StoreStartMode::Join(ticket_2.clone()))
         .await?;
-    await_activation(&provider_1, &ticket_2).await?;
+    await_activation(&provider_2, &ticket_2).await?;
 
     let (ticket_3, staged_3) = await_staging(
         &provider_1,
         StoreMember {
-            node_id: NodeId::new("node-3")?,
+            node_id: NodeId::new("control-b")?,
             host_address: Ipv4Addr::new(127, 0, 0, 3),
         },
     )
@@ -213,7 +213,7 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
     let runtime_3 = provider_3
         .start(StoreStartMode::Join(ticket_3.clone()))
         .await?;
-    await_activation(&provider_1, &ticket_3).await?;
+    await_activation(&provider_3, &ticket_3).await?;
 
     runtime_2.shutdown(StoreShutdown::Immediate).await?;
     let key = Keyspace::new(&ClusterId::new("embedded-provider-three-node")?).leader();
@@ -260,22 +260,22 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
     runtime_2.shutdown(StoreShutdown::Immediate).await?;
     runtime_1.shutdown(StoreShutdown::Immediate).await?;
     let expected_members = BTreeSet::from([
-        NodeId::new("node-1")?,
-        NodeId::new("node-2")?,
-        NodeId::new("node-3")?,
+        NodeId::new("master")?,
+        NodeId::new("control-a")?,
+        NodeId::new("control-b")?,
     ]);
     let recovery = provider_1
         .recover(StoreRecoveryPermit::new(
             ClusterId::new("embedded-provider-three-node")?,
-            NodeId::new("node-1")?,
+            NodeId::new("master")?,
             expected_members,
             1_750_000_000_000,
         )?)
         .await?;
-    assert_eq!(recovery.report.retained_node, NodeId::new("node-1")?);
+    assert_eq!(recovery.report.retained_node, NodeId::new("master")?);
     assert_eq!(
         recovery.report.members_to_rejoin,
-        vec![NodeId::new("node-2")?, NodeId::new("node-3")?]
+        vec![NodeId::new("control-a")?, NodeId::new("control-b")?]
     );
     assert_eq!(
         recovery
@@ -379,10 +379,10 @@ fn three_member_configs(
 ) -> Result<Vec<StoreProviderConfig>, Box<dyn std::error::Error>> {
     let cluster_id = ClusterId::new("embedded-provider-three-node")?;
     let definitions = [
-        ("node-1", Ipv4Addr::new(127, 0, 0, 1), NodeRole::Master),
-        ("node-2", Ipv4Addr::new(127, 0, 0, 2), NodeRole::Hybrid),
+        ("master", Ipv4Addr::new(127, 0, 0, 1), NodeRole::Master),
+        ("control-a", Ipv4Addr::new(127, 0, 0, 2), NodeRole::Hybrid),
         (
-            "node-3",
+            "control-b",
             Ipv4Addr::new(127, 0, 0, 3),
             NodeRole::ControlPlane,
         ),

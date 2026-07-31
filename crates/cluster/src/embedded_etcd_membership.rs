@@ -62,7 +62,7 @@ pub(crate) async fn activate_member(
     ticket: &StoreJoinTicket,
 ) -> Result<MemberActivation, StoreProviderError> {
     let ticket_data = validate_membership_ticket(config, ticket)?;
-    let mut client = connect_admin(config, settings).await?;
+    let mut client = connect_existing_member(config, settings, &ticket_data).await?;
     let listed = client.member_list().await.map_err(unavailable)?;
     let member = listed
         .members()
@@ -157,6 +157,34 @@ async fn connect_admin(
         .values()
         .map(|member| client_url(config, member.host_address))
         .collect::<Vec<_>>();
+    connect_endpoints(config, settings, endpoints).await
+}
+
+async fn connect_existing_member(
+    config: &StoreProviderConfig,
+    settings: EmbeddedEtcdSettings,
+    ticket: &EtcdJoinTicketData,
+) -> Result<Client, StoreProviderError> {
+    let endpoints = ticket
+        .members
+        .iter()
+        .filter(|member| member.node_id != config.local_member().node_id)
+        .map(|member| {
+            config
+                .known_members()
+                .get(&member.node_id)
+                .map(|known| client_url(config, known.host_address))
+                .ok_or(StoreProviderError::InvalidJoinTicket)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    connect_endpoints(config, settings, endpoints).await
+}
+
+async fn connect_endpoints(
+    config: &StoreProviderConfig,
+    settings: EmbeddedEtcdSettings,
+    endpoints: Vec<String>,
+) -> Result<Client, StoreProviderError> {
     let mut last_error = None;
     for endpoint in endpoints {
         let connected = Client::connect(
