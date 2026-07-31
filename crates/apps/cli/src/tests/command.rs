@@ -442,8 +442,6 @@ async fn upgrade_confirmation_warns_and_aborts_before_loading_an_api_context()
         "maestro",
         "cluster",
         "upgrade",
-        "--target-version",
-        "2.0.0",
         "--batch=all",
         "--node",
         "node-b",
@@ -456,10 +454,12 @@ async fn upgrade_confirmation_warns_and_aborts_before_loading_an_api_context()
     run(cli, &mut input, &mut output).await?;
 
     let output = String::from_utf8(output)?;
-    assert!(output.contains(
-        "Upgrade cluster nodes `node-b`, `node-a` to Maestro 2.0.0 or newer in one batch; \
-         services and the control plane will be unavailable? [y/N]:"
-    ));
+    let expected = format!(
+        "Upgrade cluster nodes `node-b`, `node-a` to Maestro {} or newer in one batch; \
+         services and the control plane will be unavailable? [y/N]:",
+        kernel_api::MAESTRO_VERSION
+    );
+    assert!(output.contains(&expected));
     assert!(output.ends_with("[maestro]: aborted\n"));
     Ok(())
 }

@@ -191,7 +191,7 @@ pub(crate) enum ClusterCommand {
     /// Start a rolling or all-node cluster upgrade.
     Upgrade {
         /// Minimum daemon version every selected node must reach.
-        #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+        #[arg(long, default_value = kernel_api::MAESTRO_VERSION)]
         target_version: String,
         /// Node batching strategy.
         #[arg(long, value_enum, default_value_t = UpgradeBatch::Rolling)]
