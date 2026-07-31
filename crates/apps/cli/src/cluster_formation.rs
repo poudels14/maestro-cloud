@@ -9,7 +9,11 @@ use kernel_api::{NodeId, NodeRole};
 use time::{Duration, OffsetDateTime};
 
 use crate::CliError;
-use crate::config::{load_cluster, load_cluster_for_node};
+use crate::cluster_config::LoadedClusterConfig;
+use crate::config::{
+    ClusterConfigFallbacks, load_cluster, load_cluster_for_node_with_fallbacks,
+    load_cluster_with_fallbacks,
+};
 use crate::config_source::ConfigSourceReader;
 use crate::launch_document::DaemonLaunchDocument;
 use crate::private_document::{Persisted, persist_private_exact, read_private};
@@ -95,6 +99,30 @@ pub(crate) async fn bootstrap(
     output: &mut dyn Write,
     reader: &impl ConfigSourceReader,
 ) -> Result<(), CliError> {
+    bootstrap_with_fallbacks(
+        config_source,
+        selected_node_id,
+        data_directory,
+        containerd_socket,
+        etcd_binary,
+        &ClusterConfigFallbacks::default(),
+        output,
+        reader,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn bootstrap_with_fallbacks(
+    config_source: &str,
+    selected_node_id: Option<NodeId>,
+    data_directory: &Path,
+    containerd_socket: &Path,
+    etcd_binary: &Path,
+    fallbacks: &ClusterConfigFallbacks,
+    output: &mut dyn Write,
+    reader: &impl ConfigSourceReader,
+) -> Result<(), CliError> {
     if !data_directory.is_absolute()
         || !containerd_socket.is_absolute()
         || !etcd_binary.is_absolute()
@@ -104,9 +132,29 @@ pub(crate) async fn bootstrap(
         ));
     }
     let loaded = match selected_node_id {
-        Some(node_id) => load_cluster_for_node(config_source, node_id, reader).await?,
-        None => load_cluster(config_source, reader).await?,
+        Some(node_id) => {
+            load_cluster_for_node_with_fallbacks(config_source, node_id, reader, fallbacks).await?
+        }
+        None => load_cluster_with_fallbacks(config_source, reader, fallbacks).await?,
     };
+    bootstrap_loaded(
+        config_source,
+        loaded,
+        data_directory,
+        containerd_socket,
+        etcd_binary,
+        output,
+    )
+}
+
+pub(crate) fn bootstrap_loaded(
+    config_source: &str,
+    loaded: LoadedClusterConfig,
+    data_directory: &Path,
+    containerd_socket: &Path,
+    etcd_binary: &Path,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
     let node =
         loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
             CliError::invalid_input("selected node disappeared from the topology")

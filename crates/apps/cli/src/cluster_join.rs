@@ -12,6 +12,7 @@ use kernel_api::{NodeId, NodeRole};
 
 use crate::CliError;
 use crate::api_client::decode_response_with_limit;
+use crate::cluster_config::LoadedClusterConfig;
 use crate::config::{load_cluster, load_cluster_for_node};
 use crate::config_source::ConfigSourceReader;
 use crate::launch_document::{DaemonLaunchDocument, validate_etcd_binary};
@@ -56,12 +57,21 @@ pub(crate) async fn join_with_transport(
     reader: &impl ConfigSourceReader,
     transport: &impl JoinTransport,
 ) -> Result<(), CliError> {
-    validate_paths(&options)?;
-    let origin = parse_leader_origin(&options.leader)?;
-    let loaded = match options.node_id {
+    let loaded = match options.node_id.clone() {
         Some(node_id) => load_cluster_for_node(&options.config_source, node_id, reader).await?,
         None => load_cluster(&options.config_source, reader).await?,
     };
+    join_loaded(options, loaded, output, transport).await
+}
+
+pub(crate) async fn join_loaded(
+    options: JoinOptions,
+    loaded: LoadedClusterConfig,
+    output: &mut dyn Write,
+    transport: &impl JoinTransport,
+) -> Result<(), CliError> {
+    validate_paths(&options)?;
+    let origin = parse_leader_origin(&options.leader)?;
     let node =
         loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
             CliError::invalid_input("selected node disappeared from the topology")
@@ -185,7 +195,7 @@ pub(crate) struct AdmissionResponse {
     pub(crate) envelope: EncryptedJoinResponse,
 }
 
-struct ReqwestJoinTransport;
+pub(crate) struct ReqwestJoinTransport;
 
 impl JoinTransport for ReqwestJoinTransport {
     async fn discover(

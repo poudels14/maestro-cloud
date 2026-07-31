@@ -9,6 +9,7 @@ use daemon::{
     stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
+use maestro_cli::{NodeLaunchOptions, prepare_node_launch};
 use node_agent::{TailscaleDnsPluginSettings, TailscaleDnsRoute};
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::EnvFilter;
@@ -38,6 +39,20 @@ enum DaemonCommand {
         /// Absolute node data directory containing launch.json.
         #[arg(long, value_name = "PATH")]
         data_dir: PathBuf,
+        /// Absolute containerd gRPC socket recorded in first-boot state.
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = "/run/containerd/containerd.sock"
+        )]
+        containerd_socket: PathBuf,
+        /// Absolute etcd executable recorded for control-plane nodes.
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = "/run/current-system/sw/bin/etcd"
+        )]
+        etcd_binary: PathBuf,
     },
     /// Runs the internal authoritative resolver role on a delegated runtime network.
     #[command(hide = true)]
@@ -152,7 +167,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             config,
             subnet,
             data_dir,
-        } => start(config, subnet, data_dir).await,
+            containerd_socket,
+            etcd_binary,
+        } => start(config, subnet, data_dir, containerd_socket, etcd_binary).await,
         DaemonCommand::Dns {
             cluster_id,
             node_id,
@@ -261,6 +278,8 @@ async fn start(
     config_source: String,
     subnet: Option<cluster::Ipv4Cidr>,
     data_directory: PathBuf,
+    containerd_socket: PathBuf,
+    etcd_binary: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !data_directory.is_absolute() {
         return Err(std::io::Error::new(
@@ -270,6 +289,16 @@ async fn start(
         .into());
     }
     let fallbacks = ClusterConfigFallbacks::default().with_single_node_subnet(subnet);
+    prepare_node_launch(
+        NodeLaunchOptions::new(
+            config_source.clone(),
+            data_directory.clone(),
+            containerd_socket,
+            etcd_binary,
+        )
+        .with_fallbacks(fallbacks),
+    )
+    .await?;
     let launch_path = data_directory.join("launch.json");
     let config =
         load_launch_config_with_fallbacks(&launch_path, &config_source, &fallbacks).await?;

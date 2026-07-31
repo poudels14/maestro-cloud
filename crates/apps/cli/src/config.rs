@@ -142,7 +142,7 @@ pub async fn load_cluster(
     source: &str,
     reader: &impl ConfigSourceReader,
 ) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
-    decode_cluster(source, load_merged(source, reader).await?, reader).await
+    load_cluster_with_fallbacks(source, reader, &ClusterConfigFallbacks::default()).await
 }
 
 pub async fn load_cluster_for_node(
@@ -169,6 +169,16 @@ impl ClusterConfigFallbacks {
         self.single_node_subnet = subnet;
         self
     }
+}
+
+pub async fn load_cluster_with_fallbacks(
+    source: &str,
+    reader: &impl ConfigSourceReader,
+    fallbacks: &ClusterConfigFallbacks,
+) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
+    let mut value = load_merged(source, reader).await?;
+    apply_cluster_fallbacks(source, &mut value, fallbacks)?;
+    decode_cluster(source, value, reader).await
 }
 
 pub async fn load_cluster_for_node_with_fallbacks(

@@ -34,7 +34,8 @@ in
   assert config.services.maestro.dataDir == "/data";
   assert lib.any (package: lib.getName package == "depot") config.environment.systemPackages;
   assert lib.hasInfix "/bin/maestro-daemon" daemonCommand;
-  assert lib.hasInfix "\"start\" \"--config\" \"aws-secret://maestro/test/config.json\" \"--data-dir\" \"/data\" \"--test-option\" \"test-value\"" daemonCommand;
+  assert lib.hasInfix "\"start\" \"--config\" \"aws-secret://maestro/test/config.json\" \"--data-dir\" \"/data\" \"--containerd-socket\" \"/run/containerd/containerd.sock\" \"--etcd-binary\"" daemonCommand;
+  assert lib.hasInfix "\"--test-option\" \"test-value\"" daemonCommand;
     pkgs.runCommand "maestro-module-check" {} ''
       touch "$out"
     ''

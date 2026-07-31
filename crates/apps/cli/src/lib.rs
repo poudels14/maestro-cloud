@@ -15,6 +15,7 @@ mod cluster_config_launch;
 mod cluster_cutover;
 mod cluster_formation;
 mod cluster_join;
+mod cluster_prepare;
 mod cluster_restart;
 mod cluster_tailscale;
 mod command;
@@ -38,10 +39,11 @@ mod up;
 mod upgrades;
 
 pub use cluster_config::LoadedClusterConfig;
+pub use cluster_prepare::{NodeLaunchOptions, prepare_node_launch};
 pub use command::{Cli, run};
 pub use config::{
     ClusterConfigFallbacks, load_cluster, load_cluster_for_node,
-    load_cluster_for_node_with_fallbacks,
+    load_cluster_for_node_with_fallbacks, load_cluster_with_fallbacks,
 };
 pub use config_source::{ConfigSourceReader, SystemConfigSourceReader};
 pub use error::CliError;

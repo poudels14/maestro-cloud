@@ -141,6 +141,10 @@ in {
             cfg.config
             "--data-dir"
             cfg.dataDir
+            "--containerd-socket"
+            "/run/containerd/containerd.sock"
+            "--etcd-binary"
+            "${cfg.etcdPackage}/bin/etcd"
           ]
           ++ cfg.extraArgs
         );

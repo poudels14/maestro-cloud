@@ -16,13 +16,11 @@ fn daemon_help_uses_clap_success_semantics() -> TestResult {
 #[test]
 fn start_requires_its_explicit_subcommand() -> TestResult {
     let directory = tempfile::tempdir()?;
+    let config = directory.path().join("missing-config.json");
     let explicit = daemon_command()
-        .args([
-            "start",
-            "--config",
-            "aws-secret://maestro/test/config",
-            "--data-dir",
-        ])
+        .args(["start", "--config"])
+        .arg(&config)
+        .arg("--data-dir")
         .arg(directory.path())
         .output()?;
     let positional = daemon_command().arg(directory.path()).output()?;
@@ -42,7 +40,7 @@ fn start_requires_its_explicit_subcommand() -> TestResult {
         event
             .get("error")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|error| error.contains("daemon launch document"))
+            .is_some_and(|error| error.contains("failed to read config"))
     );
     assert_eq!(positional.status.code(), Some(2));
     assert!(positional.stdout.is_empty());
@@ -51,15 +49,35 @@ fn start_requires_its_explicit_subcommand() -> TestResult {
 }
 
 #[test]
-fn start_accepts_the_single_node_subnet_fallback() -> TestResult {
+fn start_prepares_a_fresh_single_node_data_directory_with_the_subnet_fallback() -> TestResult {
     let directory = tempfile::tempdir()?;
+    let config = directory.path().join("cluster.jsonc");
+    std::fs::write(
+        &config,
+        r#"{
+            "jwt-secret-key": "daemon-cli-jwt-secret-with-at-least-32-characters",
+            "encryption-key": "daemon-cli-encryption-key-with-at-least-32-characters",
+            "cluster": {
+                "name": "daemon-cli-test",
+                "nodes": {
+                    "node-1": {
+                        "endpoint": "10.20.0.11",
+                        "role": "master"
+                    }
+                },
+                "join-secret": "daemon-cli-join-secret-with-at-least-32-characters"
+            },
+            "node": "node-1"
+        }"#,
+    )?;
     let output = daemon_command()
+        .args(["start", "--config"])
+        .arg(&config)
         .args([
-            "start",
-            "--config",
-            "aws-secret://maestro/test/config",
             "--subnet",
             "10.202.0.0/16",
+            "--etcd-binary",
+            "/bin/false",
             "--data-dir",
         ])
         .arg(directory.path())
@@ -67,8 +85,11 @@ fn start_accepts_the_single_node_subnet_fallback() -> TestResult {
 
     assert_eq!(output.status.code(), Some(1));
     let error = String::from_utf8(output.stderr)?;
-    assert!(error.contains("daemon launch document"));
     assert!(!error.contains("unexpected argument"));
+    let launch: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("launch.json"))?)?;
+    assert_eq!(launch.pointer("/nodeId"), Some(&"node-1".into()));
+    assert_eq!(launch.pointer("/storeMode/kind"), Some(&"bootstrap".into()));
     Ok(())
 }
 

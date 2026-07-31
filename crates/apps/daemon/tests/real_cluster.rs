@@ -173,7 +173,7 @@ impl RealProcessCluster {
                     17,
                 ),
                 data_directory: root.path().join(node_id.as_str()),
-                config_path: root.path().join(format!("{node_id}.launch.json")),
+                config_path: root.path().join(node_id.as_str()).join("launch.json"),
                 log_path: root.path().join(format!("{node_id}.log")),
                 child: None,
                 launch_sequence: 0,
@@ -233,6 +233,7 @@ impl RealProcessCluster {
             ),
         )
         .map_err(RealClusterError::from_display)?;
+        std::fs::create_dir_all(&node.data_directory).map_err(RealClusterError::from_display)?;
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;
         let error_log = log.try_clone().map_err(RealClusterError::from_display)?;
@@ -261,7 +262,12 @@ impl RealProcessCluster {
             .arg("start")
             .arg("--config")
             .arg(&self.cluster_config_path)
-            .arg(&node.config_path)
+            .arg("--data-dir")
+            .arg(&node.data_directory)
+            .arg("--containerd-socket")
+            .arg(&self.containerd_socket)
+            .arg("--etcd-binary")
+            .arg(&self.etcd_binary)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(error_log))

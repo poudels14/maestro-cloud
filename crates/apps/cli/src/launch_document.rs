@@ -139,6 +139,20 @@ impl DaemonLaunchDocument {
         &self.node_id
     }
 
+    pub(crate) fn matches_runtime_paths(
+        &self,
+        data_directory: &Path,
+        containerd_socket: &Path,
+        etcd_binary: &Path,
+    ) -> bool {
+        self.data_directory == data_directory
+            && self.containerd_socket == containerd_socket
+            && self
+                .etcd_binary
+                .as_ref()
+                .is_none_or(|configured| configured == etcd_binary)
+    }
+
     pub(crate) fn matches_bootstrap(
         &self,
         node_id: &NodeId,
