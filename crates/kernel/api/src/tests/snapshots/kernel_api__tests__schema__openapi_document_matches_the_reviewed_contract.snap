@@ -4633,6 +4633,11 @@ expression: document
               }
             ],
             "description": "Derived service identity owned by this preview."
+          },
+          "title": {
+            "default": "",
+            "description": "Human-readable pull-request title.",
+            "type": "string"
           }
         },
         "required": [
