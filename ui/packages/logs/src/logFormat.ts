@@ -129,7 +129,7 @@ function formatDurationNs(ns: number): string {
 function httpMethodColor(method: string): string {
   switch (method.toUpperCase()) {
     case "GET":
-      return "text-sky-600";
+      return "text-brand";
     case "POST":
       return "text-emerald-600";
     case "PUT":
@@ -138,7 +138,7 @@ function httpMethodColor(method: string): string {
     case "DELETE":
       return "text-red-600";
     default:
-      return "text-violet-600";
+      return "text-brand";
   }
 }
 
@@ -146,7 +146,7 @@ function httpStatusPill(status: string): string {
   const code = Number.parseInt(status, 10);
   if (code >= 500) return "bg-red-100 text-red-600 border border-red-200";
   if (code >= 400) return "bg-amber-100 text-amber-600 border border-amber-200";
-  if (code >= 300) return "bg-cyan-100 text-cyan-600 border border-cyan-200";
+  if (code >= 300) return "bg-brand-ring text-brand border border-brand-border";
   if (code >= 200) return "bg-emerald-100 text-emerald-600 border border-emerald-200";
   return "bg-gray-100 text-gray-500 border border-gray-200";
 }
@@ -178,10 +178,10 @@ function logLevelColors(level: string) {
     };
   }
   return {
-    dot: "bg-blue-500",
-    text: "text-blue-600",
-    pillActive: "bg-blue-50 text-blue-700 border-blue-200",
-    pillHover: "hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200"
+    dot: "bg-brand",
+    text: "text-brand",
+    pillActive: "bg-brand-light text-brand-hover border-brand-border",
+    pillHover: "hover:bg-brand-light hover:text-brand-hover hover:border-brand-border"
   };
 }
 

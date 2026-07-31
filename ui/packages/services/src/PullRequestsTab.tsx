@@ -53,10 +53,10 @@ function PullRequestRow(props: { preview: Service; url: string | null }) {
         </span>
         <span class="min-w-0">
           <span class="flex min-w-0 items-baseline gap-1.5 text-sm">
-            <span class="shrink-0 font-semibold text-gray-900 group-hover:text-indigo-600">
+            <span class="shrink-0 font-semibold text-gray-900 group-hover:text-brand">
               #{resource().spec.pullRequestNumber}
             </span>
-            <span class="truncate font-medium text-gray-800 group-hover:text-indigo-600">
+            <span class="truncate font-medium text-gray-800 group-hover:text-brand">
               {resource().spec.title || resource().spec.repository}
             </span>
           </span>
@@ -85,7 +85,7 @@ function PullRequestRow(props: { preview: Service; url: string | null }) {
               href={url()}
               target="_blank"
               rel="noreferrer"
-              class="inline-flex items-center gap-1 rounded-md border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-600 outline-none hover:bg-indigo-50"
+              class="inline-flex items-center gap-1 rounded-md border border-brand-border px-2 py-1 text-xs font-medium text-brand outline-none hover:bg-brand-light"
             >
               Open app
               <ArrowUpRight class="size-3" />

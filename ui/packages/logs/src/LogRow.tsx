@@ -41,7 +41,7 @@ function LogRow(props: {
     <li
       class={clsx("border-b border-gray-50 transition-colors", {
         "cursor-pointer": !props.stream,
-        "bg-indigo-50/60 hover:bg-indigo-50/80": props.expanded,
+        "bg-brand-light": props.expanded,
         "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
         "bg-gray-50/60 hover:bg-gray-100/60": !props.expanded && props.index % 2 === 1
       })}

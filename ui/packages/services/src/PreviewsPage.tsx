@@ -33,12 +33,7 @@ function PreviewsPage(props: { api: ServicesApi }) {
         when={services.data}
         fallback={<div class="py-20 text-center text-sm text-gray-400">Loading previews…</div>}
       >
-        <div class="mb-5">
-          <h1 class="text-lg font-semibold text-gray-900">Pull request previews</h1>
-          <p class="mt-1 text-sm text-gray-400">
-            Ephemeral services created for open pull requests.
-          </p>
-        </div>
+        <h1 class="mb-5 text-lg font-semibold text-gray-900">Pull request previews</h1>
 
         <Show
           when={previews().length > 0}
@@ -112,7 +107,7 @@ function PreviewRow(props: { service: Service; onOpen: () => void }) {
               href={pullRequestUrl()}
               target="_blank"
               rel="noreferrer"
-              class="shrink-0 font-medium text-gray-800 outline-none hover:text-indigo-600"
+              class="shrink-0 font-medium text-gray-800 outline-none hover:text-brand"
             >
               PR #{preview().spec.pullRequestNumber}
             </a>
@@ -132,7 +127,7 @@ function PreviewRow(props: { service: Service; onOpen: () => void }) {
         <button
           type="button"
           onClick={props.onOpen}
-          class="rounded px-2 py-1 text-xs font-medium text-indigo-600 outline-none hover:bg-indigo-50"
+          class="rounded px-2 py-1 text-xs font-medium text-brand outline-none hover:bg-brand-light"
         >
           Open service
         </button>

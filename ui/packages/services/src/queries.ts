@@ -9,7 +9,8 @@ const serviceQueryKeys = {
   all: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
   replicas: (serviceId: string, deploymentId: string) =>
-    ["deployments", serviceId, deploymentId, "replicas"] as const
+    ["deployments", serviceId, deploymentId, "replicas"] as const,
+  dnsRecords: ["dns-records"] as const
 };
 
 const servicesQuery = (api: ServicesApi) => ({
@@ -28,6 +29,14 @@ const deploymentsQuery = (api: ServicesApi, serviceId: string) => ({
   staleTime: 5_000
 });
 
+const dnsRecordsQuery = (api: ServicesApi) => ({
+  queryKey: serviceQueryKeys.dnsRecords,
+  queryFn: ssrSafe(api.listDnsRecords, []),
+  refetchInterval: 30_000,
+  refetchOnWindowFocus: true,
+  staleTime: 10_000
+});
+
 const deploymentReplicasQuery = (api: ServicesApi, deployment: Deployment) => ({
   queryKey: serviceQueryKeys.replicas(deployment.spec.serviceId, deployment.meta.id),
   queryFn: ssrSafe(() => api.listReplicas(deployment), []),
@@ -36,4 +45,10 @@ const deploymentReplicasQuery = (api: ServicesApi, deployment: Deployment) => ({
   staleTime: 2_000
 });
 
-export { deploymentReplicasQuery, deploymentsQuery, serviceQueryKeys, servicesQuery };
+export {
+  deploymentReplicasQuery,
+  deploymentsQuery,
+  dnsRecordsQuery,
+  serviceQueryKeys,
+  servicesQuery
+};

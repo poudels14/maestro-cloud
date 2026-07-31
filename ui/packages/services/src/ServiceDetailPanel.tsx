@@ -30,8 +30,7 @@ function ServiceDetailPanel(props: {
   const showPullRequests = () =>
     props.service.previewResource == null &&
     (props.service.spec.preview != null || previews().length > 0);
-  const tab = () =>
-    props.tab === "pull-requests" && !showPullRequests() ? "overview" : props.tab;
+  const tab = () => (props.tab === "pull-requests" && !showPullRequests() ? "overview" : props.tab);
   const contentMaxWidth = () => (tab() === "logs" ? "max-w-6xl" : "max-w-4xl");
 
   return (
@@ -78,6 +77,11 @@ function ServiceDetailPanel(props: {
               active={tab() === "deployments"}
               onClick={() => props.navigateTab("deployments")}
             />
+            <TabButton
+              label="Logs"
+              active={tab() === "logs"}
+              onClick={() => props.navigateTab("logs")}
+            />
             <Show when={showPullRequests()}>
               <TabButton
                 label="Pull requests"
@@ -85,11 +89,6 @@ function ServiceDetailPanel(props: {
                 onClick={() => props.navigateTab("pull-requests")}
               />
             </Show>
-            <TabButton
-              label="Logs"
-              active={tab() === "logs"}
-              onClick={() => props.navigateTab("logs")}
-            />
           </div>
         </div>
       </div>
@@ -154,10 +153,10 @@ function PreviewOriginBanner(props: {
     `https://github.com/${props.resource.spec.repository}/pull/${props.resource.spec.pullRequestNumber}`;
 
   return (
-    <div class="mb-4 flex flex-col gap-2.5 rounded-lg border border-indigo-100 bg-indigo-50/50 px-4 py-3 sm:flex-row sm:items-center">
+    <div class="mb-4 flex flex-col gap-2.5 rounded-lg border border-brand-ring bg-brand-light px-4 py-3 sm:flex-row sm:items-center">
       <div class="flex min-w-0 flex-1 items-center gap-2.5">
-        <GitPullRequest class="size-4 shrink-0 text-indigo-400" />
-        <span class="min-w-0 truncate text-xs text-indigo-900">
+        <GitPullRequest class="size-4 shrink-0 text-brand/60" />
+        <span class="min-w-0 truncate text-xs text-brand-hover">
           Preview of{" "}
           <a
             href={`/services/${encodeURIComponent(props.resource.spec.baseServiceId)}/overview`}
@@ -174,7 +173,7 @@ function PreviewOriginBanner(props: {
           >
             PR #{props.resource.spec.pullRequestNumber}
           </a>
-          <span class="text-indigo-400">
+          <span class="text-brand/60">
             {" · "}
             {props.resource.spec.title || props.resource.spec.repository}
           </span>
@@ -186,7 +185,7 @@ function PreviewOriginBanner(props: {
             href={url()}
             target="_blank"
             rel="noreferrer"
-            class="inline-flex shrink-0 items-center gap-1 self-start rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs font-medium text-indigo-600 outline-none hover:bg-indigo-50 sm:self-auto"
+            class="inline-flex shrink-0 items-center gap-1 self-start rounded-md border border-brand-border bg-white px-2 py-1 text-xs font-medium text-brand outline-none hover:bg-brand-light sm:self-auto"
           >
             Open app
             <ArrowUpRight class="size-3" />

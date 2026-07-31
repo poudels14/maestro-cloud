@@ -29,13 +29,7 @@ function NodesPage(props: { api: ClusterApi }) {
   return (
     <section class="space-y-8">
       <div>
-        <div class="flex items-end justify-between gap-3 mb-3">
-          <div>
-            <h1 class="text-lg font-semibold text-gray-900">Cluster nodes</h1>
-            <p class="text-xs text-gray-500 mt-1">Control-plane health and workload placement.</p>
-          </div>
-          <span class="text-xs text-gray-400 tabular-nums">{nodes.data?.length ?? 0} nodes</span>
-        </div>
+        <h1 class="mb-3 text-lg font-semibold text-gray-900">Cluster nodes</h1>
         <Show when={error()}>
           {(message) => (
             <div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">

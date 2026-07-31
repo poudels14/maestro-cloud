@@ -70,7 +70,6 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
       <div class="shrink-0 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 class="text-lg font-semibold text-gray-900">Cluster logs</h1>
-          <p class="mt-1 text-xs text-gray-500">Logs from every service across all live nodes.</p>
         </div>
         <div class="flex flex-wrap items-end gap-2">
           <label class="grid gap-1 text-[11px] font-medium text-gray-500">
@@ -78,7 +77,7 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
             <select
               value={search().node ?? ""}
               onChange={(event) => setUrlSearch({ node: event.currentTarget.value || undefined })}
-              class="min-w-44 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+              class="min-w-44 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-brand-border focus:ring-2 focus:ring-brand-ring"
             >
               <option value="" selected={!search().node}>
                 All nodes
@@ -104,7 +103,7 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
               onChange={(event) =>
                 setUrlSearch({ service: event.currentTarget.value || undefined })
               }
-              class="min-w-48 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+              class="min-w-48 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-brand-border focus:ring-2 focus:ring-brand-ring"
             >
               <option value="" selected={!search().service}>
                 All services

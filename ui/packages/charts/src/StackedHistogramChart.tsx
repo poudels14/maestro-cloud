@@ -14,7 +14,7 @@ function levelColor(level: string) {
     case "2xx":
       return "#34d399";
     case "3xx":
-      return "#22d3ee";
+      return "#818cf8";
     case "4xx":
       return "#fbbf24";
     case "5xx":
@@ -28,10 +28,10 @@ function levelColor(level: string) {
     case "warning":
       return "#f59e0b";
     case "info":
-      return "#6366f1";
+      return "#4f46e5";
     case "debug":
     case "dbg":
-      return "#8b5cf6";
+      return "#94a3b8";
     case "trace":
       return "#64748b";
     default:

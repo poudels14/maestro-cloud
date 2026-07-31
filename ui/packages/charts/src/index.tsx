@@ -19,7 +19,7 @@ export function TimelineChart(props: {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
 
-  const color = () => props.color ?? "#6366f1";
+  const color = () => props.color ?? "#4f46e5";
   const height = () => props.height ?? 180;
 
   const margin = { top: 12, right: 16, bottom: 28, left: 52 };

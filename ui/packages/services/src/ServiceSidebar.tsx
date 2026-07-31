@@ -47,7 +47,7 @@ function ServiceSidebar(props: {
             onClick={props.onBack}
             class="flex items-center gap-2 hover:opacity-80 transition-opacity outline-none group"
           >
-            <div class="size-7 rounded-lg bg-indigo-500 flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
+            <div class="size-7 rounded-lg bg-brand flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
               <Monitor class="size-4 text-white" />
             </div>
             <span class="text-sm font-semibold text-gray-900 tracking-tight">Maestro</span>
@@ -107,13 +107,13 @@ function SidebarServiceItem(props: { service: Service; selected: boolean; onClic
       class={clsx(
         "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-[transform,background-color,color] duration-150 ease-out-strong active:scale-[0.98] outline-none",
         {
-          "bg-indigo-50 text-indigo-700 font-medium": props.selected,
+          "bg-brand-light text-brand-hover font-medium": props.selected,
           "text-gray-700 hover:bg-gray-50": !props.selected
         }
       )}
     >
       <Show when={props.selected}>
-        <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-indigo-500" />
+        <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-brand" />
       </Show>
       <span class="size-3.5 flex items-center justify-center shrink-0">
         <StatusDot status={status()} />

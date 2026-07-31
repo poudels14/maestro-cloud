@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import type { LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
-import { deploymentsQuery, serviceQueryKeys } from "./queries";
+import { deploymentsQuery, dnsRecordsQuery, serviceQueryKeys } from "./queries";
 import { ErrorBanner } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
@@ -26,6 +26,24 @@ function DeploymentsTab(props: {
   const serviceId = () => props.service.meta.id;
   const deployFrozen = () => props.service.status.rollout === "frozen";
   const deployments = useQuery(() => deploymentsQuery(props.api, serviceId()));
+  const showReplicas = () => !isSystemService(props.service);
+  const dnsRecords = useQuery(() => ({
+    ...dnsRecordsQuery(props.api),
+    enabled: showReplicas()
+  }));
+
+  const replicaUrl = (replicaIndex: number) => {
+    const prefix = `${serviceId()}-${replicaIndex}.`;
+    const record = (dnsRecords.data ?? []).find((candidate) =>
+      candidate.spec.name.startsWith(prefix)
+    );
+    if (!record) return null;
+    const hostname = record.spec.name.replace(/\.$/, "");
+    const port = props.service.spec.exposedPorts?.[0];
+    if (port === undefined || port === 80) return `http://${hostname}`;
+    if (port === 443) return `https://${hostname}`;
+    return `http://${hostname}:${port}`;
+  };
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
@@ -158,8 +176,11 @@ function DeploymentsTab(props: {
               <For each={visibleDeployments()}>
                 {(deployment, index) => (
                   <DeploymentRow
+                    api={props.api}
                     deployment={deployment}
                     actionsEnabled={!isSystemService(props.service)}
+                    showReplicas={showReplicas()}
+                    replicaUrl={replicaUrl}
                     isLatest={index() === 0}
                     isSelected={selectedId() === deployment.meta.id}
                     onOpen={() =>

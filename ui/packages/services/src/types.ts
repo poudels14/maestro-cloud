@@ -5,5 +5,6 @@ type Service = ApiSchemas["Service"] & {
 };
 type Deployment = ApiSchemas["Deployment"];
 type ReplicaState = ApiSchemas["ReplicaState"];
+type DnsRecord = ApiSchemas["DnsRecord"];
 
-export type { Deployment, ReplicaState, Service };
+export type { Deployment, DnsRecord, ReplicaState, Service };

@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "@tanstack/solid-router";
-import { createEffect, createSignal, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show, untrack, type JSX } from "solid-js";
 import { Loader2, RefreshCw } from "lucide-solid";
 import { queryClient } from "../lib/queryClient";
 import { apiClient, isUnauthenticated, SESSION_UNAUTHENTICATED_EVENT } from "../lib/client";
@@ -29,24 +29,24 @@ function SessionGate(props: { children: JSX.Element }) {
     retry();
     if (path === "/login") {
       requestSequence += 1;
-      return;
+      setState("checking");
+    } else if (untrack(state) !== "authenticated") {
+      const sequence = ++requestSequence;
+      setState("checking");
+      void apiClient()
+        .getClusterInfo()
+        .then(() => {
+          if (sequence === requestSequence) setState("authenticated");
+        })
+        .catch((error: unknown) => {
+          if (sequence !== requestSequence) return;
+          if (isUnauthenticated(error)) {
+            openLogin();
+          } else {
+            setState("unavailable");
+          }
+        });
     }
-
-    const sequence = ++requestSequence;
-    setState("checking");
-    void apiClient()
-      .getClusterInfo()
-      .then(() => {
-        if (sequence === requestSequence) setState("authenticated");
-      })
-      .catch((error: unknown) => {
-        if (sequence !== requestSequence) return;
-        if (isUnauthenticated(error)) {
-          openLogin();
-        } else {
-          setState("unavailable");
-        }
-      });
   });
 
   return (

@@ -149,7 +149,7 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
       type="button"
       onClick={props.onClick}
       class={clsx("px-3 pb-1 text-sm font-medium border-b-2 transition-colors outline-none", {
-        "border-indigo-500 text-indigo-600": props.active,
+        "border-brand text-brand": props.active,
         "border-transparent text-gray-400 hover:text-gray-600": !props.active
       })}
     >

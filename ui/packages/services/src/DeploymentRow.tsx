@@ -1,15 +1,21 @@
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 import clsx from "clsx";
-import { GitCommitHorizontal } from "lucide-solid";
+import { ArrowUpRight, GitCommitHorizontal } from "lucide-solid";
+import { useQuery } from "@maestro/sdk";
 import { STATUS_COLORS, StatusBadge, StatusDot } from "@maestro/kit";
+import type { ServicesApi } from "./api";
 import type { Deployment, ReplicaState } from "./types";
 import { replicaDisplayName } from "./deploymentView";
+import { deploymentReplicasQuery } from "./queries";
 import { formatDateTime } from "@maestro/kit";
 import { DeploymentMenu } from "./DeploymentMenu";
 
 type Props = {
+  api: ServicesApi;
   deployment: Deployment;
   actionsEnabled: boolean;
+  showReplicas: boolean;
+  replicaUrl: (replicaIndex: number) => string | null;
   isLatest: boolean;
   isSelected: boolean;
   onOpen: () => void;
@@ -29,6 +35,10 @@ function DeploymentRow(props: Props) {
       : null;
   };
   const isLive = () => ["BUILDING", "PENDING_READY", "READY"].includes(phase());
+  const replicas = useQuery(() => ({
+    ...deploymentReplicasQuery(props.api, props.deployment),
+    enabled: props.showReplicas && isLive()
+  }));
 
   return (
     <div
@@ -42,14 +52,12 @@ function DeploymentRow(props: Props) {
         }
       }}
       class={clsx("relative px-4 sm:px-5 py-3 transition-colors cursor-pointer outline-none", {
-        "bg-indigo-50/60": props.isSelected,
-        "bg-emerald-50/60 hover:bg-emerald-50": props.isLatest && isLive() && !props.isSelected,
+        "bg-brand-light": props.isSelected,
+        "bg-emerald-100/60 hover:bg-emerald-100/80":
+          props.isLatest && isLive() && !props.isSelected,
         "hover:bg-gray-50": !props.isSelected && !(props.isLatest && isLive())
       })}
     >
-      <Show when={props.isLatest && isLive() && !props.isSelected}>
-        <span class="absolute inset-y-2 left-0 w-0.5 rounded-r bg-emerald-400" />
-      </Show>
       <div class="flex items-start gap-3">
         <div class="pt-1">
           <StatusDot status={phase()} />
@@ -71,6 +79,19 @@ function DeploymentRow(props: Props) {
               {props.deployment.spec.service.version}
             </span>
           </div>
+          <Show when={(replicas.data?.length ?? 0) > 0}>
+            <div class="mt-2 space-y-1">
+              <For each={replicas.data}>
+                {(replica) => (
+                  <ReplicaLine
+                    deployment={props.deployment}
+                    replica={replica}
+                    url={props.replicaUrl(replica.spec.replicaIndex)}
+                  />
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
         <div class="flex items-center gap-2 shrink-0">
           <Show when={phase() !== "REMOVED"} fallback={<span class="w-24" aria-hidden="true" />}>
@@ -95,6 +116,48 @@ function DeploymentRow(props: Props) {
           </Show>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ReplicaLine(props: { deployment: Deployment; replica: ReplicaState; url: string | null }) {
+  const hostname = () => props.url?.replace(/^https?:\/\//, "");
+
+  return (
+    <div class="flex min-w-0 items-center gap-2 text-[11px]">
+      <StatusDot status={props.replica.status.phase} />
+      <Show
+        when={props.url}
+        fallback={
+          <span class="truncate font-mono text-gray-500">
+            {replicaDisplayName(props.deployment, props.replica)}
+          </span>
+        }
+      >
+        {(url) => (
+          <a
+            href={url()}
+            target="_blank"
+            rel="noreferrer"
+            title={url()}
+            onClick={(event) => event.stopPropagation()}
+            class="inline-flex min-w-0 items-center gap-1 font-mono text-gray-600 outline-none hover:text-brand hover:underline"
+          >
+            <span class="truncate">{hostname()}</span>
+            <ArrowUpRight class="size-3 shrink-0 text-gray-400" />
+          </a>
+        )}
+      </Show>
+      <Show when={props.replica.status.nodeId}>
+        {(nodeId) => (
+          <span
+            class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
+            title="Cluster node"
+          >
+            <span class="font-semibold">NODE:</span> {nodeId()}
+          </span>
+        )}
+      </Show>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
 import { ServiceSidebar, servicesQuery, type Service } from "@maestro/services";
-import { clusterInfoQuery } from "@maestro/cluster";
+import { clusterConfigQuery, clusterInfoQuery } from "@maestro/cluster";
 import { NodeNavSection } from "./NodeNavSection";
 import type { HomePath } from "./NodeNavSection";
 import { ClientOnly } from "../ClientOnly";
@@ -16,6 +16,7 @@ function HomeShell(props: { path: HomePath }) {
   const navigate = useNavigate();
   const services = useQuery(() => servicesQuery(servicesApi));
   const cluster = useQuery(() => clusterInfoQuery(clusterApi));
+  const config = useQuery(() => clusterConfigQuery(clusterApi));
   const [drawerOpen, setDrawerOpen] = createSignal(false);
   const featureRoute = () => panelFeatureRegistry.routes.find((route) => route.path === props.path);
   const featureLayout = () => {
@@ -60,7 +61,9 @@ function HomeShell(props: { path: HomePath }) {
           </button>
           <Show when={cluster.data}>
             {(info) => (
-              <span class="text-sm font-semibold text-gray-900 truncate">{info().clusterId}</span>
+              <span class="text-sm font-semibold text-gray-900 truncate">
+                {config.data?.name ?? info().clusterId}
+              </span>
             )}
           </Show>
         </div>

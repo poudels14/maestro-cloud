@@ -15,14 +15,9 @@ function ClusterInfoPage(props: { api: ClusterApi }) {
       <Show when={cluster.data}>
         {(info) => (
           <div>
-            <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
-                {config.data?.name ?? info().clusterId}
-              </h1>
-              <Show when={config.data?.name}>
-                <span class="font-mono text-[11px] text-gray-300">{info().clusterId}</span>
-              </Show>
-            </div>
+            <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
+              {config.data?.name ?? info().clusterId}
+            </h1>
             <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
               <span>{info().nodeCount} nodes</span>
             </div>

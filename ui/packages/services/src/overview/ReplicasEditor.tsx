@@ -68,7 +68,7 @@ function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
             type="button"
             onClick={applyReplicas}
             disabled={busy()}
-            class="mr-1 px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-600 text-white shadow-sm hover:bg-indigo-500 disabled:bg-indigo-300 transition-colors"
+            class="mr-1 px-2.5 py-1 text-xs font-medium rounded-md bg-brand text-white shadow-sm hover:bg-brand-hover disabled:bg-brand/40 transition-colors"
           >
             Save
           </button>
@@ -88,7 +88,7 @@ function ReplicasEditor(props: { api: ServicesApi; service: Service }) {
           max={MAX_REPLICAS}
           value={replicasInput()}
           onInput={(e) => setReplicasInput(Number(e.currentTarget.value))}
-          class="w-12 text-center text-sm font-mono text-gray-800 border border-gray-200 rounded-md py-0.5 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          class="w-12 text-center text-sm font-mono text-gray-800 border border-gray-200 rounded-md py-0.5 outline-none focus:border-brand focus:ring-2 focus:ring-brand-ring [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           disabled={busy()}
         />
         <button

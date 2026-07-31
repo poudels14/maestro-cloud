@@ -142,7 +142,7 @@ function LogQueryInput(props: {
       <div class="relative">
         <div
           onClick={() => inputRef?.focus()}
-          class="flex w-full cursor-text flex-wrap items-center gap-1 rounded-md border border-gray-200 bg-gray-50 py-1 pl-8 pr-8 transition-colors focus-within:border-indigo-300 focus-within:bg-white"
+          class="flex w-full cursor-text flex-wrap items-center gap-1 rounded-md border border-gray-200 bg-gray-50 py-1 pl-8 pr-8 transition-colors focus-within:border-brand-border focus-within:bg-white"
         >
           <button
             type="button"
@@ -152,7 +152,7 @@ function LogQueryInput(props: {
               setOpen(false);
             }}
             title="Apply log query"
-            class="absolute left-1.5 top-1/2 -translate-y-1/2 z-10 p-1 text-gray-400 hover:text-indigo-600 outline-none rounded hover:bg-indigo-50"
+            class="absolute left-1.5 top-1/2 -translate-y-1/2 z-10 p-1 text-gray-400 hover:text-brand outline-none rounded hover:bg-brand-light"
           >
             <Search class="size-3.5" />
           </button>
@@ -336,7 +336,9 @@ function LogQueryInput(props: {
                             onMouseEnter={() => setActiveIndex(item.flatIndex)}
                             class={clsx(
                               "flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left outline-none",
-                              activeIndex() === item.flatIndex ? "bg-indigo-50" : "hover:bg-gray-50"
+                              activeIndex() === item.flatIndex
+                                ? "bg-brand-light"
+                                : "hover:bg-gray-50"
                             )}
                           >
                             <span class="min-w-0">
@@ -396,7 +398,7 @@ function HighlightedLabel(props: { label: string; match: string }) {
       {(range) => (
         <>
           {props.label.slice(0, range().start)}
-          <span class="rounded-sm bg-indigo-100/70 text-indigo-700">
+          <span class="rounded-sm bg-brand-ring text-brand-hover">
             {props.label.slice(range().start, range().end)}
           </span>
           {props.label.slice(range().end)}

@@ -73,7 +73,7 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
             <TimelineChart
               data={(nodeMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
               label="CPU"
-              color="#6366f1"
+              color="#4f46e5"
               yFormat={formatPercent}
               xMin={xMin()}
               xMax={xMax()}
@@ -90,7 +90,7 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
             <TimelineChart
               data={(nodeMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
               label="Memory"
-              color="#8b5cf6"
+              color="#4f46e5"
               yFormat={formatBytes}
               xMin={xMin()}
               xMax={xMax()}
@@ -108,7 +108,7 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
             <TimelineChart
               data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
               label="CPU"
-              color="#0ea5e9"
+              color="#4f46e5"
               yFormat={formatPercent}
               xMin={xMin()}
               xMax={xMax()}
@@ -125,7 +125,7 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
             <TimelineChart
               data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
               label="Memory"
-              color="#14b8a6"
+              color="#4f46e5"
               yFormat={formatBytes}
               xMin={xMin()}
               xMax={xMax()}

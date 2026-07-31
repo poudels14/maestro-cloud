@@ -67,8 +67,8 @@ function FirewallPolicyForm(props: {
       <div>
         <div class="mb-2 flex items-center justify-between gap-3">
           <div>
-            <h3 class="text-sm font-semibold text-gray-900">Rules</h3>
-            <p class="mt-0.5 text-xs text-gray-400">
+            <h3 class="text-sm font-semibold text-neutral-900">Rules</h3>
+            <p class="mt-0.5 text-xs text-neutral-400">
               Evaluated top to bottom — the first match wins.
             </p>
           </div>
@@ -76,15 +76,15 @@ function FirewallPolicyForm(props: {
             <button
               type="button"
               onClick={props.onAddRule}
-              class="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+              class="inline-flex items-center gap-1.5 rounded border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
             >
               <Plus class="size-3.5" /> Add rule
             </button>
           </Show>
         </div>
 
-        <div class="overflow-hidden rounded-lg border border-gray-200">
-          <div class="hidden gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-400 sm:grid sm:grid-cols-[1.5rem_minmax(10rem,1fr)_5.5rem_minmax(8rem,0.9fr)_6rem_2rem]">
+        <div class="overflow-hidden rounded-md border border-neutral-200">
+          <div class="hidden gap-2 border-b border-neutral-100 bg-neutral-50 px-3 py-2 text-[10px] font-medium uppercase tracking-wide text-neutral-400 sm:grid sm:grid-cols-[1.5rem_minmax(10rem,1fr)_5.5rem_minmax(8rem,0.9fr)_6rem_2rem]">
             <span />
             <span>{props.draft.direction === "egress" ? "Destination CIDR" : "Source CIDR"}</span>
             <span>Protocol</span>
@@ -92,11 +92,11 @@ function FirewallPolicyForm(props: {
             <span>Verdict</span>
             <span />
           </div>
-          <div class="divide-y divide-gray-100 bg-white">
+          <div class="divide-y divide-neutral-100 bg-white">
             <For each={props.draft.rules}>
               {(rule, index) => (
                 <div class="grid items-center gap-2 px-3 py-2 sm:grid-cols-[1.5rem_minmax(10rem,1fr)_5.5rem_minmax(8rem,0.9fr)_6rem_2rem]">
-                  <span class="hidden text-center text-[11px] tabular-nums text-gray-300 sm:block">
+                  <span class="hidden text-center text-[11px] tabular-nums text-neutral-300 sm:block">
                     {index() + 1}
                   </span>
                   <input
@@ -148,7 +148,7 @@ function FirewallPolicyForm(props: {
                       type="button"
                       onClick={() => props.onRemoveRule(index())}
                       aria-label={`Remove rule ${index() + 1}`}
-                      class="flex size-7 items-center justify-center justify-self-center rounded-md text-gray-300 hover:bg-red-50 hover:text-red-600"
+                      class="flex size-7 items-center justify-center justify-self-center rounded text-neutral-300 hover:bg-red-50 hover:text-red-600"
                     >
                       <Trash2 class="size-3.5" />
                     </button>
@@ -157,13 +157,13 @@ function FirewallPolicyForm(props: {
               )}
             </For>
             <Show when={props.draft.rules.length === 0}>
-              <div class="px-3 py-6 text-center text-xs text-gray-400">
+              <div class="px-3 py-6 text-center text-xs text-neutral-400">
                 No explicit rules — every packet falls through to the default verdict.
               </div>
             </Show>
-            <div class="flex flex-wrap items-center justify-between gap-2 bg-gray-50/70 px-3 py-2">
-              <span class="inline-flex items-center gap-1.5 text-xs text-gray-500">
-                <CornerDownRight class="size-3.5 text-gray-300" />
+            <div class="flex flex-wrap items-center justify-between gap-2 bg-neutral-50/70 px-3 py-2">
+              <span class="inline-flex items-center gap-1.5 text-xs text-neutral-500">
+                <CornerDownRight class="size-3.5 text-neutral-300" />
                 All other traffic
               </span>
               <Segmented
@@ -190,22 +190,22 @@ function Segmented(props: {
   verdict?: boolean;
 }) {
   return (
-    <div class="inline-flex h-8 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-100/80 p-0.5">
+    <div class="inline-flex h-8 items-center gap-0.5 rounded border border-neutral-200 bg-neutral-100/80 p-0.5">
       <For each={props.options}>
         {(option) => (
           <button
             type="button"
             onClick={() => props.onChange(option.value)}
             class={clsx(
-              "h-full rounded-[0.4rem] px-2.5 text-xs font-medium transition-colors duration-100",
+              "h-full rounded-[3px] px-2.5 text-xs font-medium transition-colors duration-100",
               {
-                "bg-white text-gray-900 shadow-[0_1px_2px_rgb(0_0_0/0.08)]":
+                "bg-white text-neutral-900 shadow-[0_1px_2px_rgb(0_0_0/0.08)]":
                   props.value === option.value && !props.verdict,
                 "bg-white text-emerald-700 shadow-[0_1px_2px_rgb(0_0_0/0.08)]":
                   props.value === option.value && props.verdict && option.value === "allow",
                 "bg-white text-red-700 shadow-[0_1px_2px_rgb(0_0_0/0.08)]":
                   props.value === option.value && props.verdict && option.value === "deny",
-                "text-gray-500 hover:text-gray-800": props.value !== option.value
+                "text-neutral-500 hover:text-neutral-800": props.value !== option.value
               }
             )}
           >
@@ -220,7 +220,7 @@ function Segmented(props: {
 function Field(props: { label: string; children: import("solid-js").JSX.Element }) {
   return (
     <label class="block">
-      <span class="mb-1.5 block text-xs font-medium text-gray-600">{props.label}</span>
+      <span class="mb-1.5 block text-xs font-medium text-neutral-600">{props.label}</span>
       {props.children}
     </label>
   );
@@ -232,6 +232,6 @@ function subjectLabel(subject: FirewallSubjectType) {
 }
 
 const inputClass =
-  "h-8 w-full rounded-md border border-gray-200 bg-white px-2.5 text-xs text-gray-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-100";
+  "h-8 w-full rounded border border-neutral-200 bg-white px-2.5 text-xs text-neutral-700 outline-none focus:border-brand focus:ring-2 focus:ring-brand-ring disabled:bg-neutral-100";
 
 export { FirewallPolicyForm };

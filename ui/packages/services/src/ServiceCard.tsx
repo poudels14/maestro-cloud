@@ -25,12 +25,12 @@ function ServiceCard(props: { service: Service; onClick: () => void; onDelete: (
   return (
     <div
       onClick={props.onClick}
-      class="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 shadow-[0_1px_2px_rgb(0_0_0/0.04)] hover:border-indigo-200 hover:shadow-md transition-[border-color,box-shadow,transform] duration-200 ease-out-strong active:scale-[0.99] text-left w-full cursor-pointer outline-none group relative"
+      class="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 shadow-[0_1px_2px_rgb(0_0_0/0.04)] hover:border-gray-300 transition-colors duration-150 text-left w-full cursor-pointer outline-none relative"
     >
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">
           <div class="flex items-center gap-2.5 mb-1">
-            <span class="text-base font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
+            <span class="text-base font-semibold text-gray-900 truncate">
               {props.service.spec.name}
             </span>
           </div>

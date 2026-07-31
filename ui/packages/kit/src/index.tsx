@@ -26,17 +26,17 @@ export function timeAgo(ms: number): string {
 
 export const STATUS_COLORS: Record<string, { dot: string; pill: string }> = {
   QUEUED: { dot: "bg-amber-400", pill: "bg-amber-50 text-amber-700 border-amber-100" },
-  BUILDING: { dot: "bg-blue-400", pill: "bg-blue-50 text-blue-700 border-blue-100" },
-  PENDING_READY: { dot: "bg-cyan-400", pill: "bg-cyan-50 text-cyan-700 border-cyan-100" },
+  BUILDING: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },
+  PENDING_READY: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },
   READY: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  DEPLOYING: { dot: "bg-indigo-400", pill: "bg-indigo-50 text-indigo-700 border-indigo-100" },
+  DEPLOYING: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },
   RUNNING: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
   FAILED: { dot: "bg-red-400", pill: "bg-red-50 text-red-700 border-red-100" },
   CRASHED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
   TERMINATED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
   CANCELLED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
   CANCELED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
-  SYSTEM: { dot: "bg-violet-400", pill: "bg-violet-50 text-violet-700 border-violet-100" },
+  SYSTEM: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },
   IDLE: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" },
   STOPPED: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" }
 };
@@ -74,7 +74,7 @@ export function TabButton(props: {
       class={clsx(
         "px-1 pb-2 text-sm font-medium border-b-2 transition-[color,border-color] duration-150 ease-out-strong outline-none",
         {
-          "border-indigo-500 text-indigo-600": props.active,
+          "border-brand text-brand": props.active,
           "border-transparent text-gray-400 hover:text-gray-600": !props.active
         }
       )}
@@ -83,7 +83,7 @@ export function TabButton(props: {
       <Show when={props.count !== undefined}>
         <span
           class={clsx("ml-1.5 text-xs", {
-            "text-indigo-400": props.active,
+            "text-brand/60": props.active,
             "text-gray-400": !props.active
           })}
         >

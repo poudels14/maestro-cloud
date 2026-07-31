@@ -15,7 +15,7 @@ function ConfirmDialog(props: {
   const confirmClass = () =>
     props.destructive !== false
       ? "px-3 py-1.5 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors outline-none disabled:bg-red-300"
-      : "px-3 py-1.5 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors outline-none disabled:bg-indigo-300";
+      : "px-3 py-1.5 text-sm text-white bg-brand hover:bg-brand-hover rounded-md transition-colors outline-none disabled:bg-brand/40";
 
   return (
     <Dialog

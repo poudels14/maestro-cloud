@@ -36,7 +36,7 @@ function LoginPage() {
     <main class="min-h-screen bg-gray-50 flex items-center justify-center px-6 py-12">
       <section class="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <div class="mb-6 flex items-center gap-3">
-          <div class="flex size-9 items-center justify-center rounded-lg bg-indigo-500 shadow-sm">
+          <div class="flex size-9 items-center justify-center rounded-lg bg-brand shadow-sm">
             <Monitor class="size-5 text-white" />
           </div>
           <div>
@@ -59,7 +59,7 @@ function LoginPage() {
               onInput={(event) => setToken(event.currentTarget.value)}
               disabled={pending()}
               autofocus
-              class="w-full rounded-md border border-gray-300 py-2 pl-9 pr-3 font-mono text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-50"
+              class="w-full rounded-md border border-gray-300 py-2 pl-9 pr-3 font-mono text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand-ring disabled:bg-gray-50"
             />
           </div>
           <p class="mt-2 text-xs leading-5 text-gray-500">
@@ -75,7 +75,7 @@ function LoginPage() {
           <button
             type="submit"
             disabled={pending()}
-            class="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-wait disabled:opacity-60"
+            class="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand disabled:cursor-wait disabled:opacity-60"
           >
             <Show when={pending()}>
               <Loader2 class="size-4 animate-spin" />

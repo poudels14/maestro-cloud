@@ -46,9 +46,7 @@ function ServiceDetailPage() {
   const [drawerOpen, setDrawerOpen] = createSignal(false);
 
   const previewUrl = (serviceId: string) => {
-    const route = (ingressRoutes.data ?? []).find(
-      (candidate) => candidate.serviceId === serviceId
-    );
+    const route = (ingressRoutes.data ?? []).find((candidate) => candidate.serviceId === serviceId);
     return route ? routePublicUrl(route) : null;
   };
 
@@ -94,7 +92,7 @@ function ServiceDetailPage() {
             <button
               type="button"
               onClick={() => navigate({ to: "/" })}
-              class="mt-3 text-sm text-indigo-600 hover:text-indigo-700"
+              class="mt-3 text-sm text-brand hover:text-brand-hover"
             >
               Back to services
             </button>

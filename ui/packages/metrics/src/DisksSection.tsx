@@ -45,7 +45,7 @@ function DiskCard(props: { disk: DiskInfo }) {
             {
               "bg-red-500": usedPercent() > 90,
               "bg-amber-500": usedPercent() > 70 && usedPercent() <= 90,
-              "bg-indigo-500": usedPercent() <= 70
+              "bg-brand": usedPercent() <= 70
             }
           )}
           style={{ width: `${Math.min(usedPercent(), 100)}%` }}

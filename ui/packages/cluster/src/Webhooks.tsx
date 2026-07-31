@@ -81,7 +81,7 @@ function Webhooks(props: { api: ClusterApi }) {
                 setEditing(null);
                 setShowForm(true);
               }}
-              class="w-full px-4 py-2.5 flex items-center gap-2 text-xs font-medium text-indigo-600 hover:bg-indigo-50 transition-colors outline-none"
+              class="w-full px-4 py-2.5 flex items-center gap-2 text-xs font-medium text-brand hover:bg-brand-light transition-colors outline-none"
             >
               <Plus class="size-3.5" />
               Add webhook
@@ -160,7 +160,7 @@ function WebhookRow(props: {
           </Show>
           <For each={props.webhook.spec.events}>
             {(event) => (
-              <span class="text-[11px] font-medium px-1.5 py-0.5 rounded border border-indigo-100 bg-indigo-50/60 text-indigo-700">
+              <span class="text-[11px] font-medium px-1.5 py-0.5 rounded border border-brand-ring bg-brand-light text-brand-hover">
                 {EVENT_OPTIONS.find((option) => option.value === event)?.label ?? event}
               </span>
             )}
@@ -184,7 +184,7 @@ function WebhookRow(props: {
           onClick={() => props.onRequestEdit()}
           disabled={busy()}
           title="Edit webhook"
-          class="size-7 flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md disabled:opacity-50"
+          class="size-7 flex items-center justify-center text-gray-400 hover:text-brand hover:bg-brand-light rounded-md disabled:opacity-50"
         >
           <Pencil class="size-3.5" />
         </button>
@@ -193,7 +193,7 @@ function WebhookRow(props: {
           onClick={() => testMutation.mutate()}
           disabled={busy()}
           title="Send test message"
-          class="size-7 flex items-center justify-center text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md disabled:opacity-50"
+          class="size-7 flex items-center justify-center text-gray-400 hover:text-brand hover:bg-brand-light rounded-md disabled:opacity-50"
         >
           <Send class="size-3.5" />
         </button>

@@ -58,12 +58,7 @@ function ClusterStatsSection(props: { api: ClusterApi }) {
                       : "The agent has not received a controller stats report"
                   }
                 />
-                <HealthRow
-                  label="Agent"
-                  level="healthy"
-                  value={`v${data().agent.version}`}
-                  detail={`uptime ${formatDuration(data().agent.uptimeMs)}`}
-                />
+                <HealthRow label="Agent" level="healthy" value={`v${data().agent.version}`} />
                 <SinkRow
                   label="Agent log sync"
                   sink={agentSink()}
@@ -267,7 +262,7 @@ function HealthPill(props: { level: HealthLevel; label?: string | undefined }) {
         "shrink-0 inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium",
         {
           "border-emerald-100 bg-emerald-50 text-emerald-700": props.level === "healthy",
-          "border-blue-100 bg-blue-50 text-blue-700": props.level === "catching-up",
+          "border-brand-ring bg-brand-light text-brand-hover": props.level === "catching-up",
           "border-amber-100 bg-amber-50 text-amber-700": props.level === "warning",
           "border-red-100 bg-red-50 text-red-700": props.level === "error",
           "border-gray-100 bg-gray-50 text-gray-500": props.level === "disabled"
@@ -277,7 +272,7 @@ function HealthPill(props: { level: HealthLevel; label?: string | undefined }) {
       <span
         class={clsx("size-1.5 rounded-full", {
           "bg-emerald-400": props.level === "healthy",
-          "bg-blue-400": props.level === "catching-up",
+          "bg-brand": props.level === "catching-up",
           "bg-amber-400": props.level === "warning",
           "bg-red-400": props.level === "error",
           "bg-gray-400": props.level === "disabled"

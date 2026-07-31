@@ -44,7 +44,10 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
         <ErrorBanner message="Failed to load metrics" onRetry={() => metrics.refetch()} />
       </Show>
       <Show when={traffic.isError}>
-        <ErrorBanner message="Failed to load HTTP traffic metrics" onRetry={() => traffic.refetch()} />
+        <ErrorBanner
+          message="Failed to load HTTP traffic metrics"
+          onRetry={() => traffic.refetch()}
+        />
       </Show>
       <div class="flex justify-end">
         <div class="flex gap-1 bg-gray-100 rounded-md p-0.5">
@@ -72,7 +75,7 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
         <TimelineChart
           data={cpuData()}
           label="CPU"
-          color="#6366f1"
+          color="#4f46e5"
           yFormat={formatPercent}
           xMin={xMin()}
           xMax={xMax()}
@@ -83,7 +86,7 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
         <TimelineChart
           data={memData()}
           label="Memory"
-          color="#8b5cf6"
+          color="#4f46e5"
           yFormat={formatBytes}
           xMin={xMin()}
           xMax={xMax()}
@@ -94,7 +97,7 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
         <TimelineChart
           data={netRxData()}
           label="RX"
-          color="#10b981"
+          color="#4f46e5"
           yFormat={formatBytes}
           xMin={xMin()}
           xMax={xMax()}
@@ -105,14 +108,14 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
       <ChartCard
         title="HTTP requests"
         legend={[
-          { color: "bg-indigo-500", label: "Total" },
+          { color: "bg-brand", label: "Total" },
           { color: "bg-red-500", label: "Errors (4xx/5xx)" }
         ]}
       >
         <TimelineChart
           data={trafficSeries().totalRequestRate}
           label="req/s"
-          color="#6366f1"
+          color="#4f46e5"
           yFormat={formatRate}
           xMin={xMin()}
           xMax={xMax()}
@@ -127,14 +130,14 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
       <ChartCard
         title="Latency"
         legend={[
-          { color: "bg-cyan-500", label: "p50" },
+          { color: "bg-brand", label: "p50" },
           { color: "bg-amber-500", label: "p95" }
         ]}
       >
         <TimelineChart
           data={trafficSeries().p50LatencyMs}
           label="p50"
-          color="#06b6d4"
+          color="#4f46e5"
           yFormat={formatMs}
           xMin={xMin()}
           xMax={xMax()}
@@ -149,20 +152,20 @@ function MetricsTab(props: { api: MetricsApi; serviceId: string }) {
       <ChartCard
         title="HTTP bandwidth"
         legend={[
-          { color: "bg-emerald-500", label: "In" },
-          { color: "bg-orange-500", label: "Out" }
+          { color: "bg-brand", label: "In" },
+          { color: "bg-amber-500", label: "Out" }
         ]}
       >
         <TimelineChart
           data={trafficSeries().bytesInRate}
           label="in/s"
-          color="#10b981"
+          color="#4f46e5"
           yFormat={formatBytesRate}
           xMin={xMin()}
           xMax={xMax()}
           secondarySeries={{
             data: trafficSeries().bytesOutRate,
-            color: "#f97316",
+            color: "#f59e0b",
             label: "out/s"
           }}
         />

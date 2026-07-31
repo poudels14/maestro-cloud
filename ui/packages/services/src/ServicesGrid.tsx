@@ -54,17 +54,7 @@ function ServicesGrid(props: { api: ServicesApi }) {
         when={services.data}
         fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
       >
-        <div class="mb-4 flex items-end justify-between gap-3">
-          <div>
-            <h1 class="text-lg font-semibold text-gray-900">Services</h1>
-            <p class="mt-1 text-sm text-gray-400">Workloads you deploy and operate.</p>
-          </div>
-          <Show when={userServices().length > 0}>
-            <span class="text-xs text-gray-400 tabular-nums">
-              {userServices().length} {userServices().length === 1 ? "service" : "services"}
-            </span>
-          </Show>
-        </div>
+        <h1 class="mb-4 text-lg font-semibold text-gray-900">Services</h1>
         <Show
           when={userServices().length > 0}
           fallback={
@@ -94,14 +84,8 @@ function ServicesGrid(props: { api: ServicesApi }) {
         </Show>
         <Show when={systemServices().length > 0}>
           <div class="mt-10">
-            <div class="mb-4 flex items-baseline justify-between gap-3">
-              <div>
-                <SectionHeader>System</SectionHeader>
-                <p class="mt-0.5 text-xs text-gray-400">
-                  Managed by Maestro to run the cluster — always on, not removable.
-                </p>
-              </div>
-              <span class="text-xs text-gray-400 tabular-nums">{systemServices().length}</span>
+            <div class="mb-4">
+              <SectionHeader>System</SectionHeader>
             </div>
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <For each={systemServices()}>

@@ -72,7 +72,7 @@ function ipLogQuery(ip: string): string {
 function statusColor(status: number): string {
   if (status >= 500) return "bg-red-50 text-red-700";
   if (status >= 400) return "bg-amber-50 text-amber-700";
-  if (status >= 300) return "bg-blue-50 text-blue-700";
+  if (status >= 300) return "bg-brand-light text-brand-hover";
   if (status >= 200) return "bg-emerald-50 text-emerald-700";
   return "bg-gray-100 text-gray-600";
 }
