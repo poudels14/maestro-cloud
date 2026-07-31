@@ -2,7 +2,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
-use kernel_api::UpgradeMode;
+use kernel_api::{NodeId, UpgradeMode};
 
 use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
@@ -32,6 +32,9 @@ pub(crate) enum ClusterCommand {
         /// Cluster configuration source.
         #[arg(long, default_value = "maestro.jsonc")]
         config: String,
+        /// Node selected from the declared cluster topology.
+        #[arg(long)]
+        node_id: Option<NodeId>,
         /// Protected absolute data directory that will own daemon state.
         #[arg(long, value_name = "PATH")]
         data_dir: PathBuf,
@@ -45,9 +48,6 @@ pub(crate) enum ClusterCommand {
         /// Absolute etcd executable used by the embedded store provider.
         #[arg(long, value_name = "PATH")]
         etcd_binary: PathBuf,
-        /// Create the private daemon launch document at this path.
-        #[arg(long, value_name = "PATH")]
-        output: Option<PathBuf>,
     },
     /// Create restart/client launch documents for a one-way migrated cluster.
     PrepareCutover {
@@ -99,6 +99,9 @@ pub(crate) enum ClusterCommand {
         /// Cluster configuration source containing this node and the join secret.
         #[arg(long, default_value = "maestro.jsonc")]
         config: String,
+        /// Node selected from the declared cluster topology.
+        #[arg(long)]
+        node_id: Option<NodeId>,
         /// Protected absolute data directory that will own daemon state.
         #[arg(long, value_name = "PATH")]
         data_dir: PathBuf,
@@ -112,9 +115,6 @@ pub(crate) enum ClusterCommand {
         /// Absolute etcd executable required for control-plane nodes.
         #[arg(long, value_name = "PATH")]
         etcd_binary: Option<PathBuf>,
-        /// Create the private daemon launch document at this path.
-        #[arg(long, value_name = "PATH")]
-        output: Option<PathBuf>,
     },
     /// Show the active cluster identity and node capabilities.
     Info,
@@ -229,17 +229,17 @@ pub(crate) async fn run(
         }
         ClusterCommand::Bootstrap {
             config,
+            node_id,
             data_dir,
             containerd_socket,
             etcd_binary,
-            output: destination,
         } => {
             cluster_formation::bootstrap(
                 &config,
+                node_id,
                 &data_dir,
                 &containerd_socket,
                 &etcd_binary,
-                destination.as_deref(),
                 output,
                 &SystemConfigSourceReader,
             )
@@ -288,15 +288,15 @@ pub(crate) async fn run(
         ClusterCommand::Join {
             leader,
             config,
+            node_id,
             data_dir,
             containerd_socket,
             etcd_binary,
-            output: destination,
         } => {
             let mut options = JoinOptions::new(leader, config, data_dir);
+            options.node_id = node_id;
             options.containerd_socket = containerd_socket;
             options.etcd_binary = etcd_binary;
-            options.output = destination;
             cluster_join::join(options, output, &SystemConfigSourceReader).await
         }
         ClusterCommand::Info => cluster::info(&active_client()?, output).await,

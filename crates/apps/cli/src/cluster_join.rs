@@ -12,7 +12,7 @@ use kernel_api::{NodeId, NodeRole};
 
 use crate::CliError;
 use crate::api_client::decode_response_with_limit;
-use crate::config::load_cluster;
+use crate::config::{load_cluster, load_cluster_for_node};
 use crate::config_source::ConfigSourceReader;
 use crate::launch_document::{DaemonLaunchDocument, validate_etcd_binary};
 use crate::private_document::{Persisted, persist_private_new, read_private};
@@ -23,10 +23,10 @@ const DEFAULT_CONTAINERD_SOCKET: &str = "/run/containerd/containerd.sock";
 pub(crate) struct JoinOptions {
     pub(crate) leader: String,
     pub(crate) config_source: String,
+    pub(crate) node_id: Option<NodeId>,
     pub(crate) data_directory: PathBuf,
     pub(crate) containerd_socket: PathBuf,
     pub(crate) etcd_binary: Option<PathBuf>,
-    pub(crate) output: Option<PathBuf>,
 }
 
 impl JoinOptions {
@@ -34,10 +34,10 @@ impl JoinOptions {
         Self {
             leader,
             config_source,
+            node_id: None,
             data_directory,
             containerd_socket: PathBuf::from(DEFAULT_CONTAINERD_SOCKET),
             etcd_binary: None,
-            output: None,
         }
     }
 }
@@ -58,7 +58,10 @@ pub(crate) async fn join_with_transport(
 ) -> Result<(), CliError> {
     validate_paths(&options)?;
     let origin = parse_leader_origin(&options.leader)?;
-    let loaded = load_cluster(&options.config_source, reader).await?;
+    let loaded = match options.node_id {
+        Some(node_id) => load_cluster_for_node(&options.config_source, node_id, reader).await?,
+        None => load_cluster(&options.config_source, reader).await?,
+    };
     let node =
         loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
             CliError::invalid_input("selected node disappeared from the topology")
@@ -123,9 +126,7 @@ pub(crate) async fn join_with_transport(
         &loaded.encryption_key,
         payload,
     )?;
-    let destination = options
-        .output
-        .unwrap_or_else(|| options.data_directory.join("launch.json"));
+    let destination = options.data_directory.join("launch.json");
     let (launch, persisted) = match read_private(&destination, "daemon launch document") {
         Ok(encoded) => {
             let existing: DaemonLaunchDocument =
@@ -157,9 +158,9 @@ pub(crate) async fn join_with_transport(
     writeln!(output, "Launch config: {}", destination.display()).map_err(output_error)?;
     writeln!(
         output,
-        "Start with: maestro-daemon start --config {} {}",
+        "Start with: maestro-daemon start --config {} --data-dir {}",
         options.config_source,
-        destination.display()
+        options.data_directory.display()
     )
     .map_err(output_error)
 }

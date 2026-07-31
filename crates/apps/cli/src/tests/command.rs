@@ -56,8 +56,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
             "--etcd-binary",
             "/run/current-system/sw/bin/etcd",
-            "--output",
-            "/var/lib/maestro/launch.json",
         ])
         .is_ok()
     );
@@ -73,8 +71,6 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "/var/lib/maestro",
             "--etcd-binary",
             "/run/current-system/sw/bin/etcd",
-            "--output",
-            "/var/lib/maestro/launch.json",
         ])
         .is_ok()
     );
@@ -156,6 +152,37 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "init-ca",
             "--config",
             "maestro.jsonc",
+            "--data-dir",
+            "/var/lib/maestro",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "bootstrap",
+            "--config",
+            "aws-secret://maestro/sandbox/config.json",
+            "--node-id",
+            "node-a",
+            "--data-dir",
+            "/var/lib/maestro",
+            "--etcd-binary",
+            "/run/current-system/sw/bin/etcd",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "join",
+            "https://10.20.0.11:3000",
+            "--config",
+            "aws-secret://maestro/sandbox/config.json",
+            "--node-id",
+            "node-b",
             "--data-dir",
             "/var/lib/maestro",
         ])

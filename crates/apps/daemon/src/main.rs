@@ -35,8 +35,9 @@ enum DaemonCommand {
         /// Fallback workload subnet for a one-node config that omits cluster.nodes.*.subnet.
         #[arg(long)]
         subnet: Option<cluster::Ipv4Cidr>,
-        /// Owner-only node bootstrap document.
-        launch: PathBuf,
+        /// Absolute node data directory containing launch.json.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
     },
     /// Runs the internal authoritative resolver role on a delegated runtime network.
     #[command(hide = true)]
@@ -150,8 +151,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         DaemonCommand::Start {
             config,
             subnet,
-            launch,
-        } => start(config, subnet, launch).await,
+            data_dir,
+        } => start(config, subnet, data_dir).await,
         DaemonCommand::Dns {
             cluster_id,
             node_id,
@@ -259,10 +260,30 @@ async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::
 async fn start(
     config_source: String,
     subnet: Option<cluster::Ipv4Cidr>,
-    path: PathBuf,
+    data_directory: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if !data_directory.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "daemon data directory must be absolute",
+        )
+        .into());
+    }
     let fallbacks = ClusterConfigFallbacks::default().with_single_node_subnet(subnet);
-    let config = load_launch_config_with_fallbacks(&path, &config_source, &fallbacks).await?;
+    let launch_path = data_directory.join("launch.json");
+    let config =
+        load_launch_config_with_fallbacks(&launch_path, &config_source, &fallbacks).await?;
+    if config.data_directory != data_directory {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "launch document data directory `{}` does not match --data-dir `{}`",
+                config.data_directory.display(),
+                data_directory.display()
+            ),
+        )
+        .into());
+    }
     let cluster_id = config.cluster.cluster_id.clone();
     let node_id = config.node_id.clone();
     tracing::info!(%cluster_id, %node_id, "starting maestro daemon");

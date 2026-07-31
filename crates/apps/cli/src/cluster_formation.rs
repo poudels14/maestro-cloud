@@ -9,7 +9,7 @@ use kernel_api::{NodeId, NodeRole};
 use time::{Duration, OffsetDateTime};
 
 use crate::CliError;
-use crate::config::load_cluster;
+use crate::config::{load_cluster, load_cluster_for_node};
 use crate::config_source::ConfigSourceReader;
 use crate::launch_document::DaemonLaunchDocument;
 use crate::private_document::{Persisted, persist_private_exact, read_private};
@@ -88,10 +88,10 @@ pub(crate) async fn issue_node(
 
 pub(crate) async fn bootstrap(
     config_source: &str,
+    selected_node_id: Option<NodeId>,
     data_directory: &Path,
     containerd_socket: &Path,
     etcd_binary: &Path,
-    destination: Option<&Path>,
     output: &mut dyn Write,
     reader: &impl ConfigSourceReader,
 ) -> Result<(), CliError> {
@@ -103,7 +103,10 @@ pub(crate) async fn bootstrap(
             "bootstrap data directory, containerd socket, and etcd binary must be absolute paths",
         ));
     }
-    let loaded = load_cluster(config_source, reader).await?;
+    let loaded = match selected_node_id {
+        Some(node_id) => load_cluster_for_node(config_source, node_id, reader).await?,
+        None => load_cluster(config_source, reader).await?,
+    };
     let node =
         loaded.cluster.nodes.get(&loaded.node_id).ok_or_else(|| {
             CliError::invalid_input("selected node disappeared from the topology")
@@ -114,9 +117,7 @@ pub(crate) async fn bootstrap(
             loaded.node_id
         )));
     }
-    let launch_path = destination
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| data_directory.join("launch.json"));
+    let launch_path = data_directory.join("launch.json");
 
     let (launch, persisted, authority) = match read_private(&launch_path, "daemon launch document")
     {
@@ -186,9 +187,9 @@ pub(crate) async fn bootstrap(
     writeln!(output, "Launch config: {}", launch_path.display()).map_err(output_error)?;
     writeln!(
         output,
-        "Start with: maestro-daemon start --config {} {}",
+        "Start with: maestro-daemon start --config {} --data-dir {}",
         config_source,
-        launch_path.display(),
+        data_directory.display(),
     )
     .map_err(output_error)
 }

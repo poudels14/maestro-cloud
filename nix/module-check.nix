@@ -30,9 +30,10 @@ in
   assert daemon.serviceConfig.LimitNOFILE == 1048576;
   assert config.services.maestro.package == maestroPackage;
   assert config.services.maestro.source != null;
+  assert config.services.maestro.dataDir == "/data";
   assert lib.any (package: lib.getName package == "depot") config.environment.systemPackages;
   assert lib.hasInfix "/bin/maestro-daemon" daemonCommand;
-  assert lib.hasInfix "\"start\" \"--config\" \"aws-secret://maestro/test/config.json\" \"--test-option\" \"test-value\" \"/run/maestro/launch.json\"" daemonCommand;
+  assert lib.hasInfix "\"start\" \"--config\" \"aws-secret://maestro/test/config.json\" \"--data-dir\" \"/data\" \"--test-option\" \"test-value\"" daemonCommand;
     pkgs.runCommand "maestro-module-check" {} ''
       touch "$out"
     ''

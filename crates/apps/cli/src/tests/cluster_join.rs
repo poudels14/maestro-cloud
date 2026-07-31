@@ -9,7 +9,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::CliError;
 use crate::cluster_join::{AdmissionResponse, JoinOptions, JoinTransport, join_with_transport};
-use crate::config::load_cluster;
+use crate::config::{load_cluster, load_cluster_for_node};
 use crate::config_source::ConfigSourceReader;
 
 struct MemoryReader {
@@ -82,9 +82,15 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let reader = MemoryReader {
-        source: cluster_document(),
+        source: cluster_document().replace("            node: \"node-2\"\n", ""),
     };
-    let loaded = load_cluster("maestro.jsonc", &reader).await?;
+    let selected_node = kernel_api::NodeId::new("node-2")?;
+    let loaded = load_cluster_for_node(
+        "aws-secret://maestro/sandbox/config.json",
+        selected_node.clone(),
+        &reader,
+    )
+    .await?;
     let now = OffsetDateTime::now_utc();
     let validity = CertificateValidity::new(
         now.checked_sub(Duration::minutes(1))
@@ -119,11 +125,13 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
         requests: Mutex::new(Vec::new()),
     };
     let options = || {
-        JoinOptions::new(
+        let mut options = JoinOptions::new(
             "https://10.20.0.11:3000".to_string(),
-            "maestro.jsonc".to_string(),
+            "aws-secret://maestro/sandbox/config.json".to_string(),
             directory.path().to_path_buf(),
-        )
+        );
+        options.node_id = Some(selected_node.clone());
+        options
     };
 
     let mut first_output = Vec::new();

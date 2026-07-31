@@ -16,12 +16,16 @@ fn daemon_help_uses_clap_success_semantics() -> TestResult {
 #[test]
 fn start_requires_its_explicit_subcommand() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let config = directory.path().join("missing-launch.json");
     let explicit = daemon_command()
-        .args(["start", "--config", "aws-secret://maestro/test/config"])
-        .arg(&config)
+        .args([
+            "start",
+            "--config",
+            "aws-secret://maestro/test/config",
+            "--data-dir",
+        ])
+        .arg(directory.path())
         .output()?;
-    let positional = daemon_command().arg(&config).output()?;
+    let positional = daemon_command().arg(directory.path()).output()?;
 
     assert_eq!(explicit.status.code(), Some(1));
     assert!(explicit.stdout.is_empty());
@@ -47,9 +51,8 @@ fn start_requires_its_explicit_subcommand() -> TestResult {
 }
 
 #[test]
-fn start_accepts_the_legacy_single_node_subnet_fallback() -> TestResult {
+fn start_accepts_the_single_node_subnet_fallback() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let launch = directory.path().join("missing-launch.json");
     let output = daemon_command()
         .args([
             "start",
@@ -57,8 +60,9 @@ fn start_accepts_the_legacy_single_node_subnet_fallback() -> TestResult {
             "aws-secret://maestro/test/config",
             "--subnet",
             "10.202.0.0/16",
+            "--data-dir",
         ])
-        .arg(launch)
+        .arg(directory.path())
         .output()?;
 
     assert_eq!(output.status.code(), Some(1));

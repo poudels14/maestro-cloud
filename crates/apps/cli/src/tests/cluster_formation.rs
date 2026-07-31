@@ -1,4 +1,5 @@
 use cluster::{ClusterCertificateAuthority, NodeCertificateBundle, certificate_fingerprint};
+use kernel_api::NodeId;
 
 use crate::CliError;
 use crate::cluster_formation::{bootstrap, init_ca, issue_node};
@@ -117,10 +118,10 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
     let mut first_output = Vec::new();
     bootstrap(
         "maestro.jsonc",
+        None,
         directory.path(),
         containerd_socket,
         etcd_binary,
-        None,
         &mut first_output,
         &reader,
     )
@@ -130,10 +131,10 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
     let mut second_output = Vec::new();
     bootstrap(
         "maestro.jsonc",
+        None,
         directory.path(),
         containerd_socket,
         etcd_binary,
-        None,
         &mut second_output,
         &reader,
     )
@@ -166,6 +167,29 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
             0o600
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bootstrap_selects_one_node_from_a_shared_cluster_config()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let reader = MemoryReader {
+        source: cluster_document().replace("            node: \"node-1\"\n", ""),
+    };
+    bootstrap(
+        "aws-secret://maestro/sandbox/config.json",
+        Some(NodeId::new("node-1")?),
+        directory.path(),
+        std::path::Path::new("/run/containerd/containerd.sock"),
+        std::path::Path::new("/run/current-system/sw/bin/etcd"),
+        &mut Vec::new(),
+        &reader,
+    )
+    .await?;
+    let launch: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("launch.json"))?)?;
+    assert_eq!(launch.pointer("/nodeId"), Some(&"node-1".into()));
     Ok(())
 }
 

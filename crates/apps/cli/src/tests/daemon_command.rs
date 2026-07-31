@@ -12,7 +12,8 @@ fn daemon_arguments_are_forwarded_without_reinterpretation() {
             "maestro",
             "daemon",
             "start",
-            "/run/maestro/launch.json",
+            "--data-dir",
+            "/data/maestro/test",
             "--future-daemon-flag",
         ])
         .is_ok()

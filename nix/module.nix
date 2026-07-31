@@ -28,10 +28,10 @@ in {
       description = "Cluster configuration source fetched on every Maestro daemon start";
     };
 
-    launch = lib.mkOption {
+    dataDir = lib.mkOption {
       type = lib.types.str;
-      default = "/run/maestro/launch.json";
-      description = "Absolute path to the owner-only node bootstrap document outside the Nix store";
+      default = "/data";
+      description = "Absolute node data directory containing the encrypted launch document and daemon state";
     };
 
     extraArgs = lib.mkOption {
@@ -60,8 +60,8 @@ in {
         message = "services.maestro.config must name a cluster configuration source";
       }
       {
-        assertion = lib.hasPrefix "/" cfg.launch;
-        message = "services.maestro.launch must be an absolute runtime path";
+        assertion = lib.hasPrefix "/" cfg.dataDir;
+        message = "services.maestro.dataDir must be an absolute runtime path";
       }
     ];
 
@@ -130,9 +130,10 @@ in {
             "start"
             "--config"
             cfg.config
+            "--data-dir"
+            cfg.dataDir
           ]
           ++ cfg.extraArgs
-          ++ [cfg.launch]
         );
         Restart = "on-failure";
         RestartSec = 5;
