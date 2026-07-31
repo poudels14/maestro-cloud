@@ -39,7 +39,10 @@ mod upgrades;
 
 pub use cluster_config::LoadedClusterConfig;
 pub use command::{Cli, run};
-pub use config::{load_cluster, load_cluster_for_node};
+pub use config::{
+    ClusterConfigFallbacks, load_cluster, load_cluster_for_node,
+    load_cluster_for_node_with_fallbacks,
+};
 pub use config_source::{ConfigSourceReader, SystemConfigSourceReader};
 pub use error::CliError;
 

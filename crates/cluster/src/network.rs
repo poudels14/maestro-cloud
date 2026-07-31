@@ -115,19 +115,29 @@ impl Ipv4Cidr {
     /// Iterates addresses available for workload replicas.
     ///
     /// The network and gateway addresses are excluded, as are the broadcast
-    /// address and Maestro's fixed-address system allocation at the top.
+    /// address and Maestro's fixed system allocation in the first `/24`.
     pub fn workload_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
         let first = u32::from(self.network).saturating_add(2);
-        let end = u32::from(self.broadcast_address()).saturating_sub(Self::SYSTEM_RESERVED_HOSTS);
-        (first..end).map(Ipv4Addr::from)
+        let end = u32::from(self.broadcast_address());
+        (first..end)
+            .map(Ipv4Addr::from)
+            .filter(move |address| self.is_workload_address(*address))
     }
 
     /// Returns whether `address` belongs to the workload allocation range.
     pub fn is_workload_address(self, address: Ipv4Addr) -> bool {
         let address = u32::from(address);
         let first = u32::from(self.network).saturating_add(2);
-        let end = u32::from(self.broadcast_address()).saturating_sub(Self::SYSTEM_RESERVED_HOSTS);
-        address >= first && address < end
+        let broadcast = u32::from(self.broadcast_address());
+        let system_end = if self.prefix < 24 {
+            u32::from(self.network).saturating_add(255)
+        } else {
+            broadcast
+        };
+        let system_start = system_end.saturating_sub(Self::SYSTEM_RESERVED_HOSTS);
+        address >= first
+            && address < broadcast
+            && !(address >= system_start && address < system_end)
     }
 
     /// Returns whether the whole network is RFC 1918 private space.

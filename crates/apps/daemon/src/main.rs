@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use daemon::{
-    DEFAULT_DNS_RESOLVER_PORT, DeadLetterAdminCommand, DeadLetterAdminOutput,
-    DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters, launch_daemon,
-    load_launch_config, run_dns_resolver, stream_local_logs,
+    ClusterConfigFallbacks, DEFAULT_DNS_RESOLVER_PORT, DeadLetterAdminCommand,
+    DeadLetterAdminOutput, DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters,
+    launch_daemon, load_launch_config, load_launch_config_with_fallbacks, run_dns_resolver,
+    stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
 use node_agent::{TailscaleDnsPluginSettings, TailscaleDnsRoute};
@@ -31,6 +32,9 @@ enum DaemonCommand {
         /// Cluster configuration source fetched on every daemon start.
         #[arg(long)]
         config: String,
+        /// Fallback workload subnet for a one-node config that omits cluster.nodes.*.subnet.
+        #[arg(long)]
+        subnet: Option<cluster::Ipv4Cidr>,
         /// Owner-only node bootstrap document.
         launch: PathBuf,
     },
@@ -143,7 +147,11 @@ fn initialize_tracing() {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        DaemonCommand::Start { config, launch } => start(config, launch).await,
+        DaemonCommand::Start {
+            config,
+            subnet,
+            launch,
+        } => start(config, subnet, launch).await,
         DaemonCommand::Dns {
             cluster_id,
             node_id,
@@ -248,8 +256,13 @@ async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::
     }
 }
 
-async fn start(config_source: String, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let config = load_launch_config(&path, &config_source).await?;
+async fn start(
+    config_source: String,
+    subnet: Option<cluster::Ipv4Cidr>,
+    path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fallbacks = ClusterConfigFallbacks::default().with_single_node_subnet(subnet);
+    let config = load_launch_config_with_fallbacks(&path, &config_source, &fallbacks).await?;
     let cluster_id = config.cluster.cluster_id.clone();
     let node_id = config.node_id.clone();
     tracing::info!(%cluster_id, %node_id, "starting maestro daemon");

@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
-use kernel_api::ClusterId;
+use kernel_api::{ClusterId, NodeId};
 
 use crate::CliError;
-use crate::config::{ConfigKind, init, load_cluster, load_jwt_secret_key, validate};
+use crate::config::{
+    ClusterConfigFallbacks, ConfigKind, init, load_cluster, load_cluster_for_node_with_fallbacks,
+    load_jwt_secret_key, validate,
+};
 use crate::config_source::{ConfigSourceReader, SystemConfigSourceReader};
 
 struct MemoryReader {
@@ -41,6 +44,90 @@ impl ConfigSourceReader for MemoryReader {
             .cloned()
             .ok_or_else(|| CliError::not_found(format!("missing fixture `{source}`")))
     }
+}
+
+#[tokio::test]
+async fn one_node_cli_subnet_is_only_a_missing_config_fallback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let cli_subnet = "10.202.0.0/16".parse()?;
+    let fallbacks = ClusterConfigFallbacks::default().with_single_node_subnet(Some(cli_subnet));
+    let configured = MemoryReader {
+        sources: BTreeMap::from([(source.to_owned(), cluster_document("172.22.1.0/24"))]),
+    };
+    let loaded = load_cluster_for_node_with_fallbacks(
+        source,
+        NodeId::new("node-1")?,
+        &configured,
+        &fallbacks,
+    )
+    .await?;
+    assert_eq!(
+        loaded
+            .cluster
+            .nodes
+            .get(&NodeId::new("node-1")?)
+            .ok_or("node missing")?
+            .workload_subnet,
+        "172.22.1.0/24".parse()?
+    );
+
+    let missing = MemoryReader {
+        sources: BTreeMap::from([(
+            source.to_owned(),
+            cluster_document("172.22.1.0/24")
+                .replace("                        subnet: \"172.22.1.0/24\",\n", ""),
+        )]),
+    };
+    let loaded =
+        load_cluster_for_node_with_fallbacks(source, NodeId::new("node-1")?, &missing, &fallbacks)
+            .await?;
+    assert_eq!(
+        loaded
+            .cluster
+            .nodes
+            .get(&NodeId::new("node-1")?)
+            .ok_or("node missing")?
+            .workload_subnet,
+        cli_subnet
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_node_config_ignores_the_one_node_cli_subnet_fallback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24").replace(
+        "                    }\n                },\n                \"control-allow-cidrs\"",
+        r#"                    },
+                    "node-2": {
+                        endpoint: "10.20.0.12",
+                        subnet: "172.22.2.0/24",
+                        role: "worker"
+                    }
+                },
+                "control-allow-cidrs""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(source.to_owned(), document)]),
+    };
+    let fallbacks =
+        ClusterConfigFallbacks::default().with_single_node_subnet(Some("10.202.0.0/16".parse()?));
+    let loaded =
+        load_cluster_for_node_with_fallbacks(source, NodeId::new("node-1")?, &reader, &fallbacks)
+            .await?;
+    assert_eq!(
+        loaded
+            .cluster
+            .nodes
+            .get(&NodeId::new("node-1")?)
+            .ok_or("node missing")?
+            .workload_subnet,
+        "172.22.1.0/24".parse()?
+    );
+    assert_eq!(loaded.cluster.nodes.len(), 2);
+    Ok(())
 }
 
 #[tokio::test]

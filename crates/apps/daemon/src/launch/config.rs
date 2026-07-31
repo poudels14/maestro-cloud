@@ -278,11 +278,26 @@ pub async fn load_launch_config(
     path: &Path,
     config_source: &str,
 ) -> Result<DaemonLaunchConfig, DaemonLaunchError> {
+    load_launch_config_with_fallbacks(
+        path,
+        config_source,
+        &maestro_cli::ClusterConfigFallbacks::default(),
+    )
+    .await
+}
+
+/// Loads current cluster settings with CLI fallbacks and combines them with node bootstrap state.
+pub async fn load_launch_config_with_fallbacks(
+    path: &Path,
+    config_source: &str,
+    fallbacks: &maestro_cli::ClusterConfigFallbacks,
+) -> Result<DaemonLaunchConfig, DaemonLaunchError> {
     let document = load_launch_document(path)?;
-    let loaded = maestro_cli::load_cluster_for_node(
+    let loaded = maestro_cli::load_cluster_for_node_with_fallbacks(
         config_source,
         document.node_id.clone(),
         &maestro_cli::SystemConfigSourceReader,
+        fallbacks,
     )
     .await
     .map_err(|error| invalid(format!("failed to load current cluster config: {error}")))?;

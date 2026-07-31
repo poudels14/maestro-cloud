@@ -20,6 +20,32 @@ fn validates_a_three_node_control_plane() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[test]
+fn larger_workload_network_is_limited_to_a_one_node_topology()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut one_node = valid_config()?;
+    let master_id = NodeId::new("node-1")?;
+    one_node.nodes.retain(|node_id, _| node_id == &master_id);
+    one_node
+        .nodes
+        .get_mut(&master_id)
+        .ok_or("master missing")?
+        .workload_subnet = "10.202.0.0/16".parse()?;
+    one_node.preflight()?;
+
+    let mut multiple_nodes = valid_config()?;
+    multiple_nodes
+        .nodes
+        .get_mut(&NodeId::new("node-1")?)
+        .ok_or("master missing")?
+        .workload_subnet = "10.202.0.0/16".parse()?;
+    assert!(matches!(
+        multiple_nodes.preflight(),
+        Err(ClusterPreflightError::InvalidWorkloadSubnet { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn rejects_unsupported_control_plane_shapes() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = valid_config()?;
     let node = config.nodes.get_mut(&NodeId::new("node-3")?);

@@ -56,7 +56,7 @@ mod config;
 
 pub use config::{
     DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, load_launch_config,
-    load_launch_document,
+    load_launch_config_with_fallbacks, load_launch_document,
 };
 
 /// Builds production adapters and starts one daemon instance for its declared node role.

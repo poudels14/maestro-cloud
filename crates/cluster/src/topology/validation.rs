@@ -46,7 +46,7 @@ impl ClusterConfig {
                 });
             }
 
-            validate_workload_subnet(node_id, node.workload_subnet)?;
+            validate_workload_subnet(node_id, node.workload_subnet, self.nodes.len() == 1)?;
             if let Some((other_node, _)) = subnets
                 .iter()
                 .find(|(_, subnet)| subnet.overlaps(node.workload_subnet))
@@ -167,8 +167,11 @@ fn validate_endpoint(
 fn validate_workload_subnet(
     node_id: &NodeId,
     network: Ipv4Cidr,
+    one_node_topology: bool,
 ) -> Result<(), ClusterPreflightError> {
-    if network.prefix() != 24 || !network.is_private() {
+    let valid_prefix =
+        network.prefix() == 24 || one_node_topology && (16..24).contains(&network.prefix());
+    if !valid_prefix || !network.is_private() {
         return Err(ClusterPreflightError::InvalidWorkloadSubnet {
             node_id: node_id.clone(),
             network,

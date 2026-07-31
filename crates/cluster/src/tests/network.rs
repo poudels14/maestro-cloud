@@ -45,6 +45,24 @@ fn workload_range_preserves_gateway_and_system_addresses() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[test]
+fn larger_standalone_range_preserves_first_slash_24_system_addresses()
+-> Result<(), Box<dyn std::error::Error>> {
+    let network = "10.202.0.0/16".parse::<Ipv4Cidr>()?;
+    let addresses = network.workload_addresses().collect::<Vec<_>>();
+
+    assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 199)));
+    assert!(!addresses.contains(&Ipv4Addr::new(10, 202, 0, 200)));
+    assert!(!addresses.contains(&Ipv4Addr::new(10, 202, 0, 250)));
+    assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 255)));
+    assert!(addresses.contains(&Ipv4Addr::new(10, 202, 255, 254)));
+    assert_eq!(
+        network.admin_address(),
+        Some(Ipv4Addr::new(10, 202, 0, 250))
+    );
+    Ok(())
+}
+
 proptest! {
     #[test]
     fn distinct_private_slash_24_networks_do_not_overlap(

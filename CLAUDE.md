@@ -9,6 +9,7 @@
 - Dont update package.json or Cargo.toml manually. Use pnpm to install/update npm packages and cargo install to install/update rust packages.
 - Treat the configured cluster source as authoritative at process startup. Do not cache resolved cluster configuration or reusable cluster credentials in node launch documents.
 - Pass remote cluster config sources explicitly through `services.maestro` and the daemon CLI. Keep node launch documents limited to node-local bootstrap state.
+- Treat daemon CLI configuration arguments as fallbacks. Explicit values from the resolved config source take precedence, and topology-specific fallbacks that do not apply must be ignored rather than rejected.
 - Encrypt secret-bearing durable cluster values with the cluster encryption key before they reach the storage backend. Keep only bootstrap material that is required before etcd authentication on the node filesystem.
 
 # Coding style

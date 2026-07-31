@@ -69,13 +69,14 @@ pub use dns_launch::{
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
     DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, launch_daemon, load_launch_config,
-    load_launch_document,
+    load_launch_config_with_fallbacks, load_launch_document,
 };
 pub use launch_error::DaemonLaunchError;
 pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};
 pub use log_maintenance::{
     LogBackupTarget, LogMaintenanceError, LogMaintenanceSettings, LogMaintenanceWorker,
 };
+pub use maestro_cli::ClusterConfigFallbacks;
 pub use operator_error::OperatorSuiteError;
 pub use operator_leader::{BuildOperatorBackends, OperatorBackends, OperatorLeaderWorkload};
 pub use operator_settings::{OperatorSettings, PreviewOperatorSettings};

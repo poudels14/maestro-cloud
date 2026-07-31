@@ -2,6 +2,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
+use cluster::Ipv4Cidr;
+use kernel_api::NodeId;
+use serde_json::Value;
 
 use crate::CliError;
 use crate::cluster_config::decode_cluster;
@@ -144,10 +147,38 @@ pub async fn load_cluster(
 
 pub async fn load_cluster_for_node(
     source: &str,
-    node_id: kernel_api::NodeId,
+    node_id: NodeId,
     reader: &impl ConfigSourceReader,
 ) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
+    load_cluster_for_node_with_fallbacks(
+        source,
+        node_id,
+        reader,
+        &ClusterConfigFallbacks::default(),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClusterConfigFallbacks {
+    single_node_subnet: Option<Ipv4Cidr>,
+}
+
+impl ClusterConfigFallbacks {
+    pub fn with_single_node_subnet(mut self, subnet: Option<Ipv4Cidr>) -> Self {
+        self.single_node_subnet = subnet;
+        self
+    }
+}
+
+pub async fn load_cluster_for_node_with_fallbacks(
+    source: &str,
+    node_id: NodeId,
+    reader: &impl ConfigSourceReader,
+    fallbacks: &ClusterConfigFallbacks,
+) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
     let mut value = load_merged(source, reader).await?;
+    apply_cluster_fallbacks(source, &mut value, fallbacks)?;
     let object = value.as_object_mut().ok_or_else(|| {
         CliError::invalid_input(format!(
             "cluster config `{source}` must contain a JSON object at the top level"
@@ -165,6 +196,38 @@ pub async fn load_cluster_for_node(
     }
     loaded.node_id = node_id;
     Ok(loaded)
+}
+
+fn apply_cluster_fallbacks(
+    source: &str,
+    value: &mut Value,
+    fallbacks: &ClusterConfigFallbacks,
+) -> Result<(), CliError> {
+    let Some(subnet) = fallbacks.single_node_subnet else {
+        return Ok(());
+    };
+    let Some(nodes) = value
+        .get_mut("cluster")
+        .and_then(|cluster| cluster.get_mut("nodes"))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    if nodes.len() != 1 {
+        return Ok(());
+    }
+    let node = nodes
+        .values_mut()
+        .next()
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            CliError::invalid_input(format!(
+                "cluster config `{source}` must define each cluster.nodes entry as an object"
+            ))
+        })?;
+    node.entry("subnet".to_owned())
+        .or_insert_with(|| Value::String(subnet.to_string()));
+    Ok(())
 }
 
 pub(crate) async fn load_jwt_secret_key(

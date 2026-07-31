@@ -46,7 +46,10 @@ bootstrap document, conventionally `/run/maestro/launch.json`. It contains an
 encrypted node identity and local paths, not a cached resolved cluster config.
 `services.maestro.extraArgs` remains available for non-secret daemon arguments;
 never place credentials there because Nix-built service definitions are not a
-secret store.
+secret store. For compatibility, a one-node deployment may provide
+`extraArgs = ["--subnet" "10.202.0.0/16"];`. This value only fills an omitted
+subnet in a one-node config. An explicit config subnet takes precedence, and a
+multi-node config ignores the one-node fallback.
 
 The config must define a stable `encryption-key` of at least 32 characters.
 Maestro deterministically derives distinct keys for local node-bootstrap and

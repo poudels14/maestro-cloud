@@ -122,8 +122,10 @@ pub enum ClusterPreflightError {
     /// An API endpoint must unambiguously identify one node.
     #[error("endpoint `{address}:{port}` is assigned to more than one node")]
     DuplicateEndpoint { address: Ipv4Addr, port: u16 },
-    /// Node workload allocations use a fixed prefix for predictable bridge addressing.
-    #[error("node `{node_id}` workload network `{network}` must be a private IPv4 /24")]
+    /// Multi-node allocations use `/24`; larger historical standalone ranges remain supported.
+    #[error(
+        "node `{node_id}` workload network `{network}` must be a private IPv4 /24, or /16-/24 in a one-node topology"
+    )]
     InvalidWorkloadSubnet { node_id: NodeId, network: Ipv4Cidr },
     /// Per-node workload address spaces cannot collide.
     #[error("workload networks for nodes `{first}` and `{second}` overlap")]

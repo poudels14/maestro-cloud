@@ -47,6 +47,28 @@ fn start_requires_its_explicit_subcommand() -> TestResult {
 }
 
 #[test]
+fn start_accepts_the_legacy_single_node_subnet_fallback() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let launch = directory.path().join("missing-launch.json");
+    let output = daemon_command()
+        .args([
+            "start",
+            "--config",
+            "aws-secret://maestro/test/config",
+            "--subnet",
+            "10.202.0.0/16",
+        ])
+        .arg(launch)
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8(output.stderr)?;
+    assert!(error.contains("daemon launch document"));
+    assert!(!error.contains("unexpected argument"));
+    Ok(())
+}
+
+#[test]
 fn dead_letter_commands_require_explicit_purge_scope() -> TestResult {
     let directory = tempfile::tempdir()?;
     let config = directory.path().join("missing-launch.json");
