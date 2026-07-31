@@ -42,15 +42,21 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         .collect::<BTreeMap<_, _>>();
 
     for service in services.values() {
+        let service_routes = input
+            .ingress_routes
+            .iter()
+            .filter(|route| route.spec.service_id == service.meta.id)
+            .cloned()
+            .collect::<Vec<_>>();
         let related = deployments
             .values()
             .filter(|deployment| deployment.spec.service_id == service.meta.id)
             .collect::<Vec<_>>();
         let mut desired_service_status = service.status.clone();
         let desired_deployment_id = if service.meta.deletion_timestamp.is_none() {
-            let desired = new_deployment(&input.cluster_id, service, input.now)?;
-            let watched_revision = desired.spec.service != service.spec;
-            let existing = if watched_revision {
+            let desired = new_deployment(&input.cluster_id, service, &service_routes, input.now)?;
+            let captured_service_changed = desired.spec.service != service.spec;
+            let existing = if captured_service_changed {
                 deployments.get(&desired.meta.id).or_else(|| {
                     related.iter().copied().find(|deployment| {
                         deployment.spec.service_generation == service.meta.generation
@@ -433,6 +439,21 @@ pub enum DeploymentPlanError {
     /// A successful Build did not publish its immutable image digest.
     #[error("successful Build `{build_id}` has no image digest")]
     SucceededBuildMissingImage { build_id: BuildId },
+    /// A runtime environment value contained malformed template syntax.
+    #[error("Service `{service_id}` environment `{key}` has an invalid template: {message}")]
+    InvalidEnvironmentTemplate {
+        service_id: ServiceId,
+        key: String,
+        message: String,
+    },
+    /// A supported runtime variable had no unambiguous value for this service.
+    #[error("Service `{service_id}` environment `{key}` cannot resolve `{variable}`: {message}")]
+    UnavailableEnvironmentVariable {
+        service_id: ServiceId,
+        key: String,
+        variable: String,
+        message: String,
+    },
     /// Persisted state requested a transition outside the reviewed nine-state matrix.
     #[error("Deployment `{deployment_id}` cannot transition from {from:?} to {to:?}")]
     InvalidTransition {

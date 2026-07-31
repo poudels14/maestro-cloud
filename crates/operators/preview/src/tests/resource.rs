@@ -52,6 +52,32 @@ fn derived_service_is_stable_pinned_isolated_and_freeze_aware() {
 }
 
 #[test]
+fn derived_service_preserves_dynamic_environment_templates_for_preview_deployment() {
+    let preview = preview();
+    let mut base = base_service();
+    base.spec
+        .preview
+        .as_mut()
+        .expect("preview policy")
+        .environment
+        .insert(
+            "PREVIEW_URL".to_owned(),
+            "https://${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+        );
+
+    let derived = desired_service(&preview, &base, None).expect("derive service");
+
+    assert_eq!(
+        derived
+            .spec
+            .environment
+            .get("PREVIEW_URL")
+            .map(String::as_str),
+        Some("https://${{ MAESTRO_PREVIEW_HOST }}")
+    );
+}
+
+#[test]
 fn derived_route_keeps_shape_under_one_stable_preview_host() {
     let preview = preview();
     let base = base_route();

@@ -5,10 +5,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ArtifactTemplate, AssignmentId, Build, BuildId, BuildPhase, BuildSource, BuildTemplate,
-    ClusterId, Deployment, DeploymentId, DeploymentPhase, ExecPolicy, Generation, NodeApiAccess,
-    NodeId, NodeInstanceId, Object, ObjectMeta, PlacementConstraint, ReplicaState, ReplicaStateId,
-    ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, ResourceRevision,
-    RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
+    ClusterId, Deployment, DeploymentId, DeploymentPhase, ExecPolicy, Generation, IngressRoute,
+    IngressRouteId, IngressRouteSpec, IngressRouteStatus, NodeApiAccess, NodeId, NodeInstanceId,
+    Object, ObjectMeta, OwnerReference, Ownership, PlacementConstraint, ReplicaState,
+    ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceId, ResourceKind, ResourceName,
+    ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -88,6 +89,56 @@ async fn store_backed_controller_replaces_a_stale_queued_generation()
         deployment.spec.service_generation == Generation(2)
             && deployment.status.phase == DeploymentPhase::Queued
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn store_backed_controller_resolves_preview_environment_from_the_same_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut service = image_service();
+    service.meta.owner_refs = vec![OwnerReference {
+        resource: ResourceId::new(
+            ResourceKind::new("Preview")?,
+            ResourceName::new("api-pr-42")?,
+        ),
+        ownership: Ownership::Controller,
+    }];
+    service.spec.environment.insert(
+        "PREVIEW_URL".to_owned(),
+        "https://${{ MAESTRO_PREVIEW_HOST }}/callback".to_owned(),
+    );
+    let world = World::new(service.clone()).await?;
+    let route: IngressRoute = Object {
+        meta: metadata(IngressRouteId::new("api-route")?),
+        spec: IngressRouteSpec {
+            service_id: service.meta.id,
+            hosts: vec!["api-pr-42.preview.example.test".to_owned()],
+            path_prefix: None,
+            target_port: 8080,
+            session_affinity: None,
+        },
+        status: IngressRouteStatus {
+            applied_generation: Generation::default(),
+            conditions: Vec::new(),
+        },
+    };
+    world.put("IngressRoute", &route.meta.id, &route).await?;
+
+    assert_eq!(
+        world.reconcile(Timestamp(1_000)).await?.created_deployments,
+        1
+    );
+    let deployment = world.one::<Deployment>("Deployment").await?;
+
+    assert_eq!(
+        deployment
+            .spec
+            .service
+            .environment
+            .get("PREVIEW_URL")
+            .map(String::as_str),
+        Some("https://api-pr-42.preview.example.test/callback")
+    );
     Ok(())
 }
 

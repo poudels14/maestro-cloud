@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use kernel_api::{
     ArtifactTemplate, BUILD_WATCH_REVISION_ANNOTATION, Build, BuildId, BuildPhase, BuildSource,
     BuildSpec, BuildStatus, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase,
-    DeploymentSpec, DeploymentStatus, Generation, InvalidIdentifier, Object, ObjectMeta,
-    OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service, ServiceId,
-    Timestamp,
+    DeploymentSpec, DeploymentStatus, Generation, IngressRoute, InvalidIdentifier, Object,
+    ObjectMeta, OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service,
+    ServiceId, Timestamp,
 };
 use sha2::{Digest, Sha256};
 
@@ -17,23 +17,11 @@ const DEPLOYMENT_KIND: &str = "Deployment";
 pub(crate) fn new_deployment(
     cluster_id: &kernel_api::ClusterId,
     service: &Service,
+    routes: &[IngressRoute],
     now: Timestamp,
 ) -> Result<Deployment, DeploymentPlanError> {
     let watched_revision = watched_revision(service);
     let generation = service.meta.generation.0.to_string();
-    let mut identity = vec![cluster_id.as_str(), service.meta.id.as_str(), &generation];
-    if let Some(revision) = watched_revision {
-        identity.push(revision);
-    }
-    let deployment_id = DeploymentId::new(stable_id("deployment", &identity))?;
-    let build_id = matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
-        .then(|| {
-            BuildId::new(stable_id(
-                "build",
-                &[cluster_id.as_str(), deployment_id.as_str()],
-            ))
-        })
-        .transpose()?;
     let mut captured_service = service.spec.clone();
     if let (
         Some(revision),
@@ -51,6 +39,24 @@ pub(crate) fn new_deployment(
     {
         *desired = revision.to_string();
     }
+    let environment_fingerprint =
+        crate::environment::resolve(service, routes, &mut captured_service.environment)?;
+    let mut identity = vec![cluster_id.as_str(), service.meta.id.as_str(), &generation];
+    if let Some(revision) = watched_revision {
+        identity.push(revision);
+    }
+    if let Some(fingerprint) = environment_fingerprint.as_deref() {
+        identity.push(fingerprint);
+    }
+    let deployment_id = DeploymentId::new(stable_id("deployment", &identity))?;
+    let build_id = matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
+        .then(|| {
+            BuildId::new(stable_id(
+                "build",
+                &[cluster_id.as_str(), deployment_id.as_str()],
+            ))
+        })
+        .transpose()?;
     Ok(Object {
         meta: child_metadata(deployment_id, SERVICE_KIND, service.meta.id.clone().into())?,
         spec: DeploymentSpec {

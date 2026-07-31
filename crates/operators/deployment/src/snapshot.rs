@@ -3,10 +3,11 @@ use std::fmt::Display;
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentSpec, AssignmentStatus, Build, BuildId, BuildSpec,
-    BuildStatus, Deployment, DeploymentId, DeploymentSpec, DeploymentStatus, Object, ReplicaState,
-    ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, Service,
-    ServiceId, ServiceSpec, ServiceStatus, TrafficGeneration, TrafficGenerationId,
-    TrafficGenerationSpec, TrafficGenerationStatus,
+    BuildStatus, Deployment, DeploymentId, DeploymentSpec, DeploymentStatus, IngressRoute,
+    IngressRouteId, IngressRouteSpec, IngressRouteStatus, Object, ReplicaState, ReplicaStateId,
+    ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, Service, ServiceId,
+    ServiceSpec, ServiceStatus, TrafficGeneration, TrafficGenerationId, TrafficGenerationSpec,
+    TrafficGenerationStatus,
 };
 use kernel_controller::FencedStore;
 use kernel_store::{Compare, ExpectedVersion, Keyspace, StoredValue};
@@ -16,6 +17,7 @@ use crate::{DeploymentError, DeploymentInput, LifecycleSettings};
 
 pub(crate) struct ResourceSnapshot {
     pub(crate) services: BTreeMap<ServiceId, StoredResource<Service>>,
+    pub(crate) ingress_routes: BTreeMap<IngressRouteId, StoredResource<IngressRoute>>,
     pub(crate) deployments: BTreeMap<DeploymentId, StoredResource<Deployment>>,
     pub(crate) builds: BTreeMap<BuildId, StoredResource<Build>>,
     pub(crate) assignments: BTreeMap<AssignmentId, StoredResource<Assignment>>,
@@ -29,6 +31,11 @@ impl ResourceSnapshot {
         Ok(Self {
             services: decode_kind::<ServiceId, ServiceSpec, ServiceStatus>(
                 &values, keyspace, "Service",
+            )?,
+            ingress_routes: decode_kind::<IngressRouteId, IngressRouteSpec, IngressRouteStatus>(
+                &values,
+                keyspace,
+                "IngressRoute",
             )?,
             deployments: decode_kind::<DeploymentId, DeploymentSpec, DeploymentStatus>(
                 &values,
@@ -62,6 +69,9 @@ impl ResourceSnapshot {
         let mut snapshot = Self::load(store, keyspace).await?;
         snapshot.services.retain(|id, _| id == service_id);
         snapshot
+            .ingress_routes
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot
             .deployments
             .retain(|_, resource| resource.resource.spec.service_id == *service_id);
         snapshot
@@ -90,6 +100,7 @@ impl ResourceSnapshot {
             now,
             settings,
             services: resources(&self.services),
+            ingress_routes: resources(&self.ingress_routes),
             deployments: resources(&self.deployments),
             builds: resources(&self.builds),
             assignments: resources(&self.assignments),
@@ -102,6 +113,11 @@ impl ResourceSnapshot {
         self.services
             .values()
             .map(|resource| &resource.stored)
+            .chain(
+                self.ingress_routes
+                    .values()
+                    .map(|resource| &resource.stored),
+            )
             .map(|stored| Compare {
                 key: stored.key.clone(),
                 expected: ExpectedVersion::Exact(stored.version),

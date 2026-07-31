@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use kernel_api::{
-    Assignment, Build, BuildId, Deployment, DeploymentId, DeploymentStatus, ReplicaStateId,
-    ResourceRevision, Service, ServiceId, ServiceStatus, Timestamp, TrafficGeneration,
+    Assignment, Build, BuildId, Deployment, DeploymentId, DeploymentStatus, IngressRoute,
+    ReplicaStateId, ResourceRevision, Service, ServiceId, ServiceStatus, Timestamp,
+    TrafficGeneration,
 };
 
 /// Timing policy applied by the pure deployment lifecycle planner.
@@ -23,6 +24,8 @@ pub struct DeploymentInput {
     pub settings: LifecycleSettings,
     /// Desired services.
     pub services: Vec<Service>,
+    /// Desired ingress routes used to resolve deployment environment templates.
+    pub ingress_routes: Vec<IngressRoute>,
     /// Existing immutable deployments.
     pub deployments: Vec<Deployment>,
     /// Existing artifact builds.

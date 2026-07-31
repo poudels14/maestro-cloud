@@ -1,6 +1,7 @@
 use kernel_api::{
     ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, DeploymentId, DeploymentPhase,
-    Generation, RolloutState, Timestamp,
+    Generation, IngressRouteId, IngressRouteSpec, IngressRouteStatus, Object, OwnerReference,
+    Ownership, ResourceId, ResourceKind, ResourceName, RolloutState, Timestamp,
 };
 
 use super::plan_support::*;
@@ -16,6 +17,77 @@ fn creates_one_stable_deployment_per_service_generation() {
     assert_eq!(deployment.spec.service_generation, Generation(7));
     assert_eq!(deployment.status.phase, DeploymentPhase::Queued);
     assert!(deployment.spec.build_id.is_none());
+}
+
+#[test]
+fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment() {
+    let mut service = service(Generation(7), RolloutState::Active);
+    service.meta.owner_refs = vec![OwnerReference {
+        resource: ResourceId::new(
+            ResourceKind::new("Preview").unwrap(),
+            ResourceName::new("api-pr-42").unwrap(),
+        ),
+        ownership: Ownership::Controller,
+    }];
+    service.spec.environment.insert(
+        "PREVIEW_URL".to_owned(),
+        "https://${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+    );
+    let mut first_input = input(service.clone(), Vec::new());
+    first_input.ingress_routes = vec![Object {
+        meta: metadata(IngressRouteId::new("api-route").unwrap(), Generation(1)),
+        spec: IngressRouteSpec {
+            service_id: service.meta.id.clone(),
+            hosts: vec!["api-pr-42.preview.example.test".to_owned()],
+            path_prefix: None,
+            target_port: 8080,
+            session_affinity: None,
+        },
+        status: IngressRouteStatus {
+            applied_generation: Generation::default(),
+            conditions: Vec::new(),
+        },
+    }];
+
+    let first = plan(first_input)
+        .expect("resolve initial ingress host")
+        .create_deployments
+        .remove(0);
+
+    assert_eq!(
+        first.spec.service.environment.get("PREVIEW_URL"),
+        Some(&"https://api-pr-42.preview.example.test".to_owned())
+    );
+    assert_eq!(
+        service.spec.environment.get("PREVIEW_URL"),
+        Some(&"https://${{ MAESTRO_PREVIEW_HOST }}".to_owned())
+    );
+
+    let mut changed_input = input(service, vec![first.clone()]);
+    changed_input.ingress_routes = vec![Object {
+        meta: metadata(IngressRouteId::new("api-route").unwrap(), Generation(2)),
+        spec: IngressRouteSpec {
+            service_id: first.spec.service_id.clone(),
+            hosts: vec!["api-pr-42-new.preview.example.test".to_owned()],
+            path_prefix: None,
+            target_port: 8080,
+            session_affinity: None,
+        },
+        status: IngressRouteStatus {
+            applied_generation: Generation::default(),
+            conditions: Vec::new(),
+        },
+    }];
+    let changed = plan(changed_input)
+        .expect("resolve changed ingress host")
+        .create_deployments
+        .remove(0);
+
+    assert_ne!(changed.meta.id, first.meta.id);
+    assert_eq!(
+        changed.spec.service.environment.get("PREVIEW_URL"),
+        Some(&"https://api-pr-42-new.preview.example.test".to_owned())
+    );
 }
 
 #[test]

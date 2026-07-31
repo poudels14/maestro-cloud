@@ -71,6 +71,7 @@ pub(super) async fn convert_service(
         &format!("{path}.deploy.env"),
         template.deploy.env,
         reader,
+        MaestroTemplatePolicy::Reject,
     )
     .await?;
     let secrets = match template.deploy.secrets {
@@ -88,6 +89,7 @@ pub(super) async fn convert_service(
                     items: secrets.items,
                 },
                 reader,
+                MaestroTemplatePolicy::Reject,
             )
             .await?
             .into_iter()
@@ -273,6 +275,7 @@ async fn convert_build(
         &format!("{service_path}.build.env"),
         build.env,
         reader,
+        MaestroTemplatePolicy::Reject,
     )
     .await?;
     let secrets = resolve_values(
@@ -280,6 +283,7 @@ async fn convert_build(
         &format!("{service_path}.build.secrets"),
         build.secrets,
         reader,
+        MaestroTemplatePolicy::Reject,
     )
     .await?
     .into_iter()
@@ -369,6 +373,7 @@ async fn convert_preview(
         &format!("{service_path}.preview.env"),
         preview.env,
         reader,
+        MaestroTemplatePolicy::Preserve,
     )
     .await?;
     Ok(Some(PreviewPolicy {
@@ -384,6 +389,7 @@ async fn resolve_values(
     field: &str,
     values: ValueSource,
     reader: &impl ConfigSourceReader,
+    maestro_templates: MaestroTemplatePolicy,
 ) -> Result<BTreeMap<String, String>, CliError> {
     if values.source.is_some() && !values.items.is_empty() {
         return Err(invalid(field, "set either `source` or `items`, not both"));
@@ -395,11 +401,47 @@ async fn resolve_values(
         values.items
     };
     for (key, value) in &mut items {
-        *value = shellexpand::env(value.as_str())
-            .map_err(|error| invalid(&format!("{field}.items.{key}"), error))?
-            .into_owned();
+        *value = expand_local_environment(value, maestro_templates)
+            .map_err(|error| invalid(&format!("{field}.items.{key}"), error))?;
     }
     Ok(items)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaestroTemplatePolicy {
+    Preserve,
+    Reject,
+}
+
+fn expand_local_environment(
+    value: &str,
+    maestro_templates: MaestroTemplatePolicy,
+) -> Result<String, String> {
+    let mut remaining = value;
+    let mut output = String::with_capacity(value.len());
+    while let Some(open) = remaining.find("${{") {
+        if maestro_templates == MaestroTemplatePolicy::Reject {
+            return Err("Maestro templates are supported only in preview.env".to_owned());
+        }
+        output.push_str(
+            shellexpand::env(&remaining[..open])
+                .map_err(|error| error.to_string())?
+                .as_ref(),
+        );
+        let expression = &remaining[open + 3..];
+        let Some(close) = expression.find("}}") else {
+            output.push_str(&remaining[open..]);
+            return Ok(output);
+        };
+        output.push_str(&remaining[open..open + 3 + close + 2]);
+        remaining = &expression[close + 2..];
+    }
+    output.push_str(
+        shellexpand::env(remaining)
+            .map_err(|error| error.to_string())?
+            .as_ref(),
+    );
+    Ok(output)
 }
 
 fn parse_key_values(field: &str, raw: &str) -> Result<BTreeMap<String, String>, CliError> {

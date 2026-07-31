@@ -76,7 +76,8 @@ Add a `preview` block to a repository-backed service in `maestro.services.jsonc`
         "env": {
           "items": {
             "FEATURE_FLAGS": "preview",
-            "ANALYTICS_DISABLED": "1"
+            "ANALYTICS_DISABLED": "1",
+            "PREVIEW_URL": "https://${{ MAESTRO_PREVIEW_HOST }}"
           }
         }
       }
@@ -89,6 +90,12 @@ Add a `preview` block to a repository-backed service in `maestro.services.jsonc`
 `1d`. Preview environment items override base deployment environment items. Base environment
 sources, build settings, Depot project, health checks, deploy secrets, node affinity, and egress
 rules are inherited. Volumes are deliberately removed and replicas are fixed at one.
+
+Preview environment values support the `${{ MAESTRO_PREVIEW_HOST }}` string template. Maestro
+resolves it to the derived preview's one concrete ingress hostname when it creates the deployment.
+The template may appear inside a larger value, as shown above. Deployment planning fails when the
+preview has no ingress, multiple distinct hosts, or only a wildcard host; Maestro never guesses
+which hostname the application should use.
 
 Preview-enabled services must use a `github.com` repository, define ingress, and have a lowercase
 DNS-label service ID. The `-pr-` infix is reserved for Maestro's derived services. Fork PRs and

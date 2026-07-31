@@ -5,6 +5,7 @@
 //! separate boundaries so lifecycle behavior remains exhaustively testable.
 
 mod controller;
+mod environment;
 mod goal;
 mod model;
 mod plan;

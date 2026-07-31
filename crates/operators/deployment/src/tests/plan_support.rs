@@ -21,6 +21,7 @@ pub(super) fn input(service: Service, deployments: Vec<Deployment>) -> Deploymen
             drain_grace: Duration::from_secs(30),
         },
         services: vec![service],
+        ingress_routes: Vec::new(),
         deployments,
         builds: Vec::new(),
         assignments: Vec::new(),
