@@ -69,6 +69,15 @@ in {
     virtualisation.containerd.settings = {
       plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true;
     };
+    # dhcpcd otherwise assigns IPv4LL addresses to Maestro's dynamically
+    # created links. Its connected 169.254.0.0/16 route can capture cloud
+    # metadata traffic that must continue through the node's primary ENI.
+    networking.dhcpcd.denyInterfaces = [
+      "maestro0"
+      "mh*"
+      "mp*"
+      "wg0"
+    ];
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
     nix.settings.experimental-features = [
       "nix-command"

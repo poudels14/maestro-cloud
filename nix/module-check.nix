@@ -10,6 +10,7 @@
 in
   assert config.virtualisation.containerd.enable;
   assert config.virtualisation.containerd.settings.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup;
+  assert lib.all (interface: lib.elem interface config.networking.dhcpcd.denyInterfaces) ["maestro0" "mh*" "mp*" "wg0"];
   assert config.boot.kernel.sysctl."net.ipv4.ip_forward" == 1;
   assert lib.elem "nix-command" config.nix.settings.experimental-features;
   assert lib.elem "flakes" config.nix.settings.experimental-features;
