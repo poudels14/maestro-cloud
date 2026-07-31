@@ -79,6 +79,7 @@ async fn configured_node_admits_and_replays_only_one_exact_control_plane_request
     worker.role = NodeRole::Worker;
     config.nodes.insert(worker_id.clone(), worker);
     let authority = crate::ClusterCertificateAuthority::generate(&config.name, validity()?)?;
+    let expected_authority = authority.clone();
     let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let provider = Arc::new(RecordingProvider {
         staged: Mutex::new(Vec::new()),
@@ -145,6 +146,7 @@ async fn configured_node_admits_and_replays_only_one_exact_control_plane_request
         JoinResponseStatus::ACCEPTED,
     )?;
     assert!(first_payload.store_join_ticket.is_some());
+    assert_eq!(first_payload.certificate_issuer, Some(expected_authority));
 
     let replay = coordinator
         .admit(
@@ -245,6 +247,7 @@ async fn configured_node_admits_and_replays_only_one_exact_control_plane_request
         JoinResponseStatus::ACCEPTED,
     )?;
     assert!(worker_payload.store_join_ticket.is_none());
+    assert!(worker_payload.certificate_issuer.is_none());
     assert_eq!(
         provider
             .staged

@@ -460,6 +460,7 @@ impl RealProcessCluster {
             nodes: self.cluster.nodes.clone(),
             ports: self.cluster.ports,
             certificates,
+            certificate_issuer: Some(self.authority.clone()),
             store_join_ticket: Some(ticket),
         };
         let envelope = encrypt_join_response(

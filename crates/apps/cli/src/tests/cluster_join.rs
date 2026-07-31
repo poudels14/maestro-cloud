@@ -11,6 +11,7 @@ use crate::CliError;
 use crate::cluster_join::{AdmissionResponse, JoinOptions, JoinTransport, join_with_transport};
 use crate::config::{load_cluster, load_cluster_for_node};
 use crate::config_source::ConfigSourceReader;
+use crate::launch_document::DaemonLaunchDocument;
 
 struct MemoryReader {
     source: String,
@@ -116,6 +117,7 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
             node.role,
             validity,
         )?,
+        certificate_issuer: None,
         store_join_ticket: None,
     };
     let transport = FakeJoinTransport {
@@ -231,6 +233,8 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
     let now = OffsetDateTime::now_utc();
     let validity = CertificateValidity::new(now, now + Duration::days(1))?;
     let authority = ClusterCertificateAuthority::generate(&loaded.cluster.name, validity)?;
+    let expected_authority = authority.clone();
+    let encryption_key = loaded.encryption_key.clone();
     let node = loaded
         .cluster
         .nodes
@@ -248,6 +252,7 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
             node.role,
             validity,
         )?,
+        certificate_issuer: Some(authority.clone()),
         store_join_ticket: Some(StoreJoinTicket::from_provider_data(
             loaded.node_id.clone(),
             b"opaque-test-ticket",
@@ -289,6 +294,12 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
     );
     assert!(launch.pointer("/protectedBootstrap").is_some());
     assert!(launch.pointer("/certificateIssuer").is_none());
+    let launch: DaemonLaunchDocument =
+        serde_json::from_slice(&std::fs::read(directory.path().join("launch.json"))?)?;
+    assert_eq!(
+        launch.bootstrap_authority(&encryption_key)?,
+        expected_authority
+    );
     Ok(())
 }
 
@@ -311,6 +322,7 @@ fn unusable_payload(
             node.role,
             validity,
         )?,
+        certificate_issuer: None,
         store_join_ticket: None,
     })
 }

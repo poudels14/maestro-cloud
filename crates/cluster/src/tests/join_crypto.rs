@@ -26,6 +26,7 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         nodes: config.nodes.clone(),
         ports: config.ports,
         certificates,
+        certificate_issuer: Some(authority),
         store_join_ticket: Some(StoreJoinTicket::from_provider_data(
             node_id.clone(),
             b"test-ticket",

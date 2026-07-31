@@ -357,6 +357,15 @@ fn validate_grant_trust(
             "join grant trust root does not match authenticated CA discovery",
         ));
     }
+    if payload
+        .certificate_issuer
+        .as_ref()
+        .is_some_and(|issuer| issuer.certificate_pem != discovery.ca_certificate_pem)
+    {
+        return Err(CliError::invalid_api_response(
+            "join grant certificate issuer does not match authenticated CA discovery",
+        ));
+    }
     Ok(())
 }
 

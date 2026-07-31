@@ -74,8 +74,12 @@ impl DaemonLaunchDocument {
         payload: JoinPayload,
     ) -> Result<Self, CliError> {
         let store_mode = StoreLaunchDocument::joined(&node_id, role, payload.store_join_ticket)?;
-        let protected_bootstrap =
-            protect_bootstrap(&node_id, &payload.certificates, None, encryption_key)?;
+        let protected_bootstrap = protect_bootstrap(
+            &node_id,
+            &payload.certificates,
+            payload.certificate_issuer.as_ref(),
+            encryption_key,
+        )?;
         let document = Self {
             node_id,
             data_directory,

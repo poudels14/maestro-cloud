@@ -241,6 +241,10 @@ impl AdmissionCoordinator {
             nodes: self.config.nodes.clone(),
             ports: self.config.ports,
             certificates,
+            certificate_issuer: request
+                .role
+                .is_control_plane()
+                .then(|| self.authority.clone()),
             store_join_ticket,
         })
     }
