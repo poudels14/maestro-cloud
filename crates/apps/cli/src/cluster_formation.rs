@@ -5,7 +5,7 @@ use cluster::{
     CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
     certificate_fingerprint,
 };
-use kernel_api::{NodeId, NodeRole, SecretValue};
+use kernel_api::{NodeId, NodeRole};
 use time::{Duration, OffsetDateTime};
 
 use crate::CliError;
@@ -114,18 +114,12 @@ pub(crate) async fn bootstrap(
             loaded.node_id
         )));
     }
-    let authority_directory = authority_directory(data_directory);
-    let authority = ClusterCertificateAuthority::load_or_initialize(
-        &authority_directory,
-        &loaded.cluster.name,
-        validity(AUTHORITY_VALIDITY_DAYS)?,
-    )
-    .map_err(|error| CliError::cluster("failed to initialize cluster CA", error.to_string()))?;
     let launch_path = destination
         .map(Path::to_path_buf)
         .unwrap_or_else(|| data_directory.join("launch.json"));
 
-    let (launch, persisted) = match read_private(&launch_path, "daemon launch document") {
+    let (launch, persisted, authority) = match read_private(&launch_path, "daemon launch document")
+    {
         Ok(encoded) => {
             let launch =
                 serde_json::from_slice::<DaemonLaunchDocument>(&encoded).map_err(|source| {
@@ -133,23 +127,27 @@ pub(crate) async fn bootstrap(
                 })?;
             launch.validate()?;
             if !launch.matches_bootstrap(
-                &loaded.cluster,
                 &loaded.node_id,
                 data_directory,
                 containerd_socket,
                 etcd_binary,
-                &authority,
-                &loaded.jwt_secret_key,
-                &loaded.launch_policy,
             ) {
                 return Err(CliError::invalid_input(format!(
                     "existing daemon launch document `{}` does not match this bootstrap request",
                     launch_path.display()
                 )));
             }
-            (launch, Persisted::Reused)
+            let authority = launch.bootstrap_authority(&loaded.encryption_key)?;
+            (launch, Persisted::Reused, authority)
         }
         Err(CliError::NotFound { .. }) => {
+            let authority = ClusterCertificateAuthority::generate(
+                &loaded.cluster.name,
+                validity(AUTHORITY_VALIDITY_DAYS)?,
+            )
+            .map_err(|error| {
+                CliError::cluster("failed to initialize cluster CA", error.to_string())
+            })?;
             let security = authority
                 .issue_node_certificate_for_definition(
                     &loaded.node_id,
@@ -160,19 +158,16 @@ pub(crate) async fn bootstrap(
                     CliError::cluster("failed to issue master certificate", error.to_string())
                 })?;
             let launch = DaemonLaunchDocument::bootstrap(
-                loaded.cluster.clone(),
                 loaded.node_id.clone(),
                 data_directory.to_path_buf(),
                 containerd_socket.to_path_buf(),
                 etcd_binary.to_path_buf(),
                 security,
                 authority.clone(),
-                loaded.jwt_secret_key,
-                generated_secret(),
-                loaded.launch_policy.clone(),
+                &loaded.encryption_key,
             )?;
             let persisted = persist_private_exact(&launch_path, &launch, "daemon launch document")?;
-            (launch, persisted)
+            (launch, persisted, authority)
         }
         Err(error) => return Err(error),
     };
@@ -191,18 +186,11 @@ pub(crate) async fn bootstrap(
     writeln!(output, "Launch config: {}", launch_path.display()).map_err(output_error)?;
     writeln!(
         output,
-        "Start with: maestro-daemon start {}",
-        launch_path.display()
+        "Start with: maestro-daemon start --config {} {}",
+        config_source,
+        launch_path.display(),
     )
     .map_err(output_error)
-}
-
-fn generated_secret() -> SecretValue {
-    SecretValue::new(format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    ))
 }
 
 fn authority_directory(data_directory: &Path) -> PathBuf {

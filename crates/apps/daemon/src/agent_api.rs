@@ -73,6 +73,7 @@ pub(crate) async fn bind_agent_api<MeshBackendType, FirewallBackendType, BridgeB
         (Some(dependencies), AgentStore::Managed { provider, .. }) => Some(
             dependencies
                 .coordinator(plan.cluster().clone(), provider.clone(), store.clone())
+                .await
                 .map_err(|error| role_error("construct cluster admission coordinator", error))?,
         ),
         (Some(_), AgentStore::Remote(_)) => {

@@ -111,7 +111,8 @@
                   system.stateVersion = "24.11";
                   services.maestro = {
                     enable = true;
-                    config = "/run/maestro/launch.json";
+                    config = "aws-secret://maestro/test/config.json";
+                    extraArgs = ["--test-option" "test-value"];
                   };
                 }
               ];

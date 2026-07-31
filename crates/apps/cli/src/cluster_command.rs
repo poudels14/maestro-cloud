@@ -10,8 +10,6 @@ use crate::cluster::{self, NodeLifecycleAction};
 use crate::cluster_cutover::{self, CutoverBundleOptions};
 use crate::cluster_formation;
 use crate::cluster_join::{self, JoinOptions};
-use crate::cluster_jwt;
-use crate::cluster_preview_config;
 use crate::cluster_restart::{self, RestartSelection, RestartSelectionArgs};
 use crate::cluster_tailscale;
 use crate::config_source::SystemConfigSourceReader;
@@ -132,21 +130,6 @@ pub(crate) enum ClusterCommand {
         /// Stable key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
-    },
-    /// Replace this node's launch key from the shared cluster config.
-    RotateJwtKey {
-        /// Cluster configuration containing the replacement jwt-secret-key.
-        #[arg(long, default_value = "maestro.jsonc")]
-        config: String,
-        /// Existing owner-only daemon launch document to update atomically.
-        #[arg(long, value_name = "PATH")]
-        launch: PathBuf,
-    },
-    /// Persist the shared preview integration into every protected node launch document.
-    SyncPreviewConfig {
-        /// Cluster configuration containing the preview domain and GitHub token.
-        #[arg(long, default_value = "maestro.jsonc")]
-        config: String,
     },
     /// Stop new workload placement on a node and drain its assignments.
     Drain {
@@ -331,12 +314,6 @@ pub(crate) async fn run(
                 &SystemConfigSourceReader,
             )
             .await
-        }
-        ClusterCommand::RotateJwtKey { config, launch } => {
-            cluster_jwt::rotate_jwt_key(&config, &launch, output, &SystemConfigSourceReader).await
-        }
-        ClusterCommand::SyncPreviewConfig { config } => {
-            cluster_preview_config::sync(&config, output, &SystemConfigSourceReader).await
         }
         ClusterCommand::Drain {
             node_id,

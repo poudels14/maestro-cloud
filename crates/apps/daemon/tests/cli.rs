@@ -17,7 +17,10 @@ fn daemon_help_uses_clap_success_semantics() -> TestResult {
 fn start_requires_its_explicit_subcommand() -> TestResult {
     let directory = tempfile::tempdir()?;
     let config = directory.path().join("missing-launch.json");
-    let explicit = daemon_command().args(["start"]).arg(&config).output()?;
+    let explicit = daemon_command()
+        .args(["start", "--config", "aws-secret://maestro/test/config"])
+        .arg(&config)
+        .output()?;
     let positional = daemon_command().arg(&config).output()?;
 
     assert_eq!(explicit.status.code(), Some(1));
@@ -77,6 +80,8 @@ fn local_logs_command_retains_source_tail_and_follow_options() -> TestResult {
         .arg("logs")
         .arg(&config)
         .args([
+            "--config",
+            "aws-secret://maestro/test/config",
             "--source",
             "api/deployment/workload",
             "--tail",

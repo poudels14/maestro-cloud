@@ -19,11 +19,12 @@ use crate::config_source::{ConfigSourceReader, decode_document, resolve_relative
 const DEFAULT_API_PORT: u16 = 3_000;
 
 #[derive(Debug)]
-pub(crate) struct LoadedClusterConfig {
-    pub(crate) cluster: ClusterConfig,
-    pub(crate) launch_policy: ClusterLaunchPolicy,
-    pub(crate) node_id: NodeId,
-    pub(crate) jwt_secret_key: SecretValue,
+pub struct LoadedClusterConfig {
+    pub cluster: ClusterConfig,
+    pub launch_policy: ClusterLaunchPolicy,
+    pub node_id: NodeId,
+    pub jwt_secret_key: SecretValue,
+    pub encryption_key: SecretValue,
     pub(crate) ignored_fields: Vec<String>,
 }
 
@@ -36,6 +37,7 @@ pub(crate) async fn decode_cluster(
         decode_document(&value, &format!("cluster config `{source}`"))?;
     let launch_policy = convert_launch_policy(source, &document, reader).await?;
     let jwt_secret_key = convert_jwt_secret_key(document.jwt_secret_key)?;
+    let encryption_key = convert_encryption_key(document.encryption_key)?;
     let tailscale = convert_tailscale(source, document.tailscale, reader).await?;
     let cloudflare = convert_cloudflare(source, document.cloudflare, reader).await?;
     let cluster = convert_cluster(document.cluster, tailscale, cloudflare)?;
@@ -46,8 +48,20 @@ pub(crate) async fn decode_cluster(
         launch_policy,
         node_id,
         jwt_secret_key,
+        encryption_key,
         ignored_fields,
     })
+}
+
+fn convert_encryption_key(value: String) -> Result<SecretValue, CliError> {
+    let value = required("encryption-key", value)?;
+    if value.chars().count() < 32 || value.contains('\0') {
+        return Err(invalid(
+            "encryption-key",
+            "must contain at least 32 characters and no NUL bytes",
+        ));
+    }
+    Ok(SecretValue::new(value))
 }
 
 pub(crate) fn convert_jwt_secret_key(value: String) -> Result<SecretValue, CliError> {

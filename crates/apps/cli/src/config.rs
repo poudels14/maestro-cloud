@@ -135,15 +135,16 @@ pub(crate) async fn validate(
     }
 }
 
-pub(crate) async fn load_cluster(
+pub async fn load_cluster(
     source: &str,
     reader: &impl ConfigSourceReader,
 ) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
     decode_cluster(source, load_merged(source, reader).await?, reader).await
 }
 
-pub(crate) async fn load_cluster_with_default_node(
+pub async fn load_cluster_for_node(
     source: &str,
+    node_id: kernel_api::NodeId,
     reader: &impl ConfigSourceReader,
 ) -> Result<crate::cluster_config::LoadedClusterConfig, CliError> {
     let mut value = load_merged(source, reader).await?;
@@ -152,19 +153,18 @@ pub(crate) async fn load_cluster_with_default_node(
             "cluster config `{source}` must contain a JSON object at the top level"
         ))
     })?;
-    if !object.contains_key("node") {
-        let node_id = object
-            .get("cluster")
-            .and_then(|cluster| cluster.get("nodes"))
-            .and_then(serde_json::Value::as_object)
-            .and_then(|nodes| nodes.keys().min())
-            .cloned()
-            .ok_or_else(|| {
-                CliError::invalid_input("cluster.nodes must declare at least one node")
-            })?;
-        object.insert("node".to_string(), serde_json::Value::String(node_id));
+    object.insert(
+        "node".to_owned(),
+        serde_json::Value::String(node_id.to_string()),
+    );
+    let mut loaded = decode_cluster(source, value, reader).await?;
+    if !loaded.cluster.nodes.contains_key(&node_id) {
+        return Err(CliError::invalid_input(format!(
+            "node `{node_id}` is absent from cluster.nodes"
+        )));
     }
-    decode_cluster(source, value, reader).await
+    loaded.node_id = node_id;
+    Ok(loaded)
 }
 
 pub(crate) async fn load_jwt_secret_key(
@@ -203,9 +203,15 @@ fn cluster_template() -> String {
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
+    let encryption_key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
     CLUSTER_TEMPLATE
         .replace("__JOIN_SECRET__", &join_secret)
         .replace("__JWT_SECRET_KEY__", &jwt_secret_key)
+        .replace("__ENCRYPTION_KEY__", &encryption_key)
 }
 
 fn output_error(source: std::io::Error) -> CliError {
@@ -215,6 +221,7 @@ fn output_error(source: std::io::Error) -> CliError {
 const CLUSTER_TEMPLATE: &str = r#"{
   // "$extends": "file://shared-cluster.jsonc",
   "jwt-secret-key": "__JWT_SECRET_KEY__",
+  "encryption-key": "__ENCRYPTION_KEY__",
   "cluster": {
     "name": "my-cluster",
     "nodes": {

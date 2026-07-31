@@ -22,28 +22,8 @@ fn context_command_surface_matches_the_rewrite_contract() {
         ])
         .is_ok()
     );
-    assert!(
-        Cli::try_parse_from([
-            "maestro",
-            "cluster",
-            "sync-preview-config",
-            "--config",
-            "aws-secret://maestro/production/config.json",
-        ])
-        .is_ok()
-    );
-    assert!(
-        Cli::try_parse_from([
-            "maestro",
-            "cluster",
-            "rotate-jwt-key",
-            "--config",
-            "maestro.jsonc",
-            "--launch",
-            "/run/maestro/launch.json",
-        ])
-        .is_ok()
-    );
+    assert!(Cli::try_parse_from(["maestro", "cluster", "sync-preview-config",]).is_err());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "rotate-jwt-key",]).is_err());
     assert!(
         Cli::try_parse_from([
             "maestro",

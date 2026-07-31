@@ -25,7 +25,19 @@ in {
 
     config = lib.mkOption {
       type = lib.types.str;
-      description = "Absolute path to the owner-only daemon launch document outside the Nix store";
+      description = "Cluster configuration source fetched on every Maestro daemon start";
+    };
+
+    launch = lib.mkOption {
+      type = lib.types.str;
+      default = "/run/maestro/launch.json";
+      description = "Absolute path to the owner-only node bootstrap document outside the Nix store";
+    };
+
+    extraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      description = "Additional non-secret arguments passed to maestro-daemon start";
     };
 
     etcdPackage = lib.mkOption {
@@ -44,8 +56,12 @@ in {
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = lib.hasPrefix "/" cfg.config;
-        message = "services.maestro.config must be an absolute runtime path";
+        assertion = cfg.config != "";
+        message = "services.maestro.config must name a cluster configuration source";
+      }
+      {
+        assertion = lib.hasPrefix "/" cfg.launch;
+        message = "services.maestro.launch must be an absolute runtime path";
       }
     ];
 
@@ -108,11 +124,16 @@ in {
 
       serviceConfig = {
         Type = "simple";
-        ExecStart = utils.escapeSystemdExecArgs [
-          "${cfg.package}/bin/maestro-daemon"
-          "start"
-          cfg.config
-        ];
+        ExecStart = utils.escapeSystemdExecArgs (
+          [
+            "${cfg.package}/bin/maestro-daemon"
+            "start"
+            "--config"
+            cfg.config
+          ]
+          ++ cfg.extraArgs
+          ++ [cfg.launch]
+        );
         Restart = "on-failure";
         RestartSec = 5;
         UMask = "0077";

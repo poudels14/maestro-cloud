@@ -14,9 +14,8 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 use zeroize::Zeroizing;
 
 use crate::{
-    CloudflareTunnelConfig, ClusterCertificateAuthority, ClusterLaunchPolicy, ClusterPorts,
-    Ipv4Cidr, JoinPrivateKey, JoinProtocolError, JoinRequest, NodeCertificateBundle,
-    NodeDefinition, TailscaleGatewayConfig,
+    ClusterPorts, JoinPrivateKey, JoinProtocolError, JoinRequest, NodeCertificateBundle,
+    NodeDefinition,
     join::{canonical_body, decode_leader_public_key, decode_public_key, validate_shared_secret},
 };
 
@@ -34,30 +33,13 @@ pub struct JoinPayload {
     pub cluster_name: String,
     /// Authoritative node topology at admission time.
     pub nodes: BTreeMap<NodeId, NodeDefinition>,
-    /// Authoritative private networks allowed to initiate control traffic.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub control_allow_cidrs: Vec<Ipv4Cidr>,
     /// Persisted cluster service ports.
     pub ports: ClusterPorts,
-    /// Optional managed Tailscale subnet-router fleet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tailscale: Option<TailscaleGatewayConfig>,
-    /// Optional remotely managed Cloudflare Tunnel connector fleet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloudflare: Option<CloudflareTunnelConfig>,
-    /// Optional production integrations copied into the joining node's protected launch document.
-    #[serde(default)]
-    pub launch_policy: ClusterLaunchPolicy,
     /// Node-specific mutual-authentication identity.
     pub certificates: NodeCertificateBundle,
-    /// Cluster-wide key used to encrypt persisted internal values.
-    pub store_encryption_secret: SecretValue,
     /// Opaque store membership data granted to control-plane joiners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_join_ticket: Option<crate::StoreJoinTicket>,
-    /// Trust-root signing material granted only to control-plane nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certificate_issuer: Option<ClusterCertificateAuthority>,
 }
 
 /// Validated HTTP status bound into encrypted response authentication.
@@ -224,13 +206,8 @@ fn validate_payload_binding(
     if payload.nodes.get(&request.node_id) != Some(&requested_node) {
         return Err(JoinProtocolError::ResponseConfigurationMismatch);
     }
-    if request.role.is_control_plane() != payload.certificate_issuer.is_some()
-        || request.role.is_control_plane() != payload.store_join_ticket.is_some()
-    {
+    if request.role.is_control_plane() != payload.store_join_ticket.is_some() {
         return Err(JoinProtocolError::ResponseIssuerGrantMismatch);
-    }
-    if payload.store_encryption_secret.expose().chars().count() < 32 {
-        return Err(JoinProtocolError::ResponseStoreSecretGrantMismatch);
     }
     Ok(())
 }

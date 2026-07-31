@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use cluster::{
     ClusterCertificateAuthority, ClusterConfig, NodeCertificateBundle, StoreJoinTicket,
     StoreStartMode,
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
+use kernel_store::{EncryptedValue, derive_key_with_context, open_with_context, seal_with_context};
 use runtime::ContainerdRuntimeSettings;
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +41,7 @@ impl StoreLaunchMode {
     }
 }
 
-/// Protected launch document consumed by the control-plane daemon executable.
+/// Runtime configuration resolved from the live cluster source and node bootstrap document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DaemonLaunchConfig {
@@ -86,8 +88,36 @@ pub struct DaemonLaunchConfig {
     pub nixos_upgrade: Option<NixosUpgradeLaunchConfig>,
 }
 
-/// Private on-disk daemon configuration.
-pub type DaemonLaunchDocument = DaemonLaunchConfig;
+/// Minimal node-local bootstrap document consumed by the daemon executable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonLaunchDocument {
+    /// Stable local node selected from the live cluster topology.
+    pub node_id: NodeId,
+    /// Root of all role and provider persistence.
+    pub data_directory: PathBuf,
+    /// Containerd gRPC Unix socket used by Linux; ignored by the macOS Docker profile.
+    #[serde(default = "default_containerd_socket")]
+    pub containerd_socket: PathBuf,
+    /// Exact etcd executable on control-plane nodes; absent on workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etcd_binary: Option<PathBuf>,
+    /// Explicit local store initialization decision.
+    pub store_mode: StoreLaunchMode,
+    /// Node identity and optional first-bootstrap CA seed encrypted by the config key.
+    pub protected_bootstrap: String,
+    /// Optional deterministic process identity, primarily for cluster tests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<NodeInstanceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProtectedBootstrap {
+    security: NodeCertificateBundle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    certificate_issuer: Option<ClusterCertificateAuthority>,
+}
 
 impl DaemonLaunchConfig {
     fn validate_common(&self) -> Result<(), DaemonLaunchError> {
@@ -233,19 +263,147 @@ pub fn load_launch_document(path: &Path) -> Result<DaemonLaunchDocument, DaemonL
         path: path.to_path_buf(),
         source,
     })?;
-    let config = serde_json::from_slice::<DaemonLaunchDocument>(&bytes).map_err(|source| {
+    let document = serde_json::from_slice::<DaemonLaunchDocument>(&bytes).map_err(|source| {
         DaemonLaunchError::InvalidDocument {
             path: path.to_path_buf(),
             source,
         }
     })?;
+    document.validate()?;
+    Ok(document)
+}
+
+/// Loads current cluster settings and combines them with node-local bootstrap state.
+pub async fn load_launch_config(
+    path: &Path,
+    config_source: &str,
+) -> Result<DaemonLaunchConfig, DaemonLaunchError> {
+    let document = load_launch_document(path)?;
+    let loaded = maestro_cli::load_cluster_for_node(
+        config_source,
+        document.node_id.clone(),
+        &maestro_cli::SystemConfigSourceReader,
+    )
+    .await
+    .map_err(|error| invalid(format!("failed to load current cluster config: {error}")))?;
+    let protected = document.open(&loaded.encryption_key)?;
+    let cluster::ClusterLaunchPolicy {
+        datadog,
+        depot,
+        log_backup,
+        preview,
+        nixos_upgrade,
+    } = loaded.launch_policy;
+    let config = DaemonLaunchConfig {
+        cluster: loaded.cluster,
+        node_id: document.node_id,
+        data_directory: document.data_directory,
+        containerd_socket: document.containerd_socket,
+        etcd_binary: document.etcd_binary,
+        store_mode: document.store_mode,
+        security: protected.security,
+        certificate_issuer: protected.certificate_issuer,
+        jwt_secret_key: loaded.jwt_secret_key,
+        store_encryption_secret: loaded.encryption_key,
+        instance_id: document.instance_id,
+        datadog,
+        depot,
+        log_backup,
+        preview,
+        nixos_upgrade,
+    };
     config.validate()?;
     Ok(config)
 }
 
-/// Loads one owner-only daemon launch document.
-pub async fn load_launch_config(path: &Path) -> Result<DaemonLaunchConfig, DaemonLaunchError> {
-    load_launch_document(path)
+impl DaemonLaunchDocument {
+    /// Creates a minimal launch document with authenticated encrypted bootstrap material.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        node_id: NodeId,
+        data_directory: PathBuf,
+        containerd_socket: PathBuf,
+        etcd_binary: Option<PathBuf>,
+        store_mode: StoreLaunchMode,
+        security: NodeCertificateBundle,
+        certificate_issuer: Option<ClusterCertificateAuthority>,
+        encryption_secret: &SecretValue,
+        instance_id: Option<NodeInstanceId>,
+    ) -> Result<Self, DaemonLaunchError> {
+        let plaintext = serde_json::to_vec(&ProtectedBootstrap {
+            security,
+            certificate_issuer,
+        })
+        .map_err(|error| {
+            invalid(format!(
+                "failed to encode protected bootstrap state: {error}"
+            ))
+        })?;
+        let key = derive_bootstrap_key(encryption_secret)?;
+        let envelope = seal_with_context(&key, &plaintext, bootstrap_context(&node_id).as_bytes())
+            .map_err(|error| {
+                invalid(format!(
+                    "failed to encrypt protected bootstrap state: {error}"
+                ))
+            })?;
+        let document = Self {
+            node_id,
+            data_directory,
+            containerd_socket,
+            etcd_binary,
+            store_mode,
+            protected_bootstrap: BASE64.encode(envelope.as_bytes()),
+            instance_id,
+        };
+        document.validate()?;
+        Ok(document)
+    }
+
+    fn validate(&self) -> Result<(), DaemonLaunchError> {
+        if !self.data_directory.is_absolute() {
+            return Err(invalid("data directory must be an absolute path"));
+        }
+        #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
+        if !self.containerd_socket.is_absolute() {
+            return Err(invalid("containerd socket must be an absolute path"));
+        }
+        if self.protected_bootstrap.trim().is_empty() {
+            return Err(invalid("protected bootstrap state must not be empty"));
+        }
+        Ok(())
+    }
+
+    fn open(
+        &self,
+        encryption_secret: &SecretValue,
+    ) -> Result<ProtectedBootstrap, DaemonLaunchError> {
+        let envelope = BASE64
+            .decode(&self.protected_bootstrap)
+            .map_err(|_| invalid("protected bootstrap state is not valid Base64"))?;
+        let envelope = EncryptedValue::from_bytes(envelope)
+            .map_err(|error| invalid(format!("protected bootstrap state is invalid: {error}")))?;
+        let key = derive_bootstrap_key(encryption_secret)?;
+        let plaintext =
+            open_with_context(&key, &envelope, bootstrap_context(&self.node_id).as_bytes())
+                .map_err(|error| {
+                    invalid(format!(
+                        "could not decrypt protected bootstrap state: {error}"
+                    ))
+                })?;
+        serde_json::from_slice(&plaintext)
+            .map_err(|error| invalid(format!("protected bootstrap state is invalid: {error}")))
+    }
+}
+
+fn bootstrap_context(node_id: &NodeId) -> String {
+    format!("maestro-node-bootstrap-v1:{node_id}")
+}
+
+fn derive_bootstrap_key(
+    encryption_secret: &SecretValue,
+) -> Result<kernel_store::EncryptionKey, DaemonLaunchError> {
+    derive_key_with_context(encryption_secret.expose(), b"node-bootstrap-v1")
+        .map_err(|error| invalid(format!("config encryption key is invalid: {error}")))
 }
 
 fn default_containerd_socket() -> PathBuf {

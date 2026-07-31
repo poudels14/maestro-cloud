@@ -79,6 +79,11 @@ impl Debug for ClusterCertificateAuthority {
 }
 
 impl ClusterCertificateAuthority {
+    /// Validates the certificate, signing capability, and private-key binding.
+    pub fn validate(&self) -> Result<(), CertificateError> {
+        validate_ca_material(&self.certificate_pem, self.private_key_pem.expose())
+    }
+
     /// Generates a self-signed trust root for one named cluster.
     pub fn generate(
         cluster_name: &str,

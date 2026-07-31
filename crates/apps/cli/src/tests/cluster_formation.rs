@@ -146,16 +146,11 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
         launch.pointer("/etcdBinary"),
         Some(&"/run/current-system/sw/bin/etcd".into())
     );
-    assert!(launch.pointer("/certificateIssuer/privateKeyPem").is_some());
-    assert_eq!(
-        launch.pointer("/jwtSecretKey"),
-        Some(&JWT_SECRET_KEY.into())
-    );
-    assert!(launch.pointer("/storeEncryptionSecret").is_some());
-    assert_eq!(
-        launch.pointer("/depot/token"),
-        Some(&"formation-depot-secret".into())
-    );
+    assert!(launch.pointer("/protectedBootstrap").is_some());
+    assert!(launch.pointer("/certificateIssuer").is_none());
+    assert!(launch.pointer("/jwtSecretKey").is_none());
+    assert!(launch.pointer("/storeEncryptionSecret").is_none());
+    assert!(launch.pointer("/depot").is_none());
     let first_output = String::from_utf8(first_output)?;
     assert!(first_output.contains("created bootstrap launch document"));
     assert!(!first_output.contains("jwtSecretKey"));
@@ -177,6 +172,7 @@ async fn master_bootstrap_creates_and_reuses_one_private_launch_document()
 pub(super) fn cluster_document() -> String {
     r#"{
             "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
+            "encryption-key": "encryption-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
                 nodes: {

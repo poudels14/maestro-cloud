@@ -103,8 +103,11 @@ maestro config init services
 
 Edit `maestro.jsonc` so every future node is declared with its stable private
 endpoint, role, and non-overlapping workload subnet. The generated
-`join-secret` and `jwt-secret-key` are already strong. The cluster document
-contains secrets and must remain owner-only.
+`join-secret`, `jwt-secret-key`, and `encryption-key` are already strong. The
+cluster document contains secrets and must remain owner-only. Keep
+`encryption-key` stable: Maestro derives separate node-bootstrap and etcd keys
+from it, and changing it without a re-encryption operation makes existing
+encrypted state unreadable.
 
 Validate the fully merged sources before creating local state:
 
@@ -124,22 +127,25 @@ sudo maestro cluster bootstrap \
   --output /run/maestro/launch.json
 ```
 
-The launch document contains private keys and cluster secrets, including the
-shared `jwt-secret-key`. It must remain an owner-only regular file outside the
-Nix store. Start it through the NixOS module, or directly while
-developing:
+The launch document contains only the node's encrypted bootstrap identity and
+local runtime paths. It remains an owner-only regular file outside the Nix
+store. The resolved cluster config and reusable service credentials are never
+cached in it. Start it through the NixOS module, or pass the same config source
+directly while developing:
 
 ```sh
-sudo maestro-daemon start /run/maestro/launch.json
+sudo maestro-daemon start \
+  --config aws-secret://maestro/production/cluster \
+  /run/maestro/launch.json
 ```
 
 Optional top-level `datadog`, `depot`, `log-backup`, `preview`, and
-`nixos-upgrade` settings are validated with the cluster config and copied into
-the protected launch document. Credential fields accept literal values,
-`file://` sources, or `aws-secret://` sources. Node admission carries the same
-policy inside the encrypted join response. Each node copies `jwt-secret-key`
-from its protected shared cluster config into its private launch document. The
-cluster config API never returns it.
+`nixos-upgrade` settings are validated with the cluster config. Credential
+fields accept literal values, `file://` sources, or `aws-secret://` sources.
+Every daemon fetches and resolves that source on every service start, so an AWS
+Secrets Manager update takes effect after restarting the node. Node admission
+returns only node-bound bootstrap material; it does not copy shared config into
+the launch document. The cluster config API never returns secret values.
 
 For multi-node admission, network requirements, verification, drain, restart,
 upgrade, and removal procedures, follow
@@ -167,17 +173,9 @@ retain full access. A panel session never outlives the source token and is
 always capped at eight hours.
 
 To rotate the signing key, replace `jwt-secret-key` in the protected shared
-config, update each node's private launch document, and restart nodes serially:
-
-```sh
-sudo maestro cluster rotate-jwt-key \
-  --config /etc/maestro/maestro.jsonc \
-  --launch /run/maestro/launch.json
-```
-
-Maestro currently accepts one HS256 signing key at a time. Coordinate the
-restart across all nodes; existing tokens stop working once requests reach a
-node using the new key. Mint replacement tokens after the restart.
+config and restart the nodes. Maestro currently accepts one HS256 signing key
+at a time, so existing tokens stop working once requests reach a restarted
+node. Mint replacement tokens after every node is using the new key.
 
 Create a context for one declared HTTPS endpoint. Supply the cluster CA when it
 is not already in the workstation trust store:
@@ -303,13 +301,16 @@ Time-bounded queries use Unix milliseconds:
 maestro logs --from 1784707200000 --to 1784793600000 --no-follow
 ```
 
-Inspect one node without an operator context by authenticating with its
-protected launch document:
+Inspect one node without an operator context by authenticating with its local
+bootstrap identity and current cluster config:
 
 ```sh
-sudo maestro daemon logs /run/maestro/launch.json --tail 100
-sudo maestro daemon logs /run/maestro/launch.json --source daemon
-sudo maestro daemon logs /run/maestro/launch.json \
+sudo maestro daemon logs --config aws-secret://maestro/production/cluster \
+  /run/maestro/launch.json --tail 100
+sudo maestro daemon logs --config aws-secret://maestro/production/cluster \
+  /run/maestro/launch.json --source daemon
+sudo maestro daemon logs --config aws-secret://maestro/production/cluster \
+  /run/maestro/launch.json \
   --source api/deployment-1/workload-1 --follow
 ```
 

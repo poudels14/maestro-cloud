@@ -138,9 +138,10 @@ substitute for staging evidence.
    taking the post-migration snapshot. That snapshot is the source for every
    rewrite store member.
 
-7. Create one shared CA and one launch document per declared node. The
-   protected cluster config must contain the shared `jwt-secret-key`; the store
-   secret must be the exact secret used by migration:
+7. Create one shared CA and one encrypted bootstrap document per declared node.
+   The protected cluster config must contain the shared `jwt-secret-key` and
+   `encryption-key`; `encryption-key` must exactly match the secret used by
+   migration. Maestro derives its etcd protection key from that value:
 
    ```sh
    install -d -m 0700 \
@@ -219,7 +220,9 @@ substitute for staging evidence.
     quorum, then start worker daemons:
 
     ```sh
-    maestro-daemon start /run/maestro/node-a.launch.json
+    maestro-daemon start \
+      --config aws-secret://maestro/production/cluster \
+      /run/maestro/node-a.launch.json
     ```
 
     Verify cluster quorum, node identity, and the WireGuard mesh before

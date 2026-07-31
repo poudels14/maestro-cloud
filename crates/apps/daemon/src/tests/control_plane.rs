@@ -91,14 +91,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
     let now = OffsetDateTime::now_utc();
     let admission = AdmissionDependencies {
-        authority: ClusterCertificateAuthority::generate(
+        authority_seed: Some(ClusterCertificateAuthority::generate(
             &cluster.name,
             CertificateValidity::new(now - TimeDuration::days(1), now + TimeDuration::days(3_650))?,
-        )?,
-        store_encryption_secret: SecretValue::new(
-            "storage-test-secret-with-at-least-32-characters",
-        ),
-        launch_policy: cluster::ClusterLaunchPolicy::default(),
+        )?),
     };
     let plan = DaemonPlan::new(
         cluster.clone(),

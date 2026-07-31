@@ -176,6 +176,11 @@ impl Keyspace {
         self.key("observations/scheduler")
     }
 
+    /// Encrypted cluster certificate authority used by control-plane admission.
+    pub fn certificate_authority(&self) -> StoreKey {
+        self.key("control/security/certificate-authority")
+    }
+
     /// Prefix containing managed Tailscale control values.
     pub fn tailscale_controls(&self) -> StorePrefix {
         self.prefix("control/tailscale")

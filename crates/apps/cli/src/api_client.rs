@@ -110,29 +110,6 @@ impl ApiClient {
             .await
     }
 
-    pub(crate) async fn put_exact<Request, Response>(
-        &self,
-        path: &str,
-        body: &Request,
-    ) -> Result<Response, CliError>
-    where
-        Request: Serialize,
-        Response: DeserializeOwned,
-    {
-        let endpoint = self.endpoint(path)?;
-        let encoded = serde_json::to_vec(body)
-            .map_err(|source| CliError::json("failed to encode API request", source))?;
-        let response = self
-            .client
-            .put(endpoint)
-            .header(CONTENT_TYPE, "application/json")
-            .body(encoded)
-            .send()
-            .await
-            .map_err(|source| CliError::transport("API mutation failed", source))?;
-        decode_response(response).await
-    }
-
     pub(crate) async fn delete<Request, Response>(
         &self,
         path: &str,

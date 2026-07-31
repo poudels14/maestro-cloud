@@ -29,17 +29,15 @@ successfully from the base service; previews inherit its build environment and s
 
 Preview discovery remains disabled until the cluster has a `preview` integration.
 
-For an existing cluster, persist the integration into every protected node launch document and
-restart the cluster:
+For an existing cluster, update the shared config source and restart each Maestro daemon. Every
+node fetches the current source during startup; no preview token is copied into its launch document.
 
 ```sh
-maestro cluster sync-preview-config \
-  --config aws-secret://maestro/production/config.json
-maestro cluster restart --all --yes
+aws secretsmanager put-secret-value \
+  --secret-id maestro/production/config.json \
+  --secret-string file://maestro.jsonc
+sudo systemctl restart maestro
 ```
-
-The sync command contacts each node through its predictable `.250` Admin endpoint and never prints
-the GitHub token.
 
 ## Service configuration
 

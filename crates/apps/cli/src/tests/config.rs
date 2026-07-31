@@ -566,6 +566,7 @@ fn cluster_document(subnet: &str) -> String {
     format!(
         r#"{{
             "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
+            "encryption-key": "encryption-test-secret-with-at-least-32-characters",
             cluster: {{
                 name: "test-cluster",
                 nodes: {{

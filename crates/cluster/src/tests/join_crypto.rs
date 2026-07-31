@@ -2,7 +2,6 @@ use crate::{
     ClusterCertificateAuthority, JoinPayload, JoinPrivateKey, JoinProtocolError, JoinRequest,
     JoinResponseStatus, StoreJoinTicket, decrypt_join_response, encrypt_join_response,
 };
-use kernel_api::SecretValue;
 
 use super::fixtures::{valid_config, validity};
 
@@ -25,18 +24,12 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
         cluster_id: config.cluster_id.clone(),
         cluster_name: config.name.clone(),
         nodes: config.nodes.clone(),
-        control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,
-        tailscale: config.tailscale.clone(),
-        cloudflare: config.cloudflare.clone(),
-        launch_policy: crate::ClusterLaunchPolicy::default(),
         certificates,
-        store_encryption_secret: SecretValue::new("store-test-secret-with-at-least-32-characters"),
         store_join_ticket: Some(StoreJoinTicket::from_provider_data(
             node_id.clone(),
             b"test-ticket",
         )),
-        certificate_issuer: Some(authority),
     };
     let envelope = encrypt_join_response(
         &config.join_secret,
@@ -72,28 +65,16 @@ fn response_is_bound_to_request_key_and_status() -> Result<(), Box<dyn std::erro
             .is_err()
     );
 
-    let mut missing_issuer = payload.clone();
-    missing_issuer.certificate_issuer = None;
+    let mut missing_ticket = payload;
+    missing_ticket.store_join_ticket = None;
     assert!(matches!(
         encrypt_join_response(
             &config.join_secret,
             &request,
-            &missing_issuer,
+            &missing_ticket,
             JoinResponseStatus::ACCEPTED,
         ),
         Err(JoinProtocolError::ResponseIssuerGrantMismatch)
-    ));
-
-    let mut weak_secrets = payload;
-    weak_secrets.store_encryption_secret = SecretValue::new("too-short");
-    assert!(matches!(
-        encrypt_join_response(
-            &config.join_secret,
-            &request,
-            &weak_secrets,
-            JoinResponseStatus::ACCEPTED,
-        ),
-        Err(JoinProtocolError::ResponseStoreSecretGrantMismatch)
     ));
     Ok(())
 }

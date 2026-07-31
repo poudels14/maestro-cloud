@@ -110,7 +110,6 @@ fn coordinator_error(error: AdmissionCoordinatorError) -> ApiError {
             ApiError::conflict("joinConflict", error.to_string())
         }
         AdmissionCoordinatorError::InvalidTopology(_)
-        | AdmissionCoordinatorError::WeakStoreSecret
         | AdmissionCoordinatorError::ConcurrentAdmission { .. }
         | AdmissionCoordinatorError::Provider(_)
         | AdmissionCoordinatorError::Store(_) => {

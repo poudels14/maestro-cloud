@@ -5,15 +5,12 @@ use cluster::{
     ClusterConfig, JoinPayload, JoinResponseStatus, SignedJoinRequest, StoreJoinTicket,
     create_ca_discovery_response, encrypt_join_response, verify_join_request_signature,
 };
-use kernel_api::SecretValue;
 use time::{Duration, OffsetDateTime};
 
 use crate::CliError;
 use crate::cluster_join::{AdmissionResponse, JoinOptions, JoinTransport, join_with_transport};
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
-
-const JWT_SECRET_KEY: &str = "operator-test-secret-with-at-least-32-characters";
 
 struct MemoryReader {
     source: String,
@@ -105,18 +102,7 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
         cluster_id: loaded.cluster.cluster_id.clone(),
         cluster_name: loaded.cluster.name.clone(),
         nodes: loaded.cluster.nodes.clone(),
-        control_allow_cidrs: loaded.cluster.control_allow_cidrs.clone(),
         ports: loaded.cluster.ports,
-        tailscale: loaded.cluster.tailscale.clone(),
-        cloudflare: loaded.cluster.cloudflare.clone(),
-        launch_policy: cluster::ClusterLaunchPolicy {
-            depot: Some(cluster::DepotLaunchConfig {
-                token: SecretValue::new("joined-depot-secret"),
-                executable: "/opt/depot/bin/depot".into(),
-                timeout_secs: 600,
-            }),
-            ..cluster::ClusterLaunchPolicy::default()
-        },
         certificates: authority.issue_node_certificate(
             &loaded.node_id,
             &node.hostname,
@@ -124,11 +110,7 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
             node.role,
             validity,
         )?,
-        store_encryption_secret: SecretValue::new(
-            "storage-test-secret-with-at-least-32-characters",
-        ),
         store_join_ticket: None,
-        certificate_issuer: None,
     };
     let transport = FakeJoinTransport {
         config: loaded.cluster,
@@ -162,20 +144,12 @@ async fn authenticated_join_persists_a_replayable_private_worker_launch_document
     let launch: serde_json::Value = serde_json::from_slice(&std::fs::read(&launch_path)?)?;
     assert_eq!(launch.pointer("/nodeId"), Some(&"node-2".into()));
     assert_eq!(launch.pointer("/storeMode/kind"), Some(&"client".into()));
-    assert_eq!(
-        launch.pointer("/cluster/controlAllowCidrs/0"),
-        Some(&"10.20.0.0/24".into())
-    );
-    assert!(launch.pointer("/security/identity/privateKeyPem").is_some());
-    assert_eq!(
-        launch.pointer("/jwtSecretKey"),
-        Some(&JWT_SECRET_KEY.into())
-    );
-    assert_eq!(
-        launch.pointer("/depot/token"),
-        Some(&"joined-depot-secret".into())
-    );
-    assert!(launch.pointer("/storeEncryptionSecret").is_some());
+    assert!(launch.pointer("/cluster").is_none());
+    assert!(launch.pointer("/security").is_none());
+    assert!(launch.pointer("/jwtSecretKey").is_none());
+    assert!(launch.pointer("/depot").is_none());
+    assert!(launch.pointer("/storeEncryptionSecret").is_none());
+    assert!(launch.pointer("/protectedBootstrap").is_some());
     assert!(launch.pointer("/certificateIssuer").is_none());
     assert!(launch.pointer("/etcdBinary").is_none());
     let first_output = String::from_utf8(first_output)?;
@@ -258,11 +232,7 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
         cluster_id: loaded.cluster.cluster_id.clone(),
         cluster_name: loaded.cluster.name.clone(),
         nodes: loaded.cluster.nodes.clone(),
-        control_allow_cidrs: loaded.cluster.control_allow_cidrs.clone(),
         ports: loaded.cluster.ports,
-        tailscale: loaded.cluster.tailscale.clone(),
-        cloudflare: loaded.cluster.cloudflare.clone(),
-        launch_policy: cluster::ClusterLaunchPolicy::default(),
         certificates: authority.issue_node_certificate(
             &loaded.node_id,
             &node.hostname,
@@ -270,14 +240,10 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
             node.role,
             validity,
         )?,
-        store_encryption_secret: SecretValue::new(
-            "storage-test-secret-with-at-least-32-characters",
-        ),
         store_join_ticket: Some(StoreJoinTicket::from_provider_data(
             loaded.node_id.clone(),
             b"opaque-test-ticket",
         )),
-        certificate_issuer: Some(authority.clone()),
     };
     let transport = FakeJoinTransport {
         config: loaded.cluster,
@@ -313,7 +279,8 @@ async fn control_plane_join_writes_its_bound_ticket_issuer_and_etcd_path()
             .and_then(serde_json::Value::as_str),
         Some("/run/current-system/sw/bin/etcd")
     );
-    assert!(launch.pointer("/certificateIssuer/privateKeyPem").is_some());
+    assert!(launch.pointer("/protectedBootstrap").is_some());
+    assert!(launch.pointer("/certificateIssuer").is_none());
     Ok(())
 }
 
@@ -328,11 +295,7 @@ fn unusable_payload(
         cluster_id: config.cluster_id.clone(),
         cluster_name: config.name.clone(),
         nodes: config.nodes.clone(),
-        control_allow_cidrs: config.control_allow_cidrs.clone(),
         ports: config.ports,
-        tailscale: config.tailscale.clone(),
-        cloudflare: config.cloudflare.clone(),
-        launch_policy: cluster::ClusterLaunchPolicy::default(),
         certificates: authority.issue_node_certificate(
             &node_id,
             &node.hostname,
@@ -340,17 +303,14 @@ fn unusable_payload(
             node.role,
             validity,
         )?,
-        store_encryption_secret: SecretValue::new(
-            "storage-test-secret-with-at-least-32-characters",
-        ),
         store_join_ticket: None,
-        certificate_issuer: None,
     })
 }
 
 fn cluster_document() -> String {
     r#"{
             "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
+            "encryption-key": "encryption-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
                 nodes: {
@@ -378,6 +338,7 @@ fn cluster_document() -> String {
 fn control_plane_cluster_document() -> String {
     r#"{
             "jwt-secret-key": "operator-test-secret-with-at-least-32-characters",
+            "encryption-key": "encryption-test-secret-with-at-least-32-characters",
             cluster: {
                 name: "test-cluster",
                 nodes: {

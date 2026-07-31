@@ -27,6 +27,16 @@ fn internal_values_are_context_bound_and_traefik_values_remain_external()
         Err(StoreError::Protection { .. })
     ));
 
+    let authority = keys.certificate_authority();
+    let authority_record = br#"{"privateKeyPem":"cluster-ca-private-key"}"#;
+    let protected_authority = values.protect(&authority, authority_record)?;
+    assert_ne!(protected_authority, authority_record);
+    assert!(protected_authority.starts_with(b"MAE1"));
+    assert_eq!(
+        values.unprotect(&authority, &protected_authority)?,
+        authority_record
+    );
+
     let traefik = keys.traefik_entry("http/routers/api/rule")?;
     assert_eq!(
         values.protect(&traefik, b"Host(`api.example.test`)")?,

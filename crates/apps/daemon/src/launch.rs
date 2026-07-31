@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use build::LocalBuildSourceProvider;
 use cluster::{
-    ClusterConfig, ClusterLaunchPolicy, EmbeddedEtcdProvider, EmbeddedEtcdSettings,
-    NodeCertificateBundle, StoreMember, StoreProviderConfig,
+    ClusterConfig, EmbeddedEtcdProvider, EmbeddedEtcdSettings, NodeCertificateBundle, StoreMember,
+    StoreProviderConfig,
 };
 use kernel_api::{NodeId, NodeInstanceId, SecretValue};
 use kernel_controller::SystemTimestampClock;
@@ -38,7 +38,6 @@ use crate::NodeUpgradeDependencies;
 use crate::cloudflare_resources::CloudflareSystemResources;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::dns_resources::DnsResolverSystemResources;
-use crate::launch_config_admin::FileLaunchConfigAdmin;
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
@@ -63,15 +62,6 @@ pub use config::{
 /// Builds production adapters and starts one daemon instance for its declared node role.
 pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, DaemonLaunchError> {
     launch_daemon_inner(config, None).await
-}
-
-/// Starts one daemon while enabling atomic updates to its source launch document.
-pub async fn launch_daemon_with_document(
-    config: DaemonLaunchConfig,
-    path: PathBuf,
-) -> Result<RunningDaemon, DaemonLaunchError> {
-    let admin = Arc::new(FileLaunchConfigAdmin::new(path, &config));
-    launch_daemon_inner(config, Some(admin)).await
 }
 
 async fn launch_daemon_inner(
@@ -113,18 +103,12 @@ async fn launch_daemon_inner(
         configure_datadog(datadog.as_ref(), &cluster.name, &local_node.hostname)?;
     let api_settings = api_settings(&cluster, local_node, &security, jwt_secret_key.clone());
     let admin_api_settings = admin_api_settings(&cluster, local_node, jwt_secret_key.clone())?;
-    let launch_policy = ClusterLaunchPolicy {
-        datadog: datadog.clone(),
-        depot: depot.clone(),
-        log_backup: log_backup.clone(),
-        preview: preview.clone(),
-        nixos_upgrade: nixos_upgrade.clone(),
-    };
-    let admission = certificate_issuer.map(|authority| AdmissionDependencies {
-        authority,
-        store_encryption_secret: store_encryption_secret.clone(),
-        launch_policy,
-    });
+    let admission = local_node
+        .role
+        .is_control_plane()
+        .then(|| AdmissionDependencies {
+            authority_seed: certificate_issuer,
+        });
     let agent_store = if local_node.role.is_control_plane() {
         let local_member = known_members
             .get(&node_id)

@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use kernel_api::{NodeId, NodeRole, SecretValue};
+use kernel_api::{NodeId, NodeRole};
 use kernel_store::{
     Compare, ExpectedVersion, Keyspace, Mutation, Store, Transaction, TransactionOutcome,
 };
@@ -9,10 +9,9 @@ use kernel_store::{
 use crate::admission::admit_replayed_join_request;
 use crate::{
     AdmissionError, CertificateError, CertificateValidity, ClusterCertificateAuthority,
-    ClusterConfig, ClusterLaunchPolicy, ClusterPreflightError, EncryptedJoinResponse, JoinPayload,
-    JoinProtocolError, JoinRequest, JoinResponseStatus, RequestSignature, StoreMember,
-    StoreProvider, StoreProviderError, admit_join_request, create_ca_discovery_response,
-    encrypt_join_response,
+    ClusterConfig, ClusterPreflightError, EncryptedJoinResponse, JoinPayload, JoinProtocolError,
+    JoinRequest, JoinResponseStatus, RequestSignature, StoreMember, StoreProvider,
+    StoreProviderError, admit_join_request, create_ca_discovery_response, encrypt_join_response,
 };
 
 mod record;
@@ -27,8 +26,6 @@ const MAXIMUM_ADMISSION_CAS_ATTEMPTS: usize = 8;
 pub struct AdmissionCoordinator {
     config: ClusterConfig,
     authority: ClusterCertificateAuthority,
-    store_encryption_secret: SecretValue,
-    launch_policy: ClusterLaunchPolicy,
     provider: Arc<dyn StoreProvider>,
     store: Arc<dyn Store>,
     keys: Keyspace,
@@ -39,21 +36,14 @@ impl AdmissionCoordinator {
     pub fn new(
         config: ClusterConfig,
         authority: ClusterCertificateAuthority,
-        store_encryption_secret: SecretValue,
-        launch_policy: ClusterLaunchPolicy,
         provider: Arc<dyn StoreProvider>,
         store: Arc<dyn Store>,
     ) -> Result<Self, AdmissionCoordinatorError> {
         config.preflight()?;
-        if store_encryption_secret.expose().chars().count() < 32 {
-            return Err(AdmissionCoordinatorError::WeakStoreSecret);
-        }
         let keys = Keyspace::new(&config.cluster_id);
         Ok(Self {
             config,
             authority,
-            store_encryption_secret,
-            launch_policy,
             provider,
             store,
             keys,
@@ -249,18 +239,9 @@ impl AdmissionCoordinator {
             cluster_id: self.config.cluster_id.clone(),
             cluster_name: self.config.name.clone(),
             nodes: self.config.nodes.clone(),
-            control_allow_cidrs: self.config.control_allow_cidrs.clone(),
             ports: self.config.ports,
-            tailscale: self.config.tailscale.clone(),
-            cloudflare: self.config.cloudflare.clone(),
-            launch_policy: self.launch_policy.clone(),
             certificates,
-            store_encryption_secret: self.store_encryption_secret.clone(),
             store_join_ticket,
-            certificate_issuer: request
-                .role
-                .is_control_plane()
-                .then(|| self.authority.clone()),
         })
     }
 
@@ -309,9 +290,6 @@ pub enum AdmissionCoordinatorError {
     /// Static cluster topology was invalid.
     #[error(transparent)]
     InvalidTopology(#[from] ClusterPreflightError),
-    /// The value-encryption secret cannot safely start an admitted node.
-    #[error("store encryption secret must contain at least 32 characters")]
-    WeakStoreSecret,
     /// The designated seed is initialized by bootstrap and never joins.
     #[error("the designated master cannot join its own cluster")]
     MasterCannotJoin,

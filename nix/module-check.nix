@@ -32,7 +32,7 @@ in
   assert config.services.maestro.source != null;
   assert lib.any (package: lib.getName package == "depot") config.environment.systemPackages;
   assert lib.hasInfix "/bin/maestro-daemon" daemonCommand;
-  assert lib.hasInfix "\"start\" \"/run/maestro/launch.json\"" daemonCommand;
+  assert lib.hasInfix "\"start\" \"--config\" \"aws-secret://maestro/test/config.json\" \"--test-option\" \"test-value\" \"/run/maestro/launch.json\"" daemonCommand;
     pkgs.runCommand "maestro-module-check" {} ''
       touch "$out"
     ''

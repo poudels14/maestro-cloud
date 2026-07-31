@@ -93,6 +93,7 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
 ```jsonc
 {
   "jwt-secret-key": "<at-least-32-bytes>",
+  "encryption-key": "<at-least-32-bytes>",
   "cluster": {
     "name": "prod"
     // nodes, ports, allowlists, and join-secret omitted
@@ -301,8 +302,8 @@ rollout, so every replacement replica receives fresh managed state and
 authenticates as a new Tailscale device. Healthy old replicas remain available
 during the rollout.
 
-The live override supersedes the original launch-document key across leadership
-changes without rewriting launch documents. Reusing the same idempotency key
+The live override supersedes the config-source key across leadership changes
+without rewriting local bootstrap documents. Reusing the same idempotency key
 after an ambiguous transport failure replays the original receipt; a concurrent
 rotation fails on its observed override revision instead of silently replacing
 another operator's key.

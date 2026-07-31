@@ -7,7 +7,7 @@ use crate::cluster_formation::init_ca;
 use crate::config_source::ConfigSourceReader;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
-const JWT_SECRET_KEY: &str = "operator-test-secret-with-at-least-32-characters";
+const ENCRYPTION_KEY: &str = "encryption-test-secret-with-at-least-32-characters";
 
 struct MemoryReader {
     source: String,
@@ -33,10 +33,7 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
     };
     init_ca("maestro.jsonc", &authority_data, &mut Vec::new(), &reader).await?;
     let store_secret = directory.path().join("store-secret");
-    private_file(
-        &store_secret,
-        b"exact-migrated-store-secret-at-least-32-characters",
-    )?;
+    private_file(&store_secret, ENCRYPTION_KEY.as_bytes())?;
     let output_directory = directory.path().join("launches");
     let options = || CutoverBundleOptions {
         config_source: "maestro.jsonc".to_owned(),
@@ -61,26 +58,16 @@ async fn cutover_bundle_creates_restart_and_client_documents_idempotently() -> T
         master.pointer("/etcdBinary"),
         Some(&"/run/current-system/sw/bin/etcd".into())
     );
-    assert!(master.pointer("/certificateIssuer/privateKeyPem").is_some());
+    assert!(master.pointer("/protectedBootstrap").is_some());
+    assert!(master.pointer("/certificateIssuer").is_none());
     assert_eq!(worker.pointer("/storeMode/kind"), Some(&"client".into()));
     assert!(worker.pointer("/etcdBinary").is_none());
     assert!(worker.pointer("/certificateIssuer").is_none());
-    assert_eq!(
-        master.pointer("/storeEncryptionSecret"),
-        Some(&"exact-migrated-store-secret-at-least-32-characters".into())
-    );
-    assert_eq!(
-        master.pointer("/jwtSecretKey"),
-        Some(&JWT_SECRET_KEY.into())
-    );
-    assert_eq!(
-        master.pointer("/depot/token"),
-        Some(&"formation-depot-secret".into())
-    );
-    assert_eq!(
-        worker.pointer("/depot/token"),
-        Some(&"formation-depot-secret".into())
-    );
+    assert!(master.pointer("/storeEncryptionSecret").is_none());
+    assert!(master.pointer("/jwtSecretKey").is_none());
+    assert!(master.pointer("/depot").is_none());
+    assert!(worker.pointer("/depot").is_none());
+    assert!(worker.pointer("/protectedBootstrap").is_some());
 
     let mut second_output = Vec::new();
     prepare_cutover_bundle(options(), &mut second_output, &reader).await?;

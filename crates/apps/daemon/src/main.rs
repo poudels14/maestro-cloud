@@ -4,7 +4,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use daemon::{
     DEFAULT_DNS_RESOLVER_PORT, DeadLetterAdminCommand, DeadLetterAdminOutput,
-    DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters, launch_daemon_with_document,
+    DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters, launch_daemon,
     load_launch_config, run_dns_resolver, stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
@@ -26,8 +26,14 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum DaemonCommand {
-    /// Starts the declared node roles from a protected launch document.
-    Start { config: PathBuf },
+    /// Starts the declared node roles from current cluster config and local bootstrap state.
+    Start {
+        /// Cluster configuration source fetched on every daemon start.
+        #[arg(long)]
+        config: String,
+        /// Owner-only node bootstrap document.
+        launch: PathBuf,
+    },
     /// Runs the internal authoritative resolver role on a delegated runtime network.
     #[command(hide = true)]
     Dns {
@@ -54,8 +60,11 @@ enum DaemonCommand {
     },
     /// Reads logs from the running local node over its authenticated node API.
     Logs {
-        /// Protected launch document used to authenticate the local query.
-        config: PathBuf,
+        /// Owner-only node bootstrap document used to authenticate the local query.
+        launch: PathBuf,
+        /// Current cluster configuration source.
+        #[arg(long)]
+        config: String,
         /// System component or service/deployment/workload source.
         #[arg(long)]
         source: Option<String>,
@@ -68,7 +77,7 @@ enum DaemonCommand {
     },
     /// Inspects, exports, or purges node-local sink dead letters.
     DeadLetters {
-        config: PathBuf,
+        launch: PathBuf,
         #[command(subcommand)]
         command: DeadLetterCommand,
     },
@@ -134,7 +143,7 @@ fn initialize_tracing() {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        DaemonCommand::Start { config } => start(config).await,
+        DaemonCommand::Start { config, launch } => start(config, launch).await,
         DaemonCommand::Dns {
             cluster_id,
             node_id,
@@ -163,12 +172,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             .await
         }
         DaemonCommand::Logs {
+            launch,
             config,
             source,
             tail,
             follow,
         } => {
-            let config = load_launch_config(&config).await?;
+            let config = load_launch_config(&launch, &config).await?;
             let mut output = std::io::stdout().lock();
             stream_local_logs(
                 &config,
@@ -182,9 +192,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             .await?;
             Ok(())
         }
-        DaemonCommand::DeadLetters { config, command } => {
+        DaemonCommand::DeadLetters { launch, command } => {
             let command = admin_command(command)?;
-            let output = administer_dead_letters(&config, command).await?;
+            let output = administer_dead_letters(&launch, command).await?;
             write_admin_output(output).await
         }
     }
@@ -238,12 +248,12 @@ async fn dns(config: DnsResolverLaunchConfig) -> Result<(), Box<dyn std::error::
     }
 }
 
-async fn start(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let config = load_launch_config(&path).await?;
+async fn start(config_source: String, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_launch_config(&path, &config_source).await?;
     let cluster_id = config.cluster.cluster_id.clone();
     let node_id = config.node_id.clone();
     tracing::info!(%cluster_id, %node_id, "starting maestro daemon");
-    let mut running = launch_daemon_with_document(config, path).await?;
+    let mut running = launch_daemon(config).await?;
     tracing::info!(%cluster_id, %node_id, "maestro daemon started");
     tokio::select! {
         signal = shutdown_signal() => {

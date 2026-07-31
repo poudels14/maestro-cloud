@@ -1,5 +1,6 @@
 use crate::{
-    EncryptedValue, EncryptionError, derive_key, open, open_with_context, seal, seal_with_context,
+    EncryptedValue, EncryptionError, derive_key, derive_key_with_context, open, open_with_context,
+    seal, seal_with_context,
 };
 
 #[test]
@@ -15,6 +16,25 @@ fn encrypted_values_round_trip_without_exposing_key_or_ciphertext() {
     );
     assert_eq!(format!("{key:?}"), "EncryptionKey([REDACTED])");
     assert!(!format!("{first:?}").contains("database-password"));
+}
+
+#[test]
+fn derived_keys_are_deterministic_and_domain_separated() {
+    let master_secret = "operator master secret";
+    let store_key = derive_key(master_secret).expect("derive store key");
+    let same_store_key = derive_key(master_secret).expect("derive same store key");
+    let bootstrap_key =
+        derive_key_with_context(master_secret, b"node-bootstrap-v1").expect("derive bootstrap key");
+    let encrypted = seal(&store_key, b"secret").expect("encrypt with store key");
+
+    assert_eq!(
+        open(&same_store_key, &encrypted).expect("open with deterministic store key"),
+        b"secret"
+    );
+    assert_eq!(
+        open(&bootstrap_key, &encrypted),
+        Err(EncryptionError::Authentication)
+    );
 }
 
 #[test]

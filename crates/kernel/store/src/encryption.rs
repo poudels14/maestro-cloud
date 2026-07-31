@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
+const STORE_KEY_CONTEXT: &[u8] = b"store-v1";
 const KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 12;
 const ENVELOPE_MAGIC: &[u8; 4] = b"MAE1";
@@ -82,7 +83,19 @@ pub enum EncryptionError {
 
 /// Derives the v1 store encryption key from an operator-supplied master secret.
 pub fn derive_key(master_secret: &str) -> Result<EncryptionKey, EncryptionError> {
-    let salt = Sha256::digest(KDF_SALT);
+    derive_key_with_context(master_secret, STORE_KEY_CONTEXT)
+}
+
+/// Derives a deterministic domain-separated key from an operator-supplied master secret.
+pub fn derive_key_with_context(
+    master_secret: &str,
+    context: &[u8],
+) -> Result<EncryptionKey, EncryptionError> {
+    let mut salt_input = Vec::with_capacity(KDF_SALT.len() + context.len() + 1);
+    salt_input.extend_from_slice(KDF_SALT);
+    salt_input.push(0);
+    salt_input.extend_from_slice(context);
+    let salt = Sha256::digest(salt_input);
     let mut key = [0; KEY_LENGTH];
     Argon2::default()
         .hash_password_into(master_secret.as_bytes(), &salt, &mut key)

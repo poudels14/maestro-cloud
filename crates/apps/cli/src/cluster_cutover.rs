@@ -12,7 +12,9 @@ use crate::CliError;
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
 use crate::launch_document::DaemonLaunchDocument;
-use crate::private_document::{Persisted, persist_private_exact, read_private};
+use crate::private_document::{
+    Persisted, persist_private_exact, persist_private_new, read_private,
+};
 
 const MAXIMUM_SECRET_BYTES: usize = 64 * 1_024;
 const NODE_VALIDITY_DAYS: i64 = 825;
@@ -41,6 +43,11 @@ pub(crate) async fn prepare_cutover_bundle(
     .map_err(|error| CliError::cluster("failed to load cluster CA", error.to_string()))?;
     let store_encryption_secret =
         read_secret(&options.store_secret_file, "store encryption secret")?;
+    if store_encryption_secret != loaded.encryption_key {
+        return Err(CliError::invalid_input(
+            "cutover store encryption secret must match config encryption-key",
+        ));
+    }
     ensure_private_directory(&options.output_directory)?;
     let provisioning = options
         .authority_data_directory
@@ -56,21 +63,39 @@ pub(crate) async fn prepare_cutover_bundle(
         let bundle_path = provisioning.join(format!("{node_id}.certificates.json"));
         let security = load_or_issue_bundle(&bundle_path, node_id, node, &authority)?;
         let launch = DaemonLaunchDocument::cutover(
-            loaded.cluster.clone(),
             node_id.clone(),
+            node.role,
             options.target_data_directory.clone(),
             options.containerd_socket.clone(),
             options.etcd_binary.clone(),
             security,
             authority.clone(),
-            loaded.jwt_secret_key.clone(),
-            store_encryption_secret.clone(),
-            loaded.launch_policy.clone(),
+            &loaded.encryption_key,
         )?;
         let launch_path = options
             .output_directory
             .join(format!("{node_id}.launch.json"));
-        let persisted = persist_private_exact(&launch_path, &launch, "cutover launch document")?;
+        let persisted = match read_private(&launch_path, "cutover launch document") {
+            Ok(encoded) => {
+                let existing: DaemonLaunchDocument =
+                    serde_json::from_slice(&encoded).map_err(|error| {
+                        CliError::json("failed to decode cutover launch document", error)
+                    })?;
+                existing.validate()?;
+                if !existing.equivalent(&launch, &loaded.encryption_key)? {
+                    return Err(CliError::invalid_input(format!(
+                        "refusing to overwrite a different cutover launch document `{}`",
+                        launch_path.display()
+                    )));
+                }
+                Persisted::Reused
+            }
+            Err(CliError::NotFound { .. }) => {
+                persist_private_new(&launch_path, &launch, "cutover launch document")?;
+                Persisted::Created
+            }
+            Err(error) => return Err(error),
+        };
         writeln!(
             output,
             "[maestro]: {} cutover launch document for `{node_id}`: {}",

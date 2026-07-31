@@ -52,6 +52,8 @@ tokio-tungstenite = { workspace = true, default-features = false, features = [
 uuid.workspace = true
 webpki-roots.workspace = true
 time.workspace = true
+kernel-store = { version = "0.1.0", path = "../../kernel/store" }
+base64.workspace = true
 
 [lints]
 workspace = true

@@ -15,7 +15,7 @@ use crate::api_client::decode_response_with_limit;
 use crate::config::load_cluster;
 use crate::config_source::ConfigSourceReader;
 use crate::launch_document::{DaemonLaunchDocument, validate_etcd_binary};
-use crate::private_document::{persist_private_exact, persist_private_new, read_private};
+use crate::private_document::{Persisted, persist_private_new, read_private};
 
 const ADMISSION_RESPONSE_LIMIT_BYTES: usize = 64 * 1_024;
 const DEFAULT_CONTAINERD_SOCKET: &str = "/run/containerd/containerd.sock";
@@ -116,17 +116,37 @@ pub(crate) async fn join_with_transport(
     validate_grant_trust(&discovery, &payload)?;
     let launch = DaemonLaunchDocument::joined(
         loaded.node_id,
-        loaded.cluster.join_secret,
+        node.role,
         options.data_directory.clone(),
         options.containerd_socket.clone(),
         options.etcd_binary.clone(),
-        loaded.jwt_secret_key,
+        &loaded.encryption_key,
         payload,
     )?;
     let destination = options
         .output
         .unwrap_or_else(|| options.data_directory.join("launch.json"));
-    let persisted = persist_private_exact(&destination, &launch, "daemon launch document")?;
+    let (launch, persisted) = match read_private(&destination, "daemon launch document") {
+        Ok(encoded) => {
+            let existing: DaemonLaunchDocument =
+                serde_json::from_slice(&encoded).map_err(|error| {
+                    CliError::json("failed to decode daemon launch document", error)
+                })?;
+            existing.validate()?;
+            if !existing.equivalent(&launch, &loaded.encryption_key)? {
+                return Err(CliError::invalid_input(format!(
+                    "refusing to overwrite a different daemon launch document `{}`",
+                    destination.display()
+                )));
+            }
+            (existing, Persisted::Reused)
+        }
+        Err(CliError::NotFound { .. }) => {
+            persist_private_new(&destination, &launch, "daemon launch document")?;
+            (launch, Persisted::Created)
+        }
+        Err(error) => return Err(error),
+    };
     writeln!(
         output,
         "[maestro]: {} joined launch document for node `{}`",
@@ -137,7 +157,8 @@ pub(crate) async fn join_with_transport(
     writeln!(output, "Launch config: {}", destination.display()).map_err(output_error)?;
     writeln!(
         output,
-        "Start with: maestro-daemon start {}",
+        "Start with: maestro-daemon start --config {} {}",
+        options.config_source,
         destination.display()
     )
     .map_err(output_error)

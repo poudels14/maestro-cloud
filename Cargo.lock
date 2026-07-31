@@ -1821,6 +1821,7 @@ dependencies = [
  "kernel-store",
  "logs",
  "logstore",
+ "maestro-cli",
  "metrics",
  "node-agent",
  "preview",
@@ -3462,6 +3463,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",
+ "base64 0.22.1",
  "clap",
  "cluster",
  "crossterm",
@@ -3472,6 +3474,7 @@ dependencies = [
  "json5",
  "jsonwebtoken",
  "kernel-api",
+ "kernel-store",
  "libc",
  "logs",
  "reqwest",

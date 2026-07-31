@@ -15,8 +15,6 @@ mod cluster_config_launch;
 mod cluster_cutover;
 mod cluster_formation;
 mod cluster_join;
-mod cluster_jwt;
-mod cluster_preview_config;
 mod cluster_restart;
 mod cluster_tailscale;
 mod command;
@@ -39,7 +37,10 @@ mod services_command;
 mod up;
 mod upgrades;
 
+pub use cluster_config::LoadedClusterConfig;
 pub use command::{Cli, run};
+pub use config::{load_cluster, load_cluster_for_node};
+pub use config_source::{ConfigSourceReader, SystemConfigSourceReader};
 pub use error::CliError;
 
 #[cfg(test)]

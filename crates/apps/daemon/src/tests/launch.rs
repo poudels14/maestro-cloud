@@ -2,16 +2,18 @@ use std::path::PathBuf;
 
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use cluster::StoreJoinTicket;
-use cluster::{CertificateKeyPair, ClusterCertificateAuthority, NodeCertificateBundle};
+use cluster::{
+    CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
+};
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
 use crate::launch::{admin_api_settings, api_settings, panel_directory};
-use crate::launch_config_admin::replace_preview;
 use crate::{
     DaemonLaunchConfig, DaemonLaunchDocument, DatadogLaunchConfig, DatadogLogsLaunchConfig,
     DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
-    PreviewLaunchConfig, StoreLaunchMode, load_launch_document,
+    PreviewLaunchConfig, StoreLaunchMode, load_launch_config, load_launch_document,
 };
+use time::{Duration as TimeDuration, OffsetDateTime};
 
 use super::cluster_with_nodes;
 
@@ -85,50 +87,65 @@ fn launch_document_requires_owner_only_permissions() -> Result<(), Box<dyn std::
     Ok(())
 }
 
-#[test]
-fn preview_launch_config_is_atomically_updated_for_the_exact_node()
+#[tokio::test]
+async fn launch_resolution_refetches_config_without_persisting_its_secrets()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("launch.json");
-    let config = document("master", NodeRole::Master, StoreLaunchMode::Bootstrap)?;
-    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    let preview = PreviewLaunchConfig {
-        domain: "preview.example.test".to_string(),
-        github_token: SecretValue::new("github-super-secret"),
-        max_concurrent_previews: 5,
-    };
+    let launch_path = directory.path().join("launch.json");
+    let config_path = directory.path().join("cluster.json");
+    let cluster = cluster_with_nodes(&[("master", NodeRole::Master)])?;
+    let node_id = NodeId::new("master")?;
+    let node = cluster.nodes.get(&node_id).ok_or("master missing")?;
+    let now = OffsetDateTime::now_utc();
+    let validity =
+        CertificateValidity::new(now - TimeDuration::minutes(1), now + TimeDuration::days(1))?;
+    let authority = ClusterCertificateAuthority::generate(&cluster.name, validity)?;
+    let security = authority.issue_node_certificate_for_definition(&node_id, node, validity)?;
+    let encryption_secret = SecretValue::new("live-config-encryption-secret-with-32-characters");
+    let launch = DaemonLaunchDocument::new(
+        node_id,
+        directory.path().join("data"),
+        PathBuf::from("/run/containerd/containerd.sock"),
+        Some(PathBuf::from("/usr/bin/etcd")),
+        StoreLaunchMode::Bootstrap,
+        security,
+        Some(authority),
+        &encryption_secret,
+        None,
+    )?;
+    write_private(&launch_path, &launch)?;
+    std::fs::write(
+        &config_path,
+        live_cluster_source("first-operator-jwt-secret-with-32-characters"),
+    )?;
 
-    assert!(replace_preview(
-        &path,
-        &config.cluster.cluster_id,
-        &config.node_id,
-        preview.clone()
-    )?);
-    assert_eq!(load_launch_document(&path)?.preview, Some(preview.clone()));
-    assert!(!replace_preview(
-        &path,
-        &config.cluster.cluster_id,
-        &config.node_id,
-        preview
-    )?);
-    assert!(
-        replace_preview(
-            &path,
-            &config.cluster.cluster_id,
-            &NodeId::new("other")?,
-            PreviewLaunchConfig {
-                domain: "preview.example.test".to_string(),
-                github_token: SecretValue::new("replacement"),
-                max_concurrent_previews: 5,
-            }
-        )
-        .is_err()
+    let first =
+        load_launch_config(&launch_path, config_path.to_str().ok_or("config path")?).await?;
+    assert_eq!(
+        first.jwt_secret_key.expose(),
+        "first-operator-jwt-secret-with-32-characters"
     );
+    std::fs::write(
+        &config_path,
+        live_cluster_source("second-operator-jwt-secret-with-32-characters"),
+    )?;
+    let second =
+        load_launch_config(&launch_path, config_path.to_str().ok_or("config path")?).await?;
+    assert_eq!(
+        second.jwt_secret_key.expose(),
+        "second-operator-jwt-secret-with-32-characters"
+    );
+
+    let persisted = std::fs::read_to_string(launch_path)?;
+    for secret in [
+        TEST_JWT_SECRET_KEY,
+        "first-operator-jwt-secret-with-32-characters",
+        "second-operator-jwt-secret-with-32-characters",
+        encryption_secret.expose(),
+        "PRIVATE KEY",
+    ] {
+        assert!(!persisted.contains(secret));
+    }
     Ok(())
 }
 
@@ -448,7 +465,18 @@ fn document(
     role: NodeRole,
     store_mode: StoreLaunchMode,
 ) -> Result<DaemonLaunchDocument, Box<dyn std::error::Error>> {
-    config(node_id, role, store_mode)
+    let config = config(node_id, role, store_mode)?;
+    Ok(DaemonLaunchDocument::new(
+        config.node_id,
+        config.data_directory,
+        config.containerd_socket,
+        config.etcd_binary,
+        config.store_mode,
+        config.security,
+        config.certificate_issuer,
+        &config.store_encryption_secret,
+        config.instance_id,
+    )?)
 }
 
 fn config_with_jwt_secret(
@@ -486,4 +514,46 @@ fn config_with_jwt_secret(
         preview: None,
         nixos_upgrade: None,
     })
+}
+
+fn live_cluster_source(jwt_secret: &str) -> String {
+    format!(
+        r#"{{
+            "jwt-secret-key": "{jwt_secret}",
+            "encryption-key": "live-config-encryption-secret-with-32-characters",
+            "cluster": {{
+                "cluster-id": "daemon-test",
+                "name": "daemon-test",
+                "nodes": {{
+                    "master": {{
+                        "hostname": "master.internal",
+                        "endpoint": "10.20.0.11:3011",
+                        "subnet": "172.22.0.0/24",
+                        "role": "master"
+                    }}
+                }},
+                "control-allow-cidrs": ["10.20.0.0/24"],
+                "ports": {{
+                    "gateway": 3001,
+                    "store-client": 2379,
+                    "store-peer": 2380,
+                    "wireguard": 51820
+                }},
+                "join-secret": "daemon-test-join-secret-with-32-characters"
+            }}
+        }}"#
+    )
+}
+
+fn write_private(
+    path: &std::path::Path,
+    value: &impl serde::Serialize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }

@@ -53,6 +53,7 @@ const WIREGUARD_PORT: u16 = 34_820;
 const GATEWAY_PORT: u16 = 34_001;
 const API_PORT: u16 = 35_000;
 const OPERATOR_JWT_SECRET: &str = "real-cluster-operator-secret-with-at-least-32-characters";
+const ENCRYPTION_SECRET: &str = "real-cluster-encryption-secret-with-at-least-32-characters";
 
 static NEXT_NETWORK: AtomicU16 = AtomicU16::new(1);
 
@@ -80,6 +81,7 @@ struct RealProcessCluster {
     bridge: String,
     resolv_conf: PathBuf,
     dns_upstream: Option<LocalDnsUpstream>,
+    cluster_config_path: PathBuf,
     cluster: ClusterConfig,
     authority: ClusterCertificateAuthority,
     nodes: Vec<RealNode>,
@@ -110,6 +112,8 @@ impl RealProcessCluster {
         let token = format!("{:x}{allocation:x}", std::process::id());
         let bridge = shortened_interface_name("mb", &token, 0);
         let cluster = topology(node_count, segment, &token, operator_access)?;
+        let cluster_config_path = root.path().join("cluster.json");
+        write_cluster_config(&cluster_config_path, &cluster)?;
         let resolv_conf = root.path().join("resolv.conf");
         std::fs::write(
             &resolv_conf,
@@ -183,6 +187,7 @@ impl RealProcessCluster {
             bridge,
             resolv_conf,
             dns_upstream: None,
+            cluster_config_path,
             cluster,
             authority,
             nodes,
@@ -213,38 +218,21 @@ impl RealProcessCluster {
             .get(&node.node_id)
             .cloned()
             .ok_or_else(|| RealClusterError::new("node security is missing"))?;
-        let retains_certificate_issuer = self
-            .cluster
-            .nodes
-            .get(&node.node_id)
-            .is_some_and(|definition| definition.role.is_control_plane());
-        let config = DaemonLaunchDocument {
-            cluster: self.cluster.clone(),
-            node_id: node.node_id.clone(),
-            data_directory: node.data_directory.clone(),
-            containerd_socket: self.containerd_socket.clone(),
-            etcd_binary: Some(self.etcd_binary.clone()),
+        let config = DaemonLaunchDocument::new(
+            node.node_id.clone(),
+            node.data_directory.clone(),
+            self.containerd_socket.clone(),
+            Some(self.etcd_binary.clone()),
             store_mode,
             security,
-            certificate_issuer: if retains_certificate_issuer {
-                Some(self.authority.clone())
-            } else {
-                None
-            },
-            jwt_secret_key: SecretValue::new(OPERATOR_JWT_SECRET),
-            store_encryption_secret: SecretValue::new(
-                "real-cluster-store-secret-with-32-characters",
-            ),
-            instance_id: Some(
+            Some(self.authority.clone()),
+            &SecretValue::new(ENCRYPTION_SECRET),
+            Some(
                 NodeInstanceId::new(format!("{}-process-{launch_sequence}", node.node_id))
                     .map_err(RealClusterError::from_display)?,
             ),
-            datadog: None,
-            depot: None,
-            log_backup: None,
-            preview: None,
-            nixos_upgrade: None,
-        };
+        )
+        .map_err(RealClusterError::from_display)?;
         write_private_json(&node.config_path, &config)?;
         let log = append_file(&node.log_path)?;
         let error_log = log.try_clone().map_err(RealClusterError::from_display)?;
@@ -271,6 +259,8 @@ impl RealProcessCluster {
             .env("AWS_EC2_METADATA_DISABLED", "true")
             .arg(&self.daemon_binary)
             .arg("start")
+            .arg("--config")
+            .arg(&self.cluster_config_path)
             .arg(&node.config_path)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
@@ -468,17 +458,9 @@ impl RealProcessCluster {
             cluster_id: self.cluster.cluster_id.clone(),
             cluster_name: self.cluster.name.clone(),
             nodes: self.cluster.nodes.clone(),
-            control_allow_cidrs: self.cluster.control_allow_cidrs.clone(),
             ports: self.cluster.ports,
-            tailscale: self.cluster.tailscale.clone(),
-            cloudflare: self.cluster.cloudflare.clone(),
-            launch_policy: cluster::ClusterLaunchPolicy::default(),
             certificates,
-            store_encryption_secret: SecretValue::new(
-                "real-cluster-store-secret-with-32-characters",
-            ),
             store_join_ticket: Some(ticket),
-            certificate_issuer: Some(self.authority.clone()),
         };
         let envelope = encrypt_join_response(
             &self.cluster.join_secret,
@@ -674,6 +656,63 @@ fn write_private_json(path: &Path, value: &impl serde::Serialize) -> Result<(), 
     }
     let file = options.open(path).map_err(RealClusterError::from_display)?;
     serde_json::to_writer_pretty(file, value).map_err(RealClusterError::from_display)
+}
+
+fn write_cluster_config(path: &Path, cluster: &ClusterConfig) -> Result<(), RealClusterError> {
+    let nodes = cluster
+        .nodes
+        .iter()
+        .map(|(node_id, node)| {
+            (
+                node_id.to_string(),
+                serde_json::json!({
+                    "hostname": node.hostname,
+                    "endpoint": format!("{}:{}", node.endpoint.host_address, node.endpoint.api_port),
+                    "subnet": node.workload_subnet.to_string(),
+                    "role": role_name(node.role),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let tailscale = cluster.tailscale.as_ref().map(|tailscale| {
+        serde_json::json!({
+            "auth-key": tailscale.auth_key.expose(),
+            "advertise-routes": tailscale.advertise_routes.as_ref().map(|routes| {
+                routes.iter().map(ToString::to_string).collect::<Vec<_>>()
+            }),
+            "replicas": tailscale.replicas,
+            "tags": tailscale.tags,
+            "cross-cluster-dns": tailscale.cross_cluster_dns,
+        })
+    });
+    let document = serde_json::json!({
+        "jwt-secret-key": OPERATOR_JWT_SECRET,
+        "encryption-key": ENCRYPTION_SECRET,
+        "cluster": {
+            "cluster-id": cluster.cluster_id.to_string(),
+            "name": cluster.name,
+            "nodes": nodes,
+            "control-allow-cidrs": cluster.control_allow_cidrs.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "ports": {
+                "gateway": cluster.ports.gateway,
+                "store-client": cluster.ports.store_client,
+                "store-peer": cluster.ports.store_peer,
+                "wireguard": cluster.ports.wireguard,
+            },
+            "join-secret": cluster.join_secret.expose(),
+        },
+        "tailscale": tailscale,
+    });
+    write_private_json(path, &document)
+}
+
+fn role_name(role: NodeRole) -> &'static str {
+    match role {
+        NodeRole::Master => "master",
+        NodeRole::Hybrid => "hybrid",
+        NodeRole::ControlPlane => "control-plane",
+        NodeRole::Worker => "worker",
+    }
 }
 
 fn append_file(path: &Path) -> Result<File, RealClusterError> {

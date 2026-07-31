@@ -62,6 +62,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+maestro-cli = { version = "0.1.0", path = "../cli" }
 
 [lints]
 workspace = true

@@ -14,8 +14,8 @@ The flake exposes Maestro through these production entry points:
 
 ## Host configuration
 
-Import the module and point it at a launch document created outside the Nix
-store:
+Import the module, pass the live cluster config source, and keep the node
+bootstrap document outside the Nix store:
 
 ```nix
 {
@@ -28,7 +28,8 @@ store:
         ({...}: {
           services.maestro = {
             enable = true;
-            config = "/run/maestro/launch.json";
+            config = "aws-secret://maestro/production/cluster";
+            launch = "/run/maestro/launch.json";
           };
         })
       ];
@@ -37,13 +38,20 @@ store:
 }
 ```
 
-`services.maestro.config` names the protected daemon launch document, not
-the shared JSON/JSONC config source. The launch document contains cluster
-private keys, application secrets, and the shared JWT signing key. It must be
-an absolute owner-only regular file such as
-`/run/maestro/launch.json`; placing its contents in a Nix expression would copy
-those secrets into the world-readable Nix store. The daemon validates the file
-before starting.
+`services.maestro.config` is a source identifier accepted by `maestro config
+validate`, such as an `aws-secret://` reference. Only the identifier enters the
+Nix expression; the daemon fetches and resolves its current value on every
+start. `services.maestro.launch` is the absolute path to the owner-only node
+bootstrap document, conventionally `/run/maestro/launch.json`. It contains an
+encrypted node identity and local paths, not a cached resolved cluster config.
+`services.maestro.extraArgs` remains available for non-secret daemon arguments;
+never place credentials there because Nix-built service definitions are not a
+secret store.
+
+The config must define a stable `encryption-key` of at least 32 characters.
+Maestro deterministically derives distinct keys for local node-bootstrap and
+etcd encryption domains. Do not change it until a supported re-encryption
+rotation workflow is available.
 
 The module does not enable or modify the NixOS host firewall. Maestro owns its
 runtime nftables table, and deployments that enable another host firewall must
@@ -57,7 +65,7 @@ structured `level`, `message`, `error`, and resource identity fields. The
 `info`; launch configuration, secret values, and full environment maps are
 never emitted.
 
-Control-plane launch documents should use
+Control-plane bootstrap documents should use
 `/run/current-system/sw/bin/etcd` for `etcdBinary`. The module installs the
 selected etcd package into the system profile, enables native containerd, and
 starts the containerd-backed BuildKit worker. It also installs Depot and exposes
@@ -136,7 +144,7 @@ The daemon image contains the static daemon and panel, with no Node runtime or
 shell. It is a packaging artifact, not a replacement for the host integration
 in `services.maestro`: a real daemon still needs host networking,
 containerd, privileged network access, the launch document, and the external
-adapter binaries selected by that document. Prefer the NixOS module for
+adapter binaries selected by the live config. Prefer the NixOS module for
 production and use the image only where those dependencies are explicitly
 supplied by the container orchestrator.
 

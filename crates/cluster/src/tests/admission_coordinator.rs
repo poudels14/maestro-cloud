@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kernel_api::{NodeId, NodeRole, SecretValue};
+use kernel_api::{NodeId, NodeRole};
 use kernel_store::{ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, TokioClock};
 
 use crate::{
@@ -83,23 +83,8 @@ async fn configured_node_admits_and_replays_only_one_exact_control_plane_request
     let provider = Arc::new(RecordingProvider {
         staged: Mutex::new(Vec::new()),
     });
-    let storage_secret = SecretValue::new("storage-test-secret-with-at-least-32-characters");
-    let launch_policy = crate::ClusterLaunchPolicy {
-        depot: Some(crate::DepotLaunchConfig {
-            token: SecretValue::new("depot-test-secret"),
-            executable: "/opt/depot/bin/depot".into(),
-            timeout_secs: 900,
-        }),
-        ..crate::ClusterLaunchPolicy::default()
-    };
-    let coordinator = AdmissionCoordinator::new(
-        config.clone(),
-        authority,
-        storage_secret.clone(),
-        launch_policy.clone(),
-        provider.clone(),
-        store.clone(),
-    )?;
+    let coordinator =
+        AdmissionCoordinator::new(config.clone(), authority, provider.clone(), store.clone())?;
     let master_id = NodeId::new("node-1")?;
     let master_key = JoinPrivateKey::generate();
     let master_request = JoinRequest::from_config(&master_key, &config, &master_id, 1_000)?;
@@ -159,10 +144,7 @@ async fn configured_node_admits_and_replays_only_one_exact_control_plane_request
         &first,
         JoinResponseStatus::ACCEPTED,
     )?;
-    assert_eq!(first_payload.store_encryption_secret, storage_secret);
-    assert_eq!(first_payload.launch_policy, launch_policy);
     assert!(first_payload.store_join_ticket.is_some());
-    assert!(first_payload.certificate_issuer.is_some());
 
     let replay = coordinator
         .admit(
@@ -263,7 +245,6 @@ async fn configured_node_admits_and_replays_only_one_exact_control_plane_request
         JoinResponseStatus::ACCEPTED,
     )?;
     assert!(worker_payload.store_join_ticket.is_none());
-    assert!(worker_payload.certificate_issuer.is_none());
     assert_eq!(
         provider
             .staged

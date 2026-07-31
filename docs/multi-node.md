@@ -35,6 +35,7 @@ document is identical on every host except for the top-level `node` selector.
 ```jsonc
 {
   "jwt-secret-key": "<at-least-32-bytes>",
+  "encryption-key": "<at-least-32-bytes>",
   "cluster": {
     "name": "prod",
     "nodes": {
@@ -72,8 +73,8 @@ document is identical on every host except for the top-level `node` selector.
 
 An endpoint without a port uses TCP `3000`. The four cluster ports shown above
 are also the defaults. They must be nonzero and distinct, and no API endpoint
-may reuse one. Maestro validates and persists them in each protected launch
-document; it does not discover different free ports on each host.
+may reuse one. Maestro validates them from the current config on every daemon
+start; it does not discover different free ports on each host.
 
 The topology must have:
 
@@ -113,12 +114,11 @@ maestro config validate /etc/maestro/maestro.jsonc
 ```
 
 Top-level `datadog`, `depot`, `log-backup`, `preview`, and `nixos-upgrade`
-settings form the production launch policy. Their credential fields accept
+settings form the production runtime policy. Their credential fields accept
 literal values, relative or absolute `file://` sources, and
-`aws-secret://` sources. Bootstrap writes the policy to the protected master
-launch document; admission sends the same policy to every node inside its
-request-bound encrypted join response. Do not copy these credentials into
-worker-specific overlay files.
+`aws-secret://` sources. Each daemon resolves the current shared source at
+startup. Bootstrap and admission never copy these credentials into per-node
+launch documents or join grants.
 
 ## Host prerequisites
 
@@ -161,9 +161,15 @@ sudo maestro cluster bootstrap \
   --output /run/maestro/launch.json
 ```
 
-The command creates the cluster authority, master identity, secrets, initial
-store membership, and a create-only launch document. Start the Maestro daemon
-with that launch document before admitting another node.
+The command creates the cluster authority, master identity, initial store
+membership, and a create-only encrypted bootstrap document. Start the Maestro
+daemon with the same config source before admitting another node:
+
+```sh
+sudo maestro-daemon start \
+  --config /etc/maestro/maestro.jsonc \
+  /run/maestro/launch.json
+```
 
 Join each configured node through a running control-plane API:
 
@@ -182,9 +188,11 @@ whose role, hostname, endpoint, workload subnet, and observed source address
 all match that declaration. The first accepted request durably binds the node
 ID to its key and exact request for safe retries. The node receives an encrypted
 node-bound grant and starts an etcd learner when its role requires one. The
-operator signing key is not part of that grant: every node copies the same
-`jwt-secret-key` from its protected shared config into its private launch
-document. A joining control-plane member is promoted only after it catches up.
+operator signing key and runtime credentials are not part of that grant. Every
+node obtains them from the current shared config source when its daemon starts.
+A joining control-plane member is promoted only after it catches up. The
+cluster CA is persisted in encrypted etcd state; only the first master carries
+an encrypted local seed needed to initialize that record.
 
 Bootstrap and join output files are create-only and owner-only. A retry verifies
 and reuses matching state; it does not overwrite a conflicting launch document.
@@ -214,13 +222,16 @@ key.
 
 ## Inspect node-local logs
 
-Use the protected launch document to inspect one running node without an
-operator contexts file:
+Use the local bootstrap document and live config source to inspect one running
+node without an operator contexts file:
 
 ```sh
-sudo maestro-daemon logs /run/maestro/launch.json --tail 100
-sudo maestro-daemon logs /run/maestro/launch.json --source daemon
-sudo maestro-daemon logs /run/maestro/launch.json \
+sudo maestro-daemon logs --config /etc/maestro/maestro.jsonc \
+  /run/maestro/launch.json --tail 100
+sudo maestro-daemon logs --config /etc/maestro/maestro.jsonc \
+  /run/maestro/launch.json --source daemon
+sudo maestro-daemon logs --config /etc/maestro/maestro.jsonc \
+  /run/maestro/launch.json \
   --source api/deployment-1/workload-1 --follow
 ```
 

@@ -9,11 +9,12 @@ use crate::CliError;
 
 const MAX_EXTENDS_DEPTH: usize = 16;
 
-pub(crate) trait ConfigSourceReader {
+#[allow(async_fn_in_trait)]
+pub trait ConfigSourceReader {
     async fn read(&self, source: &str) -> Result<String, CliError>;
 }
 
-pub(crate) struct SystemConfigSourceReader;
+pub struct SystemConfigSourceReader;
 
 impl ConfigSourceReader for SystemConfigSourceReader {
     async fn read(&self, source: &str) -> Result<String, CliError> {

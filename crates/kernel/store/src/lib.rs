@@ -23,8 +23,8 @@ mod store;
 
 pub use clock::{Clock, MonotonicTime, TokioClock};
 pub use encryption::{
-    EncryptedValue, EncryptionError, EncryptionKey, derive_key, open, open_with_context, seal,
-    seal_with_context,
+    EncryptedValue, EncryptionError, EncryptionKey, derive_key, derive_key_with_context, open,
+    open_with_context, seal, seal_with_context,
 };
 pub use error::StoreError;
 pub use etcd::{EtcdStore, EtcdTlsConfig};
