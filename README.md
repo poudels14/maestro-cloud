@@ -87,6 +87,23 @@ Control-plane nodes also require the configured etcd executable. The NixOS
 module provisions containerd, BuildKit, Depot, etcd, and the host tools
 used by the production adapters.
 
+The module deliberately leaves the NixOS firewall configuration to the host.
+With the default Maestro ports, a host that enables that firewall needs:
+
+```nix
+networking.firewall.allowedTCPPorts = [ 53 2379 2380 3000 ];
+networking.firewall.allowedUDPPorts = [ 53 51820 ];
+```
+
+Both TCP and UDP port `53` must be allowed so workloads can reach the DNS
+listener on their local workload bridge; TCP is required for DNS fallback and
+larger responses. TCP `3000` is the node API, TCP `2379` and `2380` are etcd
+client and peer traffic, and UDP `51820` is the workload WireGuard mesh. Use
+the configured values instead if those ports are customized. Restrict the API
+and etcd ports to the declared node and operator networks in cloud security
+groups, and never expose etcd publicly. Port `53` only needs a listener on the
+local workload bridge, so it does not need a public security-group rule.
+
 The runtime crate also contains a native Docker API backend for its supported
 development capabilities. Production daemon composition selects containerd.
 Cutover deliberately restarts migrated workloads under that runtime instead of

@@ -31,6 +31,10 @@ bootstrap document outside the Nix store:
             config = "aws-secret://maestro/production/cluster";
             launch = "/run/maestro/launch.json";
           };
+
+          networking.firewall.enable = true;
+          networking.firewall.allowedTCPPorts = [ 53 2379 2380 3000 ];
+          networking.firewall.allowedUDPPorts = [ 53 51820 ];
         })
       ];
     };
@@ -59,7 +63,13 @@ rotation workflow is available.
 The module does not enable or modify the NixOS host firewall. Maestro owns its
 runtime nftables table, and deployments that enable another host firewall must
 configure it separately so it does not block the workload bridge or cluster
-control traffic.
+control traffic. The example allows the default node API, etcd, WireGuard, and
+workload DNS ports. DNS needs both UDP and TCP port `53`; allowing only UDP can
+break fallback and larger responses. Use the cluster's configured ports when
+they differ from the defaults, restrict API and etcd traffic with cloud
+security groups, and never expose etcd publicly. The DNS listener is bound to
+the local workload bridge, so no public port `53` security-group rule is
+required.
 
 The daemon and migration tool write newline-delimited JSON diagnostics to
 stderr. Under systemd, these records flow directly into the journal with
