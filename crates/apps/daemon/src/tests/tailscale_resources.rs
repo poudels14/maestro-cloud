@@ -30,7 +30,7 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
         replicas: 2,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
 
@@ -166,7 +166,7 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
             .environment
             .get("TS_EXTRA_ARGS")
             .map(String::as_str),
-        Some("--accept-routes --advertise-tags=tag:maestro-gateway")
+        Some("--accept-routes --advertise-tags=tag:maestro")
     );
     assert!(!service.spec.environment.contains_key("TS_AUTHKEY"));
     let secrets = required(service.spec.secrets, "gateway secret mount")?;
@@ -240,7 +240,7 @@ async fn reconciles_enable_update_and_removal_as_fenced_writes()
         auth_key: SecretValue::new("tskey-auth-first-reusable-secret"),
         advertise_routes: None,
         replicas: 2,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
     let desired = required(
@@ -345,7 +345,7 @@ async fn refuses_a_reserved_id_collision_without_creating_the_other_resource()
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
         replicas: 1,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
     let desired = required(
@@ -384,7 +384,7 @@ async fn stale_leadership_cannot_create_gateway_resources() -> Result<(), Box<dy
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
         replicas: 1,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
     let desired = required(
@@ -425,7 +425,7 @@ async fn live_auth_key_changes_trigger_fenced_gateway_reconciliation()
         auth_key: SecretValue::new("tskey-auth-launch-document-secret"),
         advertise_routes: None,
         replicas: 1,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
     let desired = required(

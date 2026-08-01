@@ -32,18 +32,18 @@ grants a specific operator group access to them:
     "group:maestro-operators": ["alice@example.com", "bob@example.com"]
   },
   "tagOwners": {
-    "tag:maestro-gateway": ["autogroup:admin"]
+    "tag:maestro": ["autogroup:admin"]
   },
   "autoApprovers": {
     "routes": {
-      "172.22.1.0/24": ["tag:maestro-gateway"],
-      "172.22.2.0/24": ["tag:maestro-gateway"]
+      "172.22.1.0/24": ["tag:maestro"],
+      "172.22.2.0/24": ["tag:maestro"]
     }
   },
   "grants": [
     {
       "src": ["group:maestro-operators"],
-      "dst": ["tag:maestro-gateway"],
+      "dst": ["tag:maestro"],
       "ip": ["tcp:80"]
     },
     {
@@ -72,8 +72,11 @@ Generate an auth key with these properties:
 
 - reusable, because each gateway replica has its own Tailscale identity;
 - pre-approved when the tailnet requires device approval;
-- tagged with `tag:maestro-gateway`; and
 - non-ephemeral, because each replica persists its identity.
+
+Tags are optional. Maestro does not request one unless `tailscale.tags` is
+explicitly configured. If your tailnet uses tags for ACL identity or route
+auto-approval, authorize those tags in tailnet policy and on the auth key.
 
 Store a reusable key in a secrets manager. Tailscale auth keys expire after at
 most 90 days, but gateways already authenticated with persisted state continue
@@ -102,7 +105,7 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
     "auth-key": "aws-secret://maestro/production/tailscale-auth-key",
     "advertise-routes": null,
     "replicas": 2,
-    "tags": ["tag:maestro-gateway"],
+    "tags": [],
     "cross-cluster-dns": [
       {
         "cluster-id": "staging",
@@ -122,7 +125,7 @@ The defaults are:
 
 - `advertise-routes: null`, which advertises every workload-node subnet;
 - `replicas: 2`; and
-- `tags: ["tag:maestro-gateway"]`; and
+- `tags: []`, which leaves identity and policy to the auth key; and
 - `cross-cluster-dns: []`, which disables remote suffix forwarding.
 
 Every explicit advertised route must be unique, canonical, contained by an
@@ -164,7 +167,7 @@ Use every address in `tailscale.dnsNameservers` as a restricted nameserver for
     "advertiseRoutes": ["172.22.0.0/16"],
     "dnsNameservers": ["172.22.1.1", "172.22.2.1"],
     "replicas": 2,
-    "tags": ["tag:maestro-gateway"],
+    "tags": [],
     "crossClusterDns": [
       {
         "clusterId": "staging",

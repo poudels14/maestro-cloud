@@ -101,7 +101,7 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
         replicas: 2,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
     config.preflight()?;
@@ -164,7 +164,7 @@ fn validates_tailscale_routes_replicas_tags_and_secret_strength()
     ));
 
     let tailscale = config.tailscale.as_mut().ok_or("tailscale missing")?;
-    tailscale.tags = vec!["tag:maestro-gateway".to_owned()];
+    tailscale.tags = vec!["tag:maestro".to_owned()];
     tailscale.cross_cluster_dns = vec![CrossClusterDnsRoute {
         cluster_id: ClusterId::new("remote")?,
         nameservers: vec![Ipv4Addr::new(172, 23, 1, 1)],

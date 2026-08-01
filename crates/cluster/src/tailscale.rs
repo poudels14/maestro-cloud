@@ -256,7 +256,7 @@ const fn default_replicas() -> u32 {
 }
 
 fn default_tags() -> Vec<String> {
-    vec!["tag:maestro-gateway".to_owned()]
+    Vec::new()
 }
 
 fn validate_auth_key(auth_key: &SecretValue) -> Result<(), TailscaleConfigError> {

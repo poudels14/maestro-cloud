@@ -367,7 +367,7 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_workload_rou
         ),
         ["172.22.1.0/24".parse()?]
     );
-    assert_eq!(tailscale.tags, ["tag:maestro-gateway"]);
+    assert!(tailscale.tags.is_empty());
     let route = tailscale
         .cross_cluster_dns
         .first()

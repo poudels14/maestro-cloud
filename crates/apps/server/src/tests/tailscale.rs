@@ -205,7 +205,7 @@ fn config(
             advertise_routes: vec!["10.42.0.0/16".to_owned()],
             dns_nameservers: vec!["10.42.1.1".to_owned()],
             replicas: 1,
-            tags: vec!["tag:maestro-gateway".to_owned()],
+            tags: vec!["tag:maestro".to_owned()],
             cross_cluster_dns: Vec::new(),
         }),
         cloudflare: None,

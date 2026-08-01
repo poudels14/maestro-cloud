@@ -179,7 +179,7 @@ const fn default_tailscale_replicas() -> u32 {
 }
 
 fn default_tailscale_tags() -> Vec<String> {
-    vec!["tag:maestro-gateway".to_owned()]
+    Vec::new()
 }
 
 #[derive(Debug, Deserialize)]

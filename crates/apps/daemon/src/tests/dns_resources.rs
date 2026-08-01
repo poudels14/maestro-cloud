@@ -28,7 +28,7 @@ fn builds_store_authenticated_delegated_dns_service() -> Result<(), Box<dyn std:
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
         replicas: 1,
-        tags: vec!["tag:maestro-gateway".to_owned()],
+        tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: vec![CrossClusterDnsRoute {
             cluster_id: ClusterId::new("remote")?,
             nameservers: vec!["172.23.1.1".parse()?, "172.23.2.1".parse()?],
