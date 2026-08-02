@@ -22,6 +22,7 @@ async fn secret_mount_is_private_idempotent_and_zeroized_on_cleanup()
     let workload_id = WorkloadId::new("workload-1")?;
     let spec = SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: None,
         items: BTreeMap::from([
             ("MULTILINE".to_owned(), SecretValue::new("line1\nline2")),
             ("QUOTED".to_owned(), SecretValue::new("say \"hi\"")),
@@ -131,6 +132,7 @@ async fn secret_mount_rejects_identity_mutation_and_collects_only_stale_workload
     let second = WorkloadId::new("workload-2")?;
     let mut spec = SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: None,
         items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("first"))]),
     };
     let first_mount = manager.materialize(&first, &spec).await?;
@@ -161,6 +163,7 @@ async fn secret_mount_rejects_unsafe_targets_and_keys() -> Result<(), Box<dyn st
     let workload_id = WorkloadId::new("workload-1")?;
     let invalid_target = SecretMountSpec::Dotenv {
         mount_path: "relative.env".to_owned(),
+        source: None,
         items: BTreeMap::new(),
     };
     assert!(matches!(
@@ -169,6 +172,7 @@ async fn secret_mount_rejects_unsafe_targets_and_keys() -> Result<(), Box<dyn st
     ));
     let invalid_key = SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: None,
         items: BTreeMap::from([("BAD-KEY".to_owned(), SecretValue::new("value"))]),
     };
     assert!(matches!(
@@ -338,6 +342,7 @@ impl SecretMountFileSystem for BlockingSecretMountFileSystem {
 fn secret_spec(value: &str) -> SecretMountSpec {
     SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: None,
         items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new(value))]),
     }
 }

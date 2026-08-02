@@ -59,6 +59,8 @@ pub(crate) fn desired_service(
     spec.name = preview.spec.service_id.to_string();
     spec.preview = None;
     spec.replicas = policy.replicas;
+    spec.environment_sources
+        .extend(policy.environment_source.clone());
     spec.environment.extend(policy.environment.clone());
     spec.volumes.clear();
 

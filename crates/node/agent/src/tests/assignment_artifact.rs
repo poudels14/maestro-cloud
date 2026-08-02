@@ -96,7 +96,9 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             registry: None,
             depot: None,
             environment: Default::default(),
+            environment_source: None,
             secrets: Default::default(),
+            secrets_source: None,
         },
     };
     desired_deployment.status.image_digest = Some("sha256:local-build".to_owned());

@@ -1,9 +1,14 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use kernel_api::{Build, BuildPhase, Condition, ConditionState, DepotBuildConfig};
-use runtime::{ArtifactBuildRequest, ArtifactDigest, ArtifactSource, ArtifactStoreError};
+use kernel_api::{Build, BuildPhase, Condition, ConditionState, DepotBuildConfig, SecretValue};
+use runtime::{
+    ArtifactBuildRequest, ArtifactDigest, ArtifactSource, ArtifactStoreError, ValueSourceError,
+    ValueSourceResolver,
+};
 
 use super::support::{
     RecordingArtifacts, RecordingSource, TestResult, TestWorld, prepared, queued_build,
@@ -55,7 +60,7 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
     assert_eq!(requests.len(), 1);
     let request = requests.first().ok_or("artifact request missing")?;
     assert_eq!(
-        request.arguments.get("PROFILE").map(String::as_str),
+        request.arguments.get("PROFILE").map(SecretValue::expose),
         Some("release")
     );
     assert_eq!(
@@ -78,6 +83,100 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
         }
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn external_build_values_are_resolved_for_execution_without_persisting_plaintext()
+-> TestResult {
+    let world = TestWorld::new().await?;
+    let mut build = queued_build("Dockerfile")?;
+    build.spec.template.environment.clear();
+    build.spec.template.environment_source = Some("aws-secret://build-environment".to_owned());
+    build.spec.template.secrets.clear();
+    build.spec.template.secrets_source = Some("aws-secret://build-secrets".to_owned());
+    world.seed(&build).await?;
+    let resolver = Arc::new(FixedValueSources {
+        values: BTreeMap::from([
+            (
+                "aws-secret://build-environment".to_owned(),
+                BTreeMap::from([("PROFILE".to_owned(), SecretValue::new("external-profile"))]),
+            ),
+            (
+                "aws-secret://build-secrets".to_owned(),
+                BTreeMap::from([
+                    (
+                        "GH_TOKEN".to_owned(),
+                        SecretValue::new("external-github-token"),
+                    ),
+                    ("TOKEN".to_owned(), SecretValue::new("external-build-token")),
+                ]),
+            ),
+        ]),
+        calls: AtomicUsize::new(0),
+    });
+    let source = Arc::new(RecordingSource::successful("commit-abc"));
+    let artifacts = Arc::new(RecordingArtifacts::successful()?);
+    let controller =
+        world.runtime_with_value_sources(source.clone(), artifacts.clone(), resolver.clone())?;
+
+    for _ in 0..4 {
+        controller.reconcile_snapshot().await?;
+    }
+
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        source.github_tokens(),
+        [
+            Some("external-github-token".to_owned()),
+            Some("external-github-token".to_owned())
+        ]
+    );
+    let requests = artifacts.calls();
+    let request = requests.first().ok_or("artifact request missing")?;
+    assert_eq!(
+        request.arguments.get("PROFILE").map(SecretValue::expose),
+        Some("external-profile")
+    );
+    assert_eq!(
+        request.secrets.get("TOKEN").map(|value| value.expose()),
+        Some("external-build-token")
+    );
+
+    let stored = world.build().await?;
+    assert!(stored.spec.template.environment.is_empty());
+    assert!(stored.spec.template.secrets.is_empty());
+    assert_eq!(
+        stored.spec.template.environment_source.as_deref(),
+        Some("aws-secret://build-environment")
+    );
+    assert_eq!(
+        stored.spec.template.secrets_source.as_deref(),
+        Some("aws-secret://build-secrets")
+    );
+    let encoded = serde_json::to_string(&stored)?;
+    assert!(!encoded.contains("external-build-token"));
+    Ok(())
+}
+
+struct FixedValueSources {
+    values: BTreeMap<String, BTreeMap<String, SecretValue>>,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ValueSourceResolver for FixedValueSources {
+    async fn resolve(
+        &self,
+        source: &str,
+    ) -> Result<BTreeMap<String, SecretValue>, ValueSourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.values
+            .get(source)
+            .cloned()
+            .ok_or_else(|| ValueSourceError::Rejected {
+                message: format!("missing fake source `{source}`"),
+            })
+    }
 }
 
 #[tokio::test]

@@ -15,7 +15,9 @@ use node_agent::{
     HostStatsReader, MeshBackend, MeshIdentity, StatusClock, SystemDnsPluginSettings,
     TailscaleDnsPluginSettings, WorkloadBridgeBackend, WorkloadNetworkStatsReader,
 };
-use runtime::{ArtifactStore, HostPortPublication, NetworkProvider, WorkloadRuntime};
+use runtime::{
+    ArtifactStore, HostPortPublication, NetworkProvider, ValueSourceResolver, WorkloadRuntime,
+};
 use semver::Version;
 use server::ServerSettings;
 use tokio::sync::watch;
@@ -160,6 +162,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) artifact_store: Arc<dyn ArtifactStore>,
     pub(crate) artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
+    pub(crate) value_sources: Option<Arc<dyn ValueSourceResolver>>,
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) sink_runtime: SinkRuntimeRegistry,
@@ -215,6 +218,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             workload_runtime: dependencies.workload_runtime,
             artifact_store: dependencies.artifact_store,
             artifact_archives: dependencies.artifact_archives,
+            value_sources: None,
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,
             sink_runtime: SinkRuntimeRegistry::default(),
@@ -244,6 +248,12 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             store: Mutex::new(None),
             leader_workload: None,
         }
+    }
+
+    /// Enables deployment-time resolution of external environment and secret references.
+    pub fn with_value_source_resolver(mut self, resolver: Arc<dyn ValueSourceResolver>) -> Self {
+        self.value_sources = Some(resolver);
+        self
     }
 
     /// Attaches the workload started for each successfully fenced leadership term.

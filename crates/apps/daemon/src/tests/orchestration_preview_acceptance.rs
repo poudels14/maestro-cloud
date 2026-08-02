@@ -149,7 +149,9 @@ impl PreviewCluster for PreviewAcceptanceWorld {
                 registry: None,
                 depot: None,
                 environment: BTreeMap::new(),
+                environment_source: None,
                 secrets: BTreeMap::new(),
+                secrets_source: None,
             },
         };
         base.spec.preview = Some(PreviewPolicy {
@@ -157,6 +159,7 @@ impl PreviewCluster for PreviewAcceptanceWorld {
             lifetime_secs: 3_600,
             replicas: 1,
             environment: BTreeMap::from([("MAESTRO_PREVIEW".to_string(), "true".to_string())]),
+            environment_source: None,
         });
         base.status.rollout = RolloutState::Active;
         let mut base_route = route().map_err(PreviewAcceptanceError::from_driver)?;

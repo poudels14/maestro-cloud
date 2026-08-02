@@ -232,10 +232,12 @@ pub(super) fn build(
                 registry: None,
                 depot: None,
                 environment: BTreeMap::new(),
+                environment_source: None,
                 secrets: BTreeMap::from([(
                     "REGISTRY_PASSWORD".to_string(),
                     SecretValue::new("registry-password"),
                 )]),
+                secrets_source: None,
             },
         },
         status: BuildStatus {

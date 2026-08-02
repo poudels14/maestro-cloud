@@ -82,7 +82,8 @@ impl OperatorSuite {
                 backends.artifacts,
                 timestamp_clock.clone(),
             )?
-            .with_depot_backend(backends.depot),
+            .with_depot_backend(backends.depot)
+            .with_value_source_resolver(backends.value_sources),
         )
         .runtime(
             store.clone(),

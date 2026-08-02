@@ -281,6 +281,7 @@ fn deployment(
                 }),
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
+                environment_sources: Vec::new(),
                 user: node_api_user,
                 node_api: if node_api_user.is_some() {
                     NodeApiAccess::IdentityAndTelemetry

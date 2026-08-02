@@ -42,7 +42,7 @@ pub(crate) fn convert_service_config(
         Some(artifact) => artifact,
         None => convert_artifact(config, data, pinned_revision)?,
     };
-    let environment = resolved_values(
+    let (environment_source, environment) = converted_values(
         &config.id,
         "deploy.env",
         &config.deploy.env,
@@ -89,6 +89,7 @@ pub(crate) fn convert_service_config(
         health_check,
         max_restarts: config.deploy.max_restarts,
         environment,
+        environment_sources: environment_source.into_iter().collect(),
         user: None,
         node_api: NodeApiAccess::Disabled,
         secrets,
@@ -156,17 +157,18 @@ fn convert_build(
             "repository-less build is not associated with a resolved upload",
         ));
     };
-    let environment =
-        resolved_values(service_id, "build.env", &build.env, &data.build_environment)?;
-    let secrets = resolved_values(
+    let (environment_source, environment) =
+        converted_values(service_id, "build.env", &build.env, &data.build_environment)?;
+    let (secrets_source, secrets) = converted_values(
         service_id,
         "build.secrets",
         &build.secrets,
         &data.build_secrets,
-    )?
-    .into_iter()
-    .map(|(key, value)| (key, SecretValue::new(value)))
-    .collect();
+    )?;
+    let secrets = secrets
+        .into_iter()
+        .map(|(key, value)| (key, SecretValue::new(value)))
+        .collect();
     let registry = build
         .registry
         .as_deref()
@@ -205,7 +207,9 @@ fn convert_build(
             registry,
             depot,
             environment,
+            environment_source,
             secrets,
+            secrets_source,
         },
     })
 }
@@ -223,9 +227,19 @@ fn convert_secrets(
             "deployment sidecar contains secrets but config has no secret mount",
         ));
     };
-    let values = resolved_secret_values(&config.id, secrets, &data.deploy_secrets)?;
+    let source = secrets
+        .source
+        .as_ref()
+        .filter(|source| source.starts_with("aws-secret://"))
+        .cloned();
+    let values = if source.is_some() {
+        secrets.items.clone()
+    } else {
+        resolved_secret_values(&config.id, secrets, &data.deploy_secrets)?
+    };
     Ok(Some(SecretMountSpec::Dotenv {
         mount_path: secrets.mount_path.clone(),
+        source,
         items: values
             .into_iter()
             .map(|(key, value)| (key, SecretValue::new(value)))
@@ -362,16 +376,18 @@ fn convert_preview(
         }
         return Ok(None);
     };
+    let (environment_source, environment) = converted_values(
+        &config.id,
+        "preview.env",
+        &preview.env,
+        &data.preview_environment,
+    )?;
     Ok(Some(PreviewPolicy {
         close_grace_period_secs: parse_duration(&config.id, &preview.close_grace_period)?,
         lifetime_secs: PREVIEW_LIFETIME_SECS,
         replicas: preview.replicas,
-        environment: resolved_values(
-            &config.id,
-            "preview.env",
-            &preview.env,
-            &data.preview_environment,
-        )?,
+        environment,
+        environment_source,
     }))
 }
 
@@ -492,17 +508,24 @@ fn valid_header_name(header: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || PUNCTUATION.contains(&byte))
 }
 
-fn resolved_values(
+fn converted_values(
     service_id: &str,
     field: &'static str,
     config: &LegacyEnvConfig,
     sidecar: &BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, LegacyPlanError> {
+) -> Result<(Option<String>, BTreeMap<String, String>), LegacyPlanError> {
+    if let Some(source) = config
+        .source
+        .as_ref()
+        .filter(|source| source.starts_with("aws-secret://"))
+    {
+        return Ok((Some(source.clone()), config.items.clone()));
+    }
     let values = resolved_map(service_id, field, &config.items, sidecar)?;
     if config.source.is_some() && values.is_empty() {
         Err(unresolved(service_id, field))
     } else {
-        Ok(values)
+        Ok((None, values))
     }
 }
 

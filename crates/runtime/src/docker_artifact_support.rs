@@ -33,7 +33,7 @@ pub(crate) fn build_options(
     let arguments = request
         .arguments
         .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .map(|(key, value)| (key.clone(), value.expose().to_owned()))
         .collect::<HashMap<_, _>>();
     let labels = HashMap::from([(
         MANAGED_IMAGE_LABEL.to_owned(),

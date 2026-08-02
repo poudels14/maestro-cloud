@@ -425,6 +425,7 @@ fn service(service_id: &str) -> TestResult<Service> {
             health_check: None,
             max_restarts: None,
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: None,

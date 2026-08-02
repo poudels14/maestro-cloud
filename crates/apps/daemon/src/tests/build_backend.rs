@@ -45,6 +45,7 @@ impl FakeBuildBackend {
                 build_revisions: build.clone(),
                 artifacts: build.clone(),
                 depot: None,
+                value_sources: None,
                 pull_requests: None,
                 upgrades: None,
                 webhooks: Arc::new(AcceptingWebhookBackend),

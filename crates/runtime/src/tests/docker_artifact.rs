@@ -24,8 +24,8 @@ fn docker_build_options_preserve_public_arguments_and_managed_ownership() {
             definition: PathBuf::from("containers/App.Dockerfile"),
         },
         arguments: BTreeMap::from([
-            ("MODE".to_owned(), "release".to_owned()),
-            ("REVISION".to_owned(), "abc123".to_owned()),
+            ("MODE".to_owned(), SecretValue::new("release")),
+            ("REVISION".to_owned(), SecretValue::new("abc123")),
         ]),
         secrets: BTreeMap::new(),
         tags: vec![ArtifactReference::new("registry.example/app:v1").unwrap()],

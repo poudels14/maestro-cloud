@@ -67,6 +67,14 @@ impl AssignmentAgent {
             .iter()
             .filter(|assignment| assignment.meta.deletion_timestamp.is_none())
             .collect::<Vec<_>>();
+        let active_deployments = active
+            .iter()
+            .map(|assignment| assignment.spec.deployment_id.clone())
+            .collect::<BTreeSet<_>>();
+        self.resolved_deployments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|deployment_id, _| active_deployments.contains(deployment_id));
         let network = self.network.ensure_network(&self.settings.network).await?;
         let mut report = AssignmentReconcileReport {
             desired: active.len(),

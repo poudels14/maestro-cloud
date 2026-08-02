@@ -170,7 +170,10 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(!service.spec.environment.contains_key("TS_AUTHKEY"));
     let secrets = required(service.spec.secrets, "gateway secret mount")?;
-    let kernel_api::SecretMountSpec::Dotenv { mount_path, items } = secrets else {
+    let kernel_api::SecretMountSpec::Dotenv {
+        mount_path, items, ..
+    } = secrets
+    else {
         return Err("gateway secret mount is not dotenv".into());
     };
     assert_eq!(mount_path, "/run/secrets/tailscale.env");

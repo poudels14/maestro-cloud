@@ -61,10 +61,12 @@ pub(super) async fn put_service(
             }),
             max_restarts: Some(3),
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: Some(SecretMountSpec::Dotenv {
                 mount_path: "/run/secrets/maestro.env".to_owned(),
+                source: None,
                 items: BTreeMap::from([(
                     "TOKEN".to_owned(),
                     SecretValue::new("real-runtime-secret"),
@@ -144,6 +146,7 @@ pub(super) async fn put_affinity_service_and_route(
             }),
             max_restarts: Some(3),
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: None,

@@ -14,7 +14,10 @@ pub(crate) fn container_spec() -> WorkloadSpec {
         configuration: WorkloadConfiguration {
             metadata: metadata(),
             hostname: "workload-1".to_owned(),
-            environment: BTreeMap::from([("PLAIN".to_owned(), "visible".to_owned())]),
+            environment: BTreeMap::from([(
+                "PLAIN".to_owned(),
+                kernel_api::SecretValue::new("visible"),
+            )]),
             mounts: vec![WorkloadMount {
                 source: MountSource::HostPath(PathBuf::from("/run/maestro/workload-1")),
                 target: PathBuf::from("/run/maestro"),

@@ -19,6 +19,9 @@ impl ServiceSpec {
             }
         }
         validate_public_environment("environment", &self.environment)?;
+        for source in &self.environment_sources {
+            validate_external_source("environmentSources", Some(source))?;
+        }
         let mut ports = BTreeSet::new();
         for port in &self.exposed_ports {
             if *port == 0 {
@@ -60,7 +63,8 @@ impl ServiceSpec {
         if let Some(secrets) = &self.secrets {
             absolute_clean_path("secrets.mountPath", secrets.mount_path())?;
             match secrets {
-                SecretMountSpec::Dotenv { items, .. } => {
+                SecretMountSpec::Dotenv { source, items, .. } => {
+                    validate_external_source("secrets.source", source.as_deref())?;
                     validate_secret_environment("secrets.items", items)?;
                 }
                 SecretMountSpec::Files { files, .. } => {
@@ -94,6 +98,10 @@ impl ServiceSpec {
                 return invalid("preview", "lifetime and replica count must be non-zero");
             }
             validate_public_environment("preview.environment", &preview.environment)?;
+            validate_external_source(
+                "preview.environmentSource",
+                preview.environment_source.as_deref(),
+            )?;
         }
         Ok(())
     }
@@ -136,7 +144,12 @@ fn validate_artifact(artifact: &ArtifactTemplate) -> Result<(), ServiceSpecError
                 }
             }
             validate_public_environment("artifact.environment", &template.environment)?;
+            validate_external_source(
+                "artifact.environmentSource",
+                template.environment_source.as_deref(),
+            )?;
             validate_secret_environment("artifact.secrets", &template.secrets)?;
+            validate_external_source("artifact.secretsSource", template.secrets_source.as_deref())?;
             match &template.source {
                 BuildSource::Git {
                     repository,
@@ -148,6 +161,25 @@ fn validate_artifact(artifact: &ArtifactTemplate) -> Result<(), ServiceSpecError
                 BuildSource::Tarball { .. } => {}
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_external_source(field: &str, source: Option<&str>) -> Result<(), ServiceSpecError> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let Some(secret_id) = source.strip_prefix("aws-secret://") else {
+        return invalid(field, "only aws-secret:// sources may enter desired state");
+    };
+    if secret_id.is_empty()
+        || secret_id.chars().any(char::is_whitespace)
+        || secret_id.chars().any(char::is_control)
+    {
+        return invalid(
+            field,
+            "AWS secret ID must be non-empty and contain no whitespace",
+        );
     }
     Ok(())
 }

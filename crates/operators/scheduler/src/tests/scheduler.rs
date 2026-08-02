@@ -425,6 +425,7 @@ fn service(replicas: u32) -> Service {
             health_check: None,
             max_restarts: Some(3),
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: None,

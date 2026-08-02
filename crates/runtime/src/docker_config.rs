@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use docker::models::{
     ContainerCreateBody, HostConfig, Mount, MountType, PortBinding, PortMap, RestartPolicy,
@@ -114,7 +114,11 @@ fn validate_mount(mount: &WorkloadMount) -> Result<(), RuntimeError> {
 }
 
 fn environment(configuration: &WorkloadConfiguration) -> Vec<String> {
-    let mut environment = configuration.environment.clone();
+    let mut environment = configuration
+        .environment
+        .iter()
+        .map(|(key, value)| (key.clone(), value.expose().to_owned()))
+        .collect::<BTreeMap<_, _>>();
     let metadata = &configuration.metadata;
     environment.insert(
         "MAESTRO_CLUSTER_ID".to_owned(),

@@ -2,9 +2,10 @@ use std::fmt::{Debug, Formatter};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A secret-bearing wire value whose debug representation is always redacted.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct SecretValue(String);
 

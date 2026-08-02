@@ -93,8 +93,8 @@ pub struct WorkloadConfiguration {
     pub metadata: WorkloadMetadata,
     /// Workload-visible hostname.
     pub hostname: String,
-    /// Non-secret environment passed to the primary process.
-    pub environment: BTreeMap<String, String>,
+    /// Environment retained in zeroizing memory until handed to the workload backend.
+    pub environment: BTreeMap<String, kernel_api::SecretValue>,
     /// Filesystem mounts applied before the workload starts.
     pub mounts: Vec<WorkloadMount>,
     /// Cluster-routable address allocated by host-owned IPAM.

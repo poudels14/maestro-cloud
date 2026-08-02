@@ -85,6 +85,11 @@ expression: document
                 "description": "Non-secret build variables.",
                 "type": "object"
               },
+              "environmentSource": {
+                "description": "External source resolved by the build worker immediately before use.",
+                "nullable": true,
+                "type": "string"
+              },
               "registry": {
                 "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
                 "nullable": true,
@@ -96,6 +101,11 @@ expression: document
                 },
                 "description": "Secret build variables that are redacted from debug output.",
                 "type": "object"
+              },
+              "secretsSource": {
+                "description": "External secret source resolved by the build worker immediately before use.",
+                "nullable": true,
+                "type": "string"
               },
               "source": {
                 "allOf": [
@@ -499,6 +509,11 @@ expression: document
             "description": "Non-secret build variables.",
             "type": "object"
           },
+          "environmentSource": {
+            "description": "External source resolved by the build worker immediately before use.",
+            "nullable": true,
+            "type": "string"
+          },
           "registry": {
             "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
             "nullable": true,
@@ -510,6 +525,11 @@ expression: document
             },
             "description": "Secret build variables that are redacted from debug output.",
             "type": "object"
+          },
+          "secretsSource": {
+            "description": "External secret source resolved by the build worker immediately before use.",
+            "nullable": true,
+            "type": "string"
           },
           "source": {
             "allOf": [
@@ -4567,6 +4587,11 @@ expression: document
             "description": "Runtime environment overlaid on the derived service.",
             "type": "object"
           },
+          "environmentSource": {
+            "description": "External runtime environment source preserved for deployment-time resolution.",
+            "nullable": true,
+            "type": "string"
+          },
           "lifetimeSecs": {
             "description": "Maximum lifetime measured from pull-request creation.",
             "format": "uint64",
@@ -4924,6 +4949,11 @@ expression: document
               },
               "mountPath": {
                 "description": "Absolute workload-visible file path.",
+                "type": "string"
+              },
+              "source": {
+                "description": "External secret source resolved after build, immediately before workload creation.",
+                "nullable": true,
                 "type": "string"
               }
             },
@@ -5441,6 +5471,13 @@ expression: document
             },
             "description": "Non-secret runtime environment.",
             "type": "object"
+          },
+          "environmentSources": {
+            "description": "Ordered external runtime environment sources resolved after build, before workload creation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "exec": {
             "allOf": [

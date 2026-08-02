@@ -46,6 +46,7 @@ fn preview_policy_uses_explicit_lifecycle_units() {
         lifetime_secs: 604_800,
         replicas: 1,
         environment: BTreeMap::from([("PREVIEW".to_string(), "true".to_string())]),
+        environment_source: None,
     };
 
     assert_eq!(
@@ -104,7 +105,9 @@ fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
             registry: None,
             depot: None,
             environment: BTreeMap::new(),
+            environment_source: None,
             secrets: BTreeMap::new(),
+            secrets_source: None,
         },
     };
     let encoded = serde_json::to_value(&artifact).expect("serialize build artifact");
@@ -228,7 +231,9 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             registry: None,
             depot: None,
             environment: BTreeMap::new(),
+            environment_source: None,
             secrets: BTreeMap::new(),
+            secrets_source: None,
         },
     };
     assert!(spec.validate().is_err());
@@ -245,7 +250,9 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             registry: Some("registry.example/team/".to_string()),
             depot: None,
             environment: BTreeMap::new(),
+            environment_source: None,
             secrets: BTreeMap::new(),
+            secrets_source: None,
         },
     };
     assert!(spec.validate().is_err());
@@ -288,6 +295,7 @@ fn valid_service_spec() -> ServiceSpec {
         health_check: None,
         max_restarts: Some(3),
         environment: BTreeMap::new(),
+        environment_sources: Vec::new(),
         user: None,
         node_api: NodeApiAccess::Disabled,
         secrets: None,

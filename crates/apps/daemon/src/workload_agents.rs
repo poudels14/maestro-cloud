@@ -93,7 +93,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         .get(&spec.node_id)
         .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
     let network = assignment_network(node, factory.workload_network_mode)?;
-    AssignmentAgent::new(
+    let agent = AssignmentAgent::new(
         store.clone(),
         factory.workload_runtime.clone(),
         factory.network_provider.clone(),
@@ -136,7 +136,11 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         factory.monotonic_clock.clone(),
         factory.status_clock.clone(),
     )
-    .map_err(|error| role_error("construct assignment agent", error))
+    .map_err(|error| role_error("construct assignment agent", error))?;
+    Ok(match &factory.value_sources {
+        Some(resolver) => agent.with_value_source_resolver(resolver.clone()),
+        None => agent,
+    })
 }
 
 struct AssignmentNetwork {

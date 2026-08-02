@@ -251,7 +251,7 @@ fn build_invocation(
     ];
     for (key, value) in &request.arguments {
         arguments.push(OsString::from("--build-arg"));
-        arguments.push(OsString::from(format!("{key}={value}")));
+        arguments.push(OsString::from(format!("{key}={}", value.expose())));
     }
     let mut environment = vec![
         (OsString::from("DEPOT_TOKEN"), settings.token.clone()),
@@ -297,7 +297,7 @@ fn validate_request(
     }
     for (key, value) in &request.arguments {
         validate_key(DepotKeyKind::Argument, key)?;
-        if value.contains('\0') {
+        if value.expose().contains('\0') {
             return Err(rejected(format!(
                 "Depot argument `{key}` contains a null byte"
             )));

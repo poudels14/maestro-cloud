@@ -615,10 +615,12 @@ pub(super) fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
             health_check: None,
             max_restarts: Some(3),
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: Some(SecretMountSpec::Dotenv {
                 mount_path: "/run/secrets/api.env".to_string(),
+                source: None,
                 items: BTreeMap::from([(
                     "DATABASE_PASSWORD".to_string(),
                     SecretValue::new("database-password"),

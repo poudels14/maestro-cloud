@@ -46,7 +46,7 @@ async fn depot_cli_keeps_credentials_out_of_argv_and_imports_output() -> TestRes
             root: context.clone(),
             definition: PathBuf::from("Dockerfile"),
         },
-        arguments: BTreeMap::from([("PROFILE".to_owned(), "release".to_owned())]),
+        arguments: BTreeMap::from([("PROFILE".to_owned(), SecretValue::new("release"))]),
         secrets: BTreeMap::from([(
             "PRIVATE_TOKEN".to_owned(),
             SecretValue::new("build-secret-never-in-argv"),

@@ -1803,6 +1803,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
  "base64 0.22.1",
  "build",
  "chrono",
@@ -3207,6 +3208,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]

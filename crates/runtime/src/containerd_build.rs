@@ -168,7 +168,10 @@ fn build_invocation(
     ];
     for (key, value) in &request.arguments {
         arguments.push(OsString::from("--opt"));
-        arguments.push(OsString::from(format!("build-arg:{key}={value}")));
+        arguments.push(OsString::from(format!(
+            "build-arg:{key}={}",
+            value.expose()
+        )));
     }
     let mut environment = Vec::with_capacity(request.secrets.len());
     for (index, (key, value)) in request.secrets.iter().enumerate() {
@@ -238,7 +241,7 @@ async fn probe_buildkit(
 fn validate_request(request: &ArtifactBuildRequest) -> Result<(), ArtifactStoreError> {
     for (key, value) in &request.arguments {
         validate_key(BuildParameterKind::Argument, key)?;
-        if value.contains('\0') {
+        if value.expose().contains('\0') {
             return Err(rejected(format!(
                 "BuildKit argument `{key}` contains a null byte"
             )));

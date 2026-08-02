@@ -167,7 +167,12 @@ fn environment(configuration: &WorkloadConfiguration, image: &ImageDefaults) -> 
         .filter_map(|entry| entry.split_once('='))
         .map(|(name, value)| (name.to_owned(), value.to_owned()))
         .collect::<BTreeMap<_, _>>();
-    variables.extend(configuration.environment.clone());
+    variables.extend(
+        configuration
+            .environment
+            .iter()
+            .map(|(key, value)| (key.clone(), value.expose().to_owned())),
+    );
     let metadata = &configuration.metadata;
     variables.insert(
         "MAESTRO_CLUSTER_ID".to_owned(),

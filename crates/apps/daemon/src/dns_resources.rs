@@ -117,6 +117,7 @@ impl DnsResolverSystemResources {
                 }),
                 max_restarts: None,
                 environment: BTreeMap::new(),
+                environment_sources: Vec::new(),
                 user: Some(WorkloadUserSpec {
                     user_id: 0,
                     group_id: 0,

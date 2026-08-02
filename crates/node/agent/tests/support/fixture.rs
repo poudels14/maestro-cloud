@@ -219,6 +219,7 @@ fn deployment() -> Deployment {
                 }),
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
+                environment_sources: Vec::new(),
                 user: None,
                 node_api: kernel_api::NodeApiAccess::Disabled,
                 secrets: None,

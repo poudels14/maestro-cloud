@@ -3,8 +3,8 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, ClusterId, Deployment, HealthProbe, VolumeAccess, VolumeSource,
-    WorkloadId, workload_hostname,
+    ArtifactTemplate, Assignment, ClusterId, Deployment, HealthProbe, SecretValue, VolumeAccess,
+    VolumeSource, WorkloadId, workload_hostname,
 };
 use node_fabric::WORKLOAD_NODE_DIRECTORY;
 use runtime::{
@@ -13,10 +13,38 @@ use runtime::{
     WorkloadUser,
 };
 
+#[cfg(test)]
 pub(crate) fn workload_spec(
     cluster_id: &ClusterId,
     assignment: &Assignment,
     deployment: &Deployment,
+    dns_server: Option<IpAddr>,
+    additional_mounts: Vec<WorkloadMount>,
+    published_ports: Vec<HostPortPublication>,
+) -> Result<WorkloadSpec, WorkloadPlanError> {
+    let environment = deployment
+        .spec
+        .service
+        .environment
+        .iter()
+        .map(|(key, value)| (key.clone(), SecretValue::new(value.clone())))
+        .collect();
+    workload_spec_with_environment(
+        cluster_id,
+        assignment,
+        deployment,
+        environment,
+        dns_server,
+        additional_mounts,
+        published_ports,
+    )
+}
+
+pub(crate) fn workload_spec_with_environment(
+    cluster_id: &ClusterId,
+    assignment: &Assignment,
+    deployment: &Deployment,
+    environment: BTreeMap<String, SecretValue>,
     dns_server: Option<IpAddr>,
     additional_mounts: Vec<WorkloadMount>,
     published_ports: Vec<HostPortPublication>,
@@ -49,7 +77,7 @@ pub(crate) fn workload_spec(
                 labels,
             },
             hostname: workload_hostname(&assignment.spec.service_id, assignment.spec.replica_index),
-            environment: deployment.spec.service.environment.clone(),
+            environment,
             mounts,
             workload_address: assignment.spec.workload_address,
             dns_server,

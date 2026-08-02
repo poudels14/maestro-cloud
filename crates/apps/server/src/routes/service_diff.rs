@@ -78,6 +78,12 @@ pub(super) fn changes(
         Some(&current.environment),
         Some(&desired.environment),
     );
+    push_json(
+        &mut changes,
+        "environmentSources",
+        &current.environment_sources,
+        &desired.environment_sources,
+    )?;
     push_json(&mut changes, "user", &current.user, &desired.user)?;
     push_json(
         &mut changes,
@@ -96,6 +102,12 @@ pub(super) fn changes(
         "secrets.mountPath",
         &current.secrets.as_ref().map(SecretMountSpec::mount_path),
         &desired.secrets.as_ref().map(SecretMountSpec::mount_path),
+    )?;
+    push_json(
+        &mut changes,
+        "secrets.source",
+        &current.secrets.as_ref().and_then(dotenv_source),
+        &desired.secrets.as_ref().and_then(dotenv_source),
     )?;
     push_secret_map(
         &mut changes,
@@ -130,6 +142,13 @@ fn secret_format(secrets: &SecretMountSpec) -> &'static str {
 fn dotenv_items(secrets: &SecretMountSpec) -> Option<&BTreeMap<String, SecretValue>> {
     match secrets {
         SecretMountSpec::Dotenv { items, .. } => Some(items),
+        SecretMountSpec::Files { .. } => None,
+    }
+}
+
+fn dotenv_source(secrets: &SecretMountSpec) -> Option<&String> {
+    match secrets {
+        SecretMountSpec::Dotenv { source, .. } => source.as_ref(),
         SecretMountSpec::Files { .. } => None,
     }
 }

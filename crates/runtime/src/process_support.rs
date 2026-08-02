@@ -35,7 +35,12 @@ pub(crate) fn build_supervised_spec(
             message: "process runtime does not support remapped filesystem mounts".to_owned(),
         });
     }
-    let mut environment = process.configuration.environment.clone();
+    let mut environment = process
+        .configuration
+        .environment
+        .iter()
+        .map(|(key, value)| (key.clone(), value.expose().to_owned()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let metadata = &process.configuration.metadata;
     environment.insert(
         "MAESTRO_CLUSTER_ID".to_owned(),

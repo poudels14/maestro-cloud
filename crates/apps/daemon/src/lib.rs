@@ -48,6 +48,7 @@ mod tailscale_reconciler;
 mod tailscale_resources;
 mod traefik_resources;
 mod upgrade_config;
+mod value_source;
 mod workload_agents;
 
 pub use admission::AdmissionDependencies;

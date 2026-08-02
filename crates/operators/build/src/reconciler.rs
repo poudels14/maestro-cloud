@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +15,7 @@ use kernel_controller::{
 use kernel_store::{Clock, Keyspace};
 use runtime::{
     ArtifactBuildRequest, ArtifactDigest, ArtifactReference, ArtifactStore, ArtifactStoreError,
+    ValueSourceError, ValueSourceResolver,
 };
 
 use crate::DepotBuildBackend;
@@ -28,6 +30,7 @@ pub struct BuildReconciler {
     source: Arc<dyn BuildSourceProvider>,
     artifacts: Arc<dyn ArtifactStore>,
     depot: Option<Arc<dyn DepotBuildBackend>>,
+    value_sources: Option<Arc<dyn ValueSourceResolver>>,
     timestamp_clock: Arc<dyn TimestampClock>,
     writer: BuildStatusWriter,
     prefix: kernel_store::StorePrefix,
@@ -47,6 +50,7 @@ impl BuildReconciler {
             source,
             artifacts,
             depot: None,
+            value_sources: None,
             timestamp_clock,
             writer: BuildStatusWriter::new(&cluster_id)?,
             prefix: keyspace.resource_kind(&kind),
@@ -56,6 +60,15 @@ impl BuildReconciler {
     /// Selects the protected Depot backend for templates that name a Depot project.
     pub fn with_depot_backend(mut self, depot: Option<Arc<dyn DepotBuildBackend>>) -> Self {
         self.depot = depot;
+        self
+    }
+
+    /// Resolves external build value references only when a build consumes them.
+    pub fn with_value_source_resolver(
+        mut self,
+        resolver: Option<Arc<dyn ValueSourceResolver>>,
+    ) -> Self {
+        self.value_sources = resolver;
         self
     }
 
@@ -111,13 +124,24 @@ impl BuildReconciler {
                 .fail(build, context, "InvalidBuildDefinition", message)
                 .await;
         }
+        let secrets = match self.resolve_secrets(&build).await {
+            Ok(secrets) => secrets,
+            Err(ValueSourceError::Unavailable { message }) => {
+                return Err(ReconcileError::Retryable { message });
+            }
+            Err(ValueSourceError::Rejected { message }) => {
+                return self
+                    .fail(build, context, "ExternalValueSourceRejected", message)
+                    .await;
+            }
+        };
         match self
             .source
             .prepare(
                 &build.meta.id,
                 &build.spec.template.source,
                 None,
-                github_token(&build),
+                github_token(&secrets),
             )
             .await
         {
@@ -167,13 +191,24 @@ impl BuildReconciler {
                 )
                 .await;
         };
+        let secrets = match self.resolve_secrets(&build).await {
+            Ok(secrets) => secrets,
+            Err(ValueSourceError::Unavailable { message }) => {
+                return Err(ReconcileError::Retryable { message });
+            }
+            Err(ValueSourceError::Rejected { message }) => {
+                return self
+                    .fail(build, context, "ExternalValueSourceRejected", message)
+                    .await;
+            }
+        };
         let prepared = match self
             .source
             .prepare(
                 &build.meta.id,
                 &build.spec.template.source,
                 Some(&revision),
-                github_token(&build),
+                github_token(&secrets),
             )
             .await
         {
@@ -198,7 +233,19 @@ impl BuildReconciler {
                 )
                 .await;
         }
-        self.run_artifact_build(build, context, prepared).await
+        let environment = match self.resolve_environment(&build).await {
+            Ok(environment) => environment,
+            Err(ValueSourceError::Unavailable { message }) => {
+                return Err(ReconcileError::Retryable { message });
+            }
+            Err(ValueSourceError::Rejected { message }) => {
+                return self
+                    .fail(build, context, "ExternalValueSourceRejected", message)
+                    .await;
+            }
+        };
+        self.run_artifact_build(build, context, prepared, environment, secrets)
+            .await
     }
 
     async fn run_artifact_build(
@@ -206,12 +253,14 @@ impl BuildReconciler {
         mut build: Build,
         context: &ReconcileContext,
         prepared: PreparedBuildSource,
+        arguments: BTreeMap<String, kernel_api::SecretValue>,
+        secrets: BTreeMap<String, kernel_api::SecretValue>,
     ) -> Result<Action, ReconcileError> {
         let definition = PathBuf::from(&build.spec.template.dockerfile);
         let request = ArtifactBuildRequest {
             source: with_definition(prepared, definition),
-            arguments: build.spec.template.environment.clone(),
-            secrets: build.spec.template.secrets.clone(),
+            arguments,
+            secrets,
             tags: Vec::new(),
         };
         match self.build_and_publish(&build, &request).await {
@@ -237,6 +286,52 @@ impl BuildReconciler {
                     .await
             }
         }
+    }
+
+    async fn resolve_environment(
+        &self,
+        build: &Build,
+    ) -> Result<BTreeMap<String, kernel_api::SecretValue>, ValueSourceError> {
+        let mut values = self
+            .resolve_source(build.spec.template.environment_source.as_deref())
+            .await?;
+        values.extend(
+            build
+                .spec
+                .template
+                .environment
+                .iter()
+                .map(|(key, value)| (key.clone(), kernel_api::SecretValue::new(value.clone()))),
+        );
+        Ok(values)
+    }
+
+    async fn resolve_secrets(
+        &self,
+        build: &Build,
+    ) -> Result<BTreeMap<String, kernel_api::SecretValue>, ValueSourceError> {
+        let mut values = self
+            .resolve_source(build.spec.template.secrets_source.as_deref())
+            .await?;
+        values.extend(build.spec.template.secrets.clone());
+        Ok(values)
+    }
+
+    async fn resolve_source(
+        &self,
+        source: Option<&str>,
+    ) -> Result<BTreeMap<String, kernel_api::SecretValue>, ValueSourceError> {
+        let Some(source) = source else {
+            return Ok(BTreeMap::new());
+        };
+        let resolver = self
+            .value_sources
+            .as_ref()
+            .ok_or_else(|| ValueSourceError::Rejected {
+                message: "build contains an external value source but no resolver is configured"
+                    .to_owned(),
+            })?;
+        resolver.resolve(source).await
     }
 
     async fn build_and_publish(
@@ -331,8 +426,10 @@ impl BuildReconciler {
     }
 }
 
-fn github_token(build: &Build) -> Option<&kernel_api::SecretValue> {
-    build.spec.template.secrets.get("GH_TOKEN")
+fn github_token(
+    secrets: &BTreeMap<String, kernel_api::SecretValue>,
+) -> Option<&kernel_api::SecretValue> {
+    secrets.get("GH_TOKEN")
 }
 
 #[async_trait]

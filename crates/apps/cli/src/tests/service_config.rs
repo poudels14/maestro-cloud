@@ -161,7 +161,7 @@ async fn uploaded_service_requires_the_services_document_envelope()
 }
 
 #[tokio::test]
-async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaults()
+async fn value_sources_resolve_relative_files_and_preserve_expanded_aws_references()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = "file:///config/maestro.services.jsonc";
     let reader = MemoryReader {
@@ -179,12 +179,13 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
                                 registry: "registry.example/team/",
                                 depot: { project: "project-123" },
                                 env: { source: "build.env" },
-                                secrets: {
-                                    source: "${MAESTRO_TEST_VALUE_SOURCE:-aws-secret://build-secrets}"
-                                }
                             },
                             deploy: {
                                 env: { items: { MODE: "fallback" } },
+                                secrets: {
+                                    mountPath: "/run/secrets/app.env",
+                                    source: "${MAESTRO_TEST_SECRET_SOURCE:-aws-secret://deploy-secrets}"
+                                },
                                 replicas: 1
                             }
                         }
@@ -195,10 +196,6 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
             (
                 "file:///config/build.env".to_string(),
                 "PROFILE=release\nFEATURES=default".to_string(),
-            ),
-            (
-                "aws-secret://build-secrets".to_string(),
-                r#"{"REGISTRY_TOKEN":"private-token"}"#.to_string(),
             ),
         ]),
     };
@@ -215,10 +212,7 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
         template.environment.get("PROFILE").map(String::as_str),
         Some("release")
     );
-    assert_eq!(
-        template.secrets.get("REGISTRY_TOKEN"),
-        Some(&SecretValue::new("private-token"))
-    );
+    assert!(template.secrets.is_empty());
     assert_eq!(template.registry.as_deref(), Some("registry.example/team"));
     assert_eq!(
         template.depot.as_ref().map(|depot| depot.project.as_str()),
@@ -227,6 +221,15 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
     assert_eq!(
         desired.spec.environment.get("MODE").map(String::as_str),
         Some("fallback")
+    );
+    let Some(kernel_api::SecretMountSpec::Dotenv { source, items, .. }) = &desired.spec.secrets
+    else {
+        return Err("expected dotenv secret mount".into());
+    };
+    assert_eq!(source.as_deref(), Some("aws-secret://deploy-secrets"));
+    assert!(
+        items.is_empty(),
+        "AWS secret contents must not be loaded by the CLI"
     );
     Ok(())
 }

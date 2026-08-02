@@ -83,7 +83,11 @@ impl BuildAcceptanceWorld {
             .builds()
             .into_iter()
             .map(|request| ArtifactBuildSnapshot {
-                arguments: request.arguments,
+                arguments: request
+                    .arguments
+                    .into_iter()
+                    .map(|(name, value)| (name, value.expose().to_owned()))
+                    .collect(),
                 secret_names: request.secrets.into_keys().collect(),
             })
             .collect();
@@ -129,6 +133,7 @@ impl BuildCluster for BuildAcceptanceWorld {
                 registry: None,
                 depot: None,
                 environment: fixture.arguments,
+                environment_source: None,
                 secrets: fixture
                     .secret_names
                     .into_iter()
@@ -137,6 +142,7 @@ impl BuildCluster for BuildAcceptanceWorld {
                         (name, value)
                     })
                     .collect::<BTreeMap<_, _>>(),
+                secrets_source: None,
             },
         };
         put(&self.inner.store, &self.inner.keys, "Service", &resource)

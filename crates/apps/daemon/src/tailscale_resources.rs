@@ -195,10 +195,12 @@ impl TailscaleSystemResources {
                 }),
                 max_restarts: None,
                 environment,
+                environment_sources: Vec::new(),
                 user: None,
                 node_api: NodeApiAccess::Disabled,
                 secrets: Some(SecretMountSpec::Dotenv {
                     mount_path: "/run/secrets/tailscale.env".to_owned(),
+                    source: None,
                     items: BTreeMap::from([("TS_AUTHKEY".to_owned(), config.auth_key.clone())]),
                 }),
                 volumes: vec![VolumeMountSpec {

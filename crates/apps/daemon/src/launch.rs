@@ -46,6 +46,7 @@ use crate::platform::{AbsentHostNetworkBackend, RuntimeDelegatedNetworkStatsRead
 use crate::tailscale_resources::TAILSCALE_IPV4_CIDR;
 use crate::tailscale_resources::TailscaleSystemResources;
 use crate::traefik_resources::TraefikSystemResources;
+use crate::value_source::AwsValueSourceResolver;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
     DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, HostTelemetryDependencies,
@@ -295,6 +296,8 @@ async fn launch_daemon_inner(
         HttpWebhookBackend::new(Duration::from_secs(10))
             .map_err(|error| invalid(error.to_string()))?,
     );
+    let aws_sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let value_sources = Arc::new(AwsValueSourceResolver::new(&aws_sdk));
     let operator_workload = Arc::new(
         OperatorLeaderWorkload::new(
             cluster.cluster_id.clone(),
@@ -306,6 +309,7 @@ async fn launch_daemon_inner(
                 revisions: build_source.clone(),
                 artifacts: runtime.clone(),
                 depot: depot_backend,
+                value_sources: Some(value_sources.clone()),
                 pull_requests: configured_preview.map(|preview| preview.pull_requests),
                 upgrades: None,
                 store_upgrades,
@@ -401,6 +405,7 @@ async fn launch_daemon_inner(
         DaemonRoleSettings::default(),
     )
     .with_log_maintenance(log_maintenance)
+    .with_value_source_resolver(value_sources)
     .with_webhook_backend(webhook_backend)
     .with_leader_workload(operator_workload);
     if let Some(admin) = launch_config_admin {

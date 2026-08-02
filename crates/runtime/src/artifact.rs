@@ -131,8 +131,8 @@ pub enum ArtifactSource {
 pub struct ArtifactBuildRequest {
     /// Directory or archive source.
     pub source: ArtifactSource,
-    /// Non-secret build arguments.
-    pub arguments: BTreeMap<String, String>,
+    /// Build arguments retained in zeroizing memory until handed to the build backend.
+    pub arguments: BTreeMap<String, SecretValue>,
     /// Secret build arguments passed through the backend's protected secret mechanism.
     pub secrets: BTreeMap<String, SecretValue>,
     /// References assigned only after a successful build.

@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use kernel_api::{HealthCheckSpec, HealthProbe, VolumeSource, WorkloadUserSpec};
+use kernel_api::{HealthCheckSpec, HealthProbe, SecretValue, VolumeSource, WorkloadUserSpec};
 use runtime::{
     HEALTHCHECK_PATH_LABEL, HostPortPublication, MountAccess, MountSource, PortProtocol,
     WorkloadSpec, WorkloadUser,
@@ -46,7 +46,7 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
             .configuration
             .environment
             .get("MODE")
-            .map(String::as_str),
+            .map(SecretValue::expose),
         Some("production")
     );
     assert_eq!(workload.configuration.mounts.len(), 1);

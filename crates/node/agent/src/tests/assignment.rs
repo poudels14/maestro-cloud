@@ -20,7 +20,8 @@ use kernel_store::{
 };
 use runtime::{
     FakeNetworkProvider, FakeRuntime, FakeRuntimeOperation, NetworkAddressing, NetworkCidr,
-    NetworkProvider, NetworkSpec, RuntimeError, ShutdownRequest, WorkloadRuntime,
+    NetworkProvider, NetworkSpec, RuntimeError, ShutdownRequest, ValueSourceError,
+    ValueSourceResolver, WorkloadRuntime, WorkloadSpec,
 };
 use tokio::sync::{Notify, watch};
 
@@ -396,6 +397,7 @@ async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
     let mut deployment = deployment();
     deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: None,
         items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("sensitive"))]),
     });
     world.seed(&deployment, &assignment()).await?;
@@ -418,6 +420,95 @@ async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
     world.agent().reconcile_once().await?;
     assert!(!secret_path.exists());
     Ok(())
+}
+
+#[tokio::test]
+async fn assignment_resolves_external_values_only_at_workload_creation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut deployment = deployment();
+    deployment.spec.service.environment.clear();
+    deployment.spec.service.environment_sources =
+        vec!["aws-secret://runtime-environment".to_owned()];
+    deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
+        mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: Some("aws-secret://runtime-secrets".to_owned()),
+        items: BTreeMap::new(),
+    });
+    world.seed(&deployment, &assignment()).await?;
+
+    let stored_before = world.load_deployment().await?;
+    let encoded_before = serde_json::to_string(&stored_before)?;
+    assert!(encoded_before.contains("aws-secret://runtime-environment"));
+    assert!(encoded_before.contains("aws-secret://runtime-secrets"));
+    assert!(!encoded_before.contains("resolved-mode"));
+    assert!(!encoded_before.contains("resolved-token"));
+
+    let resolver = Arc::new(FakeValueSources {
+        values: BTreeMap::from([
+            (
+                "aws-secret://runtime-environment".to_owned(),
+                BTreeMap::from([("MODE".to_owned(), SecretValue::new("resolved-mode"))]),
+            ),
+            (
+                "aws-secret://runtime-secrets".to_owned(),
+                BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("resolved-token"))]),
+            ),
+        ]),
+        calls: AtomicU64::new(0),
+    });
+    let agent = world.agent().with_value_source_resolver(resolver.clone());
+    agent.reconcile_once().await?;
+    agent.reconcile_once().await?;
+
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        std::fs::read_to_string(world.secrets.path().join("assignment-1/secrets.env"))?,
+        "TOKEN=\"resolved-token\"\n"
+    );
+    let spec = world
+        .runtime
+        .workload_spec(&kernel_api::WorkloadId::new("assignment-1")?)?
+        .ok_or("workload spec missing")?;
+    let WorkloadSpec::Container(workload) = spec else {
+        return Err("expected container workload".into());
+    };
+    assert_eq!(
+        workload
+            .configuration
+            .environment
+            .get("MODE")
+            .map(SecretValue::expose),
+        Some("resolved-mode")
+    );
+
+    let encoded_after = serde_json::to_string(&world.load_deployment().await?)?;
+    assert!(encoded_after.contains("aws-secret://runtime-environment"));
+    assert!(encoded_after.contains("aws-secret://runtime-secrets"));
+    assert!(!encoded_after.contains("resolved-mode"));
+    assert!(!encoded_after.contains("resolved-token"));
+    Ok(())
+}
+
+struct FakeValueSources {
+    values: BTreeMap<String, BTreeMap<String, SecretValue>>,
+    calls: AtomicU64,
+}
+
+#[async_trait]
+impl ValueSourceResolver for FakeValueSources {
+    async fn resolve(
+        &self,
+        source: &str,
+    ) -> Result<BTreeMap<String, SecretValue>, ValueSourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.values
+            .get(source)
+            .cloned()
+            .ok_or_else(|| ValueSourceError::Rejected {
+                message: format!("missing fake source `{source}`"),
+            })
+    }
 }
 
 pub(crate) fn cluster_id() -> ClusterId {
@@ -490,6 +581,7 @@ pub(crate) fn deployment() -> Deployment {
                 health_check: None,
                 max_restarts: Some(3),
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
+                environment_sources: Vec::new(),
                 user: None,
                 node_api: kernel_api::NodeApiAccess::Disabled,
                 secrets: None,
@@ -670,6 +762,15 @@ impl World {
             .get(&self.assignment_key())
             .await?
             .ok_or("assignment missing")?;
+        Ok(serde_json::from_slice(&stored.value)?)
+    }
+
+    async fn load_deployment(&self) -> Result<Deployment, Box<dyn std::error::Error>> {
+        let key = Keyspace::new(&cluster_id()).resource(
+            &ResourceKind::new("Deployment")?,
+            &ResourceName::new("deployment-1")?,
+        );
+        let stored = self.store.get(&key).await?.ok_or("deployment missing")?;
         Ok(serde_json::from_slice(&stored.value)?)
     }
 

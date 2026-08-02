@@ -6,7 +6,7 @@ use kernel_api::ClusterId;
 use kernel_controller::{FencedStore, TimestampClock};
 use kernel_store::Clock;
 use preview::PullRequestApi;
-use runtime::ArtifactStore;
+use runtime::{ArtifactStore, ValueSourceResolver};
 use tokio::sync::watch;
 use upgrade::{NodeUpgradeBackend, StoreNodeUpgradeBackend, StoreNodeUpgradeBackendSettings};
 use webhook::WebhookDeliveryBackend;
@@ -38,6 +38,8 @@ pub struct OperatorBackends {
     pub artifacts: Arc<dyn ArtifactStore>,
     /// Runs service builds that select a Depot project.
     pub depot: Option<Arc<dyn DepotBuildBackend>>,
+    /// Resolves external build environment and secret references at build execution time.
+    pub value_sources: Option<Arc<dyn ValueSourceResolver>>,
     /// Lists pull requests and upserts preview feedback when previews are configured.
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
     /// Applies idempotent rolling or all-node host upgrade batches.
@@ -57,6 +59,8 @@ pub struct BuildOperatorBackends {
     pub artifacts: Arc<dyn ArtifactStore>,
     /// Fence-independent Depot process adapter retained across leadership terms.
     pub depot: Option<Arc<dyn DepotBuildBackend>>,
+    /// Resolves external build environment and secret references at build execution time.
+    pub value_sources: Option<Arc<dyn ValueSourceResolver>>,
     /// Fence-independent pull-request API retained across leadership terms.
     pub pull_requests: Option<Arc<dyn PullRequestApi>>,
     /// Fence-independent node-upgrade backend retained across leadership terms.
@@ -255,6 +259,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 build_revisions: self.builds.revisions.clone(),
                 artifacts: self.builds.artifacts.clone(),
                 depot: self.builds.depot.clone(),
+                value_sources: self.builds.value_sources.clone(),
                 pull_requests: self.builds.pull_requests.clone(),
                 upgrades,
                 webhooks: self.builds.webhooks.clone(),

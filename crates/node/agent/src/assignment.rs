@@ -1,12 +1,14 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, Deployment, ReplicaState, ResourceKind, ResourceName,
+    SecretMountSpec, SecretValue,
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
     AddressRequest, ArtifactDigest, NetworkHandle, NetworkProvider, RuntimeError, ShutdownRequest,
-    WorkloadHandle, WorkloadRuntime, WorkloadState,
+    ValueSourceError, ValueSourceResolver, WorkloadHandle, WorkloadRuntime, WorkloadState,
 };
 
 #[path = "assignment_reconcile.rs"]
@@ -20,7 +22,7 @@ use crate::assignment_error::AssignmentAgentError;
 use crate::assignment_node_api::mount_node_api;
 #[cfg(not(unix))]
 use crate::assignment_plan::node_api_user;
-use crate::assignment_plan::{workload_id, workload_spec};
+use crate::assignment_plan::{workload_id, workload_spec_with_environment};
 use crate::assignment_resource::decode_assignment;
 use crate::assignment_restart::{
     RestartReservation, finish_pending_restart, reserve_restart, restart_failure,
@@ -42,6 +44,37 @@ const REPLICA_STATE_KIND: &str = "ReplicaState";
 const RUNTIME_RETRY_REASON: &str = "RuntimeRetry";
 const MAX_CAS_ATTEMPTS: usize = 16;
 
+#[derive(Clone)]
+struct ResolvedDeployment {
+    deployment: Deployment,
+    environment: std::collections::BTreeMap<String, SecretValue>,
+}
+
+fn validate_runtime_environment(
+    values: &std::collections::BTreeMap<String, SecretValue>,
+) -> Result<(), ConvergeFailure> {
+    for (key, value) in values {
+        let mut characters = key.chars();
+        let valid_key = characters
+            .next()
+            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+            && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
+        if !valid_key {
+            return Err(ConvergeFailure::failed(
+                "ExternalValueSourceRejected",
+                format!("environment key `{key}` must match [A-Za-z_][A-Za-z0-9_]*"),
+            ));
+        }
+        if value.expose().contains('\0') {
+            return Err(ConvergeFailure::failed(
+                "ExternalValueSourceRejected",
+                format!("environment value `{key}` contains NUL"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Level-triggered node reconciler for assignment lifecycle, adoption, and garbage collection.
 pub struct AssignmentAgent {
     store: Arc<dyn Store>,
@@ -55,6 +88,9 @@ pub struct AssignmentAgent {
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
     artifact_replication: Option<Arc<ArtifactReplicationAgent>>,
+    value_sources: Option<Arc<dyn ValueSourceResolver>>,
+    resolved_deployments:
+        Mutex<std::collections::BTreeMap<kernel_api::DeploymentId, ResolvedDeployment>>,
     secrets: SecretMountManager,
     #[cfg(unix)]
     node_api: NodeApiMountManager,
@@ -99,6 +135,8 @@ impl AssignmentAgent {
             monotonic_clock,
             status_clock,
             artifact_replication: None,
+            value_sources: None,
+            resolved_deployments: Mutex::new(std::collections::BTreeMap::new()),
             secrets,
             #[cfg(unix)]
             node_api,
@@ -108,6 +146,12 @@ impl AssignmentAgent {
     /// Requires registry-free build artifacts to be local before workload creation.
     pub fn with_artifact_replication(mut self, replication: Arc<ArtifactReplicationAgent>) -> Self {
         self.artifact_replication = Some(replication);
+        self
+    }
+
+    /// Resolves external deploy environment and secret references immediately before workload creation.
+    pub fn with_value_source_resolver(mut self, resolver: Arc<dyn ValueSourceResolver>) -> Self {
+        self.value_sources = Some(resolver);
         self
     }
 
@@ -143,6 +187,8 @@ impl AssignmentAgent {
                 ConvergeFailure::pending("ArtifactReplicationUnavailable", error.to_string())
             })?;
         }
+        let resolved = self.resolve_deployment_sources(deployment).await?;
+        let deployment = &resolved.deployment;
         let workload_id = workload_id(assignment)?;
         let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {
@@ -163,10 +209,11 @@ impl AssignmentAgent {
                 "node API workloads require a Unix host".to_owned(),
             ));
         }
-        let spec = workload_spec(
+        let spec = workload_spec_with_environment(
             &self.settings.cluster_id,
             assignment,
             deployment,
+            resolved.environment.clone(),
             dns_server,
             additional_mounts,
             runtime_host_ports(
@@ -280,6 +327,83 @@ impl AssignmentAgent {
                 runtime_status_message(&status),
             ))
         }
+    }
+
+    async fn resolve_deployment_sources(
+        &self,
+        deployment: &Deployment,
+    ) -> Result<ResolvedDeployment, ConvergeFailure> {
+        if let Some(deployment) = self
+            .resolved_deployments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&deployment.meta.id)
+            .cloned()
+        {
+            return Ok(deployment);
+        }
+        let mut deployment = deployment.clone();
+        let mut resolved_source = false;
+        let environment_sources = std::mem::take(&mut deployment.spec.service.environment_sources);
+        let mut environment = std::collections::BTreeMap::new();
+        for source in environment_sources {
+            resolved_source = true;
+            environment.extend(self.resolve_value_source(&source).await?);
+        }
+        environment.extend(
+            deployment
+                .spec
+                .service
+                .environment
+                .iter()
+                .map(|(key, value)| (key.clone(), SecretValue::new(value.clone()))),
+        );
+        if let Some(SecretMountSpec::Dotenv { source, items, .. }) =
+            deployment.spec.service.secrets.as_mut()
+            && let Some(source) = source.take()
+        {
+            resolved_source = true;
+            let values = self.resolve_value_source(&source).await?;
+            let inline = std::mem::take(items);
+            *items = values;
+            items.extend(inline);
+        }
+        validate_runtime_environment(&environment)?;
+        if resolved_source {
+            deployment.spec.service.validate().map_err(|error| {
+                ConvergeFailure::failed("ExternalValueSourceRejected", error.to_string())
+            })?;
+        }
+        let resolved = ResolvedDeployment {
+            deployment,
+            environment,
+        };
+        self.resolved_deployments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(resolved.deployment.meta.id.clone(), resolved.clone());
+        Ok(resolved)
+    }
+
+    async fn resolve_value_source(
+        &self,
+        source: &str,
+    ) -> Result<std::collections::BTreeMap<String, SecretValue>, ConvergeFailure> {
+        let resolver = self.value_sources.as_ref().ok_or_else(|| {
+            ConvergeFailure::failed(
+                "ExternalValueSourceUnsupported",
+                "deployment contains an external value source but no resolver is configured"
+                    .to_owned(),
+            )
+        })?;
+        resolver.resolve(source).await.map_err(|error| match error {
+            ValueSourceError::Unavailable { message } => {
+                ConvergeFailure::pending("ExternalValueSourceUnavailable", message)
+            }
+            ValueSourceError::Rejected { message } => {
+                ConvergeFailure::failed("ExternalValueSourceRejected", message)
+            }
+        })
     }
 
     async fn remove_workload(

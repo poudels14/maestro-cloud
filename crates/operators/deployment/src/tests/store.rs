@@ -585,7 +585,9 @@ fn build_service() -> Service {
             registry: None,
             depot: None,
             environment: BTreeMap::new(),
+            environment_source: None,
             secrets: BTreeMap::new(),
+            secrets_source: None,
         },
     })
 }
@@ -604,6 +606,7 @@ fn service(artifact: ArtifactTemplate) -> Service {
             health_check: None,
             max_restarts: Some(3),
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: None,

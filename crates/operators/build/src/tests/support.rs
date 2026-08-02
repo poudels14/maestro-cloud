@@ -19,6 +19,7 @@ use kernel_store::{
 use runtime::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
+    ValueSourceResolver,
 };
 
 use crate::{
@@ -106,6 +107,25 @@ impl TestWorld {
         artifacts: Arc<dyn ArtifactStore>,
         depot: Option<Arc<dyn DepotBuildBackend>>,
     ) -> TestResult<kernel_controller::ControllerRuntime<BuildReconciler>> {
+        self.runtime_with_backends(source, artifacts, depot, None)
+    }
+
+    pub(super) fn runtime_with_value_sources(
+        &self,
+        source: Arc<dyn BuildSourceProvider>,
+        artifacts: Arc<dyn ArtifactStore>,
+        value_sources: Arc<dyn ValueSourceResolver>,
+    ) -> TestResult<kernel_controller::ControllerRuntime<BuildReconciler>> {
+        self.runtime_with_backends(source, artifacts, None, Some(value_sources))
+    }
+
+    fn runtime_with_backends(
+        &self,
+        source: Arc<dyn BuildSourceProvider>,
+        artifacts: Arc<dyn ArtifactStore>,
+        depot: Option<Arc<dyn DepotBuildBackend>>,
+        value_sources: Option<Arc<dyn ValueSourceResolver>>,
+    ) -> TestResult<kernel_controller::ControllerRuntime<BuildReconciler>> {
         let reconciler = Arc::new(
             BuildReconciler::new(
                 self.cluster_id.clone(),
@@ -113,7 +133,8 @@ impl TestWorld {
                 artifacts,
                 Arc::new(FixedTimestampClock),
             )?
-            .with_depot_backend(depot),
+            .with_depot_backend(depot)
+            .with_value_source_resolver(value_sources),
         );
         Ok(reconciler.runtime(
             self.fenced.clone(),
@@ -191,6 +212,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                 registry: None,
                 depot: None,
                 environment: BTreeMap::from([("PROFILE".to_string(), "release".to_string())]),
+                environment_source: None,
                 secrets: BTreeMap::from([
                     (
                         "GH_TOKEN".to_string(),
@@ -201,6 +223,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                         kernel_api::SecretValue::new("secret-value"),
                     ),
                 ]),
+                secrets_source: None,
             },
         },
         status: BuildStatus {

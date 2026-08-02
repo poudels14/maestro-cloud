@@ -61,9 +61,15 @@ pub struct BuildTemplate {
     /// Non-secret build variables.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
+    /// External source resolved by the build worker immediately before use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_source: Option<String>,
     /// Secret build variables that are redacted from debug output.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: BTreeMap<String, SecretValue>,
+    /// External secret source resolved by the build worker immediately before use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets_source: Option<String>,
 }
 
 /// Service-level selection for Depot's remote builder infrastructure.
@@ -153,6 +159,9 @@ pub enum SecretMountSpec {
     Dotenv {
         /// Absolute workload-visible file path.
         mount_path: String,
+        /// External secret source resolved after build, immediately before workload creation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
         /// Dotenv keys and plaintext values encrypted by the store boundary.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         items: BTreeMap<String, SecretValue>,
@@ -330,6 +339,9 @@ pub struct PreviewPolicy {
     /// Runtime environment overlaid on the derived service.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
+    /// External runtime environment source preserved for deployment-time resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_source: Option<String>,
 }
 
 /// Desired service configuration used to create immutable deployments.
@@ -362,6 +374,9 @@ pub struct ServiceSpec {
     /// Non-secret runtime environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
+    /// Ordered external runtime environment sources resolved after build, before workload creation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment_sources: Vec<String>,
     /// Explicit numeric process identity, required when the node API is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<WorkloadUserSpec>,

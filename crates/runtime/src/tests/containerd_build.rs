@@ -57,8 +57,8 @@ async fn buildkit_runner_receives_exact_cli_artifact_and_environment_only_secret
             definition: PathBuf::from("Containerfile"),
         },
         arguments: BTreeMap::from([
-            ("CHANNEL,NAME".to_owned(), "stable".to_owned()),
-            ("MODE".to_owned(), "release".to_owned()),
+            ("CHANNEL,NAME".to_owned(), SecretValue::new("stable")),
+            ("MODE".to_owned(), SecretValue::new("release")),
         ]),
         secrets: BTreeMap::from([(
             "registry-token".to_owned(),

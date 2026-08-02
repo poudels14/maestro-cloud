@@ -363,6 +363,7 @@ fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
             health_check: None,
             max_restarts: Some(3),
             environment: BTreeMap::new(),
+            environment_sources: Vec::new(),
             user: None,
             node_api: NodeApiAccess::Disabled,
             secrets: None,
@@ -413,10 +414,12 @@ fn queued_build() -> Result<Build, kernel_api::InvalidIdentifier> {
                 registry: None,
                 depot: None,
                 environment: BTreeMap::new(),
+                environment_source: None,
                 secrets: BTreeMap::from([(
                     "GH_TOKEN".to_owned(),
                     SecretValue::new("github-token"),
                 )]),
+                secrets_source: None,
             },
         },
         status: BuildStatus {

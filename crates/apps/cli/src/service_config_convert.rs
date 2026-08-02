@@ -81,7 +81,7 @@ pub(super) async fn convert_service(
                 &format!("{path}.deploy.secrets.mountPath"),
                 &secrets.mount_path,
             )?;
-            let items = resolve_values(
+            let values = resolve_values(
                 config_source,
                 &format!("{path}.deploy.secrets"),
                 ValueSource {
@@ -91,11 +91,17 @@ pub(super) async fn convert_service(
                 reader,
                 MaestroTemplatePolicy::Reject,
             )
-            .await?
-            .into_iter()
-            .map(|(key, value)| (key, SecretValue::new(value)))
-            .collect();
-            Some(SecretMountSpec::Dotenv { mount_path, items })
+            .await?;
+            let items = values
+                .items
+                .into_iter()
+                .map(|(key, value)| (key, SecretValue::new(value)))
+                .collect();
+            Some(SecretMountSpec::Dotenv {
+                mount_path,
+                source: values.source,
+                items,
+            })
         }
     };
 
@@ -171,7 +177,8 @@ pub(super) async fn convert_service(
         exposed_ports,
         health_check,
         max_restarts: template.deploy.max_restarts,
-        environment,
+        environment: environment.items,
+        environment_sources: environment.source.into_iter().collect(),
         user: None,
         node_api: NodeApiAccess::Disabled,
         secrets,
@@ -285,10 +292,12 @@ async fn convert_build(
         reader,
         MaestroTemplatePolicy::Reject,
     )
-    .await?
-    .into_iter()
-    .map(|(key, value)| (key, SecretValue::new(value)))
-    .collect();
+    .await?;
+    let secret_items = secrets
+        .items
+        .into_iter()
+        .map(|(key, value)| (key, SecretValue::new(value)))
+        .collect();
     let source = match source {
         BuildSourceSelection::ConfiguredGit => {
             let repository = build.repo.ok_or_else(|| {
@@ -350,8 +359,10 @@ async fn convert_build(
         watch: build.watch,
         registry,
         depot,
-        environment,
-        secrets,
+        environment: environment.items,
+        environment_source: environment.source,
+        secrets: secret_items,
+        secrets_source: secrets.source,
     })
 }
 
@@ -380,8 +391,14 @@ async fn convert_preview(
         close_grace_period_secs,
         lifetime_secs: 30 * 24 * 60 * 60,
         replicas: preview.replicas,
-        environment,
+        environment: environment.items,
+        environment_source: environment.source,
     }))
+}
+
+struct ResolvedValues {
+    source: Option<String>,
+    items: BTreeMap<String, String>,
 }
 
 async fn resolve_values(
@@ -390,23 +407,27 @@ async fn resolve_values(
     values: ValueSource,
     reader: &impl ConfigSourceReader,
     maestro_templates: MaestroTemplatePolicy,
-) -> Result<BTreeMap<String, String>, CliError> {
+) -> Result<ResolvedValues, CliError> {
     if values.source.is_some() && !values.items.is_empty() {
         return Err(invalid(field, "set either `source` or `items`, not both"));
     }
-    let mut items = if let Some(source) = values.source {
+    let (source, mut items) = if let Some(source) = values.source {
         let source = expand_local_environment(&source, MaestroTemplatePolicy::Reject)
             .map_err(|error| invalid(&format!("{field}.source"), error))?;
         let source = resolve_relative_source(config_source, &source)?;
-        parse_key_values(field, &reader.read(&source).await?)?
+        if source.starts_with("aws-secret://") {
+            (Some(source), BTreeMap::new())
+        } else {
+            (None, parse_key_values(field, &reader.read(&source).await?)?)
+        }
     } else {
-        values.items
+        (None, values.items)
     };
     for (key, value) in &mut items {
         *value = expand_local_environment(value, maestro_templates)
             .map_err(|error| invalid(&format!("{field}.items.{key}"), error))?;
     }
-    Ok(items)
+    Ok(ResolvedValues { source, items })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

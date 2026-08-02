@@ -95,6 +95,7 @@ mod process_stream;
 #[cfg(target_os = "linux")]
 mod process_support;
 mod stats;
+mod value_source;
 mod workload;
 
 pub use artifact::{
@@ -132,6 +133,7 @@ pub use stats::{
     WorkloadNetworkStats, WorkloadProcessStats, WorkloadResourceStats, WorkloadStatsReading,
     WorkloadStatsSnapshot,
 };
+pub use value_source::{ValueSourceError, ValueSourceResolver};
 pub use workload::{
     ContainerWorkload, EventCursor, EventRequest, HEALTHCHECK_PATH_LABEL, HostPortPublication,
     MountAccess, MountSource, ObservedWorkload, PortProtocol, ProcessWorkload, RuntimeEvent,
