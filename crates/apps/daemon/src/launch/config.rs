@@ -83,7 +83,7 @@ pub struct DaemonLaunchConfig {
     /// Optional cluster-wide GitHub pull-request previews.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewLaunchConfig>,
-    /// Optional NixOS staging and reboot policy; absence disables cluster upgrades.
+    /// Optional NixOS staging override; absence uses `/etc/maestro#default` on Linux.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nixos_upgrade: Option<NixosUpgradeLaunchConfig>,
 }

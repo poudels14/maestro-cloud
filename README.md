@@ -162,7 +162,9 @@ fields accept literal values, `file://` sources, or `aws-secret://` sources.
 Every daemon fetches and resolves that source on every service start, so an AWS
 Secrets Manager update takes effect after restarting the node. Node admission
 returns only node-bound bootstrap material; it does not copy shared config into
-the launch document. The cluster config API never returns secret values.
+the launch document. The cluster config API never returns secret values. When
+`nixos-upgrade` is omitted, Linux nodes upgrade through the standard init flake
+at `/etc/maestro#default`; that setting is only needed to override the default.
 
 For multi-node admission, network requirements, verification, drain, restart,
 upgrade, and removal procedures, follow

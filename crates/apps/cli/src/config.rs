@@ -337,6 +337,7 @@ const CLUSTER_TEMPLATE: &str = r#"{
   //   "github-token": "aws-secret://maestro/github-token",
   //   "max-concurrent-previews": 20
   // },
+  // Optional override; upgrades use /etc/maestro#default when omitted.
   // "nixos-upgrade": {
   //   "flake": "/etc/maestro",
   //   "configuration": "production"

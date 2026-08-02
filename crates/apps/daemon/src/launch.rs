@@ -26,7 +26,6 @@ use node_agent::{
 use runtime::DockerRuntime;
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
-use semver::Version;
 use server::{ServerSettings, TlsIdentity};
 use upgrade::StoreNodeUpgradeBackendSettings;
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
@@ -194,26 +193,14 @@ async fn launch_daemon_inner(
         .as_ref()
         .map(crate::preview_config::configure_preview)
         .transpose()?;
-    let configured_upgrade = nixos_upgrade
-        .as_ref()
-        .map(crate::upgrade_config::configure_nixos_upgrade)
-        .transpose()?;
-    let running_version = match configured_upgrade.as_ref() {
-        Some(upgrade) => upgrade.running_version.clone(),
-        None => Version::parse(kernel_api::MAESTRO_VERSION)
-            .map_err(|error| invalid(format!("Maestro release version is invalid: {error}")))?,
-    };
+    let configured_upgrade =
+        crate::upgrade_config::configure_nixos_upgrade(nixos_upgrade.as_ref())?;
+    let running_version = configured_upgrade.running_version.clone();
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
-    let node_upgrade = Some(configured_upgrade.map_or_else(
-        || NodeUpgradeDependencies {
-            stager: None,
-            rebooter: Arc::new(upgrade::ProcessNodeRebooter::new()),
-        },
-        |upgrade| NodeUpgradeDependencies {
-            stager: Some(upgrade.stager),
-            rebooter: upgrade.rebooter,
-        },
-    ));
+    let node_upgrade = Some(NodeUpgradeDependencies {
+        stager: Some(configured_upgrade.stager),
+        rebooter: configured_upgrade.rebooter,
+    });
     #[cfg(any(target_os = "macos", feature = "macos-platform"))]
     let node_upgrade = None;
     let tailscale_resources = TailscaleSystemResources::from_cluster(&cluster)

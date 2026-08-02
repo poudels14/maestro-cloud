@@ -119,7 +119,7 @@ fn stager_settings_reject_ambiguous_flakes_and_configuration_names() {
 }
 
 fn settings() -> Result<NixosUpgradeStagerSettings, NixosUpgradeStagingError> {
-    NixosUpgradeStagerSettings::new("/etc/maestro", "default", Version::new(1, 0, 0))?
+    NixosUpgradeStagerSettings::production(Version::new(1, 0, 0))?
         .with_binaries("/nix/bin/nix", "/nix/bin/nixos-rebuild")
 }
 

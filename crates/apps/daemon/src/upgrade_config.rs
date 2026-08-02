@@ -12,34 +12,43 @@ use upgrade::{
 pub(crate) fn validate_nixos_upgrade(
     config: &NixosUpgradeLaunchConfig,
 ) -> Result<(), NixosUpgradeLaunchError> {
-    configure_nixos_upgrade(config).map(|_| ())
+    configure_nixos_upgrade(Some(config)).map(|_| ())
 }
 
 pub(crate) fn configure_nixos_upgrade(
-    config: &NixosUpgradeLaunchConfig,
+    config: Option<&NixosUpgradeLaunchConfig>,
 ) -> Result<ConfiguredNixosUpgrade, NixosUpgradeLaunchError> {
-    validate_optional_binary(config.nix_binary.as_deref(), "nix")?;
-    validate_optional_binary(config.nixos_rebuild_binary.as_deref(), "nixos-rebuild")?;
-    validate_optional_binary(config.systemctl_binary.as_deref(), "systemctl")?;
-    if config.nix_binary.is_some() != config.nixos_rebuild_binary.is_some() {
-        return Err(NixosUpgradeLaunchError::IncompleteNixBinaries);
-    }
     let running_version = Version::parse(kernel_api::MAESTRO_VERSION).map_err(|error| {
         NixosUpgradeLaunchError::InvalidRunningVersion {
             message: error.to_string(),
         }
     })?;
-    let mut settings = NixosUpgradeStagerSettings::new(
-        config.flake.clone(),
-        config.configuration.clone(),
-        running_version.clone(),
-    )?;
-    if let (Some(nix), Some(rebuild)) = (&config.nix_binary, &config.nixos_rebuild_binary) {
-        settings = settings.with_binaries(nix.clone(), rebuild.clone())?;
-    }
-    let rebooter = match &config.systemctl_binary {
-        Some(binary) => ProcessNodeRebooter::with_binary(binary.clone()),
-        None => ProcessNodeRebooter::new(),
+    let (settings, rebooter) = match config {
+        Some(config) => {
+            validate_optional_binary(config.nix_binary.as_deref(), "nix")?;
+            validate_optional_binary(config.nixos_rebuild_binary.as_deref(), "nixos-rebuild")?;
+            validate_optional_binary(config.systemctl_binary.as_deref(), "systemctl")?;
+            if config.nix_binary.is_some() != config.nixos_rebuild_binary.is_some() {
+                return Err(NixosUpgradeLaunchError::IncompleteNixBinaries);
+            }
+            let mut settings = NixosUpgradeStagerSettings::new(
+                config.flake.clone(),
+                config.configuration.clone(),
+                running_version.clone(),
+            )?;
+            if let (Some(nix), Some(rebuild)) = (&config.nix_binary, &config.nixos_rebuild_binary) {
+                settings = settings.with_binaries(nix.clone(), rebuild.clone())?;
+            }
+            let rebooter = match &config.systemctl_binary {
+                Some(binary) => ProcessNodeRebooter::with_binary(binary.clone()),
+                None => ProcessNodeRebooter::new(),
+            };
+            (settings, rebooter)
+        }
+        None => (
+            NixosUpgradeStagerSettings::production(running_version.clone())?,
+            ProcessNodeRebooter::new(),
+        ),
     };
     Ok(ConfiguredNixosUpgrade {
         stager: Arc::new(ProcessNixosUpgradeStager::new(settings)),

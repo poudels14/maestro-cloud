@@ -19,7 +19,7 @@ pub struct ClusterLaunchPolicy {
     /// Optional cluster-wide GitHub pull-request previews.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewLaunchConfig>,
-    /// Optional NixOS staging and reboot policy.
+    /// Optional NixOS staging override; absence selects `/etc/maestro#default`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nixos_upgrade: Option<NixosUpgradeLaunchConfig>,
 }
@@ -120,7 +120,7 @@ pub struct PreviewLaunchConfig {
     pub max_concurrent_previews: usize,
 }
 
-/// NixOS host-upgrade policy copied into protected node launch documents.
+/// Overrides the standard `/etc/maestro#default` NixOS host-upgrade policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NixosUpgradeLaunchConfig {

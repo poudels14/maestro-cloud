@@ -118,7 +118,8 @@ settings form the production runtime policy. Their credential fields accept
 literal values, relative or absolute `file://` sources, and
 `aws-secret://` sources. Each daemon resolves the current shared source at
 startup. Bootstrap and admission never copy these credentials into per-node
-launch documents or join grants.
+launch documents or join grants. Without a `nixos-upgrade` override, Linux
+nodes use the init flake at `/etc/maestro#default` for upgrades.
 
 ## Host prerequisites
 
