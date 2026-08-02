@@ -179,10 +179,12 @@ async fn value_sources_resolve_relative_files_aws_secrets_and_environment_defaul
                                 registry: "registry.example/team/",
                                 depot: { project: "project-123" },
                                 env: { source: "build.env" },
-                                secrets: { source: "aws-secret://build-secrets" }
+                                secrets: {
+                                    source: "${MAESTRO_TEST_VALUE_SOURCE:-aws-secret://build-secrets}"
+                                }
                             },
                             deploy: {
-                                env: { items: { MODE: "${MAESTRO_TEST_MODE:-fallback}" } },
+                                env: { items: { MODE: "fallback" } },
                                 replicas: 1
                             }
                         }

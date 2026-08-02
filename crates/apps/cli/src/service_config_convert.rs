@@ -395,6 +395,8 @@ async fn resolve_values(
         return Err(invalid(field, "set either `source` or `items`, not both"));
     }
     let mut items = if let Some(source) = values.source {
+        let source = expand_local_environment(&source, MaestroTemplatePolicy::Reject)
+            .map_err(|error| invalid(&format!("{field}.source"), error))?;
         let source = resolve_relative_source(config_source, &source)?;
         parse_key_values(field, &reader.read(&source).await?)?
     } else {
