@@ -32,6 +32,7 @@ pub(super) struct TestWorld {
     cluster_id: ClusterId,
     keys: Keyspace,
     pub(super) store: Arc<InMemoryStore>,
+    pub(super) logs: Arc<logs::InMemoryLogStore>,
     fenced: Arc<FencedStore>,
     _session: Box<dyn Session>,
 }
@@ -71,6 +72,7 @@ impl TestWorld {
             cluster_id,
             keys,
             store,
+            logs: Arc::new(logs::InMemoryLogStore::new()),
             fenced,
             _session: session,
         })
@@ -131,6 +133,7 @@ impl TestWorld {
                 self.cluster_id.clone(),
                 source,
                 artifacts,
+                self.logs.clone(),
                 Arc::new(FixedTimestampClock),
             )?
             .with_depot_backend(depot)

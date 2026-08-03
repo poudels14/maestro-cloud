@@ -5,6 +5,7 @@ use ingress::{IngressBackend, StoreTraefikProvider, TraefikBackend};
 use kernel_api::ClusterId;
 use kernel_controller::{FencedStore, TimestampClock};
 use kernel_store::Clock;
+use logs::LogStore;
 use preview::PullRequestApi;
 use runtime::{ArtifactStore, ValueSourceResolver};
 use tokio::sync::watch;
@@ -36,6 +37,8 @@ pub struct OperatorBackends {
     pub build_revisions: Arc<dyn BuildRevisionResolver>,
     /// Builds and stores immutable runtime artifacts.
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Stores normalized build output for the build logs API.
+    pub build_logs: Arc<dyn LogStore>,
     /// Runs service builds that select a Depot project.
     pub depot: Option<Arc<dyn DepotBuildBackend>>,
     /// Resolves external build environment and secret references at build execution time.
@@ -57,6 +60,8 @@ pub struct BuildOperatorBackends {
     pub revisions: Arc<dyn BuildRevisionResolver>,
     /// Builds and stores immutable runtime artifacts.
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Stores normalized build output for the build logs API.
+    pub logs: Arc<dyn LogStore>,
     /// Fence-independent Depot process adapter retained across leadership terms.
     pub depot: Option<Arc<dyn DepotBuildBackend>>,
     /// Resolves external build environment and secret references at build execution time.
@@ -258,6 +263,7 @@ impl LeaderWorkload for OperatorLeaderWorkload {
                 build_source: self.builds.source.clone(),
                 build_revisions: self.builds.revisions.clone(),
                 artifacts: self.builds.artifacts.clone(),
+                build_logs: self.builds.logs.clone(),
                 depot: self.builds.depot.clone(),
                 value_sources: self.builds.value_sources.clone(),
                 pull_requests: self.builds.pull_requests.clone(),

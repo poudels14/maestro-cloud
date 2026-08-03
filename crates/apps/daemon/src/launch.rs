@@ -285,9 +285,13 @@ async fn launch_daemon_inner(
     );
     let aws_sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let value_sources = Arc::new(AwsValueSourceResolver::new(&aws_sdk));
+    let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
+    let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
+    let (log_store_runtime, metric_store_runtime) =
+        open_observability_stores(plan.data_directory()).await?;
     let operator_workload = Arc::new(
         OperatorLeaderWorkload::new(
-            cluster.cluster_id.clone(),
+            plan.cluster().cluster_id.clone(),
             clock.clone(),
             timestamp_clock.clone(),
             operator_settings,
@@ -295,6 +299,7 @@ async fn launch_daemon_inner(
                 source: build_source.clone(),
                 revisions: build_source.clone(),
                 artifacts: runtime.clone(),
+                logs: log_store_runtime.store(),
                 depot: depot_backend,
                 value_sources: Some(value_sources.clone()),
                 pull_requests: configured_preview.map(|preview| preview.pull_requests),
@@ -308,10 +313,6 @@ async fn launch_daemon_inner(
         .with_dns_resolver_resources(dns_resolver_resources)
         .with_traefik_resources(traefik_resources),
     );
-    let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
-    let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
-    let (log_store_runtime, metric_store_runtime) =
-        open_observability_stores(plan.data_directory()).await?;
     let datadog_sinks = build_datadog_sinks(configured_datadog, &log_store_runtime);
     let log_maintenance = configure_log_maintenance(
         log_backup.as_ref(),

@@ -44,6 +44,7 @@ impl FakeBuildBackend {
                 build_source: build.clone(),
                 build_revisions: build.clone(),
                 artifacts: build.clone(),
+                build_logs: Arc::new(logs::InMemoryLogStore::new()),
                 depot: None,
                 value_sources: None,
                 pull_requests: None,

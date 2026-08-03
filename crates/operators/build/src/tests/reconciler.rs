@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use kernel_api::{Build, BuildPhase, Condition, ConditionState, DepotBuildConfig, SecretValue};
+use kernel_api::{
+    Build, BuildId, BuildPhase, Condition, ConditionState, DepotBuildConfig, SecretValue,
+};
+use logs::{LogBody, LogOrigin, LogProducer, LogStream};
 use runtime::{
     ArtifactBuildRequest, ArtifactDigest, ArtifactSource, ArtifactStoreError, ValueSourceError,
     ValueSourceResolver,
@@ -304,8 +307,15 @@ async fn permanent_source_rejection_is_recorded_as_failed() -> TestResult {
 async fn transient_source_failure_keeps_preparing_phase_for_retry() -> TestResult {
     let world = TestWorld::new().await?;
     world.seed(&queued_build("Dockerfile")?).await?;
+    let clone_error = concat!(
+        "git command failed: Cloning into '/data/build/workspaces/build-1'...\n",
+        "remote: Write access to repository not granted.\n",
+        "fatal: unable to access 'https://github.com/Baton-AI/baton.git/': ",
+        "The requested URL returned error: 403"
+    );
     let source = Arc::new(RecordingSource::new(vec![
-        Err(BuildSourceError::unavailable("git host timed out")),
+        Err(BuildSourceError::unavailable(clone_error)),
+        Err(BuildSourceError::unavailable(clone_error)),
         Ok(prepared("commit-after-retry")),
     ]));
     let artifacts = Arc::new(RecordingArtifacts::successful()?);
@@ -315,6 +325,47 @@ async fn transient_source_failure_keeps_preparing_phase_for_retry() -> TestResul
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     assert_eq!(world.build().await?.status.phase, BuildPhase::Preparing);
+
+    let entries = world.logs.entries()?;
+    assert_eq!(entries.len(), 1);
+    let entry = entries.first().ok_or("build error log is missing")?;
+    let build_id = BuildId::new("build-1")?;
+    assert_eq!(entry.id.producer, LogProducer::Build(build_id.clone()));
+    assert_eq!(entry.severity, "error");
+    assert_eq!(entry.stream, LogStream::Stderr);
+    assert_eq!(entry.body, LogBody::Text(clone_error.to_owned()));
+    assert_eq!(
+        entry.origin,
+        LogOrigin::Build {
+            cluster_id: kernel_api::ClusterId::new("cluster-1")?,
+            node_id: kernel_api::NodeId::new("node-1")?,
+            build_id,
+        }
+    );
+    assert_eq!(
+        entry
+            .attributes
+            .get("maestro.build.phase")
+            .map(String::as_str),
+        Some("preparing")
+    );
+    assert_eq!(
+        entry
+            .attributes
+            .get("maestro.build.reason")
+            .map(String::as_str),
+        Some("SourceUnavailable")
+    );
+    assert_eq!(
+        entry
+            .attributes
+            .get("maestro.build.retryable")
+            .map(String::as_str),
+        Some("true")
+    );
+
+    controller.reconcile_snapshot().await?;
+    assert_eq!(world.logs.entries()?.len(), 1);
 
     controller.reconcile_snapshot().await?;
     let building = world.build().await?;

@@ -13,6 +13,7 @@ hex.workspace = true
 kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
+logs = { version = "0.1.0", path = "../../observability/logs" }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
@@ -27,4 +28,5 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
+logs = { version = "0.1.0", path = "../../observability/logs", features = ["test-util"] }
 tokio = { workspace = true, features = ["sync"] }

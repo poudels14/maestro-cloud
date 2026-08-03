@@ -80,6 +80,7 @@ impl OperatorSuite {
                 cluster_id.clone(),
                 backends.build_source,
                 backends.artifacts,
+                backends.build_logs,
                 timestamp_clock.clone(),
             )?
             .with_depot_backend(backends.depot)
