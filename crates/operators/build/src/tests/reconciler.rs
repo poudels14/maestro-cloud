@@ -9,8 +9,8 @@ use kernel_api::{
 };
 use logs::{LogBody, LogOrigin, LogProducer, LogStream};
 use runtime::{
-    ArtifactBuildRequest, ArtifactDigest, ArtifactSource, ArtifactStoreError, ValueSourceError,
-    ValueSourceResolver,
+    ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactDigest, ArtifactSource,
+    ArtifactStoreError, ValueSourceError, ValueSourceResolver,
 };
 
 use super::support::{
@@ -85,6 +85,60 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
             definition: "containers/api.Dockerfile".into(),
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifact_backend_output_is_persisted_as_ui_visible_build_logs() -> TestResult {
+    let world = TestWorld::new().await?;
+    world.seed(&queued_build("Dockerfile")?).await?;
+    let artifacts = Arc::new(RecordingArtifacts::successful()?.with_build_output([
+        (
+            ArtifactBuildOutputStream::Stdout,
+            b"#1 [build 1/2] RUN pnpm install".to_vec(),
+        ),
+        (
+            ArtifactBuildOutputStream::Stderr,
+            b"ERR_PNPM_FETCH_401 unauthorized".to_vec(),
+        ),
+    ]));
+    let controller = world.runtime(
+        Arc::new(RecordingSource::successful("commit-abc")),
+        artifacts,
+    )?;
+
+    for _ in 0..4 {
+        controller.reconcile_snapshot().await?;
+    }
+
+    let entries = world
+        .logs
+        .entries()?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .attributes
+                .get("maestro.build.output")
+                .is_some_and(|value| value == "backend")
+        })
+        .collect::<Vec<_>>();
+    let [stdout, stderr] = entries.as_slice() else {
+        return Err(format!("expected two backend log entries, found {}", entries.len()).into());
+    };
+    assert_eq!(stdout.stream, LogStream::Stdout);
+    assert_eq!(
+        stdout.body,
+        LogBody::Text("#1 [build 1/2] RUN pnpm install".to_owned())
+    );
+    assert_eq!(stderr.stream, LogStream::Stderr);
+    assert_eq!(
+        stderr.body,
+        LogBody::Text("ERR_PNPM_FETCH_401 unauthorized".to_owned())
+    );
+    let build_id = BuildId::new("build-1")?;
+    assert!(entries.iter().all(|entry| {
+        entry.id.producer == LogProducer::Build(build_id.clone()) && entry.severity == "info"
+    }));
     Ok(())
 }
 

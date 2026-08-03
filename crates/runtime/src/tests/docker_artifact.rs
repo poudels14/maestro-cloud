@@ -1,20 +1,72 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
+use async_trait::async_trait;
 use docker::errors::Error as DockerError;
 use docker::models::{BuildInfo, ImageSummary};
 use kernel_api::SecretValue;
 
-use crate::docker_artifact::bounded_chunk;
+use crate::docker_artifact::{bounded_chunk, consume_build_operation};
 use crate::docker_artifact_context::write_directory_archive;
 use crate::docker_artifact_support::{
     MANAGED_IMAGE_LABEL, MANAGED_IMAGE_VALUE, TEMPORARY_TAG_PREFIX, build_options, definition_text,
     imported_candidates, operation_error, prunable_image_ids, split_tag,
 };
 use crate::{
-    ArtifactBuildRequest, ArtifactDigest, ArtifactReference, ArtifactSource, ArtifactStoreError,
-    RuntimeCapability, WorkloadRuntime,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactDigest,
+    ArtifactReference, ArtifactSource, ArtifactStoreError, RuntimeCapability, WorkloadRuntime,
 };
+
+#[derive(Default)]
+struct RecordingBuildOutput(Mutex<Vec<(ArtifactBuildOutputStream, String)>>);
+
+#[async_trait]
+impl ArtifactBuildOutputSink for RecordingBuildOutput {
+    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((stream, String::from_utf8_lossy(&output).into_owned()));
+    }
+}
+
+#[tokio::test]
+async fn docker_build_stream_is_forwarded_to_the_artifact_output_sink() {
+    let output = RecordingBuildOutput::default();
+    let stream = futures_util::stream::iter([
+        Ok::<_, DockerError>(BuildInfo {
+            stream: Some("Step 1/2 : FROM scratch\nStep 2/2 : COPY . /app\n".to_owned()),
+            ..Default::default()
+        }),
+        Ok(BuildInfo {
+            status: Some("Successfully built sha256:abc".to_owned()),
+            ..Default::default()
+        }),
+    ]);
+
+    consume_build_operation("build", stream, &output)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *output.0.lock().unwrap(),
+        [
+            (
+                ArtifactBuildOutputStream::Stdout,
+                "Step 1/2 : FROM scratch".to_owned()
+            ),
+            (
+                ArtifactBuildOutputStream::Stdout,
+                "Step 2/2 : COPY . /app".to_owned()
+            ),
+            (
+                ArtifactBuildOutputStream::Stdout,
+                "Successfully built sha256:abc".to_owned()
+            ),
+        ]
+    );
+}
 
 #[test]
 fn docker_build_options_preserve_public_arguments_and_managed_ownership() {

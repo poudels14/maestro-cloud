@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,8 +18,8 @@ use logs::{
     IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStore, LogStream, OriginCursor,
 };
 use runtime::{
-    ArtifactBuildRequest, ArtifactDigest, ArtifactReference, ArtifactStore, ArtifactStoreError,
-    ValueSourceError, ValueSourceResolver,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactDigest,
+    ArtifactReference, ArtifactStore, ArtifactStoreError, ValueSourceError, ValueSourceResolver,
 };
 use sha2::{Digest, Sha256};
 
@@ -282,7 +283,14 @@ impl BuildReconciler {
             secrets,
             tags: Vec::new(),
         };
-        match self.build_and_publish(&build, &request).await {
+        let output = BuildLogOutput::new(
+            self.cluster_id.clone(),
+            context.store().token().identity().node_id.clone(),
+            build.meta.id.clone(),
+            self.logs.clone(),
+            self.timestamp_clock.clone(),
+        );
+        match self.build_and_publish(&build, &request, &output).await {
             Ok(digest) => {
                 build.status.phase = BuildPhase::Succeeded;
                 build.status.image_digest = Some(digest.as_str().to_string());
@@ -363,6 +371,7 @@ impl BuildReconciler {
         &self,
         build: &Build,
         request: &ArtifactBuildRequest,
+        output: &dyn ArtifactBuildOutputSink,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let digest = match &build.spec.template.depot {
             Some(depot) => {
@@ -373,9 +382,11 @@ impl BuildReconciler {
                         message: "build selects Depot but this cluster has no Depot token"
                             .to_owned(),
                     })?;
-                backend.build(request, &depot.project).await?
+                backend
+                    .build_with_output(request, &depot.project, output)
+                    .await?
             }
-            None => self.artifacts.build(request).await?,
+            None => self.artifacts.build_with_output(request, output).await?,
         };
         let Some(registry) = &build.spec.template.registry else {
             return Ok(digest);
@@ -516,6 +527,73 @@ impl BuildReconciler {
             .conditions
             .retain(|existing| existing.condition_type.0 != READY_CONDITION);
         build.status.conditions.push(condition);
+    }
+}
+
+struct BuildLogOutput {
+    cluster_id: kernel_api::ClusterId,
+    node_id: kernel_api::NodeId,
+    build_id: BuildId,
+    logs: Arc<dyn LogStore>,
+    timestamp_clock: Arc<dyn TimestampClock>,
+    attempt: String,
+    sequence: AtomicU64,
+}
+
+impl BuildLogOutput {
+    fn new(
+        cluster_id: kernel_api::ClusterId,
+        node_id: kernel_api::NodeId,
+        build_id: BuildId,
+        logs: Arc<dyn LogStore>,
+        timestamp_clock: Arc<dyn TimestampClock>,
+    ) -> Self {
+        Self {
+            cluster_id,
+            node_id,
+            build_id,
+            logs,
+            timestamp_clock,
+            attempt: uuid::Uuid::new_v4().simple().to_string(),
+            sequence: AtomicU64::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ArtifactBuildOutputSink for BuildLogOutput {
+    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        let timestamp = self.timestamp_clock.now();
+        let stream = match stream {
+            ArtifactBuildOutputStream::Stdout => LogStream::Stdout,
+            ArtifactBuildOutputStream::Stderr => LogStream::Stderr,
+        };
+        let entry = IngestLogEntry {
+            id: LogRecordId {
+                node_id: self.node_id.clone(),
+                producer: LogProducer::Build(self.build_id.clone()),
+                cursor: OriginCursor::new(format!(
+                    "backend-output:{}:{sequence:020}",
+                    self.attempt
+                )),
+            },
+            observed_at: timestamp,
+            event_at: timestamp,
+            severity: "info".to_owned(),
+            stream,
+            origin: LogOrigin::Build {
+                cluster_id: self.cluster_id.clone(),
+                node_id: self.node_id.clone(),
+                build_id: self.build_id.clone(),
+            },
+            body: LogBody::Text(String::from_utf8_lossy(&output).into_owned()),
+            attributes: BTreeMap::from([
+                ("maestro.build.phase".to_owned(), "building".to_owned()),
+                ("maestro.build.output".to_owned(), "backend".to_owned()),
+            ]),
+        };
+        let _ignored = self.logs.append(&[entry]).await;
     }
 }
 

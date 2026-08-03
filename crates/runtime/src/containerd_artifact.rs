@@ -31,8 +31,9 @@ use crate::containerd_artifact_support::{
 use crate::containerd_build::run_build;
 use crate::containerd_image::resolve_host_manifest_descriptor;
 use crate::{
-    ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
-    ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError, RuntimeError,
+    ArtifactBuildOutputSink, ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest,
+    ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
+    DiscardArtifactBuildOutput, RuntimeError,
 };
 
 const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
@@ -44,12 +45,16 @@ impl ArtifactStore for ContainerdRuntime {
         &self,
         request: &ArtifactBuildRequest,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
-        let output = run_build(request, &self.settings, self.build_runner.clone()).await?;
-        let digest = self.import(output.into_stream().await?).await?;
-        for tag in &request.tags {
-            self.tag_digest(&digest, tag).await?;
-        }
-        Ok(digest)
+        self.build_artifact(request, &DiscardArtifactBuildOutput)
+            .await
+    }
+
+    async fn build_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_artifact(request, output).await
     }
 
     async fn pull(
@@ -303,6 +308,20 @@ impl ArtifactStore for ContainerdRuntime {
 }
 
 impl ContainerdRuntime {
+    async fn build_artifact(
+        &self,
+        request: &ArtifactBuildRequest,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let artifact =
+            run_build(request, &self.settings, self.build_runner.clone(), output).await?;
+        let digest = self.import(artifact.into_stream().await?).await?;
+        for tag in &request.tags {
+            self.tag_digest(&digest, tag).await?;
+        }
+        Ok(digest)
+    }
+
     async fn image(&self, reference: &str) -> Result<Image, ArtifactStoreError> {
         containerd::services::v1::images_client::ImagesClient::new(self.channel.clone())
             .get(namespaced_artifact(

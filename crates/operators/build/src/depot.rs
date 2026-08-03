@@ -8,7 +8,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::SecretValue;
 use runtime::{
-    ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactStore, ArtifactStoreError,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
+    ArtifactDigest, ArtifactStore, ArtifactStoreError, DiscardArtifactBuildOutput,
+    forward_artifact_build_output,
 };
 
 use crate::depot_context::{DepotBuildContext, prepare_context};
@@ -94,6 +96,17 @@ pub trait DepotBuildBackend: Send + Sync {
         request: &ArtifactBuildRequest,
         project: &str,
     ) -> Result<ArtifactDigest, ArtifactStoreError>;
+
+    /// Builds while forwarding Depot's native progress to the caller.
+    async fn build_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let _ = output;
+        self.build(request, project).await
+    }
 }
 
 /// Process-backed Depot CLI adapter.
@@ -124,14 +137,12 @@ impl ProcessDepotBuildBackend {
             runner,
         })
     }
-}
 
-#[async_trait]
-impl DepotBuildBackend for ProcessDepotBuildBackend {
-    async fn build(
+    async fn build_artifact(
         &self,
         request: &ArtifactBuildRequest,
         project: &str,
+        output_sink: &dyn ArtifactBuildOutputSink,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         validate_request(request, project)?;
         let workspace = create_workspace(&self.settings.state_root).await?;
@@ -146,7 +157,7 @@ impl DepotBuildBackend for ProcessDepotBuildBackend {
         create_private_output(&output).await?;
         let invocation = build_invocation(request, project, &self.settings, &context, &output)?;
         self.runner
-            .run(invocation, self.settings.build_timeout)
+            .run(invocation, self.settings.build_timeout, output_sink)
             .await?;
         validate_output(&output, self.settings.max_output_bytes).await?;
         self.artifacts
@@ -160,11 +171,33 @@ impl DepotBuildBackend for ProcessDepotBuildBackend {
     }
 }
 
+#[async_trait]
+impl DepotBuildBackend for ProcessDepotBuildBackend {
+    async fn build(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_artifact(request, project, &DiscardArtifactBuildOutput)
+            .await
+    }
+
+    async fn build_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_artifact(request, project, output).await
+    }
+}
+
 pub(crate) struct DepotInvocation {
     pub(crate) executable: PathBuf,
     pub(crate) arguments: Vec<OsString>,
     pub(crate) directory: PathBuf,
     pub(crate) environment: Vec<(OsString, SecretValue)>,
+    pub(crate) redactions: Vec<SecretValue>,
     pub(crate) output: PathBuf,
 }
 
@@ -174,6 +207,7 @@ pub(crate) trait DepotRunner: Send + Sync {
         &self,
         invocation: DepotInvocation,
         timeout: Duration,
+        output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError>;
 }
 
@@ -185,14 +219,15 @@ impl DepotRunner for ProcessDepotRunner {
         &self,
         invocation: DepotInvocation,
         timeout: Duration,
+        output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError> {
         let mut command = tokio::process::Command::new(&invocation.executable);
         command
             .args(&invocation.arguments)
             .current_dir(&invocation.directory)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         for (name, value) in &invocation.environment {
             command.env(name, value.expose());
@@ -205,10 +240,51 @@ impl DepotRunner for ProcessDepotRunner {
                     invocation.executable.display()
                 ),
             })?;
-        let status = match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(result) => result.map_err(|error| ArtifactStoreError::Unavailable {
-                message: format!("wait for Depot client: {error}"),
-            })?,
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: "Depot stdout pipe was not created".to_owned(),
+            })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: "Depot stderr pipe was not created".to_owned(),
+            })?;
+        let completion = async {
+            tokio::try_join!(
+                async {
+                    child
+                        .wait()
+                        .await
+                        .map_err(|error| ArtifactStoreError::Unavailable {
+                            message: format!("wait for Depot client: {error}"),
+                        })
+                },
+                forward_artifact_build_output(
+                    stdout,
+                    ArtifactBuildOutputStream::Stdout,
+                    output,
+                    &invocation.redactions,
+                    "Depot stdout",
+                ),
+                forward_artifact_build_output(
+                    stderr,
+                    ArtifactBuildOutputStream::Stderr,
+                    output,
+                    &invocation.redactions,
+                    "Depot stderr",
+                )
+            )
+        };
+        let status = match tokio::time::timeout(timeout, completion).await {
+            Ok(Ok((status, (), ()))) => status,
+            Ok(Err(error)) => {
+                let _ignored = child.kill().await;
+                let _ignored = child.wait().await;
+                return Err(error);
+            }
             Err(_) => {
                 let _ignored = child.kill().await;
                 let _ignored = child.wait().await;
@@ -278,6 +354,9 @@ fn build_invocation(
         arguments,
         directory: context.root.clone(),
         environment,
+        redactions: std::iter::once(settings.token.clone())
+            .chain(request.secrets.values().cloned())
+            .collect(),
         output: PathBuf::from(output),
     })
 }

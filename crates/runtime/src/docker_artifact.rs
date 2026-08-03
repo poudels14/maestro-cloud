@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use bytes::Bytes;
 use docker::errors::Error as DockerError;
+use docker::models::BuildInfo;
 use docker::query_parameters::{
     CreateImageOptionsBuilder, ImportImageOptionsBuilder, ListImagesOptionsBuilder,
     PushImageOptionsBuilder, RemoveImageOptionsBuilder, TagImageOptionsBuilder,
@@ -21,8 +22,9 @@ use crate::docker_artifact_support::{
 };
 use crate::docker_support::is_not_found;
 use crate::{
-    ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
-    ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
+    ArtifactDigest, ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactSource,
+    ArtifactStore, ArtifactStoreError, DiscardArtifactBuildOutput,
 };
 
 static BUILD_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -34,54 +36,16 @@ impl ArtifactStore for DockerRuntime {
         &self,
         request: &ArtifactBuildRequest,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
-        let temporary_tag = temporary_build_tag();
-        let options = build_options(request, &temporary_tag)?;
-        let definition = validate_source(&request.source).await?;
-        match &request.source {
-            ArtifactSource::Directory { root, .. } => {
-                let (context, task) = stream_directory_archive(root.clone(), definition);
-                let result = consume_operation(
-                    "build",
-                    None,
-                    self.client
-                        .build_image(options, None, Some(docker::body_try_stream(context))),
-                )
-                .await;
-                let archive_result = finish_archive_task(task).await;
-                result?;
-                archive_result?;
-            }
-            ArtifactSource::Archive { path, .. } => {
-                let archive = tokio::fs::File::open(path).await.map_err(|error| {
-                    ArtifactStoreError::Rejected {
-                        message: format!("open Docker build archive `{}`: {error}", path.display()),
-                    }
-                })?;
-                consume_operation(
-                    "build",
-                    None,
-                    self.client.build_image(
-                        options,
-                        None,
-                        Some(docker::body_try_stream(file_stream(archive))),
-                    ),
-                )
-                .await?;
-            }
-        }
+        self.build_artifact(request, &DiscardArtifactBuildOutput)
+            .await
+    }
 
-        let digest = self.local_digest(&temporary_tag).await?;
-        for tag in &request.tags {
-            self.tag(&digest, tag).await?;
-        }
-        if !request.tags.is_empty() {
-            let cleanup = RemoveImageOptionsBuilder::default().noprune(true).build();
-            let _ignored = self
-                .client
-                .remove_image(&temporary_tag, Some(cleanup), None)
-                .await;
-        }
-        Ok(digest)
+    async fn build_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_artifact(request, output).await
     }
 
     async fn pull(
@@ -298,6 +262,60 @@ impl ArtifactStore for DockerRuntime {
 }
 
 impl DockerRuntime {
+    async fn build_artifact(
+        &self,
+        request: &ArtifactBuildRequest,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let temporary_tag = temporary_build_tag();
+        let options = build_options(request, &temporary_tag)?;
+        let definition = validate_source(&request.source).await?;
+        match &request.source {
+            ArtifactSource::Directory { root, .. } => {
+                let (context, task) = stream_directory_archive(root.clone(), definition);
+                let result = consume_build_operation(
+                    "build",
+                    self.client
+                        .build_image(options, None, Some(docker::body_try_stream(context))),
+                    output,
+                )
+                .await;
+                let archive_result = finish_archive_task(task).await;
+                result?;
+                archive_result?;
+            }
+            ArtifactSource::Archive { path, .. } => {
+                let archive = tokio::fs::File::open(path).await.map_err(|error| {
+                    ArtifactStoreError::Rejected {
+                        message: format!("open Docker build archive `{}`: {error}", path.display()),
+                    }
+                })?;
+                consume_build_operation(
+                    "build",
+                    self.client.build_image(
+                        options,
+                        None,
+                        Some(docker::body_try_stream(file_stream(archive))),
+                    ),
+                    output,
+                )
+                .await?;
+            }
+        }
+
+        let digest = self.local_digest(&temporary_tag).await?;
+        for tag in &request.tags {
+            self.tag(&digest, tag).await?;
+        }
+        if !request.tags.is_empty() {
+            let cleanup = RemoveImageOptionsBuilder::default().noprune(true).build();
+            let _ignored = self
+                .client
+                .remove_image(&temporary_tag, Some(cleanup), None)
+                .await;
+        }
+        Ok(digest)
+    }
     async fn local_digest(&self, reference: &str) -> Result<ArtifactDigest, ArtifactStoreError> {
         let inspect = self
             .client
@@ -366,6 +384,49 @@ async fn consume_operation<T>(
         item.map_err(|error| operation_error(operation, reference, error))?;
     }
     Ok(())
+}
+
+pub(crate) async fn consume_build_operation(
+    operation: &str,
+    stream: impl Stream<Item = Result<BuildInfo, DockerError>>,
+    output: &dyn ArtifactBuildOutputSink,
+) -> Result<(), ArtifactStoreError> {
+    futures_util::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        let info = item.map_err(|error| operation_error(operation, None, error))?;
+        let wrote_stream = if let Some(message) = info.stream.as_deref() {
+            write_docker_output(output, ArtifactBuildOutputStream::Stdout, message).await;
+            true
+        } else {
+            false
+        };
+        if let Some(message) = info
+            .error_detail
+            .as_ref()
+            .and_then(|detail| detail.message.as_deref())
+        {
+            write_docker_output(output, ArtifactBuildOutputStream::Stderr, message).await;
+            return Err(ArtifactStoreError::Rejected {
+                message: format!("Docker {operation}: {message}"),
+            });
+        }
+        if !wrote_stream && let Some(status) = info.status.as_deref() {
+            write_docker_output(output, ArtifactBuildOutputStream::Stdout, status).await;
+        }
+    }
+    Ok(())
+}
+
+async fn write_docker_output(
+    output: &dyn ArtifactBuildOutputSink,
+    stream: ArtifactBuildOutputStream,
+    message: &str,
+) {
+    for line in message.split_inclusive('\n') {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        output.write(stream, line.as_bytes().to_vec()).await;
+    }
 }
 
 async fn validate_source(source: &ArtifactSource) -> Result<PathBuf, ArtifactStoreError> {

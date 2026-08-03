@@ -17,9 +17,9 @@ use kernel_store::{
     Session, SessionBinding, Store,
 };
 use runtime::{
-    ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
-    ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
-    ValueSourceResolver,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
+    ArtifactDigest, ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactSource,
+    ArtifactStore, ArtifactStoreError, ValueSourceResolver,
 };
 
 use crate::{
@@ -315,6 +315,7 @@ pub(super) fn prepared(revision: &str) -> PreparedBuildSource {
 
 pub(super) struct RecordingArtifacts {
     result: Result<ArtifactDigest, ArtifactStoreError>,
+    build_output: Vec<(ArtifactBuildOutputStream, Vec<u8>)>,
     calls: Mutex<Vec<ArtifactBuildRequest>>,
     publishes: Mutex<Vec<(ArtifactDigest, ArtifactReference)>>,
     race: Mutex<Option<(Arc<InMemoryStore>, kernel_store::StoreKey)>>,
@@ -324,10 +325,19 @@ impl RecordingArtifacts {
     pub(super) fn successful() -> TestResult<Self> {
         Ok(Self {
             result: Ok(ArtifactDigest::new("sha256:abc123")?),
+            build_output: Vec::new(),
             calls: Mutex::new(Vec::new()),
             publishes: Mutex::new(Vec::new()),
             race: Mutex::new(None),
         })
+    }
+
+    pub(super) fn with_build_output(
+        mut self,
+        output: impl IntoIterator<Item = (ArtifactBuildOutputStream, Vec<u8>)>,
+    ) -> Self {
+        self.build_output = output.into_iter().collect();
+        self
     }
 
     pub(super) fn calls(&self) -> Vec<ArtifactBuildRequest> {
@@ -379,6 +389,17 @@ impl ArtifactStore for RecordingArtifacts {
             }
         }
         self.result.clone()
+    }
+
+    async fn build_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        for (stream, frame) in &self.build_output {
+            output.write(*stream, frame.clone()).await;
+        }
+        self.build(request).await
     }
 
     async fn pull(

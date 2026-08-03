@@ -204,6 +204,18 @@ pub trait ArtifactStore: Send + Sync {
         request: &ArtifactBuildRequest,
     ) -> Result<ArtifactDigest, ArtifactStoreError>;
 
+    /// Builds source while forwarding backend-native progress to the caller.
+    ///
+    /// Stores that do not expose native progress retain the ordinary build behavior.
+    async fn build_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        output: &dyn crate::ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let _ = output;
+        self.build(request).await
+    }
+
     /// Pulls a reference into local backend storage and returns its immutable digest.
     async fn pull(
         &self,

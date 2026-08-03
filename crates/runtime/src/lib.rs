@@ -5,6 +5,7 @@
 //! application composition roots.
 
 mod artifact;
+mod artifact_output;
 mod capabilities;
 #[cfg(target_os = "linux")]
 mod cgroup;
@@ -101,6 +102,10 @@ mod workload;
 pub use artifact::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
+};
+pub use artifact_output::{
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, DiscardArtifactBuildOutput,
+    forward_artifact_build_output,
 };
 pub use capabilities::{Capabilities, RuntimeCapability};
 pub use clock::{MonotonicTime, RuntimeClock, TokioRuntimeClock};

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,8 +14,8 @@ use crate::containerd_build::{
 };
 use crate::containerd_build_context::prepare_context;
 use crate::{
-    ArtifactBuildRequest, ArtifactReference, ArtifactSource, ArtifactStoreError,
-    ContainerdRuntimeSettings,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactReference,
+    ArtifactSource, ArtifactStoreError, ContainerdRuntimeSettings, DiscardArtifactBuildOutput,
 };
 
 #[derive(Default)]
@@ -23,12 +24,32 @@ struct RecordingRunner {
     output: Vec<u8>,
 }
 
+#[derive(Default)]
+struct RecordingBuildOutput(Mutex<Vec<(ArtifactBuildOutputStream, String)>>);
+
+impl RecordingBuildOutput {
+    fn frames(&self) -> Vec<(ArtifactBuildOutputStream, String)> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl ArtifactBuildOutputSink for RecordingBuildOutput {
+    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((stream, String::from_utf8_lossy(&output).into_owned()));
+    }
+}
+
 #[async_trait]
 impl BuildctlRunner for RecordingRunner {
     async fn run(
         &self,
         invocation: BuildctlInvocation,
         _timeout: Duration,
+        _output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError> {
         tokio::fs::write(&invocation.output, &self.output)
             .await
@@ -67,9 +88,14 @@ async fn buildkit_runner_receives_exact_cli_artifact_and_environment_only_secret
         tags: vec![ArtifactReference::new("registry.example/app:v1").unwrap()],
     };
 
-    let output = run_build(&request, &settings, runner.clone())
-        .await
-        .unwrap();
+    let output = run_build(
+        &request,
+        &settings,
+        runner.clone(),
+        &DiscardArtifactBuildOutput,
+    )
+    .await
+    .unwrap();
     let mut stream = output.into_stream().await.unwrap();
     assert_eq!(stream.next().await.unwrap(), Some(b"oci-archive".to_vec()));
     assert_eq!(stream.next().await.unwrap(), None);
@@ -140,6 +166,7 @@ async fn buildkit_rejects_injected_secret_fields_before_running() {
         &request,
         &settings(temporary.path().join("state")),
         runner.clone(),
+        &DiscardArtifactBuildOutput,
     )
     .await
     .unwrap_err();
@@ -162,12 +189,84 @@ async fn missing_buildkit_client_is_retryable_without_exposing_secrets() {
     let mut settings = settings(temporary.path().join("state"));
     settings.buildctl = temporary.path().join("missing-buildctl");
 
-    let error = run_build(&request, &settings, Arc::new(ProcessBuildctlRunner))
-        .await
-        .unwrap_err();
+    let error = run_build(
+        &request,
+        &settings,
+        Arc::new(ProcessBuildctlRunner),
+        &DiscardArtifactBuildOutput,
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, ArtifactStoreError::Unavailable { .. }));
     assert!(!error.to_string().contains("protected-value"));
+}
+
+#[tokio::test]
+async fn buildkit_process_streams_both_outputs_and_redacts_build_secrets() {
+    let temporary = tempfile::tempdir().unwrap();
+    let executable = temporary.path().join("fake-buildctl");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+if [ "$3" = 'debug' ]; then
+  exit 0
+fi
+printf 'buildkit build started\n'
+printf 'token %s\n' "$MAESTRO_BUILDKIT_SECRET_0" >&2
+output=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output' ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+destination="${output#*dest=}"
+destination="${destination%%,*}"
+printf 'fake-oci-archive' > "$destination"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let source = temporary.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("Dockerfile"), "FROM scratch\n").unwrap();
+    let mut request = request(std::fs::canonicalize(source).unwrap());
+    request.secrets.insert(
+        "NPM_TOKEN".to_owned(),
+        SecretValue::new("npm-token-must-not-leak"),
+    );
+    let mut settings = settings(temporary.path().join("state"));
+    settings.buildctl = executable;
+    let output = RecordingBuildOutput::default();
+
+    let artifact = run_build(
+        &request,
+        &settings,
+        Arc::new(ProcessBuildctlRunner),
+        &output,
+    )
+    .await
+    .unwrap();
+    let mut archive = artifact.into_stream().await.unwrap();
+    assert_eq!(
+        archive.next().await.unwrap(),
+        Some(b"fake-oci-archive".to_vec())
+    );
+
+    let frames = output.frames();
+    assert!(frames.iter().any(|(stream, text)| {
+        *stream == ArtifactBuildOutputStream::Stdout && text == "buildkit build started"
+    }));
+    assert!(frames.iter().any(|(stream, text)| {
+        *stream == ArtifactBuildOutputStream::Stderr && text == "token [REDACTED]"
+    }));
+    assert!(
+        frames
+            .iter()
+            .all(|(_, text)| !text.contains("npm-token-must-not-leak"))
+    );
 }
 
 #[tokio::test]

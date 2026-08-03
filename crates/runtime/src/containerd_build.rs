@@ -10,7 +10,8 @@ use kernel_api::SecretValue;
 
 use crate::containerd_build_context::prepare_context;
 use crate::{
-    ArtifactBuildRequest, ArtifactByteStream, ArtifactStoreError, ContainerdRuntimeSettings,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
+    ArtifactStoreError, ContainerdRuntimeSettings, forward_artifact_build_output,
 };
 
 const FILE_CHUNK_BYTES: usize = 64 * 1_024;
@@ -36,6 +37,7 @@ pub(crate) trait BuildctlRunner: Send + Sync {
         &self,
         invocation: BuildctlInvocation,
         timeout: Duration,
+        output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError>;
 }
 
@@ -47,14 +49,15 @@ impl BuildctlRunner for ProcessBuildctlRunner {
         &self,
         invocation: BuildctlInvocation,
         timeout: Duration,
+        output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError> {
         probe_buildkit(&invocation, timeout.min(Duration::from_secs(5))).await?;
         let mut command = tokio::process::Command::new(&invocation.executable);
         command
             .args(&invocation.arguments)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         for (name, value) in &invocation.environment {
             command.env(name, value.expose());
@@ -67,10 +70,56 @@ impl BuildctlRunner for ProcessBuildctlRunner {
                     invocation.executable.display()
                 ),
             })?;
-        let status = match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(result) => result.map_err(|error| ArtifactStoreError::Unavailable {
-                message: format!("wait for BuildKit client: {error}"),
-            })?,
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: "BuildKit stdout pipe was not created".to_owned(),
+            })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: "BuildKit stderr pipe was not created".to_owned(),
+            })?;
+        let protected = invocation
+            .environment
+            .iter()
+            .map(|(_, value)| value.clone())
+            .collect::<Vec<_>>();
+        let completion = async {
+            tokio::try_join!(
+                async {
+                    child
+                        .wait()
+                        .await
+                        .map_err(|error| ArtifactStoreError::Unavailable {
+                            message: format!("wait for BuildKit client: {error}"),
+                        })
+                },
+                forward_artifact_build_output(
+                    stdout,
+                    ArtifactBuildOutputStream::Stdout,
+                    output,
+                    &protected,
+                    "BuildKit stdout",
+                ),
+                forward_artifact_build_output(
+                    stderr,
+                    ArtifactBuildOutputStream::Stderr,
+                    output,
+                    &protected,
+                    "BuildKit stderr",
+                )
+            )
+        };
+        let status = match tokio::time::timeout(timeout, completion).await {
+            Ok(Ok((status, (), ()))) => status,
+            Ok(Err(error)) => {
+                let _ignored = child.kill().await;
+                let _ignored = child.wait().await;
+                return Err(error);
+            }
             Err(_) => {
                 let _ignored = child.kill().await;
                 let _ignored = child.wait().await;
@@ -122,6 +171,7 @@ pub(crate) async fn run_build(
     request: &ArtifactBuildRequest,
     settings: &ContainerdRuntimeSettings,
     runner: Arc<dyn BuildctlRunner>,
+    output_sink: &dyn ArtifactBuildOutputSink,
 ) -> Result<BuildOutput, ArtifactStoreError> {
     validate_request(request)?;
     let workspace = create_workspace(&settings.state_root).await?;
@@ -135,7 +185,9 @@ pub(crate) async fn run_build(
     let output = workspace.path().join("image.oci.tar");
     create_private_output(&output).await?;
     let invocation = build_invocation(request, settings, &context, output.clone())?;
-    runner.run(invocation, settings.build_timeout).await?;
+    runner
+        .run(invocation, settings.build_timeout, output_sink)
+        .await?;
     validate_output(&output, settings.max_build_output_bytes).await?;
     Ok(BuildOutput {
         archive: output,

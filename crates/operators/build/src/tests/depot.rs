@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -7,8 +8,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::SecretValue;
 use runtime::{
-    ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
-    ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
+    ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
+    ArtifactDigest, ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactSource,
+    ArtifactStore, ArtifactStoreError,
 };
 
 use super::support::TestResult;
@@ -116,6 +118,72 @@ async fn depot_cli_keeps_credentials_out_of_argv_and_imports_output() -> TestRes
 }
 
 #[tokio::test]
+async fn depot_process_streams_both_outputs_and_redacts_protected_values() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let executable = temporary.path().join("fake-depot");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+printf 'depot build started\n'
+printf 'tokens %s %s\n' "$MAESTRO_DEPOT_BUILD_SECRET_0" "$DEPOT_TOKEN" >&2
+output=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output' ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+destination="${output#type=docker,dest=}"
+printf 'fake-docker-archive' > "$destination"
+"#,
+    )?;
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+    let context = temporary.path().join("context");
+    std::fs::create_dir(&context)?;
+    std::fs::write(context.join("Dockerfile"), b"FROM scratch\n")?;
+    let state_root = absolute_without_symlinks(temporary.path().join("state"))?;
+    let artifacts = Arc::new(ImportingArtifacts::default());
+    let mut settings =
+        DepotBuildSettings::new(SecretValue::new("depot-token-must-not-leak"), state_root);
+    settings.executable = executable;
+    let backend = ProcessDepotBuildBackend::new(settings, artifacts)?;
+    let request = ArtifactBuildRequest {
+        source: ArtifactSource::Directory {
+            root: std::fs::canonicalize(context)?,
+            definition: PathBuf::from("Dockerfile"),
+        },
+        arguments: BTreeMap::new(),
+        secrets: BTreeMap::from([(
+            "NPM_TOKEN".to_owned(),
+            SecretValue::new("npm-token-must-not-leak"),
+        )]),
+        tags: Vec::new(),
+    };
+    let output = RecordingBuildOutput::default();
+
+    backend
+        .build_with_output(&request, "project-123", &output)
+        .await?;
+
+    let frames = output.frames();
+    assert!(frames.iter().any(|(stream, text)| {
+        *stream == ArtifactBuildOutputStream::Stdout && text == "depot build started"
+    }));
+    assert!(frames.iter().any(|(stream, text)| {
+        *stream == ArtifactBuildOutputStream::Stderr && text == "tokens [REDACTED] [REDACTED]"
+    }));
+    let combined = frames
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!combined.contains("npm-token-must-not-leak"));
+    assert!(!combined.contains("depot-token-must-not-leak"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn depot_cli_extracts_an_uploaded_context_before_building() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let archive = temporary.path().join("context.tar");
@@ -177,6 +245,22 @@ fn contains_pair(arguments: &[String], key: &str, value: &str) -> bool {
     })
 }
 
+#[derive(Default)]
+struct RecordingBuildOutput(Mutex<Vec<(ArtifactBuildOutputStream, String)>>);
+
+impl RecordingBuildOutput {
+    fn frames(&self) -> Vec<(ArtifactBuildOutputStream, String)> {
+        lock(&self.0).clone()
+    }
+}
+
+#[async_trait]
+impl ArtifactBuildOutputSink for RecordingBuildOutput {
+    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+        lock(&self.0).push((stream, String::from_utf8_lossy(&output).into_owned()));
+    }
+}
+
 #[derive(Clone)]
 struct InvocationSnapshot {
     executable: PathBuf,
@@ -213,6 +297,7 @@ impl DepotRunner for RecordingDepotRunner {
         &self,
         invocation: DepotInvocation,
         timeout: Duration,
+        _output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError> {
         let environment = invocation
             .environment
