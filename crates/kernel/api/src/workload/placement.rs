@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 
 use schemars::JsonSchema;
@@ -5,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{DeploymentPhase, initial_restart_generation};
 use crate::{
-    AssignmentId, Condition, DeploymentId, Generation, NodeId, Object, ReplicaStateId, ServiceId,
-    Timestamp, WorkloadId,
+    AssignmentId, Condition, DeploymentId, Generation, MaskedSecret, NodeId, Object,
+    ReplicaStateId, ServiceId, Timestamp, WorkloadId,
 };
 
 /// Desired placement of one deployment replica on one node.
@@ -149,6 +150,9 @@ pub struct ReplicaStateStatus {
     /// Earliest UTC time at which the pending restart may be attempted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_not_before: Option<Timestamp>,
+    /// API-safe secret observations resolved and mounted for this replica.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_secrets: Option<BTreeMap<String, MaskedSecret>>,
     /// Generic health and exhaustion evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

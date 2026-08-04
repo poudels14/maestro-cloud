@@ -184,6 +184,19 @@ impl AssignmentAgent {
         }
         let resolved = self.resolve_deployment_sources(deployment).await?;
         let deployment = &resolved.deployment;
+        let resolved_secrets = deployment
+            .spec
+            .service
+            .secrets
+            .as_ref()
+            .map(|secrets| {
+                secrets
+                    .values()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.masked()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let workload_id = workload_id(assignment)?;
         let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {
@@ -315,6 +328,8 @@ impl AssignmentAgent {
                 handle,
                 workload_address: attachment.address,
                 restarted,
+                replica_id: replica.map(|replica| replica.meta.id.clone()),
+                resolved_secrets,
             })
         } else {
             Err(ConvergeFailure::pending(

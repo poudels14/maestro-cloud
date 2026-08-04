@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, Build, BuildId, BuildPhase, BuildSource, Deployment,
-    DeploymentId, DeploymentPhase, DeploymentStatus, GitCommit, InvalidIdentifier, ReplicaState,
-    Service, ServiceId, Timestamp,
+    DeploymentId, DeploymentPhase, DeploymentStatus, GitCommit, InvalidIdentifier, MaskedSecret,
+    ReplicaState, Service, ServiceId, Timestamp,
 };
 
 use crate::readiness::{all_exhausted, all_ready, current_slots, drain_elapsed, has_assignments};
@@ -153,7 +153,9 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             }
         })?;
         if desired != deployment.status {
-            if !deployment.status.phase.can_transition_to(desired.phase) {
+            if desired.phase != deployment.status.phase
+                && !deployment.status.phase.can_transition_to(desired.phase)
+            {
                 return Err(DeploymentPlanError::InvalidTransition {
                     deployment_id,
                     from: deployment.status.phase,
@@ -247,12 +249,14 @@ fn desired_deployment_status(
     drain_grace: std::time::Duration,
     create_builds: &mut Vec<Build>,
 ) -> Result<DeploymentStatus, DeploymentPlanError> {
-    if let Some(desired) =
+    if let Some(mut desired) =
         crate::goal::requested_status(service, deployment, assignments, now, drain_grace)
     {
+        merge_resolved_secrets(&mut desired, deployment, replicas);
         return Ok(desired);
     }
     let mut desired = deployment.status.clone();
+    merge_resolved_secrets(&mut desired, deployment, replicas);
     match desired.phase {
         DeploymentPhase::Queued
             if service.status.rollout == kernel_api::RolloutState::Active
@@ -331,6 +335,36 @@ fn desired_deployment_status(
         | DeploymentPhase::Canceled => {}
     }
     Ok(desired)
+}
+
+fn merge_resolved_secrets(
+    desired: &mut DeploymentStatus,
+    deployment: &Deployment,
+    replicas: &[ReplicaState],
+) {
+    let mut merged = BTreeMap::new();
+    let mut observed_any = false;
+    for observed_secrets in replicas
+        .iter()
+        .filter(|replica| replica.spec.deployment_id == deployment.meta.id)
+        .filter_map(|replica| replica.status.resolved_secrets.as_ref())
+    {
+        observed_any = true;
+        for (key, observed) in observed_secrets {
+            match merged.get(key) {
+                None => {
+                    merged.insert(key.clone(), observed.clone());
+                }
+                Some(existing) if existing == observed => {}
+                Some(_) => {
+                    merged.insert(key.clone(), MaskedSecret::redacted());
+                }
+            }
+        }
+    }
+    if observed_any {
+        desired.resolved_secrets = Some(merged);
+    }
 }
 
 fn advance_readiness(

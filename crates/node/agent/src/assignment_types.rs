@@ -3,7 +3,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kernel_api::{ClusterId, NodeId, ServiceId, Timestamp};
+use kernel_api::{ClusterId, MaskedSecret, NodeId, ReplicaStateId, ServiceId, Timestamp};
 use kernel_store::{Clock, MonotonicTime};
 use runtime::{HostPortPublication, NetworkSpec, WorkloadHandle};
 
@@ -80,6 +80,8 @@ pub(crate) struct ConvergedAssignment {
     pub(crate) handle: WorkloadHandle,
     pub(crate) workload_address: IpAddr,
     pub(crate) restarted: bool,
+    pub(crate) replica_id: Option<ReplicaStateId>,
+    pub(crate) resolved_secrets: BTreeMap<String, MaskedSecret>,
 }
 
 pub(crate) fn earliest(

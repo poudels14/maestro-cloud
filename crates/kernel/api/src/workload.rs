@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactArchiveId, BuildId, Condition, DeploymentId, Generation, NodeId, Object, SecretValue,
-    ServiceId, Timestamp,
+    ArtifactArchiveId, BuildId, Condition, DeploymentId, Generation, MaskedSecret, NodeId, Object,
+    SecretValue, ServiceId, Timestamp,
 };
 
 mod build;
@@ -534,6 +534,9 @@ pub struct DeploymentStatus {
     /// Exact Git commit used by this deployment, when its build source is Git.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_commit: Option<GitCommit>,
+    /// API-safe secret observations reported by deployment replicas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_secrets: Option<BTreeMap<String, MaskedSecret>>,
     /// Generic lifecycle and availability evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

@@ -482,6 +482,20 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
         Some("resolved-mode")
     );
 
+    let replica = world.load_replica().await?;
+    assert_eq!(
+        replica
+            .status
+            .resolved_secrets
+            .as_ref()
+            .and_then(|secrets| secrets.get("TOKEN"))
+            .map(kernel_api::MaskedSecret::as_str),
+        Some("••••oken")
+    );
+    let encoded_replica = serde_json::to_string(&replica)?;
+    assert!(encoded_replica.contains("••••oken"));
+    assert!(!encoded_replica.contains("resolved-token"));
+
     let encoded_after = serde_json::to_string(&world.load_deployment().await?)?;
     assert!(encoded_after.contains("aws-secret://runtime-environment"));
     assert!(encoded_after.contains("aws-secret://runtime-secrets"));
@@ -608,6 +622,7 @@ pub(crate) fn deployment() -> Deployment {
                     .to_owned(),
             ),
             git_commit: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     }
@@ -828,6 +843,7 @@ fn replica(assignment: &Assignment) -> ReplicaState {
             restart_attempts: 0,
             restart_pending_attempt: None,
             restart_not_before: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     }

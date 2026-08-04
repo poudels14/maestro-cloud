@@ -1,14 +1,17 @@
 import { For, Show, type JSX } from "solid-js";
+import { useQuery } from "@maestro/sdk";
 import type { ServicesApi } from "./api";
 import type { Service } from "./types";
-import { secretNames } from "./secretView";
 import { isSystemService } from "./serviceView";
+import { deploymentsQuery } from "./queries";
+import { SecretConfig } from "./SecretConfig";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { VolumesList } from "./overview/VolumesList";
 import { FreezeToggle } from "./overview/FreezeToggle";
 
 function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.Element }) {
+  const deployments = useQuery(() => deploymentsQuery(props.api, props.service.meta.id));
   const artifact = () => props.service.spec.artifact;
   const sourceItems = () => {
     const value = artifact();
@@ -82,7 +85,13 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
       label,
       value
     }));
-  const secretKeys = () => secretNames(props.service.spec.secrets);
+  const currentDeployment = () =>
+    deployments.data?.find(
+      (deployment) => deployment.spec.serviceGeneration === props.service.meta.generation
+    ) ??
+    deployments.data?.find(
+      (deployment) => deployment.meta.id === props.service.status.activeDeploymentId
+    );
   const isPreview = () => props.service.previewResource != null;
 
   return (
@@ -117,17 +126,10 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
         <ConfigSection title="Environment variables" items={envItems()} />
       </Show>
 
-      <Show when={secretKeys().length > 0}>
-        <div>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">
-            Secrets
-            <span class="ml-1.5 text-gray-300 normal-case">
-              (mounted at {props.service.spec.secrets?.mountPath})
-            </span>
-          </h4>
-          <SecretsList keys={secretKeys()} />
-        </div>
-      </Show>
+      <SecretConfig
+        secrets={props.service.spec.secrets}
+        resolvedSecrets={currentDeployment()?.status.resolvedSecrets}
+      />
 
       <VolumesList service={props.service} />
     </div>

@@ -1671,6 +1671,10 @@ export interface components {
             phase: components["schemas"]["DeploymentPhase"];
             /** @description Time the deployment first became ready. */
             readyAt?: components["schemas"]["Timestamp"] | (null);
+            /** @description API-safe secret observations reported by deployment replicas. */
+            resolvedSecrets?: {
+                [key: string]: components["schemas"]["MaskedSecret"];
+            } | null;
         };
         /** @description Service-level selection for Depot's remote builder infrastructure. */
         DepotBuildConfig: {
@@ -2070,6 +2074,8 @@ export interface components {
             /** @description Remote bridge resolver addresses reachable through Tailscale. */
             nameservers: string[];
         };
+        /** @description A safe display form that reveals at most the last four characters. */
+        MaskedSecret: string;
         /** @description Secret-free view of the managed Tailscale gateway fleet. */
         MaskedTailscaleConfig: {
             /** @description Effective routes advertised to the tailnet. */
@@ -2958,6 +2964,10 @@ export interface components {
             nodeId?: components["schemas"]["NodeId"] | (null);
             /** @description Deployment lifecycle phase observed for the replica. */
             phase: components["schemas"]["DeploymentPhase"];
+            /** @description API-safe secret observations resolved and mounted for this replica. */
+            resolvedSecrets?: {
+                [key: string]: components["schemas"]["MaskedSecret"];
+            } | null;
             /**
              * Format: uint32
              * @description Restart attempts consumed by this assignment.

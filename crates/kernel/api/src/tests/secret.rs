@@ -1,4 +1,4 @@
-use crate::SecretValue;
+use crate::{MaskedSecret, SecretValue};
 
 #[test]
 fn secret_debug_and_masking_never_reveal_short_values() {
@@ -8,4 +8,12 @@ fn secret_debug_and_masking_never_reveal_short_values() {
     assert_eq!(format!("{short:?}"), "SecretValue([REDACTED])");
     assert_eq!(short.masked().as_str(), "••••");
     assert_eq!(long.masked().as_str(), "••••oken");
+    assert_eq!(MaskedSecret::redacted().as_str(), "••••");
+    assert!(serde_json::from_str::<MaskedSecret>(r#""production-token""#).is_err());
+    assert_eq!(
+        serde_json::from_str::<MaskedSecret>(r#""••••oken""#)
+            .expect("valid masked secret")
+            .as_str(),
+        "••••oken"
+    );
 }

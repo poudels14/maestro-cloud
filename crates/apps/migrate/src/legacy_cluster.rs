@@ -546,6 +546,7 @@ fn convert_replica(
             restart_attempts: legacy.restart_attempts,
             restart_pending_attempt: None,
             restart_not_before: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     })

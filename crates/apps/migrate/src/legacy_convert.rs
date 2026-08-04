@@ -355,6 +355,7 @@ fn convert_deployment(
                 revision: commit.reference.clone(),
                 title: commit.message.clone(),
             }),
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     };

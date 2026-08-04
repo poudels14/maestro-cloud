@@ -1420,6 +1420,14 @@
               }
             ],
             "description": "Time the deployment first became ready."
+          },
+          "resolvedSecrets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MaskedSecret"
+            },
+            "description": "API-safe secret observations reported by deployment replicas.",
+            "nullable": true,
+            "type": "object"
           }
         },
         "required": [
@@ -2690,6 +2698,10 @@
           "nameservers"
         ],
         "type": "object"
+      },
+      "MaskedSecret": {
+        "description": "A safe display form that reveals at most the last four characters.",
+        "type": "string"
       },
       "MaskedTailscaleConfig": {
         "description": "Secret-free view of the managed Tailscale gateway fleet.",
@@ -5680,6 +5692,14 @@
               }
             ],
             "description": "Deployment lifecycle phase observed for the replica."
+          },
+          "resolvedSecrets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MaskedSecret"
+            },
+            "description": "API-safe secret observations resolved and mounted for this replica.",
+            "nullable": true,
+            "type": "object"
           },
           "restartAttempts": {
             "description": "Restart attempts consumed by this assignment.",

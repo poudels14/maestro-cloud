@@ -364,6 +364,7 @@ impl World {
                 draining_at: None,
                 image_digest: None,
                 git_commit: None,
+                resolved_secrets: Default::default(),
                 conditions: Vec::new(),
             },
         };
@@ -418,6 +419,7 @@ impl World {
                 restart_attempts: 0,
                 restart_pending_attempt: None,
                 restart_not_before: None,
+                resolved_secrets: Default::default(),
                 conditions: Vec::new(),
             },
         };

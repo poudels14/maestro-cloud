@@ -40,13 +40,38 @@ impl Debug for SecretValue {
 }
 
 /// A safe display form that reveals at most the last four characters.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct MaskedSecret(String);
 
 impl MaskedSecret {
+    /// Produces a fully redacted display value without a visible suffix.
+    pub fn redacted() -> Self {
+        Self("••••".to_string())
+    }
+
     /// Returns the masked display text.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for MaskedSecret {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let Some(suffix) = value.strip_prefix("••••") else {
+            return Err(serde::de::Error::custom(
+                "masked secret must begin with the redaction prefix",
+            ));
+        };
+        if suffix.chars().count() > 4 {
+            return Err(serde::de::Error::custom(
+                "masked secret suffix cannot exceed four characters",
+            ));
+        }
+        Ok(Self(value))
     }
 }

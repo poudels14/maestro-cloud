@@ -116,6 +116,7 @@ pub(super) fn deployment_generation(
             draining_at: None,
             image_digest: None,
             git_commit: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     }
@@ -177,6 +178,7 @@ pub(super) fn replica(
             restart_attempts,
             restart_pending_attempt: None,
             restart_not_before: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     }

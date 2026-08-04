@@ -158,6 +158,7 @@ fn deployment(
             draining_at: None,
             image_digest: None,
             git_commit: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     })

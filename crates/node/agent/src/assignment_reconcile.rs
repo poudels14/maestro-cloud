@@ -12,6 +12,7 @@ use crate::assignment_error::AssignmentAgentError;
 #[cfg(unix)]
 use crate::assignment_node_api::active_node_api_workloads;
 use crate::assignment_replica::ensure_replica;
+use crate::assignment_replica::record_resolved_secrets;
 use crate::assignment_resource::{decode_assignments, decode_deployments, decode_replicas};
 use crate::assignment_status::{AssignmentOutcome, ConvergeFailure};
 use crate::assignment_types::{
@@ -269,6 +270,17 @@ impl AssignmentAgent {
     ) -> Result<Option<IpAddr>, AssignmentAgentError> {
         match outcome {
             Ok(converged) => {
+                if let Some(replica_id) = converged.replica_id.as_ref() {
+                    record_resolved_secrets(
+                        self.store.as_ref(),
+                        &self.keyspace,
+                        &self.replica_kind,
+                        assignment,
+                        replica_id,
+                        &converged.resolved_secrets,
+                    )
+                    .await?;
+                }
                 self.update_status(
                     assignment,
                     AssignmentOutcome::Running {

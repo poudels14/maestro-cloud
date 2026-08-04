@@ -76,6 +76,7 @@ pub(crate) fn new_deployment(
             draining_at: None,
             image_digest: None,
             git_commit: None,
+            resolved_secrets: None,
             conditions: Vec::new(),
         },
     })

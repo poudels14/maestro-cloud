@@ -51,12 +51,18 @@ pub enum AssignmentAgentError {
         replica_id: String,
         assignment_id: String,
     },
+    /// A resolved-secret observation lost its replica before it could be committed.
+    #[error("ReplicaState `{replica_id}` disappeared before resolved secrets were recorded")]
+    ReplicaObservationDisappeared { replica_id: String },
     /// A status-bearing assignment could not be encoded.
     #[error("failed to serialize Assignment resource: {message}")]
     SerializeResource { message: String },
     /// Repeated concurrent status writes exhausted the bounded retry budget.
     #[error("store contention prevented status update for assignment `{assignment_id}`")]
     Contention { assignment_id: String },
+    /// Concurrent health or restart writes prevented a resolved-secret observation update.
+    #[error("store contention prevented resolved secret update for replica `{replica_id}`")]
+    ReplicaObservationContention { replica_id: String },
 }
 
 impl AssignmentAgentError {
@@ -79,7 +85,9 @@ impl AssignmentAgentError {
             ) | Self::AssignmentDisappeared { .. }
                 | Self::AssignmentMoved { .. }
                 | Self::ReplicaDisappeared { .. }
+                | Self::ReplicaObservationDisappeared { .. }
                 | Self::Contention { .. }
+                | Self::ReplicaObservationContention { .. }
         )
     }
 }

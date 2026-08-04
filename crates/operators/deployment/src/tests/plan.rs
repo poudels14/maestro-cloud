@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use kernel_api::{
     ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, DeploymentId, DeploymentPhase,
     Generation, IngressRouteId, IngressRouteSpec, IngressRouteStatus, Object, OwnerReference,
-    Ownership, ResourceId, ResourceKind, ResourceName, RolloutState, Timestamp,
+    Ownership, ResourceId, ResourceKind, ResourceName, RolloutState, SecretValue, Timestamp,
 };
 
 use super::plan_support::*;
@@ -413,6 +415,57 @@ fn readiness_requires_the_exact_current_assignment() {
     assert_eq!(
         ready.deployment_updates[0].status.ready_at,
         Some(Timestamp(40_000))
+    );
+}
+
+#[test]
+fn deployment_collects_only_masked_secret_observations() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    service.spec.replicas = 2;
+    let deployment = deployment(&service, DeploymentPhase::Ready);
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+    let first = assignment_slot(&deployment, "assignment-0", 0, 1);
+    let second = assignment_slot(&deployment, "assignment-1", 1, 1);
+    let mut first_replica = replica(&deployment, &first, DeploymentPhase::Ready, 0);
+    first_replica.status.resolved_secrets = Some(BTreeMap::from([
+        (
+            "DATABASE_URL".to_owned(),
+            SecretValue::new("production").masked(),
+        ),
+        ("TOKEN".to_owned(), SecretValue::new("first-token").masked()),
+    ]));
+    let mut second_replica = replica(&deployment, &second, DeploymentPhase::Ready, 0);
+    second_replica.status.resolved_secrets = Some(BTreeMap::from([
+        (
+            "DATABASE_URL".to_owned(),
+            SecretValue::new("production").masked(),
+        ),
+        (
+            "TOKEN".to_owned(),
+            SecretValue::new("second-value").masked(),
+        ),
+    ]));
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.assignments = vec![first, second];
+    snapshot.replicas = vec![first_replica, second_replica];
+
+    let result = plan(snapshot).expect("collect masked secret observations");
+    let status = &result.deployment_updates[0].status;
+    assert_eq!(
+        status
+            .resolved_secrets
+            .as_ref()
+            .and_then(|secrets| secrets.get("DATABASE_URL"))
+            .map(kernel_api::MaskedSecret::as_str),
+        Some("••••tion")
+    );
+    assert_eq!(
+        status
+            .resolved_secrets
+            .as_ref()
+            .and_then(|secrets| secrets.get("TOKEN"))
+            .map(kernel_api::MaskedSecret::as_str),
+        Some("••••")
     );
 }
 

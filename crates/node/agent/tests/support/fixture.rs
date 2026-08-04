@@ -236,6 +236,7 @@ fn deployment() -> Deployment {
             draining_at: None,
             image_digest: Some("registry.test/api@sha256:abc".to_owned()),
             git_commit: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     }
@@ -267,6 +268,7 @@ fn replica(assignment: &Assignment) -> ReplicaState {
             restart_attempts: 0,
             restart_pending_attempt: None,
             restart_not_before: None,
+            resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },
     }
