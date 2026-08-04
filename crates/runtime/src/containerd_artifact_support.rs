@@ -4,6 +4,7 @@ use containerd::services::v1::Image;
 use containerd::tonic::{Code, Request, Status};
 use containerd::types::Platform;
 
+use crate::artifact::parse_oci_reference;
 use crate::{ArtifactDigest, ArtifactStoreError};
 
 pub(crate) const MANAGED_ARTIFACT_LABEL: &str = "com.maestro.managed-artifact";
@@ -69,32 +70,17 @@ pub(crate) fn image_digest(
     ArtifactDigest::new(format!("{prefix}@{digest}"))
 }
 
-pub(crate) fn reference_prefix(reference: &str) -> Result<&str, ArtifactStoreError> {
-    if let Some((prefix, _)) = reference.rsplit_once('@') {
-        return nonempty_prefix(prefix, reference);
-    }
-    let slash = reference.rfind('/');
-    let colon = reference.rfind(':');
-    let prefix = colon
-        .filter(|colon| slash.is_none_or(|slash| *colon > slash))
-        .and_then(|colon| reference.get(..colon))
-        .unwrap_or(reference);
-    nonempty_prefix(prefix, reference)
+pub(crate) fn reference_prefix(reference: &str) -> Result<String, ArtifactStoreError> {
+    let reference = parse_oci_reference(reference)?;
+    Ok(format!(
+        "{}/{}",
+        reference.registry(),
+        reference.repository()
+    ))
 }
 
-pub(crate) fn registry_reference(reference: &str) -> String {
-    let first_component = reference.split('/').next().unwrap_or(reference);
-    if reference.contains('/')
-        && (first_component.contains('.')
-            || first_component.contains(':')
-            || first_component == "localhost")
-    {
-        reference.to_owned()
-    } else if reference.contains('/') {
-        format!("docker.io/{reference}")
-    } else {
-        format!("docker.io/library/{reference}")
-    }
+pub(crate) fn registry_reference(reference: &str) -> Result<String, ArtifactStoreError> {
+    Ok(parse_oci_reference(reference)?.whole())
 }
 
 pub(crate) fn select_image(
@@ -196,18 +182,5 @@ fn is_managed(image: &Image) -> bool {
 }
 
 fn content_digest(digest: &ArtifactDigest) -> &str {
-    digest
-        .as_str()
-        .rsplit_once('@')
-        .map_or_else(|| digest.as_str(), |(_, digest)| digest)
-}
-
-fn nonempty_prefix<'a>(prefix: &'a str, reference: &str) -> Result<&'a str, ArtifactStoreError> {
-    if prefix.is_empty() {
-        Err(ArtifactStoreError::Rejected {
-            message: format!("containerd image reference `{reference}` has no repository name"),
-        })
-    } else {
-        Ok(prefix)
-    }
+    digest.content_digest()
 }

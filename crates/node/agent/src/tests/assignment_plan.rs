@@ -39,7 +39,10 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
         assignment.spec.workload_address
     );
     assert_eq!(workload.configuration.dns_server, Some(dns_server()));
-    assert_eq!(workload.image.as_str(), "registry.test/api@sha256:abc");
+    assert_eq!(
+        workload.image.as_str(),
+        "registry.test/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
     assert_eq!(workload.configuration.hostname, "api-0");
     assert_eq!(
         workload

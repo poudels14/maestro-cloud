@@ -18,6 +18,10 @@ use crate::{
     RuntimeCapability, TokioRuntimeClock, WorkloadRuntime,
 };
 
+const DIGEST_A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const DIGEST_B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const DIGEST_C: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
 #[test]
 fn containerd_transfer_lease_expiration_uses_injected_wall_time() {
     assert_eq!(
@@ -49,10 +53,13 @@ fn containerd_digest_references_preserve_repository_and_registry_ports() {
         "registry.test:5000/team/api"
     );
     assert_eq!(
-        reference_prefix("registry.test:5000/team/api@sha256:abc").unwrap(),
+        reference_prefix(&format!("registry.test:5000/team/api@{DIGEST_A}")).unwrap(),
         "registry.test:5000/team/api"
     );
-    assert_eq!(reference_prefix("alpine").unwrap(), "alpine");
+    assert_eq!(
+        reference_prefix("alpine").unwrap(),
+        "docker.io/library/alpine"
+    );
 
     let image = image("registry.test/team/api:preview", "sha256:abc", true);
     assert_eq!(
@@ -64,19 +71,19 @@ fn containerd_digest_references_preserve_repository_and_registry_ports() {
 #[test]
 fn containerd_registry_references_qualify_docker_hub_images() {
     assert_eq!(
-        registry_reference("traefik:v3.6.23@sha256:abc"),
-        "docker.io/library/traefik:v3.6.23@sha256:abc"
+        registry_reference(&format!("traefik:v3.6.23@{DIGEST_A}")).unwrap(),
+        format!("docker.io/library/traefik:v3.6.23@{DIGEST_A}")
     );
     assert_eq!(
-        registry_reference("cloudflare/cloudflared:2026.7.2@sha256:def"),
-        "docker.io/cloudflare/cloudflared:2026.7.2@sha256:def"
+        registry_reference(&format!("cloudflare/cloudflared:2026.7.2@{DIGEST_B}")).unwrap(),
+        format!("docker.io/cloudflare/cloudflared:2026.7.2@{DIGEST_B}")
     );
     assert_eq!(
-        registry_reference("ghcr.io/tailscale/tailscale:v1.98.8@sha256:ghi"),
-        "ghcr.io/tailscale/tailscale:v1.98.8@sha256:ghi"
+        registry_reference(&format!("ghcr.io/tailscale/tailscale:v1.98.8@{DIGEST_C}")).unwrap(),
+        format!("ghcr.io/tailscale/tailscale:v1.98.8@{DIGEST_C}")
     );
     assert_eq!(
-        registry_reference("localhost:5000/team/api:latest"),
+        registry_reference("localhost:5000/team/api:latest").unwrap(),
         "localhost:5000/team/api:latest"
     );
 }

@@ -62,7 +62,7 @@ impl ArtifactStore for ContainerdRuntime {
         reference: &ArtifactReference,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let platform = host_platform();
-        let registry_reference = registry_reference(reference.as_str());
+        let registry_reference = registry_reference(reference.as_str())?;
         let source = containerd::to_any(&OciRegistry {
             reference: registry_reference,
             resolver: None,
@@ -99,7 +99,7 @@ impl ArtifactStore for ContainerdRuntime {
         destination: &ArtifactReference,
     ) -> Result<(), ArtifactStoreError> {
         let image = select_image(&self.images().await?, digest)?;
-        let registry_reference = registry_reference(destination.as_str());
+        let registry_reference = registry_reference(destination.as_str())?;
         transfer(
             self.channel.clone(),
             self.settings.namespace.clone(),

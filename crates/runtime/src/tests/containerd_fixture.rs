@@ -30,7 +30,10 @@ pub(crate) fn container_spec() -> WorkloadSpec {
                 group_id: 1001,
             }),
         },
-        image: ArtifactReference::new("maestro.test/runtime@sha256:abc").unwrap(),
+        image: ArtifactReference::new(
+            "maestro.test/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap(),
         command: Some(CommandSpec {
             executable: "/bin/service".to_owned(),
             arguments: vec!["--foreground".to_owned()],

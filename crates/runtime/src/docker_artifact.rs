@@ -71,11 +71,11 @@ impl ArtifactStore for DockerRuntime {
     ) -> Result<(), ArtifactStoreError> {
         self.tag(digest, destination).await?;
         let (repository, tag) = split_tag(destination.as_str())?;
-        let options = PushImageOptionsBuilder::default().tag(tag).build();
+        let options = PushImageOptionsBuilder::default().tag(&tag).build();
         consume_operation(
             "push",
             Some(destination.as_str()),
-            self.client.push_image(repository, Some(options), None),
+            self.client.push_image(&repository, Some(options), None),
         )
         .await
     }
@@ -332,8 +332,8 @@ impl DockerRuntime {
     ) -> Result<(), ArtifactStoreError> {
         let (repository, tag) = split_tag(destination.as_str())?;
         let options = TagImageOptionsBuilder::default()
-            .repo(repository)
-            .tag(tag)
+            .repo(&repository)
+            .tag(&tag)
             .build();
         self.client
             .tag_image(digest.as_str(), Some(options))

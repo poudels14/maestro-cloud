@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::SecretValue;
 
+use crate::artifact::parse_oci_reference;
 use crate::containerd_build_context::prepare_context;
 use crate::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
@@ -330,19 +331,14 @@ fn validate_key(kind: BuildParameterKind, key: &str) -> Result<(), ArtifactStore
 }
 
 pub(crate) fn validate_tag(tag: &str) -> Result<(), ArtifactStoreError> {
-    let slash = tag.rfind('/');
-    let colon = tag.rfind(':');
-    let empty_tag_part = colon
-        .filter(|colon| slash.is_none_or(|slash| *colon > slash))
-        .is_some_and(|colon| colon == 0 || colon + 1 == tag.len());
-    if tag.contains('@')
-        || tag.chars().any(char::is_whitespace)
-        || tag.chars().any(char::is_control)
-        || tag.ends_with('/')
-        || empty_tag_part
-    {
+    let reference = parse_oci_reference(tag).map_err(|_| {
+        rejected(format!(
+            "BuildKit destination `{tag}` must be a valid OCI repository tag"
+        ))
+    })?;
+    if reference.digest().is_some() || reference.tag().is_none() {
         Err(rejected(format!(
-            "BuildKit destination `{tag}` must be a non-whitespace repository tag"
+            "BuildKit destination `{tag}` must be a repository tag, not a digest"
         )))
     } else {
         Ok(())

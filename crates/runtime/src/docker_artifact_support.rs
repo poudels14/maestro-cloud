@@ -5,6 +5,7 @@ use docker::errors::Error as DockerError;
 use docker::models::{BuildInfo, ImageInspect, ImageSummary};
 use docker::query_parameters::{BuildImageOptions, BuildImageOptionsBuilder};
 
+use crate::artifact::parse_oci_reference;
 use crate::{ArtifactBuildRequest, ArtifactDigest, ArtifactStoreError};
 
 pub(crate) const MANAGED_IMAGE_LABEL: &str = "maestro.managed";
@@ -71,28 +72,26 @@ pub(crate) fn definition_text(definition: &Path) -> Result<String, ArtifactStore
         .ok_or_else(|| rejected("Docker build definition must be valid UTF-8"))
 }
 
-pub(crate) fn split_tag(reference: &str) -> Result<(&str, &str), ArtifactStoreError> {
-    if reference.contains('@') {
+pub(crate) fn split_tag(reference: &str) -> Result<(String, String), ArtifactStoreError> {
+    let parsed = parse_oci_reference(reference).map_err(|_| {
+        rejected(format!(
+            "Docker destination `{reference}` is not a valid OCI image reference"
+        ))
+    })?;
+    if parsed.digest().is_some() {
         return Err(rejected(format!(
             "Docker destination `{reference}` must be a repository tag, not a digest"
         )));
     }
-    let slash = reference.rfind('/');
-    let colon = reference.rfind(':');
-    match colon.filter(|colon| slash.is_none_or(|slash| *colon > slash)) {
-        Some(colon) => {
-            let repository = reference.get(..colon).unwrap_or_default();
-            let tag = reference.get(colon + 1..).unwrap_or_default();
-            if repository.is_empty() || tag.is_empty() {
-                Err(rejected(format!(
-                    "Docker destination `{reference}` has an empty repository or tag"
-                )))
-            } else {
-                Ok((repository, tag))
-            }
-        }
-        None => Ok((reference, "latest")),
-    }
+    let tag = parsed.tag().ok_or_else(|| {
+        rejected(format!(
+            "Docker destination `{reference}` must include a repository tag"
+        ))
+    })?;
+    Ok((
+        format!("{}/{}", parsed.registry(), parsed.repository()),
+        tag.to_owned(),
+    ))
 }
 
 pub(crate) fn inspect_digest(

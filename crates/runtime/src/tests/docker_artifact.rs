@@ -126,10 +126,18 @@ fn docker_paths_and_tags_reject_ambiguous_shapes() {
     assert!(definition_text(Path::new(".git/Dockerfile")).is_err());
     assert_eq!(
         split_tag("registry.example:5000/team/app:v2").unwrap(),
-        ("registry.example:5000/team/app", "v2")
+        ("registry.example:5000/team/app".to_owned(), "v2".to_owned())
     );
-    assert_eq!(split_tag("team/app").unwrap(), ("team/app", "latest"));
-    assert!(split_tag("team/app@sha256:abc").is_err());
+    assert_eq!(
+        split_tag("team/app").unwrap(),
+        ("docker.io/team/app".to_owned(), "latest".to_owned())
+    );
+    assert!(
+        split_tag(
+            "team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        .is_err()
+    );
     assert!(split_tag("team/app:").is_err());
 }
 

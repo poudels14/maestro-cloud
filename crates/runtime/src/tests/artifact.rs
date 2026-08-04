@@ -14,3 +14,12 @@ fn immutable_reference_rebinds_only_the_repository() {
         "registry.example:5000/team/api@sha256:abc123"
     );
 }
+
+#[test]
+fn artifact_references_use_the_oci_distribution_grammar() {
+    assert!(ArtifactReference::new("alpine:3.22").is_ok());
+    assert!(ArtifactReference::new("registry.example:5000/team/api:v1").is_ok());
+    assert!(ArtifactReference::new("Team/API:v1").is_err());
+    assert!(ArtifactReference::new("team/api:").is_err());
+    assert!(ArtifactReference::new("team/api@sha256:abc").is_err());
+}

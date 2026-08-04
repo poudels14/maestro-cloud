@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use kernel_api::SecretValue;
+use oci_spec::distribution::Reference;
 use serde::{Deserialize, Serialize};
 
 /// Image name, tag, or digest accepted by an artifact backend.
@@ -15,16 +16,17 @@ impl ArtifactReference {
     /// Constructs a non-empty artifact reference.
     pub fn new(value: impl Into<String>) -> Result<Self, ArtifactStoreError> {
         let value = value.into();
-        if value.trim().is_empty() {
-            Err(ArtifactStoreError::InvalidReference)
-        } else {
-            Ok(Self(value))
-        }
+        parse_oci_reference(&value)?;
+        Ok(Self(value))
     }
 
     /// Returns the backend artifact reference.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn parsed(&self) -> Result<Reference, ArtifactStoreError> {
+        parse_oci_reference(&self.0)
     }
 }
 
@@ -65,26 +67,26 @@ impl ArtifactDigest {
 
     /// Rebinds this content digest to the repository portion of a destination.
     pub fn for_reference(&self, reference: &ArtifactReference) -> Result<Self, ArtifactStoreError> {
-        let value = reference.as_str();
-        let repository = if let Some((repository, _)) = value.rsplit_once('@') {
-            repository
-        } else {
-            let slash = value.rfind('/');
-            let colon = value.rfind(':');
-            colon
-                .filter(|colon| slash.is_none_or(|slash| *colon > slash))
-                .and_then(|colon| value.get(..colon))
-                .unwrap_or(value)
-        };
-        if repository.trim().is_empty() {
-            return Err(ArtifactStoreError::InvalidReference);
-        }
-        let content = self
-            .as_str()
-            .rsplit_once('@')
-            .map_or_else(|| self.as_str(), |(_, digest)| digest);
-        Self::new(format!("{repository}@{content}"))
+        let reference = reference.parsed()?;
+        Self::new(
+            Reference::with_digest(
+                reference.registry().to_owned(),
+                reference.repository().to_owned(),
+                self.content_digest().to_owned(),
+            )
+            .whole(),
+        )
     }
+
+    pub(crate) fn content_digest(&self) -> &str {
+        self.as_str()
+            .rsplit_once('@')
+            .map_or_else(|| self.as_str(), |(_, digest)| digest)
+    }
+}
+
+pub(crate) fn parse_oci_reference(value: &str) -> Result<Reference, ArtifactStoreError> {
+    Reference::try_from(value).map_err(|_| ArtifactStoreError::InvalidReference)
 }
 
 impl TryFrom<String> for ArtifactDigest {
@@ -163,8 +165,8 @@ pub struct ArtifactPruneReport {
 /// Matchable artifact backend failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ArtifactStoreError {
-    /// An empty image reference is never meaningful.
-    #[error("artifact reference cannot be empty")]
+    /// An invalid OCI image reference is never meaningful.
+    #[error("artifact reference is not a valid OCI image reference")]
     InvalidReference,
     /// An empty immutable digest is never meaningful.
     #[error("artifact digest cannot be empty")]
