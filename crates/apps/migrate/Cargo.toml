@@ -13,6 +13,7 @@ clap.workspace = true
 cluster = { version = "0.1.0", path = "../../cluster" }
 duckdb = { workspace = true, features = ["bundled", "json", "parquet"] }
 etcd-client.workspace = true
+gix-url.workspace = true
 hex.workspace = true
 http.workspace = true
 ipnet.workspace = true

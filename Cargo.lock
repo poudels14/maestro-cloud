@@ -1218,6 +1218,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "flate2",
+ "gix-url",
  "hex",
  "kernel-api",
  "kernel-controller",
@@ -1231,6 +1232,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -1846,6 +1848,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "upgrade",
+ "url",
  "webhook",
 ]
 
@@ -2480,6 +2483,45 @@ checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
 dependencies = [
  "opaque-debug",
  "polyval",
+]
+
+[[package]]
+name = "gix-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "751d6bd162106f8c1e7e9aaccb5bbdd605267e91a930a17a4560c46e33a9100c"
+dependencies = [
+ "bstr",
+ "gix-trace",
+ "gix-validate",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "gix-trace"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be3eb81d9dc914335923e50d52829c551feefd6a72d176c4130c546b67a60814"
+
+[[package]]
+name = "gix-url"
+version = "0.36.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65bb01ec69d55e82ccb7a19e264501ead4e6aac38463a8cebfdd81e22bb67ab2"
+dependencies = [
+ "bstr",
+ "gix-path",
+ "percent-encoding",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "gix-validate"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a034e84d1e04e1b1f20f51f12491da230b6ac8b925d0c8e1b89bcd87a7c5ccc"
+dependencies = [
+ "bstr",
 ]
 
 [[package]]
@@ -3432,6 +3474,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "url",
 ]
 
 [[package]]
@@ -3507,6 +3550,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "url",
  "uuid",
  "webpki-roots 0.26.11",
 ]
@@ -3573,6 +3617,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -3586,6 +3631,7 @@ dependencies = [
  "cluster",
  "duckdb",
  "etcd-client",
+ "gix-url",
  "hex",
  "http 1.4.2",
  "ipnet",
@@ -4330,6 +4376,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "gix-url",
  "kernel-api",
  "kernel-controller",
  "kernel-store",

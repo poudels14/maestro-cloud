@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use aws_sdk_secretsmanager::error::DisplayErrorContext;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use url::Url;
 
 use crate::CliError;
 
@@ -19,14 +20,14 @@ pub struct SystemConfigSourceReader;
 impl ConfigSourceReader for SystemConfigSourceReader {
     async fn read(&self, source: &str) -> Result<String, CliError> {
         if let Some(path) = local_path(source) {
-            return std::fs::read_to_string(path).map_err(|source| {
+            return std::fs::read_to_string(&path).map_err(|source| {
                 CliError::io(
                     format!("failed to read config source `{}`", path.display()),
                     source,
                 )
             });
         }
-        let reference = source.strip_prefix("aws-secret://").ok_or_else(|| {
+        let reference = aws_secret_reference(source).ok_or_else(|| {
             CliError::invalid_input(format!("unsupported config source `{source}`"))
         })?;
         if reference.is_empty() {
@@ -163,19 +164,33 @@ fn merge(base: &mut Value, overlay: Value) {
 }
 
 fn resolve_extended_source(current: &str, extends: &str) -> Result<String, CliError> {
-    if extends.starts_with("aws-secret://") {
+    if aws_secret_reference(extends).is_some() {
         return Ok(extends.to_string());
     }
-    let explicit_file = extends.strip_prefix("file://");
-    let path = explicit_file.unwrap_or(extends);
-    if explicit_file.is_none() && extends.contains("://") {
+    let parsed_url = Url::parse(extends).ok();
+    let path = match parsed_url.as_ref().map(Url::scheme) {
+        Some("file") => local_path(extends).ok_or_else(|| {
+            CliError::invalid_input(format!("invalid file config source `{extends}`"))
+        })?,
+        Some(_) => {
+            return Err(CliError::invalid_input(format!(
+                "unsupported config source `{extends}`"
+            )));
+        }
+        None if extends.contains("://") => {
+            return Err(CliError::invalid_input(format!(
+                "unsupported config source `{extends}`"
+            )));
+        }
+        None => PathBuf::from(extends),
+    };
+    if path.as_os_str().is_empty() {
         return Err(CliError::invalid_input(format!(
-            "unsupported config source `{extends}`"
+            "invalid file config source `{extends}`"
         )));
     }
-    let path = Path::new(path);
     if path.is_absolute() {
-        return Ok(format!("file://{}", path.display()));
+        return file_source(&path);
     }
     let current_path = local_path(current).ok_or_else(|| {
         CliError::invalid_input(format!(
@@ -183,25 +198,71 @@ fn resolve_extended_source(current: &str, extends: &str) -> Result<String, CliEr
         ))
     })?;
     let parent = current_path.parent().unwrap_or_else(|| Path::new("."));
-    Ok(format!("file://{}", parent.join(path).display()))
+    file_source(&parent.join(path))
 }
 
-fn local_path(source: &str) -> Option<&Path> {
-    if source.starts_with("aws-secret://") {
-        None
-    } else if let Some(path) = source.strip_prefix("file://") {
-        Some(Path::new(path))
-    } else if source.contains("://") {
-        None
-    } else {
-        Some(Path::new(source))
+fn local_path(source: &str) -> Option<PathBuf> {
+    match Url::parse(source) {
+        Ok(url) if url.scheme() == "file" => file_url_path(&url),
+        Ok(_) => None,
+        Err(_) if source.contains("://") => None,
+        Err(_) => Some(PathBuf::from(source)),
     }
+}
+
+fn file_url_path(url: &Url) -> Option<PathBuf> {
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    match url.host_str() {
+        None | Some("") | Some("localhost") => url.to_file_path().ok(),
+        Some(host) if url.path().is_empty() || url.path() == "/" => Some(PathBuf::from(host)),
+        Some(host) => {
+            // Preserve Maestro's historical `file://relative/path` spelling
+            // while letting `url` validate and percent-decode its components.
+            let mut path_url = url.clone();
+            path_url.set_host(None).ok()?;
+            let suffix = path_url.to_file_path().ok()?;
+            let suffix = suffix.strip_prefix(Path::new("/")).ok()?;
+            Some(PathBuf::from(host).join(suffix))
+        }
+    }
+}
+
+fn aws_secret_reference(source: &str) -> Option<&str> {
+    let url = Url::parse(source).ok()?;
+    if url.scheme() != "aws-secret" {
+        return None;
+    }
+    let separator = source.find(':')?;
+    source
+        .get(separator.saturating_add(1)..)?
+        .strip_prefix("//")
+}
+
+fn file_source(path: &Path) -> Result<String, CliError> {
+    if !path.is_absolute() {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+    Url::from_file_path(path)
+        .map(|url| url.to_string())
+        .map_err(|()| {
+            CliError::invalid_input(format!(
+                "config file path `{}` cannot be represented as a file URL",
+                path.display()
+            ))
+        })
 }
 
 fn source_identity(source: &str) -> String {
     let Some(path) = local_path(source) else {
         return source.to_string();
     };
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
-    format!("file://{}", path.display())
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    file_source(&path).unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }

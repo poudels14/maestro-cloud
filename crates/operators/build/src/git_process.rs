@@ -4,9 +4,11 @@ use std::process::Stdio;
 
 use async_trait::async_trait;
 use base64::Engine;
+use gix_url::Scheme;
 use kernel_api::SecretValue;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+use url::Url;
 
 use crate::BuildSourceError;
 
@@ -127,20 +129,34 @@ pub(crate) fn git_environment(
     let Some(token) = github_token else {
         return Ok(environment);
     };
-    let host = repository
-        .strip_prefix("https://")
-        .and_then(|rest| rest.split('/').next())
-        .ok_or_else(|| BuildSourceError::rejected("Git repository must use HTTPS"))?;
-    if host.split(':').next() != Some("github.com") {
+    let repository = Url::parse(repository)
+        .map_err(|_| BuildSourceError::rejected("Git repository must use HTTPS"))?;
+    if repository.scheme() != "https"
+        || !repository.username().is_empty()
+        || repository.password().is_some()
+    {
+        return Err(BuildSourceError::rejected(
+            "Git repository must use HTTPS without credentials",
+        ));
+    }
+    let Some(host) = repository.host_str() else {
+        return Err(BuildSourceError::rejected(
+            "Git repository must include a host",
+        ));
+    };
+    if !host.eq_ignore_ascii_case("github.com") {
         return Ok(environment);
     }
+    let authority = repository
+        .port()
+        .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"));
     let credentials = base64::engine::general_purpose::STANDARD
         .encode(format!("x-access-token:{}", token.expose()));
     environment.extend([
         (OsString::from("GIT_CONFIG_COUNT"), SecretValue::new("1")),
         (
             OsString::from("GIT_CONFIG_KEY_0"),
-            SecretValue::new(format!("http.https://{host}/.extraHeader")),
+            SecretValue::new(format!("http.https://{authority}/.extraHeader")),
         ),
         (
             OsString::from("GIT_CONFIG_VALUE_0"),
@@ -152,33 +168,56 @@ pub(crate) fn git_environment(
 
 pub(crate) fn normalize_repository(repository: &str) -> Result<String, BuildSourceError> {
     let repository = repository.trim();
-    let normalized = if let Some(rest) = repository.strip_prefix("git@") {
-        let (host, path) = rest.split_once(':').ok_or_else(|| {
-            BuildSourceError::rejected("Git SSH repository has no host/path separator")
-        })?;
-        format!("https://{host}/{path}")
-    } else {
-        repository.to_string()
-    };
-    let (authority, _) = normalized
-        .strip_prefix("https://")
-        .and_then(|rest| rest.split_once('/'))
-        .filter(|(authority, path)| !authority.is_empty() && !path.is_empty())
-        .ok_or_else(|| {
-            BuildSourceError::rejected(
-                "Git repository must use HTTPS and include a repository path",
-            )
-        })?;
-    if authority.contains('@')
-        || authority.contains('\\')
-        || normalized.chars().any(char::is_whitespace)
-        || normalized.chars().any(char::is_control)
-    {
+    if repository.chars().any(char::is_whitespace) || repository.chars().any(char::is_control) {
         return Err(BuildSourceError::rejected(
             "Git repository must not contain credentials or control characters",
         ));
     }
-    Ok(normalized)
+    let parsed = gix_url::parse(repository.into())
+        .map_err(|_| BuildSourceError::rejected("Git repository is not a valid Git remote URL"))?;
+    let host = parsed
+        .host_argument_safe()
+        .ok_or_else(|| BuildSourceError::rejected("Git repository must include a safe host"))?;
+    let path = parsed.path_argument_safe().ok_or_else(|| {
+        BuildSourceError::rejected("Git repository must include a safe repository path")
+    })?;
+    let path = std::str::from_utf8(path.as_ref())
+        .map_err(|_| BuildSourceError::rejected("Git repository path must be UTF-8"))?;
+    let repository_path = path.trim_start_matches('/');
+    if repository_path.is_empty() || repository_path.starts_with('-') {
+        return Err(BuildSourceError::rejected(
+            "Git repository must include a safe repository path",
+        ));
+    }
+    match parsed.scheme {
+        Scheme::Https => {
+            let url = Url::parse(repository).map_err(|_| {
+                BuildSourceError::rejected("Git repository is not a valid HTTPS URL")
+            })?;
+            if !url.username().is_empty() || url.password().is_some() {
+                return Err(BuildSourceError::rejected(
+                    "Git repository must not contain credentials",
+                ));
+            }
+            Ok(url.to_string())
+        }
+        Scheme::Ssh
+            if parsed.serialize_alternative_form
+                && parsed.user() == Some("git")
+                && parsed.password().is_none()
+                && parsed.port.is_none() =>
+        {
+            let mut url = Url::parse("https://invalid.invalid/")
+                .map_err(|_| BuildSourceError::rejected("HTTPS URL construction failed"))?;
+            url.set_host(Some(host))
+                .map_err(|_| BuildSourceError::rejected("Git repository has an invalid host"))?;
+            url.set_path(repository_path);
+            Ok(url.to_string())
+        }
+        _ => Err(BuildSourceError::rejected(
+            "Git repository must use HTTPS or git@host:path SSH syntax",
+        )),
+    }
 }
 
 async fn read_bounded(

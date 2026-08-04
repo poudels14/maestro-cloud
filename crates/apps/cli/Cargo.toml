@@ -51,6 +51,7 @@ tokio-tungstenite = { workspace = true, default-features = false, features = [
   "handshake",
   "rustls-tls-webpki-roots"
 ] }
+url.workspace = true
 uuid.workspace = true
 webpki-roots.workspace = true
 time.workspace = true

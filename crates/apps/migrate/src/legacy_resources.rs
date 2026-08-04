@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use gix_url::Scheme;
 use kernel_api::{
     FirewallPolicy, FirewallPolicyId, FirewallPolicySpec, FirewallPolicyStatus, Generation,
     IngressRoute, IngressRouteId, IngressRouteSpec, IngressRouteStatus, Object, ObjectMeta,
@@ -172,24 +173,35 @@ fn normalize_github_repository(
     service_id: &ServiceId,
     repository: &str,
 ) -> Result<String, LegacyPlanError> {
-    let trimmed = repository
-        .trim()
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
-    let path = if let Some(path) = trimmed.strip_prefix("git@github.com:") {
-        path
-    } else {
-        let without_scheme = trimmed
-            .strip_prefix("https://")
-            .or_else(|| trimmed.strip_prefix("http://"))
-            .or_else(|| trimmed.strip_prefix("ssh://git@"))
-            .ok_or_else(|| {
-                invalid_preview(service_id, "GitHub repository must use HTTPS or SSH")
-            })?;
-        without_scheme.strip_prefix("github.com/").ok_or_else(|| {
-            invalid_preview(service_id, "preview repository is not hosted on github.com")
-        })?
-    };
+    let parsed = gix_url::parse(repository.trim().into()).map_err(|_| {
+        invalid_preview(
+            service_id,
+            "GitHub repository is not a valid Git remote URL",
+        )
+    })?;
+    match parsed.scheme {
+        Scheme::Http | Scheme::Https if parsed.user().is_none() && parsed.password().is_none() => {}
+        Scheme::Ssh if parsed.user() == Some("git") && parsed.password().is_none() => {}
+        _ => {
+            return Err(invalid_preview(
+                service_id,
+                "GitHub repository must use HTTP(S) or Git SSH",
+            ));
+        }
+    }
+    if !parsed
+        .host()
+        .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return Err(invalid_preview(
+            service_id,
+            "preview repository is not hosted on github.com",
+        ));
+    }
+    let path = std::str::from_utf8(parsed.path.as_ref())
+        .map_err(|_| invalid_preview(service_id, "GitHub repository path must be UTF-8"))?
+        .trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
     let mut components = path.split('/');
     let owner = components.next().unwrap_or_default();
     let name = components.next().unwrap_or_default();

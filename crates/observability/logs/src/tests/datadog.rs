@@ -14,6 +14,21 @@ use crate::{
     OriginCursor, SequencedLogEntry,
 };
 
+#[test]
+fn datadog_endpoint_requires_an_absolute_credential_free_http_url() {
+    for endpoint in [
+        "https://",
+        "https://user@intake.example/v2/logs",
+        "https-ish://intake.example/v2/logs",
+        "/v2/logs",
+    ] {
+        assert!(
+            DatadogLogSinkSettings::with_endpoint("key", endpoint.to_owned()).is_err(),
+            "accepted {endpoint}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn datadog_request_has_exact_headers_and_normalized_payload()
 -> Result<(), Box<dyn std::error::Error>> {

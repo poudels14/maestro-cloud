@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Serialize;
+use url::{Host, Url};
 
 use crate::{
     HostMetricPoint, HostMetricSink, MetricHttpRequest, MetricHttpTransport, MetricSink,
@@ -62,7 +63,7 @@ impl DatadogMetricSinkSettings {
         if api_key.is_empty() || api_key.len() > 1_024 {
             return Err(DatadogMetricSinkSettingsError::InvalidApiKey);
         }
-        if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
+        if !valid_http_endpoint(&endpoint) {
             return Err(DatadogMetricSinkSettingsError::InvalidEndpoint);
         }
         if cluster_name.is_empty() || hostname.is_empty() {
@@ -488,10 +489,29 @@ fn validate_host_baseline(point: &SequencedHostMetricPoint) -> Result<(), Metric
 fn valid_datadog_site(site: &str) -> bool {
     !site.is_empty()
         && site.len() <= 255
-        && !site.starts_with('.')
-        && !site.ends_with('.')
-        && !site.contains("..")
-        && site
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+        && site.is_ascii()
+        && Host::parse(site).is_ok_and(
+            |host| matches!(host, Host::Domain(domain) if domain.eq_ignore_ascii_case(site)),
+        )
+        && site.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
+}
+
+fn valid_http_endpoint(endpoint: &str) -> bool {
+    Url::parse(endpoint).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.has_host()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
 }

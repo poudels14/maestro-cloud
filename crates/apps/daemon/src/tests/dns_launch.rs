@@ -25,6 +25,19 @@ fn delegated_dns_launch_requires_secure_complete_coordinates()
         Err(DnsResolverLaunchError::InvalidConfiguration { .. })
     ));
 
+    for endpoint in [
+        "https://",
+        "https://user@127.0.0.1:2379",
+        "https-ish://host",
+    ] {
+        let mut malformed_endpoint = valid.clone();
+        malformed_endpoint.endpoints = vec![endpoint.to_owned()];
+        assert!(matches!(
+            malformed_endpoint.validate(),
+            Err(DnsResolverLaunchError::InvalidConfiguration { .. })
+        ));
+    }
+
     let mut relative_secret = valid.clone();
     relative_secret.store_encryption_secret = PathBuf::from("store-key");
     assert!(matches!(

@@ -28,6 +28,7 @@ strip-ansi-escapes.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tonic = { workspace = true, features = ["codegen", "router", "transport"] }
+url.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

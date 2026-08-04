@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
+use url::{Host, Url};
 
 use crate::{
     DeadLetterStore, DeadLetterStoreError, HttpRequest, HttpTransport, IngestLogEntry, LogBody,
@@ -60,7 +61,7 @@ impl DatadogLogSinkSettings {
         if api_key.is_empty() || api_key.len() > 1_024 {
             return Err(DatadogLogSinkSettingsError::InvalidApiKey);
         }
-        if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
+        if !valid_http_endpoint(&endpoint) {
             return Err(DatadogLogSinkSettingsError::InvalidEndpoint);
         }
         Ok(Self {
@@ -435,6 +436,10 @@ fn datadog_status(severity: &str) -> &'static str {
 fn valid_datadog_site(site: &str) -> bool {
     !site.is_empty()
         && site.len() <= 255
+        && site.is_ascii()
+        && Host::parse(site).is_ok_and(
+            |host| matches!(host, Host::Domain(domain) if domain.eq_ignore_ascii_case(site)),
+        )
         && site.split('.').all(|label| {
             !label.is_empty()
                 && label.len() <= 63
@@ -446,10 +451,16 @@ fn valid_datadog_site(site: &str) -> bool {
                     .as_bytes()
                     .last()
                     .is_some_and(u8::is_ascii_alphanumeric)
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         })
+}
+
+fn valid_http_endpoint(endpoint: &str) -> bool {
+    Url::parse(endpoint).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.has_host()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
 }
 
 fn invalid_split() -> LogSinkError {

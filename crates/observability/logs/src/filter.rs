@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use runtime::HEALTHCHECK_PATH_LABEL;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{IngestLogEntry, LogBody, LogOrigin};
 
@@ -212,10 +213,15 @@ fn nested_attribute_value<'a>(
 
 fn normalized_path(value: &str) -> Cow<'_, str> {
     let value = value.trim();
-    let path = value.split_once("://").map_or(value, |(_, remainder)| {
-        remainder.find('/').map_or("/", |start| &remainder[start..])
-    });
-    let path = path.split(['?', '#']).next().unwrap_or(path);
+    if let Ok(url) = Url::parse(value) {
+        let path = url.path();
+        return Cow::Owned(if path.len() > 1 {
+            path.trim_end_matches('/').to_owned()
+        } else {
+            path.to_owned()
+        });
+    }
+    let path = value.split(['?', '#']).next().unwrap_or(value);
     if path.len() > 1 {
         Cow::Owned(path.trim_end_matches('/').to_owned())
     } else {

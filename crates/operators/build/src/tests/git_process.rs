@@ -1,6 +1,27 @@
 use kernel_api::SecretValue;
 
-use crate::git_process::{GitInvocation, git_environment, safe_git_error, secret_fragments};
+use crate::git_process::{
+    GitInvocation, git_environment, normalize_repository, safe_git_error, secret_fragments,
+};
+
+#[test]
+fn repository_normalization_uses_git_remote_grammar_and_rejects_credentials() {
+    assert_eq!(
+        normalize_repository("git@github.com:acme/api.git")
+            .ok()
+            .as_deref(),
+        Some("https://github.com/acme/api.git")
+    );
+    assert_eq!(
+        normalize_repository("https://github.com/acme/api.git")
+            .ok()
+            .as_deref(),
+        Some("https://github.com/acme/api.git")
+    );
+    assert!(normalize_repository("https://user@github.com/acme/api.git").is_err());
+    assert!(normalize_repository("ssh://git@github.com/acme/api.git").is_err());
+    assert!(normalize_repository("git@github.com:-upload-pack=bad").is_err());
+}
 
 #[test]
 fn git_errors_redact_header_and_encoded_credentials() {

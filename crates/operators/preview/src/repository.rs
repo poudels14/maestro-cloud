@@ -1,3 +1,4 @@
+use gix_url::Scheme;
 use kernel_api::{ArtifactTemplate, BuildSource, Service};
 
 /// Parsed coordinates for one GitHub repository.
@@ -19,22 +20,24 @@ pub(crate) fn service_repository(service: &Service) -> Result<GithubRepository, 
 }
 
 fn parse_github_repository(repository: &str) -> Result<GithubRepository, String> {
-    let trimmed = repository
-        .trim()
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
-    let path = if let Some(path) = trimmed.strip_prefix("git@github.com:") {
-        path
-    } else {
-        let without_scheme = trimmed
-            .strip_prefix("https://")
-            .or_else(|| trimmed.strip_prefix("http://"))
-            .or_else(|| trimmed.strip_prefix("ssh://git@"))
-            .ok_or_else(|| "GitHub repository must use HTTPS or SSH".to_string())?;
-        without_scheme
-            .strip_prefix("github.com/")
-            .ok_or_else(|| "preview repositories must be hosted on github.com".to_string())?
-    };
+    let repository = repository.trim();
+    let parsed = gix_url::parse(repository.into())
+        .map_err(|_| "GitHub repository is not a valid Git remote URL".to_string())?;
+    match parsed.scheme {
+        Scheme::Http | Scheme::Https if parsed.user().is_none() && parsed.password().is_none() => {}
+        Scheme::Ssh if parsed.user() == Some("git") && parsed.password().is_none() => {}
+        _ => return Err("GitHub repository must use HTTP(S) or Git SSH".to_string()),
+    }
+    if !parsed
+        .host()
+        .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return Err("preview repositories must be hosted on github.com".to_string());
+    }
+    let path = std::str::from_utf8(parsed.path.as_ref())
+        .map_err(|_| "GitHub repository path must be UTF-8".to_string())?
+        .trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
     let mut components = path.split('/');
     let owner = components.next().unwrap_or_default();
     let name = components.next().unwrap_or_default();

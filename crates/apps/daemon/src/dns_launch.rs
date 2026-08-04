@@ -9,6 +9,7 @@ use node_agent::{
     DnsServerSettings, SystemDnsPluginSettings, TailscaleDnsPluginSettings,
 };
 use tokio::sync::watch;
+use url::Url;
 
 /// Files and store coordinates needed by the delegated-network DNS role.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +45,7 @@ impl DnsResolverLaunchConfig {
         if self
             .endpoints
             .iter()
-            .any(|endpoint| !endpoint.starts_with("https://"))
+            .any(|endpoint| !secure_store_endpoint(endpoint))
         {
             return Err(invalid("store endpoints must use HTTPS"));
         }
@@ -67,6 +68,15 @@ impl DnsResolverLaunchConfig {
         }
         Ok(())
     }
+}
+
+fn secure_store_endpoint(endpoint: &str) -> bool {
+    Url::parse(endpoint).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.has_host()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
 }
 
 /// Runs the store-fed Hickory resolver inside an isolated runtime network.

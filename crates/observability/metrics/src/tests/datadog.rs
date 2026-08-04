@@ -10,6 +10,28 @@ use crate::{
     MetricSequence, MetricSink, MetricSinkError, SequencedHostMetricPoint, SequencedMetricPoint,
 };
 
+#[test]
+fn datadog_endpoint_requires_an_absolute_credential_free_http_url() {
+    for endpoint in [
+        "http://",
+        "https://user:secret@datadog.test/api/v2/series",
+        "http-ish://datadog.test/api/v2/series",
+        "/api/v2/series",
+    ] {
+        assert!(
+            DatadogMetricSinkSettings::with_endpoint(
+                "key",
+                endpoint.to_owned(),
+                "prod",
+                "node",
+                vec![],
+            )
+            .is_err(),
+            "accepted {endpoint}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn datadog_request_preserves_legacy_gauges_deltas_and_tags()
 -> Result<(), Box<dyn std::error::Error>> {
