@@ -19,6 +19,11 @@ function deploymentGitRevision(deployment: Deployment): string | null {
   return deployment.status.gitCommit?.revision ?? null;
 }
 
+function deploymentFailure(deployment: Deployment): string | null {
+  const condition = deployment.status.conditions?.find((entry) => entry.status === "false");
+  return condition?.message || condition?.reason || null;
+}
+
 function replicaDisplayName(deployment: Deployment, replica: ReplicaState): string {
   return (
     replica.status.workloadId ?? `${deployment.spec.serviceId}-${String(replica.spec.replicaIndex)}`
@@ -31,6 +36,7 @@ function replicaFailure(replica: ReplicaState): string | null {
 }
 
 export {
+  deploymentFailure,
   deploymentGitRevision,
   deploymentTitle,
   replicaDisplayName,

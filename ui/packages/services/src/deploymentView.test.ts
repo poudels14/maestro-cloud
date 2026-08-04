@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { Deployment, ReplicaState } from "./types";
 import {
+  deploymentFailure,
   deploymentGitRevision,
   deploymentTitle,
   replicaDisplayName,
@@ -72,6 +73,23 @@ test("deployment title uses the exact Git commit title with an id fallback", () 
   expect(deploymentGitRevision(gitDeployment)).toBe("0123456789abcdef0123456789abcdef01234567");
   expect(deploymentTitle(deployment("deployment-fallback", 10))).toBe("fallback");
   expect(deploymentGitRevision(deployment("deployment-fallback", 10))).toBeNull();
+});
+
+test("deployment presentation surfaces terminal readiness failures", () => {
+  const failed = deployment("deployment-a", 10);
+  failed.status.phase = "CRASHED";
+  failed.status.conditions = [
+    {
+      lastTransitionTime: 10,
+      message: "replica 0: failed to fetch AWS secret `maestro/api`",
+      observedGeneration: 1,
+      reason: "ExternalValueSourceRejected",
+      status: "false",
+      type: "READY"
+    }
+  ];
+
+  expect(deploymentFailure(failed)).toBe("replica 0: failed to fetch AWS secret `maestro/api`");
 });
 
 test("replica presentation prefers workload identity and surfaces failed conditions", () => {

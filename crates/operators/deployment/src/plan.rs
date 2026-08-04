@@ -3,9 +3,10 @@ mod cutover;
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, Build, BuildId, BuildPhase, BuildSource, Deployment,
-    DeploymentId, DeploymentPhase, DeploymentStatus, GitCommit, InvalidIdentifier, MaskedSecret,
-    ReplicaState, Service, ServiceId, Timestamp,
+    ArtifactTemplate, Assignment, AssignmentPhase, Build, BuildId, BuildPhase, BuildSource,
+    Condition, ConditionReason, ConditionState, ConditionType, Deployment, DeploymentId,
+    DeploymentPhase, DeploymentStatus, GitCommit, InvalidIdentifier, MaskedSecret, ReplicaState,
+    Service, ServiceId, Timestamp,
 };
 
 use crate::readiness::{all_exhausted, all_ready, current_slots, drain_elapsed, has_assignments};
@@ -380,7 +381,13 @@ fn advance_readiness(
         .replica_override
         .unwrap_or(service.spec.replicas);
     let slots = current_slots(&deployment.meta.id, assignments, count);
-    if all_exhausted(deployment, &slots, replicas, count) {
+    if let Some(failed) = slots
+        .values()
+        .find(|assignment| assignment.status.phase == AssignmentPhase::Failed)
+    {
+        desired.phase = DeploymentPhase::Crashed;
+        set_assignment_failure_condition(deployment, failed, now, desired);
+    } else if all_exhausted(deployment, &slots, replicas, count) {
         desired.phase = DeploymentPhase::Crashed;
     } else if all_ready(deployment, &slots, replicas, count) {
         desired.phase = DeploymentPhase::Ready;
@@ -390,6 +397,45 @@ fn advance_readiness(
     {
         desired.phase = DeploymentPhase::PendingReady;
     }
+}
+
+fn set_assignment_failure_condition(
+    deployment: &Deployment,
+    assignment: &Assignment,
+    now: Timestamp,
+    desired: &mut DeploymentStatus,
+) {
+    let failure = assignment.status.conditions.iter().find(|condition| {
+        condition.condition_type == ConditionType::RuntimeReady
+            && condition.state == ConditionState::False
+    });
+    let reason = failure.map_or_else(
+        || ConditionReason("AssignmentFailed".to_owned()),
+        |condition| condition.reason.clone(),
+    );
+    let detail = failure.map_or("assignment failed", |condition| condition.message.as_str());
+    let message = format!(
+        "replica {} on node {}: {detail}",
+        assignment.spec.replica_index, assignment.spec.node_id
+    );
+    let previous = desired
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready);
+    let last_transition_time = previous
+        .filter(|condition| condition.state == ConditionState::False && condition.reason == reason)
+        .map_or(now, |condition| condition.last_transition_time);
+    desired
+        .conditions
+        .retain(|condition| condition.condition_type != ConditionType::Ready);
+    desired.conditions.push(Condition {
+        condition_type: ConditionType::Ready,
+        state: ConditionState::False,
+        reason,
+        message,
+        observed_generation: deployment.meta.generation,
+        last_transition_time,
+    });
 }
 
 fn ensure_build<'a>(

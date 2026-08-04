@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, DeploymentId, DeploymentPhase,
-    Generation, IngressRouteId, IngressRouteSpec, IngressRouteStatus, Object, OwnerReference,
-    Ownership, ResourceId, ResourceKind, ResourceName, RolloutState, SecretValue, Timestamp,
+    ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, Condition, ConditionReason,
+    ConditionState, ConditionType, DeploymentId, DeploymentPhase, Generation, IngressRouteId,
+    IngressRouteSpec, IngressRouteStatus, Object, OwnerReference, Ownership, ResourceId,
+    ResourceKind, ResourceName, RolloutState, SecretValue, Timestamp,
 };
 
 use super::plan_support::*;
@@ -415,6 +416,40 @@ fn readiness_requires_the_exact_current_assignment() {
     assert_eq!(
         ready.deployment_updates[0].status.ready_at,
         Some(Timestamp(40_000))
+    );
+}
+
+#[test]
+fn failed_assignment_crashes_a_pending_deployment_with_its_error() {
+    let service = service(Generation(1), RolloutState::Active);
+    let deployment = deployment(&service, DeploymentPhase::PendingReady);
+    let mut failed = assignment(&deployment, "assignment-1", 1);
+    failed.status.phase = kernel_api::AssignmentPhase::Failed;
+    failed.status.conditions = vec![Condition {
+        condition_type: ConditionType::RuntimeReady,
+        state: ConditionState::False,
+        reason: ConditionReason("ExternalValueSourceRejected".to_owned()),
+        message: "failed to fetch AWS secret `maestro/api`: access denied".to_owned(),
+        observed_generation: failed.meta.generation,
+        last_transition_time: Timestamp(39_000),
+    }];
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.assignments = vec![failed];
+
+    let result = plan(snapshot).expect("project terminal assignment failure");
+    let status = &result.deployment_updates[0].status;
+    assert_eq!(status.phase, DeploymentPhase::Crashed);
+    let failure = status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready)
+        .expect("deployment failure condition");
+    assert_eq!(failure.state, ConditionState::False);
+    assert_eq!(failure.reason.0, "ExternalValueSourceRejected");
+    assert!(
+        failure
+            .message
+            .contains("failed to fetch AWS secret `maestro/api`")
     );
 }
 

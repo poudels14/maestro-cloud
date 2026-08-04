@@ -5,7 +5,12 @@ import { useQuery } from "@maestro/sdk";
 import { STATUS_COLORS, StatusBadge, StatusDot } from "@maestro/kit";
 import type { ServicesApi } from "./api";
 import type { Deployment, ReplicaState } from "./types";
-import { deploymentGitRevision, deploymentTitle, replicaDisplayName } from "./deploymentView";
+import {
+  deploymentFailure,
+  deploymentGitRevision,
+  deploymentTitle,
+  replicaDisplayName
+} from "./deploymentView";
 import { deploymentReplicasQuery } from "./queries";
 import { formatDateTime } from "@maestro/kit";
 import { DeploymentMenu } from "./DeploymentMenu";
@@ -28,6 +33,7 @@ type Props = {
 function DeploymentRow(props: Props) {
   const phase = () => props.deployment.status.phase;
   const sourceRevision = () => deploymentGitRevision(props.deployment);
+  const failure = () => deploymentFailure(props.deployment);
   const isLive = () => ["BUILDING", "PENDING_READY", "READY"].includes(phase());
   const replicas = useQuery(() => ({
     ...deploymentReplicasQuery(props.api, props.deployment),
@@ -75,6 +81,9 @@ function DeploymentRow(props: Props) {
               {props.deployment.spec.service.version}
             </span>
           </div>
+          <Show when={failure()}>
+            {(message) => <p class="mt-1 text-[11px] text-red-500 break-words">{message()}</p>}
+          </Show>
           <Show when={(replicas.data?.length ?? 0) > 0}>
             <div class="mt-2 space-y-1">
               <For each={replicas.data}>

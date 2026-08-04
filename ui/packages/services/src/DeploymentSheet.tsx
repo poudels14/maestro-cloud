@@ -6,7 +6,12 @@ import { useQuery } from "@maestro/sdk";
 import { ErrorBanner, formatDateTime, StatusBadge, timeAgo } from "@maestro/kit";
 import { LogViewer, type LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
-import { deploymentGitRevision, deploymentTitle, replicaFailure } from "./deploymentView";
+import {
+  deploymentFailure,
+  deploymentGitRevision,
+  deploymentTitle,
+  replicaFailure
+} from "./deploymentView";
 import { deploymentReplicasQuery } from "./queries";
 import { SecretConfig } from "./SecretConfig";
 import type { Deployment } from "./types";
@@ -156,6 +161,7 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
 
 function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) {
   const deployment = () => props.deployment;
+  const failure = () => deploymentFailure(deployment());
   const replicas = useQuery(() => deploymentReplicasQuery(props.api, deployment()));
   const artifact = () => deployment().spec.service.artifact;
   const environment = () => Object.entries(deployment().spec.service.environment ?? {});
@@ -195,6 +201,9 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
             {(imageDigest) => <CopyRow label="Image" value={imageDigest()} />}
           </Show>
         </div>
+        <Show when={failure()}>
+          {(message) => <p class="mt-2 text-xs text-red-600 break-words">{message()}</p>}
+        </Show>
       </div>
 
       <Show when={replicas.isError}>

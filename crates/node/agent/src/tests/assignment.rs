@@ -504,6 +504,41 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
     Ok(())
 }
 
+#[tokio::test]
+async fn rejected_external_secret_marks_the_assignment_failed()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut deployment = deployment();
+    deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
+        mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: Some("aws-secret://missing".to_owned()),
+        items: BTreeMap::new(),
+    });
+    world.seed(&deployment, &assignment()).await?;
+    let resolver = Arc::new(FakeValueSources {
+        values: BTreeMap::new(),
+        calls: AtomicU64::new(0),
+    });
+
+    world
+        .agent()
+        .with_value_source_resolver(resolver)
+        .reconcile_once()
+        .await?;
+
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Failed);
+    let failure = assignment
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .ok_or("runtime failure condition missing")?;
+    assert_eq!(failure.reason.0, "ExternalValueSourceRejected");
+    assert!(failure.message.contains("aws-secret://missing"));
+    Ok(())
+}
+
 struct FakeValueSources {
     values: BTreeMap<String, BTreeMap<String, SecretValue>>,
     calls: AtomicU64,

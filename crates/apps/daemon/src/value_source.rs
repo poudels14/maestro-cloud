@@ -38,7 +38,7 @@ impl ValueSourceResolver for AwsValueSourceResolver {
             .secret_id(secret_id)
             .send()
             .await
-            .map_err(|error| ValueSourceError::Unavailable {
+            .map_err(|error| ValueSourceError::Rejected {
                 message: format!(
                     "failed to fetch AWS secret `{secret_id}`: {}",
                     DisplayErrorContext(error)
