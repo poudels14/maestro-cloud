@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
 use metrics::{
-    HostMetricComponent, HostMetricDeliveryStore, HostMetricQueryStore, HostMetricSequence,
-    HostMetricStore, LatestHostMetricQuery, MetricDeliveryStore, MetricRecordId, MetricSequence,
-    MetricSinkId, MetricStore, WorkloadMetricPoint, WorkloadMetricQuery, WorkloadMetricQueryStore,
+    HostMetricComponent, HostMetricDeliveryStore, HostMetricQuery, HostMetricQueryStore,
+    HostMetricSequence, HostMetricStore, LatestHostMetricQuery, MetricDeliveryStore,
+    MetricRecordId, MetricSequence, MetricSinkId, MetricStore, WorkloadMetricPoint,
+    WorkloadMetricQuery, WorkloadMetricQueryStore,
 };
 use runtime::WorkloadMetadata;
 
@@ -56,6 +57,75 @@ async fn duck_metric_store_passes_shared_conformance_and_closes_cleanly()
     )
     .await?;
     host_delivery.shutdown().await?;
+    Ok(())
+}
+
+#[test]
+fn duck_host_history_bounds_predecessor_matching_before_joining()
+-> Result<(), Box<dyn std::error::Error>> {
+    const HISTORY_POINTS: i64 = 12_000;
+    const QUERY_POINTS: usize = 8;
+
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("metrics.duckdb");
+    let mut connection = crate::metric_schema::open(&path).map_err(std::io::Error::other)?;
+    let mut point = metrics::conformance::host_metric_point("node-1", 1, 1)?;
+    let transaction = connection.transaction()?;
+    {
+        let mut insert = transaction.prepare(
+            "INSERT INTO host_metrics
+             (delivery_sequence, previous_resource_sequence, cluster_id, node_id,
+              collected_at_ms, point_json, has_resources, has_disks)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, TRUE, TRUE)",
+        )?;
+        for collected_at in 1..=HISTORY_POINTS {
+            point.id.collected_at = Timestamp(collected_at);
+            point
+                .resources
+                .as_mut()
+                .ok_or("host resource fixture missing")?
+                .memory_used_bytes = u64::try_from(collected_at % 1_024)?;
+            insert.execute(duckdb::params![
+                collected_at,
+                (collected_at > 1).then_some(collected_at - 1),
+                point.id.cluster_id.as_str(),
+                point.id.node_id.as_str(),
+                collected_at,
+                serde_json::to_string(&point)?,
+            ])?;
+        }
+    }
+    transaction.commit()?;
+
+    connection.execute_batch(
+        "SET memory_limit = '32MB';
+         SET max_temp_directory_size = '32MB';",
+    )?;
+    let from = HISTORY_POINTS - 100;
+    let history = crate::host_metric_schema::query(
+        &connection,
+        &HostMetricQuery::new(
+            point.id.cluster_id.clone(),
+            Some(point.id.node_id.clone()),
+            Timestamp(from),
+            Timestamp(HISTORY_POINTS),
+            HostMetricComponent::Resources,
+            QUERY_POINTS,
+        )?,
+    )?;
+
+    assert_eq!(history.len(), QUERY_POINTS);
+    for (offset, history) in history.iter().enumerate() {
+        let expected = from + i64::try_from(offset)?;
+        assert_eq!(history.point.id.collected_at, Timestamp(expected));
+        assert_eq!(
+            history
+                .previous
+                .as_ref()
+                .map(|previous| previous.id.collected_at),
+            Some(Timestamp(expected - 1))
+        );
+    }
     Ok(())
 }
 

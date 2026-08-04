@@ -4,6 +4,8 @@ use duckdb::{Config, Connection, OptionalExt, params};
 use metrics::{MetricAppendReport, MetricStoreError, WorkloadMetricPoint};
 
 const CURRENT_SCHEMA_VERSION: i64 = 6;
+// A failed query must not be able to consume the node data volume with DuckDB spill files.
+const MAX_TEMP_DIRECTORY_SIZE: &str = "1GB";
 
 pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
@@ -12,6 +14,7 @@ pub(crate) fn open(path: &Path) -> Result<Connection, String> {
     }
     let config = Config::default()
         .enable_autoload_extension(false)
+        .and_then(|config| config.with("max_temp_directory_size", MAX_TEMP_DIRECTORY_SIZE))
         .map_err(|error| error.to_string())?;
     let mut connection =
         Connection::open_with_flags(path, config).map_err(|error| error.to_string())?;

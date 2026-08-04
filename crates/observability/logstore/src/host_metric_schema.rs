@@ -111,30 +111,40 @@ pub(crate) fn query(
     let limit =
         i64::try_from(query.limit()).map_err(|_| query_unavailable("convert query limit"))?;
     let component = component_code(query.component());
+    // Keep the range and result bound on the left side of the temporal join. A correlated
+    // predecessor search can be decorrelated into an intermediate result that grows with the
+    // complete history before either bound is applied.
     let mut statement = connection
         .prepare(
-            "SELECT current.cluster_id, current.node_id, current.collected_at_ms,
+            "WITH current_rows AS MATERIALIZED (
+                 SELECT cluster_id, node_id, collected_at_ms, point_json
+                 FROM host_metrics
+                 WHERE cluster_id = ?1
+                   AND (?2 IS NULL OR node_id = ?2)
+                   AND collected_at_ms >= ?3 AND collected_at_ms <= ?4
+                   AND (?5 = 0 OR (?5 = 1 AND has_resources)
+                        OR (?5 = 2 AND has_disks))
+                 ORDER BY node_id, collected_at_ms
+                 LIMIT ?6
+             )
+             SELECT current.cluster_id, current.node_id, current.collected_at_ms,
                     current.point_json, previous.cluster_id, previous.node_id,
                     previous.collected_at_ms, previous.point_json
-             FROM host_metrics AS current
-             LEFT JOIN LATERAL (
+             FROM current_rows AS current
+             ASOF LEFT JOIN (
                  SELECT cluster_id, node_id, collected_at_ms, point_json
-                 FROM host_metrics AS candidate
-                 WHERE candidate.cluster_id = current.cluster_id
-                   AND candidate.node_id = current.node_id
-                   AND candidate.collected_at_ms < current.collected_at_ms
-                   AND (?5 = 0 OR (?5 = 1 AND candidate.has_resources)
-                        OR (?5 = 2 AND candidate.has_disks))
-                 ORDER BY candidate.collected_at_ms DESC
-                 LIMIT 1
-             ) AS previous ON TRUE
-             WHERE current.cluster_id = ?1
-               AND (?2 IS NULL OR current.node_id = ?2)
-               AND current.collected_at_ms >= ?3 AND current.collected_at_ms <= ?4
-               AND (?5 = 0 OR (?5 = 1 AND current.has_resources)
-                    OR (?5 = 2 AND current.has_disks))
+                 FROM host_metrics
+                 WHERE cluster_id = ?1
+                   AND (?2 IS NULL OR node_id = ?2)
+                   AND collected_at_ms < ?4
+                   AND (?5 = 0 OR (?5 = 1 AND has_resources)
+                        OR (?5 = 2 AND has_disks))
+             ) AS previous
+               ON current.cluster_id = previous.cluster_id
+              AND current.node_id = previous.node_id
+              AND current.collected_at_ms > previous.collected_at_ms
              ORDER BY current.node_id, current.collected_at_ms
-             LIMIT ?6",
+            ",
         )
         .map_err(query_failed("prepare host history query"))?;
     let rows = statement
