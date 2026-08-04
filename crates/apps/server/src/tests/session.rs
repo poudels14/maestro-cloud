@@ -1,13 +1,14 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use kernel_api::SecretValue;
 use kernel_store::{InMemoryStore, TokioClock};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::{seeded_store, token};
@@ -24,7 +25,7 @@ async fn bearer_exchange_issues_a_scoped_secure_browser_session()
         cluster_id,
         ServerSettings::new("127.0.0.1:3000".parse()?, Some(SecretValue::new(secret))),
     )?;
-    let operator = token(secret, "operator")?;
+    let operator = token_with_lifetime(secret, "operator", Duration::from_secs(7 * 86_400))?;
 
     let response = server
         .router()
@@ -52,7 +53,7 @@ async fn bearer_exchange_issues_a_scoped_secure_browser_session()
         .find_map(|attribute| attribute.trim().strip_prefix("Max-Age="))
         .ok_or("session cookie has no maximum age")?
         .parse::<u64>()?;
-    assert!((1..=300).contains(&max_age));
+    assert!(max_age > 8 * 60 * 60);
     let cookie = set_cookie
         .split(';')
         .next()
@@ -61,7 +62,10 @@ async fn bearer_exchange_issues_a_scoped_secure_browser_session()
         .split_once('=')
         .map(|(_, value)| value)
         .ok_or("cookie has no token")?;
-    assert!(jwt_expiration(session_token, secret)? <= jwt_expiration(&operator, secret)?);
+    assert_eq!(
+        jwt_expiration(session_token, secret)?,
+        jwt_expiration(&operator, secret)?
+    );
 
     let authenticated = server
         .router()
@@ -301,4 +305,24 @@ fn jwt_expiration(token: &str, secret: &str) -> Result<u64, Box<dyn std::error::
         .get("exp")
         .and_then(Value::as_u64)
         .ok_or_else(|| "token has no numeric expiration".into())
+}
+
+fn token_with_lifetime(
+    secret: &str,
+    scope: &str,
+    lifetime: Duration,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)?
+        .as_secs();
+    Ok(jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &json!({
+            "sub": "test-operator",
+            "scope": scope,
+            "iat": now,
+            "exp": now.saturating_add(lifetime.as_secs())
+        }),
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )?)
 }

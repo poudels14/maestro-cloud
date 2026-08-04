@@ -287,7 +287,7 @@ pub fn openapi_document() -> Value {
             "type": "apiKey",
             "in": "cookie",
             "name": "__Host-maestro-session",
-            "description": "Short-lived Secure, HttpOnly, SameSite=Strict session preserving the bearer token access level"
+            "description": "Secure, HttpOnly, SameSite=Strict session preserving the bearer token access level and expiration"
         }
     });
     if let Some(root) = document.as_object_mut() {

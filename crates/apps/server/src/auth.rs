@@ -19,7 +19,6 @@ const READ_ONLY_SCOPE: &str = "read-only";
 const NODE_SCOPE: &str = "node";
 const BROWSER_SESSION_AUDIENCE: &str = "maestro-panel";
 const BROWSER_SESSION_KIND: &str = "browser-session";
-const BROWSER_SESSION_SECONDS: u64 = 8 * 60 * 60;
 
 pub(crate) const BROWSER_SESSION_COOKIE: &str = "__Host-maestro-session";
 pub(crate) const TAILNET_BROWSER_SESSION_COOKIE: &str = "maestro-session";
@@ -289,10 +288,9 @@ fn issue_browser_session(
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| ApiError::internal("system clock is before the Unix epoch"))?
         .as_secs();
-    let maximum_expires_at = issued_at.saturating_add(BROWSER_SESSION_SECONDS);
     let expires_at = operator
         .expires_at
-        .map_or(maximum_expires_at, |source| source.min(maximum_expires_at));
+        .ok_or_else(|| ApiError::internal("browser session source has no expiration"))?;
     let max_age = expires_at.saturating_sub(issued_at);
     if max_age == 0 {
         return Err(ApiError::unauthorized(

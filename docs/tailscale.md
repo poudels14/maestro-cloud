@@ -211,8 +211,7 @@ The command prints only the JWT. Paste it into the panel login form. Use
 `--access-level operator` only when the session needs to change cluster state
 or open an exec session. The API enforces the access level after the panel
 exchanges the JWT for an HttpOnly, same-site browser cookie. That browser
-session expires with the source token or after eight hours, whichever comes
-first.
+session expires with the source token.
 
 The HTTP origin is reachable only through the tailnet. Production listeners
 accept panel assets, browser-session exchange, and operator API requests only
