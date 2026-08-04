@@ -17,8 +17,6 @@ use crate::writer::{WebhookStatusWriter, WebhookWriteError};
 use crate::{WebhookDelivery, WebhookDeliveryBackend};
 
 const CONFLICT_RETRY: Duration = Duration::from_millis(100);
-const READY_CONDITION: &str = "Ready";
-
 /// Retry policy for failed outbound webhook deliveries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WebhookSettings {
@@ -254,7 +252,7 @@ impl WebhookReconciler {
             .status
             .conditions
             .iter()
-            .find(|condition| condition.condition_type.0 == READY_CONDITION);
+            .find(|condition| condition.condition_type == ConditionType::Ready);
         let transitioned_at = previous
             .filter(|condition| condition.state == state)
             .map_or_else(
@@ -264,9 +262,9 @@ impl WebhookReconciler {
         webhook
             .status
             .conditions
-            .retain(|condition| condition.condition_type.0 != READY_CONDITION);
+            .retain(|condition| condition.condition_type != ConditionType::Ready);
         webhook.status.conditions.push(Condition {
-            condition_type: ConditionType(READY_CONDITION.to_string()),
+            condition_type: ConditionType::Ready,
             state,
             reason: ConditionReason(reason.to_string()),
             message: message.to_string(),

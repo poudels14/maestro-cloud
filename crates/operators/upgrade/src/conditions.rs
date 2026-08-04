@@ -6,9 +6,6 @@ use kernel_api::{
 
 use crate::UpgradePlanError;
 
-const MAINTENANCE_CONDITION: &str = "Maintenance";
-const READY_CONDITION: &str = "Ready";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MaintenanceAction {
     Reserve,
@@ -34,7 +31,7 @@ pub(crate) fn set_maintenance(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == MAINTENANCE_CONDITION);
+        .find(|condition| condition.condition_type == ConditionType::Maintenance);
     if action == MaintenanceAction::Reserve
         && existing.is_some_and(|condition| {
             condition.state == ConditionState::True && condition.reason.0 != owner
@@ -55,7 +52,7 @@ pub(crate) fn set_maintenance(
     desired
         .status
         .conditions
-        .retain(|condition| condition.condition_type.0 != MAINTENANCE_CONDITION);
+        .retain(|condition| condition.condition_type != ConditionType::Maintenance);
     let (state, reason, message) = match action {
         MaintenanceAction::Reserve => (
             ConditionState::True,
@@ -72,7 +69,7 @@ pub(crate) fn set_maintenance(
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
     desired.status.conditions.push(Condition {
-        condition_type: ConditionType(MAINTENANCE_CONDITION.to_string()),
+        condition_type: ConditionType::Maintenance,
         state,
         reason: ConditionReason(reason),
         message,
@@ -88,7 +85,7 @@ pub(crate) fn reject_foreign_maintenance(
     run: &UpgradeRun,
 ) -> Result<(), UpgradePlanError> {
     if node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == MAINTENANCE_CONDITION
+        condition.condition_type == ConditionType::Maintenance
             && condition.state == ConditionState::True
             && condition.reason.0 != maintenance_owner(run)
     }) {
@@ -115,15 +112,15 @@ pub(crate) fn set_ready_condition(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == READY_CONDITION);
+        .find(|condition| condition.condition_type == ConditionType::Ready);
     let transitioned = existing
         .filter(|condition| condition.state == state)
         .map_or(now, |condition| condition.last_transition_time);
     run.status
         .conditions
-        .retain(|condition| condition.condition_type.0 != READY_CONDITION);
+        .retain(|condition| condition.condition_type != ConditionType::Ready);
     run.status.conditions.push(Condition {
-        condition_type: ConditionType(READY_CONDITION.to_string()),
+        condition_type: ConditionType::Ready,
         state,
         reason: ConditionReason(reason.to_string()),
         message: message.to_string(),

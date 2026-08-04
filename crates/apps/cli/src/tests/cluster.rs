@@ -298,7 +298,7 @@ fn node(
             "lastSeen": 1,
             "conditions": if draining {
                 vec![json!({
-                    "type": "Draining",
+                    "type": "DRAINING",
                     "status": "true",
                     "reason": "Requested",
                     "message": "node drain requested",

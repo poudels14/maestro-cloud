@@ -8,11 +8,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
-    ClusterId, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec, DeploymentStatus,
-    ExecPolicy, Generation, NodeApiAccess, NodeId, ObjectMeta, PlacementConstraint, ReplicaState,
-    ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName,
-    ResourceRevision, SecretMountSpec, SecretValue, ServiceId, ServiceSpec, Timestamp,
-    VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
+    ClusterId, ConditionType, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec,
+    DeploymentStatus, ExecPolicy, Generation, NodeApiAccess, NodeId, ObjectMeta,
+    PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
+    ResourceKind, ResourceName, ResourceRevision, SecretMountSpec, SecretValue, ServiceId,
+    ServiceSpec, Timestamp, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
 };
 use kernel_store::{
     Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
@@ -193,7 +193,7 @@ async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failu
             .status
             .conditions
             .iter()
-            .find(|condition| condition.condition_type.0 == "RuntimeRestart")
+            .find(|condition| condition.condition_type == ConditionType::RuntimeRestart)
             .map(|condition| condition.reason.0.as_str()),
         Some("RestartSucceeded")
     );
@@ -240,7 +240,7 @@ async fn assignment_reconcile_stops_after_restart_budget_is_exhausted()
             .status
             .conditions
             .iter()
-            .find(|condition| condition.condition_type.0 == "RuntimeRestart")
+            .find(|condition| condition.condition_type == ConditionType::RuntimeRestart)
             .map(|condition| condition.reason.0.as_str()),
         Some("RestartLimitReached")
     );

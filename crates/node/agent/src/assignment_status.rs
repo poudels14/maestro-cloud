@@ -9,7 +9,6 @@ use crate::secret_mount::SecretMountError;
 #[cfg(unix)]
 use crate::{NodeApiMountError, NodeApiServerError};
 
-const RUNTIME_READY_CONDITION: &str = "RuntimeReady";
 const WORKLOAD_RUNNING_REASON: &str = "WorkloadRunning";
 const RUNTIME_RETRY_REASON: &str = "RuntimeRetry";
 const RUNTIME_REJECTED_REASON: &str = "RuntimeRejected";
@@ -190,7 +189,7 @@ pub(crate) fn desired_status(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == RUNTIME_READY_CONDITION);
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady);
     let last_transition_time = previous
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
@@ -199,7 +198,7 @@ pub(crate) fn desired_status(
         workload_id,
         workload_address,
         conditions: vec![Condition {
-            condition_type: ConditionType(RUNTIME_READY_CONDITION.to_owned()),
+            condition_type: ConditionType::RuntimeReady,
             state,
             reason: ConditionReason(reason.to_owned()),
             message,

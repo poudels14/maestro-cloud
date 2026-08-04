@@ -178,7 +178,7 @@ impl RealProcessCluster {
                                 .iter()
                                 .map(|condition| {
                                     (
-                                        condition.condition_type.0.as_str(),
+                                        condition.condition_type,
                                         condition.reason.0.as_str(),
                                         condition.message.as_str(),
                                     )

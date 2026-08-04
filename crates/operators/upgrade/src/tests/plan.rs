@@ -35,7 +35,7 @@ fn rolling_upgrade_drains_retries_restarts_and_advances_one_node_at_a_time() -> 
     assert!(nodes.iter().any(|node| {
         node.meta.id.as_str() == "worker-1"
             && node.status.conditions.iter().any(|condition| {
-                condition.condition_type.0 == "Maintenance"
+                condition.condition_type == ConditionType::Maintenance
                     && condition.message == "node reserved by upgrade run `upgrade-1`"
             })
     }));
@@ -369,7 +369,7 @@ fn run(mode: UpgradeMode) -> UpgradeRun {
 
 fn artifact_replication_ready() -> Condition {
     Condition {
-        condition_type: ConditionType("ArtifactReplicationReady".to_string()),
+        condition_type: ConditionType::ArtifactReplicationReady,
         state: ConditionState::True,
         reason: ConditionReason("PeerCopiesReady".to_string()),
         message: "retained artifacts are replicated".to_string(),
@@ -481,7 +481,7 @@ fn maintained_nodes(nodes: &[Node]) -> BTreeSet<&str> {
         .iter()
         .filter(|node| {
             node.status.conditions.iter().any(|condition| {
-                condition.condition_type.0 == "Maintenance"
+                condition.condition_type == ConditionType::Maintenance
                     && condition.state == kernel_api::ConditionState::True
             })
         })

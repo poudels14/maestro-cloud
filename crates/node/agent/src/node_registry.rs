@@ -20,7 +20,6 @@ const NODE_KIND: &str = "Node";
 const MAX_NODE_BYTES: usize = 256 * 1_024;
 const MAX_CAS_ATTEMPTS: usize = 16;
 const LEGACY_NODE_RECORD_ANNOTATION: &str = "migration.maestro.dev/legacy-node-record";
-const SCHEDULABLE_CONDITION: &str = "Schedulable";
 const MALFORMED_NODE_RECOVERY_REASON: &str = "MalformedNodeRecovered";
 
 /// Static identity and lease policy for one node daemon.
@@ -314,7 +313,7 @@ impl NodeRegistryAgent {
                     self.fresh_node(
                         now,
                         vec![Condition {
-                            condition_type: ConditionType(SCHEDULABLE_CONDITION.to_owned()),
+                            condition_type: ConditionType::Schedulable,
                             state: ConditionState::False,
                             reason: ConditionReason(
                                 MALFORMED_NODE_RECOVERY_REASON.to_owned(),

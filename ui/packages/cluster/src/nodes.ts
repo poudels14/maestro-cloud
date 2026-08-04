@@ -3,6 +3,7 @@ import type { ClusterNode } from "./types";
 
 const NODE_LIVENESS_WINDOW_MS = 30_000;
 const UPGRADE_IN_PROGRESS_LABEL = "Upgrade in progress";
+const UPGRADE_RUN_REASON_PREFIX = "UpgradeRun:";
 
 function projectClusterNodes(
   nodes: ApiSchemas["Node"][],
@@ -14,7 +15,7 @@ function projectClusterNodes(
     .map((node) => {
       const network = networksByNode.get(node.meta.id);
       const meshCondition = network?.status.conditions?.find(
-        (condition) => condition.type === "MeshReady"
+        (condition) => condition.type === "MESH_READY"
       );
       const runtimeDelegated = node.spec.workloadNetworkMode === "runtimeDelegated";
       const dataPlaneReady =
@@ -23,9 +24,9 @@ function projectClusterNodes(
           network.status.appliedGeneration === network.meta.generation &&
           meshCondition?.status === "true");
       const drainCondition = node.status.conditions?.find(
-        (condition) => condition.type === "Draining"
+        (condition) => condition.type === "DRAINING"
       );
-      const placementCondition = ["Maintenance", "Draining"]
+      const placementCondition = ["MAINTENANCE", "DRAINING"]
         .map((type) =>
           node.status.conditions?.find(
             (condition) => condition.type === type && condition.status === "true"
@@ -69,9 +70,9 @@ function projectClusterNodes(
 function placementConditionLabel(condition: ApiSchemas["Condition"] | undefined): string | null {
   if (!condition) return null;
   if (
-    condition.type === "Maintenance" &&
+    condition.type === "MAINTENANCE" &&
     condition.status === "true" &&
-    condition.reason.startsWith("UpgradeRun:")
+    condition.reason.startsWith(UPGRADE_RUN_REASON_PREFIX)
   ) {
     return UPGRADE_IN_PROGRESS_LABEL;
   }

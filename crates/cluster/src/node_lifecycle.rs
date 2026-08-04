@@ -1,8 +1,6 @@
 use kernel_api::{Condition, ConditionReason, ConditionState, ConditionType, Node, Timestamp};
 
-const DRAINING_CONDITION: &str = "Draining";
 const DRAIN_REQUEST_REASON: &str = "ReplicatingArtifacts";
-const MAINTENANCE_CONDITION: &str = "Maintenance";
 const CUTOVER_PENDING_REASON: &str = "CutoverPending";
 const LEGACY_NODE_RECORD_ANNOTATION: &str = "migration.maestro.dev/legacy-node-record";
 
@@ -38,7 +36,7 @@ pub fn set_node_scheduling(node: &mut Node, action: NodeSchedulingAction, now: T
         .status
         .conditions
         .iter()
-        .filter(|condition| condition.condition_type.0 == DRAINING_CONDITION);
+        .filter(|condition| condition.condition_type == ConditionType::Draining);
     let canonical = existing.next().is_some_and(|condition| match action {
         NodeSchedulingAction::Drain => {
             condition.state == ConditionState::True
@@ -54,7 +52,7 @@ pub fn set_node_scheduling(node: &mut Node, action: NodeSchedulingAction, now: T
     let conditions_before_restore = node.status.conditions.len();
     if action == NodeSchedulingAction::Restore && migrated {
         node.status.conditions.retain(|condition| {
-            condition.condition_type.0 != MAINTENANCE_CONDITION
+            condition.condition_type != ConditionType::Maintenance
                 || condition.reason.0 != CUTOVER_PENDING_REASON
         });
     }
@@ -62,9 +60,9 @@ pub fn set_node_scheduling(node: &mut Node, action: NodeSchedulingAction, now: T
     if !canonical {
         node.status
             .conditions
-            .retain(|condition| condition.condition_type.0 != DRAINING_CONDITION);
+            .retain(|condition| condition.condition_type != ConditionType::Draining);
         node.status.conditions.push(Condition {
-            condition_type: ConditionType(DRAINING_CONDITION.to_string()),
+            condition_type: ConditionType::Draining,
             state: desired,
             reason: ConditionReason(reason.to_string()),
             message: message.to_string(),

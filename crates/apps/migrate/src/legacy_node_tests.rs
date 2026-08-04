@@ -1,4 +1,4 @@
-use kernel_api::{AnnotationKey, BuiltinKind, ConditionState, Node, NodeRole};
+use kernel_api::{AnnotationKey, BuiltinKind, ConditionState, ConditionType, Node, NodeRole};
 use serde_json::{Value, json};
 
 use crate::legacy_fixtures::{CLUSTER_ID, cluster_meta, cluster_state, cluster_state_for};
@@ -41,16 +41,16 @@ fn cutover_plan_converts_durable_node_identity_and_drain_state() -> TestResult {
     assert_eq!(node.status.instance_id.as_str(), "instance-node-a");
     assert_eq!(node.status.last_seen.0, 2_000);
     assert!(node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "Maintenance"
+        condition.condition_type == ConditionType::Maintenance
             && condition.state == ConditionState::True
             && condition.reason.0 == "CutoverPending"
     }));
     assert!(node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "LegacyDataPlaneReady"
+        condition.condition_type == ConditionType::LegacyDataPlaneReady
             && condition.state == ConditionState::False
     }));
     assert!(node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "Draining"
+        condition.condition_type == ConditionType::Draining
             && condition.state == ConditionState::True
             && condition.message == "operator maintenance"
     }));

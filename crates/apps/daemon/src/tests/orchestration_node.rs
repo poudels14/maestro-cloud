@@ -21,9 +21,9 @@ impl RolloutWorld {
         let mut node: Node = serde_json::from_slice(&stored.value)?;
         node.status
             .conditions
-            .retain(|condition| condition.condition_type.0 != "Draining");
+            .retain(|condition| condition.condition_type != ConditionType::Draining);
         node.status.conditions.push(Condition {
-            condition_type: ConditionType("Draining".to_string()),
+            condition_type: ConditionType::Draining,
             state: match state {
                 NodeDrainState::Draining => ConditionState::True,
                 NodeDrainState::Available => ConditionState::False,

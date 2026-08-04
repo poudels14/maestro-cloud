@@ -87,13 +87,14 @@ async fn command(
 
 fn draining(node: &Node) -> bool {
     node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "Draining" && condition.state == ConditionState::True
+        condition.condition_type == kernel_api::ConditionType::Draining
+            && condition.state == ConditionState::True
     })
 }
 
 fn drain_pending(node: &Node) -> bool {
     node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "Draining"
+        condition.condition_type == kernel_api::ConditionType::Draining
             && condition.state == ConditionState::Unknown
             && condition.reason.0 == "ReplicatingArtifacts"
     })

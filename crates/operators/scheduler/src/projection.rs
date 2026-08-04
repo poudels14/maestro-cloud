@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentId, ConditionState, Deployment, DeploymentId,
-    DeploymentPhase, NodeId, PlacementConstraint, ReplicaState, ServiceId, Timestamp,
+    ArtifactTemplate, Assignment, AssignmentId, ConditionState, ConditionType, Deployment,
+    DeploymentId, DeploymentPhase, NodeId, PlacementConstraint, ReplicaState, ServiceId, Timestamp,
     TrafficGenerationPhase, VolumeSource,
 };
 
@@ -13,11 +13,6 @@ use crate::model::{
     UnhealthySlot, UnschedulableReason, UnschedulableReplica,
 };
 use crate::resource::ResourceSnapshot;
-
-const MESH_READY_CONDITION: &str = "MeshReady";
-const SCHEDULABLE_CONDITION: &str = "Schedulable";
-const DRAINING_CONDITION: &str = "Draining";
-const MAINTENANCE_CONDITION: &str = "Maintenance";
 
 pub(crate) struct Projection {
     pub(crate) input: ScheduleInput,
@@ -150,17 +145,17 @@ fn schedule_nodes(
     {
         let network = networks.get(&node.meta.id).copied();
         let explicitly_unschedulable = node.status.conditions.iter().any(|condition| {
-            (condition.condition_type.0 == SCHEDULABLE_CONDITION
+            (condition.condition_type == ConditionType::Schedulable
                 && condition.state == ConditionState::False)
                 || (matches!(
-                    condition.condition_type.0.as_str(),
-                    DRAINING_CONDITION | MAINTENANCE_CONDITION
+                    condition.condition_type,
+                    ConditionType::Draining | ConditionType::Maintenance
                 ) && condition.state == ConditionState::True)
         });
         let mesh_ready = network.is_some_and(|network| {
             network.status.applied_generation == network.meta.generation
                 && network.status.conditions.iter().any(|condition| {
-                    condition.condition_type.0 == MESH_READY_CONDITION
+                    condition.condition_type == ConditionType::MeshReady
                         && condition.state == ConditionState::True
                 })
         });
@@ -210,7 +205,7 @@ fn unavailable_since(
     network
         .and_then(|network| {
             network.status.conditions.iter().find_map(|condition| {
-                (condition.condition_type.0 == MESH_READY_CONDITION
+                (condition.condition_type == ConditionType::MeshReady
                     && condition.state != ConditionState::True)
                     .then_some(condition.last_transition_time)
             })

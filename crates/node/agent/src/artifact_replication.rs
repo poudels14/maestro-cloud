@@ -410,7 +410,7 @@ impl ArtifactReplicationAgent {
 
 fn is_draining(node: &Node) -> bool {
     node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == DRAINING_CONDITION && condition.state == ConditionState::True
+        condition.condition_type == DRAINING_CONDITION && condition.state == ConditionState::True
     })
 }
 

@@ -17,7 +17,6 @@ use crate::retry::{retryable_store_error, wait_for_store_retry_or_shutdown};
 use crate::{MeshBackend, MeshConfiguration, MeshError, MeshPlanner, MeshReconciler};
 
 const NODE_NETWORK_KIND: &str = "NodeNetwork";
-const MESH_READY_CONDITION: &str = "MeshReady";
 const MESH_APPLIED_REASON: &str = "MeshApplied";
 const MESH_FAILED_REASON: &str = "MeshApplyFailed";
 const MAX_CAS_ATTEMPTS: usize = 16;
@@ -452,14 +451,14 @@ fn desired_status(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == MESH_READY_CONDITION);
+        .find(|condition| condition.condition_type == ConditionType::MeshReady);
     let last_transition_time = previous
         .filter(|condition| condition.state == condition_state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
     NodeNetworkStatus {
         applied_generation,
         conditions: vec![Condition {
-            condition_type: ConditionType(MESH_READY_CONDITION.to_owned()),
+            condition_type: ConditionType::MeshReady,
             state: condition_state,
             reason: ConditionReason(reason.to_owned()),
             message,

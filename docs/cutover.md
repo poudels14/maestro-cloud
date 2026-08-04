@@ -227,7 +227,7 @@ substitute for staging evidence.
 
     Verify cluster quorum, node identity, and the WireGuard mesh before
     releasing workload scheduling. Migrated nodes deliberately retain their
-    `Maintenance/CutoverPending` condition until the operator restores each
+    `MAINTENANCE/CutoverPending` condition until the operator restores each
     verified node:
 
     ```sh

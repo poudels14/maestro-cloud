@@ -3,8 +3,6 @@ use kernel_api::{
     HealthCheckSpec, ReplicaState, ReplicaStateStatus, Timestamp,
 };
 
-const HEALTH_READY_CONDITION: &str = "HealthReady";
-
 #[derive(Clone, Copy)]
 pub(crate) enum HealthObservation<'a> {
     NotConfigured,
@@ -59,14 +57,14 @@ pub(crate) fn desired_health_status(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == HEALTH_READY_CONDITION);
+        .find(|condition| condition.condition_type == ConditionType::HealthReady);
     let last_transition_time = previous
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
     let mut conditions = replica.status.conditions.clone();
-    conditions.retain(|condition| condition.condition_type.0 != HEALTH_READY_CONDITION);
+    conditions.retain(|condition| condition.condition_type != ConditionType::HealthReady);
     conditions.push(Condition {
-        condition_type: ConditionType(HEALTH_READY_CONDITION.to_owned()),
+        condition_type: ConditionType::HealthReady,
         state,
         reason: ConditionReason(reason.to_owned()),
         message,

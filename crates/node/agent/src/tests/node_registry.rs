@@ -202,7 +202,7 @@ async fn registry_recovers_a_malformed_node_unschedulable_then_preserves_operato
         .conditions
         .first()
         .ok_or("recovery condition missing")?;
-    assert_eq!(condition.condition_type.0, "Schedulable");
+    assert_eq!(condition.condition_type, ConditionType::Schedulable);
     assert_eq!(condition.state, ConditionState::False);
     assert_eq!(condition.reason.0, "MalformedNodeRecovered");
     assert_eq!(
@@ -442,7 +442,7 @@ async fn add_operator_state(store: &Arc<InMemoryStore>) -> Result<(), Box<dyn st
         .scheduling_labels
         .insert("zone".to_string(), "west".to_string());
     node.status.conditions.push(Condition {
-        condition_type: ConditionType("Maintenance".to_string()),
+        condition_type: ConditionType::Maintenance,
         state: ConditionState::True,
         reason: ConditionReason("Operator".to_string()),
         message: "maintenance requested".to_string(),

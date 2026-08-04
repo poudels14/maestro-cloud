@@ -64,7 +64,8 @@ impl ClusterSetupCluster for RealProcessCluster {
                         resource.status.applied_generation == resource.meta.generation
                             && resource.status.conditions.iter().any(|condition| {
                                 condition.state == ConditionState::True
-                                    && condition.condition_type.0 == "MeshReady"
+                                    && condition.condition_type
+                                        == kernel_api::ConditionType::MeshReady
                             })
                     })
                     .map(|resource| FixtureNodeName::new(resource.spec.node_id.as_str()))

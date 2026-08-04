@@ -28,8 +28,6 @@ use crate::source::{BuildSourceError, BuildSourceProvider, PreparedBuildSource};
 use crate::writer::{BuildStatusWriter, BuildWriteError};
 
 const CONFLICT_RETRY: Duration = Duration::from_millis(100);
-const READY_CONDITION: &str = "Ready";
-
 /// Watch-driven Build resource reconciler.
 pub struct BuildReconciler {
     cluster_id: kernel_api::ClusterId,
@@ -440,7 +438,7 @@ impl BuildReconciler {
             .status
             .conditions
             .iter()
-            .find(|condition| condition.condition_type.0 == READY_CONDITION)
+            .find(|condition| condition.condition_type == ConditionType::Ready)
             .map_or_else(
                 || self.timestamp_clock.now(),
                 |condition| condition.last_transition_time,
@@ -507,7 +505,7 @@ impl BuildReconciler {
             .status
             .conditions
             .iter()
-            .find(|condition| condition.condition_type.0 == READY_CONDITION);
+            .find(|condition| condition.condition_type == ConditionType::Ready);
         let transitioned_at = previous
             .filter(|condition| condition.state == state)
             .map_or_else(
@@ -515,7 +513,7 @@ impl BuildReconciler {
                 |condition| condition.last_transition_time,
             );
         let condition = Condition {
-            condition_type: ConditionType(READY_CONDITION.to_string()),
+            condition_type: ConditionType::Ready,
             state,
             reason: ConditionReason(reason.to_string()),
             message: message.to_string(),
@@ -525,7 +523,7 @@ impl BuildReconciler {
         build
             .status
             .conditions
-            .retain(|existing| existing.condition_type.0 != READY_CONDITION);
+            .retain(|existing| existing.condition_type != ConditionType::Ready);
         build.status.conditions.push(condition);
     }
 }

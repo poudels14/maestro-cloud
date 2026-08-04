@@ -13,7 +13,7 @@ use crate::{NodeSchedulingAction, set_node_scheduling};
 fn restore_releases_only_the_migrated_cutover_freeze() -> Result<(), Box<dyn std::error::Error>> {
     let mut node = migrated_node()?;
     node.status.conditions.push(condition(
-        "Maintenance",
+        ConditionType::Maintenance,
         ConditionState::True,
         "UpgradeInProgress",
     ));
@@ -37,7 +37,7 @@ fn restore_releases_only_the_migrated_cutover_freeze() -> Result<(), Box<dyn std
             .any(|condition| condition.reason.0 == "UpgradeInProgress")
     );
     assert!(node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "Draining"
+        condition.condition_type == ConditionType::Draining
             && condition.state == ConditionState::False
             && condition.reason.0 == "Restored"
     }));
@@ -96,7 +96,7 @@ fn migrated_node() -> Result<Node, kernel_api::InvalidIdentifier> {
             version: "0.6.1".to_owned(),
             last_seen: Timestamp(1_000),
             conditions: vec![condition(
-                "Maintenance",
+                ConditionType::Maintenance,
                 ConditionState::True,
                 "CutoverPending",
             )],
@@ -104,9 +104,9 @@ fn migrated_node() -> Result<Node, kernel_api::InvalidIdentifier> {
     })
 }
 
-fn condition(condition_type: &str, state: ConditionState, reason: &str) -> Condition {
+fn condition(condition_type: ConditionType, state: ConditionState, reason: &str) -> Condition {
     Condition {
-        condition_type: ConditionType(condition_type.to_owned()),
+        condition_type,
         state,
         reason: ConditionReason(reason.to_owned()),
         message: reason.to_owned(),

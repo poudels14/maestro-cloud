@@ -70,7 +70,7 @@ test("replica presentation prefers workload identity and surfaces failed conditi
           observedGeneration: 1,
           reason: "Unhealthy",
           status: "false" as const,
-          type: "Ready"
+          type: "READY"
         }
       ]
     }

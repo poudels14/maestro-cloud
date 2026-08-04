@@ -101,7 +101,7 @@ fn conditions(bundle: &NodeBundle) -> Vec<Condition> {
     let info = &bundle.record.last_info;
     let mut conditions = vec![
         Condition {
-            condition_type: ConditionType("Maintenance".to_owned()),
+            condition_type: ConditionType::Maintenance,
             state: ConditionState::True,
             reason: ConditionReason("CutoverPending".to_owned()),
             message: "scheduling is frozen until cutover verification completes".to_owned(),
@@ -109,7 +109,7 @@ fn conditions(bundle: &NodeBundle) -> Vec<Condition> {
             last_transition_time: Timestamp(bundle.record.last_seen_at_ms),
         },
         Condition {
-            condition_type: ConditionType("LegacyDataPlaneReady".to_owned()),
+            condition_type: ConditionType::LegacyDataPlaneReady,
             state: if info.data_plane_ready {
                 ConditionState::True
             } else {
@@ -136,7 +136,7 @@ fn conditions(bundle: &NodeBundle) -> Vec<Condition> {
         && state.unschedulable
     {
         conditions.push(Condition {
-            condition_type: ConditionType("Draining".to_owned()),
+            condition_type: ConditionType::Draining,
             state: ConditionState::True,
             reason: ConditionReason("LegacyUnschedulable".to_owned()),
             message: state

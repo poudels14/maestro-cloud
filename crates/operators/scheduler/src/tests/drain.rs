@@ -101,7 +101,7 @@ async fn set_node_draining(
     let stored = world.store.get(&key).await?.ok_or("node missing")?;
     let mut node: Node = serde_json::from_slice(&stored.value)?;
     node.status.conditions.push(Condition {
-        condition_type: ConditionType("Draining".to_string()),
+        condition_type: ConditionType::Draining,
         state: ConditionState::True,
         reason: ConditionReason("Requested".to_string()),
         message: "node drain requested".to_string(),

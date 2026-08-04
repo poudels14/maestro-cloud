@@ -282,7 +282,7 @@ async fn mark_drain_ready(
         .status
         .conditions
         .iter_mut()
-        .find(|condition| condition.condition_type.0 == "Draining")
+        .find(|condition| condition.condition_type == kernel_api::ConditionType::Draining)
         .ok_or("drain condition missing")?;
     condition.state = ConditionState::True;
     condition.reason = ConditionReason("PeerCopiesReady".to_string());

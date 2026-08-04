@@ -4,9 +4,34 @@ use serde::{Deserialize, Serialize};
 use crate::{Generation, Timestamp};
 
 /// Stable machine-readable name of a status condition.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-pub struct ConditionType(pub String);
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ConditionType {
+    /// A controller completed its primary reconciliation.
+    Ready,
+    /// A node is explicitly excluded from scheduling.
+    Schedulable,
+    /// A node is being drained of workloads.
+    Draining,
+    /// A node is reserved for maintenance.
+    Maintenance,
+    /// Artifacts retained by a draining node have safe peer copies.
+    ArtifactReplicationReady,
+    /// The node mesh network is configured and available.
+    MeshReady,
+    /// The node health probe is passing.
+    HealthReady,
+    /// An assignment runtime is ready.
+    RuntimeReady,
+    /// An assignment runtime restart has completed.
+    RuntimeRestart,
+    /// The node firewall generation is applied.
+    FirewallReady,
+    /// Legacy data-plane readiness retained during migration.
+    LegacyDataPlaneReady,
+}
 
 /// Stable machine-readable reason for a condition transition.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]

@@ -154,7 +154,8 @@ impl NodeUpgradeBackend for RecordingUpgradeBackend {
 
 pub(super) fn maintained(node: &Node) -> bool {
     node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == "Maintenance" && condition.state == ConditionState::True
+        condition.condition_type == kernel_api::ConditionType::Maintenance
+            && condition.state == ConditionState::True
     })
 }
 

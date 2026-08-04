@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ClusterId, Generation, NodeFirewall, NodeFirewallId, NodeFirewallSpec, NodeFirewallStatus,
-    NodeId, Object, ObjectMeta, ResourceKind, ResourceName, ResourceRevision, Timestamp,
+    ClusterId, ConditionType, Generation, NodeFirewall, NodeFirewallId, NodeFirewallSpec,
+    NodeFirewallStatus, NodeId, Object, ObjectMeta, ResourceKind, ResourceName, ResourceRevision,
+    Timestamp,
 };
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest, Store,
@@ -79,7 +80,7 @@ async fn digest_or_backend_failure_is_reported_without_stopping_reconciliation()
     let rejected = get(store.as_ref(), &cluster_id, "node-1").await?;
     assert_eq!(rejected.status.applied_generation, Generation::default());
     assert!(rejected.status.conditions.first().is_some_and(|condition| {
-        condition.condition_type.0 == "FirewallReady"
+        condition.condition_type == ConditionType::FirewallReady
             && condition.state == kernel_api::ConditionState::False
             && condition.message.contains("digest mismatch")
     }));
@@ -96,7 +97,7 @@ async fn digest_or_backend_failure_is_reported_without_stopping_reconciliation()
     assert_eq!(failed.status.applied_generation, Generation::default());
     assert!(failed.status.applied_digest.is_none());
     assert!(failed.status.conditions.first().is_some_and(|condition| {
-        condition.condition_type.0 == "FirewallReady"
+        condition.condition_type == ConditionType::FirewallReady
             && condition.state == kernel_api::ConditionState::False
     }));
 

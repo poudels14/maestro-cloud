@@ -1336,6 +1336,8 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /** @description External source resolved by the build worker immediately before use. */
+            environmentSource?: string | null;
             /**
              * @description Optional registry prefix receiving a deployment-unique immutable build.
              *
@@ -1347,6 +1349,8 @@ export interface components {
             secrets?: {
                 [key: string]: components["schemas"]["SecretValue"];
             };
+            /** @description External secret source resolved by the build worker immediately before use. */
+            secretsSource?: string | null;
             /** @description Source material to build. */
             source: components["schemas"]["BuildSource"];
             /** @enum {string} */
@@ -1482,6 +1486,8 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /** @description External source resolved by the build worker immediately before use. */
+            environmentSource?: string | null;
             /**
              * @description Optional registry prefix receiving a deployment-unique immutable build.
              *
@@ -1493,6 +1499,8 @@ export interface components {
             secrets?: {
                 [key: string]: components["schemas"]["SecretValue"];
             };
+            /** @description External secret source resolved by the build worker immediately before use. */
+            secretsSource?: string | null;
             /** @description Source material to build. */
             source: components["schemas"]["BuildSource"];
             /** @description Poll the configured Git ref and roll out newly resolved commits. */
@@ -1583,7 +1591,7 @@ export interface components {
         /** @description Three-valued state of a status condition. */
         ConditionState: "true" | "false" | "unknown";
         /** @description Stable machine-readable name of a status condition. */
-        ConditionType: string;
+        ConditionType: "READY" | "SCHEDULABLE" | "DRAINING" | "MAINTENANCE" | "ARTIFACT_REPLICATION_READY" | "MESH_READY" | "HEALTH_READY" | "RUNTIME_READY" | "RUNTIME_RESTART" | "FIREWALL_READY" | "LEGACY_DATA_PLANE_READY";
         ControllerStatsSnapshot: {
             deadLetters: components["schemas"]["DeadLetterStatsSnapshot"];
             /** Format: int64 */
@@ -2857,6 +2865,8 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /** @description External runtime environment source preserved for deployment-time resolution. */
+            environmentSource?: string | null;
             /**
              * Format: uint64
              * @description Maximum lifetime measured from pull-request creation.
@@ -2996,6 +3006,8 @@ export interface components {
             };
             /** @description Absolute workload-visible file path. */
             mountPath: string;
+            /** @description External secret source resolved after build, immediately before workload creation. */
+            source?: string | null;
         } | {
             /** @description Single-component file names and plaintext contents encrypted by the store boundary. */
             files: {
@@ -3126,6 +3138,8 @@ export interface components {
             environment?: {
                 [key: string]: string;
             };
+            /** @description Ordered external runtime environment sources resolved after build, before workload creation. */
+            environmentSources?: string[];
             /** @description Interactive exec policy. */
             exec: components["schemas"]["ExecPolicy"];
             /** @description Runtime ports exposed to other cluster workloads. */

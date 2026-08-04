@@ -21,8 +21,6 @@ use crate::writer::{PreviewWriteOutcome, PreviewWriter};
 
 const CONFLICT_RETRY: Duration = Duration::from_millis(100);
 const CLEANUP_RETRY: Duration = Duration::from_secs(1);
-const READY_CONDITION: &str = "Ready";
-
 /// Reconciles Preview resources into isolated Services and ingress routes.
 pub struct PreviewReconciler {
     keyspace: Keyspace,
@@ -394,7 +392,7 @@ impl PreviewReconciler {
             .status
             .conditions
             .iter()
-            .find(|condition| condition.condition_type.0 == READY_CONDITION);
+            .find(|condition| condition.condition_type == ConditionType::Ready);
         let transitioned_at = previous
             .filter(|condition| condition.state == state)
             .map_or_else(
@@ -404,9 +402,9 @@ impl PreviewReconciler {
         preview
             .status
             .conditions
-            .retain(|condition| condition.condition_type.0 != READY_CONDITION);
+            .retain(|condition| condition.condition_type != ConditionType::Ready);
         preview.status.conditions.push(Condition {
-            condition_type: ConditionType(READY_CONDITION.to_string()),
+            condition_type: ConditionType::Ready,
             state,
             reason: ConditionReason(reason.to_string()),
             message: message.to_string(),

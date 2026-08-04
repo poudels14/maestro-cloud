@@ -3,7 +3,7 @@ use crate::{Condition, ConditionReason, ConditionState, ConditionType, Generatio
 #[test]
 fn condition_wire_shape_is_generic_and_typed() {
     let condition = Condition {
-        condition_type: ConditionType("Ready".to_string()),
+        condition_type: ConditionType::Ready,
         state: ConditionState::Unknown,
         reason: ConditionReason("Reconciling".to_string()),
         message: "waiting for a healthy replica".to_string(),
@@ -16,7 +16,7 @@ fn condition_wire_shape_is_generic_and_typed() {
     assert_eq!(
         value,
         serde_json::json!({
-            "type": "Ready",
+            "type": "READY",
             "status": "unknown",
             "reason": "Reconciling",
             "message": "waiting for a healthy replica",

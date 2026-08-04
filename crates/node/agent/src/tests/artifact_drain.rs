@@ -133,7 +133,7 @@ fn pending_node(node_id: NodeId) -> Result<Node, kernel_api::InvalidIdentifier> 
             version: "1.0.0".to_string(),
             last_seen: Timestamp(10_000),
             conditions: vec![Condition {
-                condition_type: ConditionType(DRAINING_CONDITION.to_string()),
+                condition_type: DRAINING_CONDITION,
                 state: ConditionState::Unknown,
                 reason: ConditionReason(DRAIN_REQUEST_REASON.to_string()),
                 message: "drain requested".to_string(),
@@ -186,9 +186,9 @@ fn node_key(
     ))
 }
 
-fn condition<'a>(node: &'a Node, condition_type: &str) -> Option<&'a Condition> {
+fn condition(node: &Node, condition_type: ConditionType) -> Option<&Condition> {
     node.status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == condition_type)
+        .find(|condition| condition.condition_type == condition_type)
 }

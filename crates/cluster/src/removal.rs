@@ -3,9 +3,10 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use kernel_api::{
-    Assignment, BuiltinKind, ClusterId, ConditionState, Generation, InvalidIdentifier, Node,
-    NodeId, NodeRemovalResponse, NodeRemovalState, NodeRole, NodeTombstone, NodeTombstoneSpec,
-    NodeTombstoneStatus, ObjectMeta, ResourceKind, ResourceName, ResourceRevision, Timestamp,
+    Assignment, BuiltinKind, ClusterId, ConditionState, ConditionType, Generation,
+    InvalidIdentifier, Node, NodeId, NodeRemovalResponse, NodeRemovalState, NodeRole,
+    NodeTombstone, NodeTombstoneSpec, NodeTombstoneStatus, ObjectMeta, ResourceKind, ResourceName,
+    ResourceRevision, Timestamp,
 };
 use kernel_store::{
     Compare, ExpectedVersion, Keyspace, Mutation, Store, StoreError, StoredValue, Transaction,
@@ -16,7 +17,6 @@ use crate::{NodeSchedulingAction, StoreProvider, StoreProviderError, set_node_sc
 
 const MAXIMUM_RESOURCE_BYTES: usize = 1024 * 1_024;
 const MAXIMUM_REMOVAL_INTENT_BYTES: usize = 16 * 1_024;
-const DRAINING_CONDITION: &str = "Draining";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -328,7 +328,8 @@ impl NodeRemovalCoordinator {
 
 fn drain_complete(node: &Node) -> bool {
     node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == DRAINING_CONDITION && condition.state == ConditionState::True
+        condition.condition_type == ConditionType::Draining
+            && condition.state == ConditionState::True
     })
 }
 

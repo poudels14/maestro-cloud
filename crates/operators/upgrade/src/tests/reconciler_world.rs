@@ -185,7 +185,7 @@ impl World {
             .into_iter()
             .filter(|node| {
                 node.status.conditions.iter().any(|condition| {
-                    condition.condition_type.0 == "Maintenance"
+                    condition.condition_type == ConditionType::Maintenance
                         && condition.state == kernel_api::ConditionState::True
                 })
             })
@@ -314,7 +314,7 @@ fn node(id: &str, role: NodeRole) -> Result<Node, kernel_api::InvalidIdentifier>
             version: "1.0.0".to_string(),
             last_seen: Timestamp(10_000),
             conditions: vec![Condition {
-                condition_type: ConditionType("ArtifactReplicationReady".to_string()),
+                condition_type: ConditionType::ArtifactReplicationReady,
                 state: ConditionState::True,
                 reason: ConditionReason("PeerCopiesReady".to_string()),
                 message: "retained artifacts are replicated".to_string(),

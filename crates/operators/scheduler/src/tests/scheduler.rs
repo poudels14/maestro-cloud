@@ -404,7 +404,7 @@ fn network(node_id: NodeId, index: u8) -> NodeNetwork {
         },
         status: NodeNetworkStatus {
             applied_generation: Generation(1),
-            conditions: vec![condition("MeshReady", ConditionState::True)],
+            conditions: vec![condition(ConditionType::MeshReady, ConditionState::True)],
         },
     }
 }
@@ -479,9 +479,9 @@ fn metadata<Id>(id: Id) -> ObjectMeta<Id> {
     }
 }
 
-fn condition(kind: &str, state: ConditionState) -> Condition {
+fn condition(kind: ConditionType, state: ConditionState) -> Condition {
     Condition {
-        condition_type: ConditionType(kind.to_owned()),
+        condition_type: kind,
         state,
         reason: ConditionReason("TestFixture".to_owned()),
         message: String::new(),

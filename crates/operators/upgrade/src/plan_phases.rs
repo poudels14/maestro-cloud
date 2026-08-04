@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use kernel_api::{
-    ConditionState, Node, NodeId, NodeUpgradeStatus, Timestamp, UpgradeMode, UpgradeOperation,
-    UpgradePhase,
+    ConditionState, ConditionType, Node, NodeId, NodeUpgradeStatus, Timestamp, UpgradeMode,
+    UpgradeOperation, UpgradePhase,
 };
 use semver::Version;
 
@@ -19,8 +19,6 @@ use crate::{
     NodeUpgradeRequest, NodeUpgradeTarget, UpgradeInput, UpgradePlan, UpgradePlanAction,
     UpgradePlanError, UpgradeSettings,
 };
-
-const ARTIFACT_REPLICATION_READY_CONDITION: &str = "ArtifactReplicationReady";
 
 pub(crate) fn initialize(
     input: UpgradeInput,
@@ -142,7 +140,7 @@ pub(crate) fn plan_draining(
     let artifacts_pending = draining_ids.iter().any(|node_id| {
         nodes.get(node_id).is_none_or(|node| {
             !node.status.conditions.iter().any(|condition| {
-                condition.condition_type.0 == ARTIFACT_REPLICATION_READY_CONDITION
+                condition.condition_type == ConditionType::ArtifactReplicationReady
                     && condition.state == kernel_api::ConditionState::True
             })
         })

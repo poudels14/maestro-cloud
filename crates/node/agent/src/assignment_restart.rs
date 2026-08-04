@@ -8,7 +8,6 @@ use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store, Sto
 
 use crate::assignment_status::ConvergeFailure;
 
-const RUNTIME_RESTART_CONDITION: &str = "RuntimeRestart";
 const MAX_CAS_ATTEMPTS: usize = 16;
 
 pub(crate) enum RestartReservation {
@@ -133,7 +132,7 @@ pub(crate) async fn reserve_restart(
 fn restart_limit_recorded(replica: &ReplicaState) -> bool {
     replica.status.phase == DeploymentPhase::Crashed
         && replica.status.conditions.iter().any(|condition| {
-            condition.condition_type.0 == RUNTIME_RESTART_CONDITION
+            condition.condition_type == ConditionType::RuntimeRestart
                 && condition.state == ConditionState::False
                 && condition.reason.0 == "RestartLimitReached"
         })
@@ -238,16 +237,16 @@ fn upsert_restart_condition(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == RUNTIME_RESTART_CONDITION);
+        .find(|condition| condition.condition_type == ConditionType::RuntimeRestart);
     let last_transition_time = previous
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
     replica
         .status
         .conditions
-        .retain(|condition| condition.condition_type.0 != RUNTIME_RESTART_CONDITION);
+        .retain(|condition| condition.condition_type != ConditionType::RuntimeRestart);
     replica.status.conditions.push(Condition {
-        condition_type: ConditionType(RUNTIME_RESTART_CONDITION.to_owned()),
+        condition_type: ConditionType::RuntimeRestart,
         state,
         reason: ConditionReason(reason.to_owned()),
         message,

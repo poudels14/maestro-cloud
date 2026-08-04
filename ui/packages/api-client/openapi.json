@@ -97,6 +97,11 @@
                 "description": "Non-secret build variables.",
                 "type": "object"
               },
+              "environmentSource": {
+                "description": "External source resolved by the build worker immediately before use.",
+                "nullable": true,
+                "type": "string"
+              },
               "registry": {
                 "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
                 "nullable": true,
@@ -108,6 +113,11 @@
                 },
                 "description": "Secret build variables that are redacted from debug output.",
                 "type": "object"
+              },
+              "secretsSource": {
+                "description": "External secret source resolved by the build worker immediately before use.",
+                "nullable": true,
+                "type": "string"
               },
               "source": {
                 "allOf": [
@@ -612,6 +622,11 @@
             "description": "Non-secret build variables.",
             "type": "object"
           },
+          "environmentSource": {
+            "description": "External source resolved by the build worker immediately before use.",
+            "nullable": true,
+            "type": "string"
+          },
           "registry": {
             "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
             "nullable": true,
@@ -623,6 +638,11 @@
             },
             "description": "Secret build variables that are redacted from debug output.",
             "type": "object"
+          },
+          "secretsSource": {
+            "description": "External secret source resolved by the build worker immediately before use.",
+            "nullable": true,
+            "type": "string"
           },
           "source": {
             "allOf": [
@@ -967,7 +987,85 @@
       },
       "ConditionType": {
         "description": "Stable machine-readable name of a status condition.",
-        "type": "string"
+        "oneOf": [
+          {
+            "description": "A controller completed its primary reconciliation.",
+            "enum": [
+              "READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A node is explicitly excluded from scheduling.",
+            "enum": [
+              "SCHEDULABLE"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A node is being drained of workloads.",
+            "enum": [
+              "DRAINING"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A node is reserved for maintenance.",
+            "enum": [
+              "MAINTENANCE"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Artifacts retained by a draining node have safe peer copies.",
+            "enum": [
+              "ARTIFACT_REPLICATION_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The node mesh network is configured and available.",
+            "enum": [
+              "MESH_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The node health probe is passing.",
+            "enum": [
+              "HEALTH_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "An assignment runtime is ready.",
+            "enum": [
+              "RUNTIME_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "An assignment runtime restart has completed.",
+            "enum": [
+              "RUNTIME_RESTART"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The node firewall generation is applied.",
+            "enum": [
+              "FIREWALL_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Legacy data-plane readiness retained during migration.",
+            "enum": [
+              "LEGACY_DATA_PLANE_READY"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ControllerStatsSnapshot": {
         "properties": {
@@ -5313,6 +5411,11 @@
             "description": "Runtime environment overlaid on the derived service.",
             "type": "object"
           },
+          "environmentSource": {
+            "description": "External runtime environment source preserved for deployment-time resolution.",
+            "nullable": true,
+            "type": "string"
+          },
           "lifetimeSecs": {
             "description": "Maximum lifetime measured from pull-request creation.",
             "format": "uint64",
@@ -5720,6 +5823,11 @@
               },
               "mountPath": {
                 "description": "Absolute workload-visible file path.",
+                "type": "string"
+              },
+              "source": {
+                "description": "External secret source resolved after build, immediately before workload creation.",
+                "nullable": true,
                 "type": "string"
               }
             },
@@ -6219,6 +6327,13 @@
             },
             "description": "Non-secret runtime environment.",
             "type": "object"
+          },
+          "environmentSources": {
+            "description": "Ordered external runtime environment sources resolved after build, before workload creation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "exec": {
             "allOf": [
@@ -7915,7 +8030,7 @@
         "type": "http"
       },
       "browserSession": {
-        "description": "Short-lived Secure, HttpOnly, SameSite=Strict session preserving the bearer token access level",
+        "description": "Secure, HttpOnly, SameSite=Strict session preserving the bearer token access level and expiration",
         "in": "cookie",
         "name": "__Host-maestro-session",
         "type": "apiKey"
@@ -7924,7 +8039,7 @@
   },
   "info": {
     "title": "Maestro Cloud API",
-    "version": "0.6.12"
+    "version": "0.6.26"
   },
   "openapi": "3.0.4",
   "paths": {

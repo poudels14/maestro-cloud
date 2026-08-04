@@ -329,7 +329,7 @@ fn node_state(node: &Node) -> &'static str {
         .status
         .conditions
         .iter()
-        .filter(|condition| condition.condition_type.0 == "Draining")
+        .filter(|condition| condition.condition_type == kernel_api::ConditionType::Draining)
         .collect::<Vec<_>>();
     match conditions.as_slice() {
         [] => "schedulable",

@@ -99,7 +99,7 @@ pub(super) fn network(
         status: NodeNetworkStatus {
             applied_generation: Generation(1),
             conditions: vec![Condition {
-                condition_type: ConditionType("MeshReady".to_string()),
+                condition_type: ConditionType::MeshReady,
                 state: ConditionState::True,
                 reason: ConditionReason("Applied".to_string()),
                 message: "mesh ready".to_string(),

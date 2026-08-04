@@ -41,7 +41,7 @@ function network(
 }
 
 const meshReady = {
-  type: "MeshReady",
+  type: "MESH_READY",
   status: "true",
   reason: "Applied",
   message: "mesh configuration is applied",
@@ -51,7 +51,7 @@ const meshReady = {
 
 test("projects node liveness, mesh readiness, and drain state", () => {
   const draining = {
-    type: "Draining",
+    type: "DRAINING",
     status: "true",
     reason: "Requested",
     message: "node drain requested",
@@ -91,7 +91,7 @@ test("projects node liveness, mesh readiness, and drain state", () => {
 
 test("keeps a node schedulable while drain artifact replication is pending", () => {
   const pendingDrain = {
-    type: "Draining",
+    type: "DRAINING",
     status: "unknown",
     reason: "ReplicatingArtifacts",
     message: "waiting for peer copies",
@@ -111,7 +111,7 @@ test("keeps a node schedulable while drain artifact replication is pending", () 
 
 test("presents upgrade-owned maintenance as UI state instead of audit detail", () => {
   const maintenance = {
-    type: "Maintenance",
+    type: "MAINTENANCE",
     status: "true",
     reason: "UpgradeRun:upgrade-1",
     message: "node reserved by upgrade run `upgrade-1`",
@@ -130,7 +130,7 @@ test("presents upgrade-owned maintenance as UI state instead of audit detail", (
 
 test("does not surface a completed restore as an active scheduling warning", () => {
   const restored = {
-    type: "Draining",
+    type: "DRAINING",
     status: "false",
     reason: "Restored",
     message: "node restored to scheduling",

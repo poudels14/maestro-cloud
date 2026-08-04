@@ -9,8 +9,9 @@ use runtime::ArtifactDigest;
 
 use crate::{ArtifactHolderRegistry, ArtifactReplicationError};
 
-pub(crate) const ARTIFACT_REPLICATION_READY_CONDITION: &str = "ArtifactReplicationReady";
-pub(crate) const DRAINING_CONDITION: &str = "Draining";
+pub(crate) const ARTIFACT_REPLICATION_READY_CONDITION: ConditionType =
+    ConditionType::ArtifactReplicationReady;
+pub(crate) const DRAINING_CONDITION: ConditionType = ConditionType::Draining;
 pub(crate) const DRAIN_REQUEST_REASON: &str = "ReplicatingArtifacts";
 
 const MAX_NODE_BYTES: usize = 256 * 1_024;
@@ -144,7 +145,7 @@ fn upsert_replication_condition(
 
 fn complete_requested_drain(node: &mut Node, readiness: &ArtifactDrainReadiness, now: Timestamp) {
     let pending = node.status.conditions.iter().any(|condition| {
-        condition.condition_type.0 == DRAINING_CONDITION
+        condition.condition_type == DRAINING_CONDITION
             && condition.state == ConditionState::Unknown
             && condition.reason.0 == DRAIN_REQUEST_REASON
     });
@@ -172,7 +173,7 @@ fn complete_requested_drain(node: &mut Node, readiness: &ArtifactDrainReadiness,
 
 fn upsert_condition(
     node: &mut Node,
-    condition_type: &str,
+    condition_type: ConditionType,
     state: ConditionState,
     reason: &str,
     message: String,
@@ -182,14 +183,14 @@ fn upsert_condition(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == condition_type)
+        .find(|condition| condition.condition_type == condition_type)
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
     node.status
         .conditions
-        .retain(|condition| condition.condition_type.0 != condition_type);
+        .retain(|condition| condition.condition_type != condition_type);
     node.status.conditions.push(Condition {
-        condition_type: ConditionType(condition_type.to_string()),
+        condition_type,
         state,
         reason: ConditionReason(reason.to_string()),
         message,

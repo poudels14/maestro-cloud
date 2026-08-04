@@ -86,7 +86,7 @@ impl UpgradeAcceptanceWorld {
             let mut resource = node(&node_id, index)?;
             resource.spec.role = NodeRole::ControlPlane;
             resource.status.conditions.push(Condition {
-                condition_type: ConditionType("ArtifactReplicationReady".to_string()),
+                condition_type: ConditionType::ArtifactReplicationReady,
                 state: ConditionState::True,
                 reason: ConditionReason("PeerCopiesReady".to_string()),
                 message: "retained artifacts are replicated".to_string(),

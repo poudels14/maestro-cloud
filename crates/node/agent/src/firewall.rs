@@ -17,7 +17,6 @@ use crate::StatusClock;
 use crate::retry::{retryable_store_error, wait_for_store_retry_or_shutdown};
 
 const NODE_FIREWALL_KIND: &str = "NodeFirewall";
-const FIREWALL_READY: &str = "FirewallReady";
 const APPLIED_REASON: &str = "RulesetApplied";
 const FAILED_REASON: &str = "RulesetApplyFailed";
 const MAX_CAS_ATTEMPTS: usize = 16;
@@ -431,7 +430,7 @@ fn desired_status(
         .status
         .conditions
         .iter()
-        .find(|condition| condition.condition_type.0 == FIREWALL_READY);
+        .find(|condition| condition.condition_type == ConditionType::FirewallReady);
     let last_transition_time = previous
         .filter(|condition| condition.state == state && condition.reason.0 == reason)
         .map_or(now, |condition| condition.last_transition_time);
@@ -439,7 +438,7 @@ fn desired_status(
         applied_generation,
         applied_digest,
         conditions: vec![Condition {
-            condition_type: ConditionType(FIREWALL_READY.to_string()),
+            condition_type: ConditionType::FirewallReady,
             state,
             reason: ConditionReason(reason.to_string()),
             message,
