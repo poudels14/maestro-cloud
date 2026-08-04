@@ -81,11 +81,12 @@ fn parse_ip(value: &str) -> Option<IpAddr> {
 fn is_internal_proxy_address(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
-            let [first, second, _, _] = address.octets();
+            const TAILSCALE_CGNAT: ipnet::Ipv4Net =
+                ipnet::Ipv4Net::new_assert(std::net::Ipv4Addr::new(100, 64, 0, 0), 10);
             address.is_private()
                 || address.is_loopback()
                 || address.is_link_local()
-                || first == 100 && second & 0xc0 == 0x40
+                || TAILSCALE_CGNAT.contains(&address)
         }
         IpAddr::V6(address) => {
             let [first, _, _, _, _, _, _, _] = address.segments();

@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use ipnet::Ipv4Net;
 use kernel_api::{NodeId, NodeNetworkSpec};
 
 use crate::{MeshIdentity, MeshIdentityError, WireGuardPrivateKey, WireGuardPublicKey};
@@ -16,26 +17,24 @@ pub const MESH_MTU_BYTES: u16 = 1_420;
 /// A canonical private IPv4 `/24` allocated to one node's workloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MeshSubnet {
-    network: Ipv4Addr,
+    network: Ipv4Net,
 }
 
 impl MeshSubnet {
     /// Returns the canonical network address.
     pub fn network_address(self) -> Ipv4Addr {
-        self.network
+        self.network.network()
     }
 
     /// Returns whether this allocation contains an address.
     pub fn contains(self, address: Ipv4Addr) -> bool {
-        let network = u32::from(self.network);
-        let address = u32::from(address);
-        address >= network && address <= network.saturating_add(255)
+        self.network.contains(&address)
     }
 }
 
 impl Display for MeshSubnet {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}/24", self.network)
+        Display::fmt(&self.network, formatter)
     }
 }
 
@@ -43,21 +42,16 @@ impl FromStr for MeshSubnet {
     type Err = MeshError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (address, prefix) = value
-            .split_once('/')
-            .ok_or_else(|| MeshError::InvalidSubnet {
-                subnet: value.to_owned(),
-            })?;
-        let network = address
-            .parse::<Ipv4Addr>()
+        let network = value
+            .parse::<Ipv4Net>()
             .map_err(|_| MeshError::InvalidSubnet {
                 subnet: value.to_owned(),
             })?;
-        let prefix = prefix.parse::<u8>().map_err(|_| MeshError::InvalidSubnet {
-            subnet: value.to_owned(),
-        })?;
-        let canonical = Ipv4Addr::from(u32::from(network) & 0xffff_ff00);
-        if prefix != 24 || canonical != network || !network.is_private() {
+        if network.prefix_len() != 24
+            || network.addr() != network.network()
+            || !network.network().is_private()
+            || !network.broadcast().is_private()
+        {
             return Err(MeshError::InvalidSubnet {
                 subnet: value.to_owned(),
             });

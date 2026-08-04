@@ -2,13 +2,13 @@ use std::fmt::{Display, Formatter};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
+use ipnet::Ipv4Net;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A canonical IPv4 network and prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ipv4Cidr {
-    network: Ipv4Addr,
-    prefix: u8,
+    network: Ipv4Net,
 }
 
 impl Ipv4Cidr {
@@ -19,35 +19,34 @@ impl Ipv4Cidr {
 
     /// Creates a CIDR when `network` is the canonical address for `prefix`.
     pub fn new(network: Ipv4Addr, prefix: u8) -> Result<Self, CidrError> {
-        if prefix > 32 {
-            return Err(CidrError::InvalidPrefix { prefix });
-        }
-
-        let canonical = Ipv4Addr::from(u32::from(network) & prefix_mask(prefix));
-        if canonical != network {
+        let network =
+            Ipv4Net::new(network, prefix).map_err(|_| CidrError::InvalidPrefix { prefix })?;
+        let supplied = network.addr();
+        let canonical = network.network();
+        if canonical != supplied {
             return Err(CidrError::NonCanonical {
-                supplied: network,
+                supplied,
                 canonical,
                 prefix,
             });
         }
 
-        Ok(Self { network, prefix })
+        Ok(Self { network })
     }
 
     /// Returns the canonical network address.
     pub fn network_address(self) -> Ipv4Addr {
-        self.network
+        self.network.network()
     }
 
     /// Returns the prefix length.
     pub fn prefix(self) -> u8 {
-        self.prefix
+        self.network.prefix_len()
     }
 
     /// Returns whether this network contains `address`.
     pub fn contains(self, address: Ipv4Addr) -> bool {
-        u32::from(address) & prefix_mask(self.prefix) == u32::from(self.network)
+        self.network.contains(&address)
     }
 
     /// Returns whether every address in `network` belongs to this network.
@@ -57,22 +56,22 @@ impl Ipv4Cidr {
 
     /// Returns the number of addresses represented by this network.
     pub fn address_count(self) -> u64 {
-        1_u64 << (32 - self.prefix)
+        1_u64 << (32 - self.prefix())
     }
 
     /// Returns whether either network contains any address from the other.
     pub fn overlaps(self, other: Self) -> bool {
-        self.contains(other.network) || other.contains(self.network)
+        self.contains(other.network_address()) || other.contains(self.network_address())
     }
 
     /// Returns the broadcast address.
     pub fn broadcast_address(self) -> Ipv4Addr {
-        Ipv4Addr::from(u32::from(self.network) | !prefix_mask(self.prefix))
+        self.network.broadcast()
     }
 
     /// Returns the runtime gateway address reserved at the start of a subnet.
     pub fn gateway_address(self) -> Option<Ipv4Addr> {
-        let network = u32::from(self.network);
+        let network = u32::from(self.network_address());
         let broadcast = u32::from(self.broadcast_address());
         network
             .checked_add(1)
@@ -82,7 +81,7 @@ impl Ipv4Cidr {
 
     /// Returns a usable address relative to the broadcast address.
     pub fn host_address_from_end(self, offset: u32) -> Option<Ipv4Addr> {
-        let network = u32::from(self.network);
+        let network = u32::from(self.network_address());
         let broadcast = u32::from(self.broadcast_address());
         broadcast
             .checked_sub(offset)
@@ -95,11 +94,11 @@ impl Ipv4Cidr {
     /// Keeping system addresses in the first `/24` preserves the historical
     /// Maestro address layout for larger standalone networks.
     pub fn system_address_from_end(self, offset: u32) -> Option<Ipv4Addr> {
-        if self.prefix >= 24 {
+        if self.prefix() >= 24 {
             return self.host_address_from_end(offset);
         }
 
-        let network = u32::from(self.network);
+        let network = u32::from(self.network_address());
         network
             .checked_add(255)
             .and_then(|end| end.checked_sub(offset))
@@ -117,20 +116,18 @@ impl Ipv4Cidr {
     /// The network and gateway addresses are excluded, as are the broadcast
     /// address and Maestro's fixed system allocation in the first `/24`.
     pub fn workload_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
-        let first = u32::from(self.network).saturating_add(2);
-        let end = u32::from(self.broadcast_address());
-        (first..end)
-            .map(Ipv4Addr::from)
+        self.network
+            .hosts()
             .filter(move |address| self.is_workload_address(*address))
     }
 
     /// Returns whether `address` belongs to the workload allocation range.
     pub fn is_workload_address(self, address: Ipv4Addr) -> bool {
         let address = u32::from(address);
-        let first = u32::from(self.network).saturating_add(2);
+        let first = u32::from(self.network_address()).saturating_add(2);
         let broadcast = u32::from(self.broadcast_address());
-        let system_end = if self.prefix < 24 {
-            u32::from(self.network).saturating_add(255)
+        let system_end = if self.prefix() < 24 {
+            u32::from(self.network_address()).saturating_add(255)
         } else {
             broadcast
         };
@@ -142,7 +139,7 @@ impl Ipv4Cidr {
 
     /// Returns whether the whole network is RFC 1918 private space.
     pub fn is_private(self) -> bool {
-        self.network.is_private() && self.broadcast_address().is_private()
+        self.network.network().is_private() && self.network.broadcast().is_private()
     }
 }
 
@@ -165,7 +162,7 @@ impl FromStr for Ipv4Cidr {
 
 impl Display for Ipv4Cidr {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}/{}", self.network, self.prefix)
+        Display::fmt(&self.network, formatter)
     }
 }
 
@@ -213,12 +210,4 @@ pub enum CidrError {
         /// Requested prefix.
         prefix: u8,
     },
-}
-
-fn prefix_mask(prefix: u8) -> u32 {
-    if prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix)
-    }
 }

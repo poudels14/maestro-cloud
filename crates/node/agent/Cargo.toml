@@ -13,6 +13,7 @@ hickory-server = { workspace = true, default-features = false }
 kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
+ipnet.workspace = true
 node-fabric = { version = "0.1.0", path = "../fabric" }
 reqwest = { workspace = true, default-features = false, features = ["rustls-tls"] }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }

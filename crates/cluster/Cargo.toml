@@ -15,6 +15,7 @@ hkdf.workspace = true
 hmac.workspace = true
 kernel-api = { path = "../kernel/api" }
 kernel-store = { version = "0.1.0", path = "../kernel/store" }
+ipnet.workspace = true
 nix = { workspace = true, features = ["signal", "process"] }
 rcgen = { workspace = true, features = ["pem", "x509-parser"] }
 serde.workspace = true

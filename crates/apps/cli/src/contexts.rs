@@ -317,8 +317,9 @@ fn parse_host_ip(host: &str) -> Option<IpAddr> {
 }
 
 fn is_tailscale_ipv4(address: std::net::Ipv4Addr) -> bool {
-    let [first, second, _, _] = address.octets();
-    first == 100 && second & 0b1100_0000 == 64
+    const TAILSCALE_CGNAT: ipnet::Ipv4Net =
+        ipnet::Ipv4Net::new_assert(std::net::Ipv4Addr::new(100, 64, 0, 0), 10);
+    TAILSCALE_CGNAT.contains(&address)
 }
 
 fn no_active_context() -> CliError {
