@@ -1,9 +1,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[cfg(any(test, all(feature = "containerd", target_os = "linux")))]
 use crate::RuntimeError;
 
 /// Node-local configuration for a native containerd runtime connection.
+///
+/// The configuration value is portable so launch documents can share its defaults; the native
+/// containerd runtime that consumes it remains Linux-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerdRuntimeSettings {
     /// Containerd gRPC Unix socket.
@@ -37,6 +41,7 @@ pub struct ContainerdRuntimeSettings {
 }
 
 impl ContainerdRuntimeSettings {
+    #[cfg(any(test, all(feature = "containerd", target_os = "linux")))]
     pub(crate) fn validate(&self) -> Result<(), RuntimeError> {
         if !self.socket.is_absolute() || !self.state_root.is_absolute() {
             return Err(RuntimeError::InvalidSpec {

@@ -40,7 +40,6 @@ mod containerd_network;
 mod containerd_network_linux;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_resolver;
-#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_settings;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_support;
@@ -111,7 +110,6 @@ pub use capabilities::{Capabilities, RuntimeCapability};
 pub use clock::{MonotonicTime, RuntimeClock, TokioRuntimeClock};
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 pub use containerd::ContainerdRuntime;
-#[cfg(all(feature = "containerd", target_os = "linux"))]
 pub use containerd_settings::ContainerdRuntimeSettings;
 #[cfg(all(feature = "docker", unix))]
 pub use docker::DockerRuntime;
