@@ -6,7 +6,7 @@ import { Ban, ShieldCheck, Trash2 } from "lucide-solid";
 import clsx from "clsx";
 import { Card, ErrorBanner, SectionHeader } from "@maestro/kit";
 import { StackedHistogramChart } from "@maestro/charts";
-import type { LogsApi } from "@maestro/logs";
+import { TRAEFIK_SERVICE_ID, type LogsApi } from "@maestro/logs";
 import type { IngressApi } from "./api";
 import {
   blockedIngressTrafficQuery,
@@ -49,7 +49,7 @@ function TrafficPage(props: { api: IngressApi; logsApi: LogsApi }) {
       const to = Date.now() + 1;
       const bucketMs = TIME_RANGES.find((range) => range.ms === rangeMs())?.bucketMs;
       return props.logsApi.getLogHistogram({
-        scope: { type: "system", component: "maestro-ingress" },
+        scope: { type: "service", serviceId: TRAEFIK_SERVICE_ID },
         from: to - rangeMs(),
         to,
         bucketMs: bucketMs ?? DEFAULT_TIME_RANGE.bucketMs,

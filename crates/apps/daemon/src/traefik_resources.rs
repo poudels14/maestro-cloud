@@ -11,7 +11,7 @@ use kernel_api::{
 use kernel_store::Keyspace;
 use runtime::{HostPortPublication, PortProtocol};
 
-pub(crate) const TRAEFIK_SERVICE_ID: &str = "maestro-system-traefik";
+pub(crate) use kernel_api::TRAEFIK_SERVICE_ID;
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 pub(crate) const TRAEFIK_DNS_ALIAS: &str = "web";
 pub(crate) const TRAEFIK_MANAGED_OWNER: &str = "traefik";

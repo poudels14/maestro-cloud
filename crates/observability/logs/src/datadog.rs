@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flate2::{Compression, write::GzEncoder};
+use kernel_api::{TAILSCALE_GATEWAY_SERVICE_ID, TRAEFIK_SERVICE_ID};
 use serde::Serialize;
 use url::{Host, Url};
 
@@ -14,8 +15,6 @@ use crate::{
 };
 
 const MAX_UNCOMPRESSED_BYTES: usize = 4_500_000;
-const INGRESS_COMPONENTS: &[&str] = &["ingress", "maestro-ingress"];
-const TAILSCALE_COMPONENTS: &[&str] = &["tailscale", "tailscaled", "maestro-tailscale"];
 
 /// Validated Datadog Logs intake configuration.
 ///
@@ -138,24 +137,17 @@ impl DatadogLogSink {
         }
         match &entry.origin {
             LogOrigin::Build { .. } => false,
-            LogOrigin::System { component, .. } => self.includes_system_component(component),
+            LogOrigin::System { .. } => false,
             LogOrigin::Workload { metadata } => {
                 self.includes_workload(metadata.service_id.as_str())
             }
         }
     }
 
-    fn includes_system_component(&self, component: &str) -> bool {
-        (INGRESS_COMPONENTS.contains(&component)
-            && self.settings.ingress_logs == LogSourceInclusion::Include)
-            || (TAILSCALE_COMPONENTS.contains(&component)
-                && self.settings.tailscale_logs == LogSourceInclusion::Include)
-    }
-
     fn includes_workload(&self, service_id: &str) -> bool {
-        if INGRESS_COMPONENTS.contains(&service_id) {
+        if service_id == TRAEFIK_SERVICE_ID {
             self.settings.ingress_logs == LogSourceInclusion::Include
-        } else if TAILSCALE_COMPONENTS.contains(&service_id) {
+        } else if service_id == TAILSCALE_GATEWAY_SERVICE_ID {
             self.settings.tailscale_logs == LogSourceInclusion::Include
         } else {
             true
@@ -417,7 +409,7 @@ fn body_text(body: &LogBody) -> String {
 }
 
 fn datadog_source(component: &str) -> &'static str {
-    if INGRESS_COMPONENTS.contains(&component) {
+    if component == TRAEFIK_SERVICE_ID {
         "traefik"
     } else {
         "maestro"

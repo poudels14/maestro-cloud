@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{ClusterId, NodeId, ServiceId, Timestamp};
+use kernel_api::{ClusterId, NodeId, ServiceId, TRAEFIK_SERVICE_ID, Timestamp};
 
 use crate::{
     InMemoryLogStore, IngestLogEntry, IngressTrafficBreakdown, IngressTrafficQuery,
@@ -25,8 +25,9 @@ async fn access_log_traffic_is_trusted_scoped_ranked_and_bucketed()
             403,
         ),
         access_entry(4, 10_004, "other-router@etcd", "203.0.113.3", "/b", 201),
+        access_entry(5, 10_005, "svc-router@etcd", "203.0.113.1", "/a", 200),
     ];
-    let mut spoof = access_entry(5, 10_005, "svc-router@etcd", "203.0.113.9", "/fake", 200);
+    let mut spoof = access_entry(6, 10_006, "svc-router@etcd", "203.0.113.9", "/fake", 200);
     spoof.origin = LogOrigin::Workload {
         metadata: runtime::WorkloadMetadata {
             cluster_id: ClusterId::new("cluster-1")?,
@@ -57,6 +58,7 @@ async fn access_log_traffic_is_trusted_scoped_ranked_and_bucketed()
     };
     assert_eq!(first_ip.value, "203.0.113.1");
     assert_eq!(first_ip.status_code, 200);
+    assert_eq!(first_ip.requests, 2);
     assert_eq!(second_ip.status_code, 500);
     assert!(
         cluster
@@ -94,11 +96,11 @@ async fn access_log_traffic_is_trusted_scoped_ranked_and_bucketed()
     let [success, failure] = service.as_slice() else {
         return Err("service traffic rows missing".into());
     };
-    assert_eq!(success.requests, 1);
-    assert_eq!(success.bytes_in, 10);
-    assert_eq!(success.bytes_out, 20);
-    assert_eq!(success.lat_le_1s, 1);
-    assert_eq!(success.lat_total, 1);
+    assert_eq!(success.requests, 2);
+    assert_eq!(success.bytes_in, 20);
+    assert_eq!(success.bytes_out, 40);
+    assert_eq!(success.lat_le_1s, 2);
+    assert_eq!(success.lat_total, 2);
     assert_eq!(failure.lat_le_1s, 0);
     assert_eq!(failure.lat_le_5s, 1);
     Ok(())
@@ -154,17 +156,29 @@ fn access_entry(
     IngestLogEntry {
         id: LogRecordId {
             node_id: NodeId::new("node-1").expect("node id"),
-            producer: LogProducer::System("maestro-ingress".to_owned()),
+            producer: LogProducer::Workload(
+                kernel_api::WorkloadId::new(format!("traefik-workload-{index}"))
+                    .expect("workload id"),
+            ),
             cursor: OriginCursor::new(format!("cursor-{index}")),
         },
         observed_at: Timestamp(at),
         event_at: Timestamp(at),
         severity: "info".to_owned(),
-        stream: LogStream::System,
-        origin: LogOrigin::System {
-            cluster_id: ClusterId::new("cluster-1").expect("cluster id"),
-            node_id: Some(NodeId::new("node-1").expect("node id")),
-            component: "maestro-ingress".to_owned(),
+        stream: LogStream::Stdout,
+        origin: LogOrigin::Workload {
+            metadata: runtime::WorkloadMetadata {
+                cluster_id: ClusterId::new("cluster-1").expect("cluster id"),
+                node_id: NodeId::new("node-1").expect("node id"),
+                service_id: ServiceId::new(TRAEFIK_SERVICE_ID).expect("service id"),
+                deployment_id: kernel_api::DeploymentId::new("traefik-deployment")
+                    .expect("deployment id"),
+                assignment_id: kernel_api::AssignmentId::new(format!("traefik-assignment-{index}"))
+                    .expect("assignment id"),
+                workload_id: kernel_api::WorkloadId::new(format!("traefik-workload-{index}"))
+                    .expect("workload id"),
+                labels: BTreeMap::new(),
+            },
         },
         body: LogBody::Text(String::new()),
         attributes: BTreeMap::from([

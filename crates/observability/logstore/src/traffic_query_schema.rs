@@ -234,8 +234,8 @@ fn access_source(
                 json_extract_string(entry_json, '$.attributes.Duration') AS duration_ns
          FROM ({}) AS stored_logs
          WHERE event_at_ms >= ? AND event_at_ms <= ?
-           AND json_extract_string(entry_json, '$.origin.type') = 'system'
-           AND json_extract_string(entry_json, '$.origin.component') IN ('ingress', 'maestro-ingress')
+           AND json_extract_string(entry_json, '$.origin.type') = 'workload'
+           AND json_extract_string(entry_json, '$.origin.metadata.serviceId') = ?
            AND json_extract_string(entry_json, '$.attributes.\"maestro.log_type\"') = 'ingress_access'
            AND router IS NOT NULL AND client_ip IS NOT NULL AND path IS NOT NULL
            AND method IS NOT NULL AND status_code BETWEEN 100 AND 599
@@ -246,6 +246,7 @@ fn access_source(
     values.extend([
         QueryValue::Integer(from),
         QueryValue::Integer(to),
+        QueryValue::Text(kernel_api::TRAEFIK_SERVICE_ID.to_owned()),
         QueryValue::Text(prefix.to_owned()),
     ]);
     Ok((sql, values))

@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use cluster::TailscaleAuthKeyRecord;
 use kernel_api::{
     ArtifactTemplate, ClusterId, ExecPolicy, FirewallPolicy, HealthProbe, NodeId, NodeInstanceId,
-    NodeRole, ReplicaSpread, ResourceKind, ResourceName, SecretValue, Service, Timestamp,
-    VolumeSource,
+    NodeRole, ReplicaSpread, ResourceKind, ResourceName, SecretValue, Service,
+    TAILSCALE_GATEWAY_SERVICE_ID, Timestamp, VolumeSource,
 };
 use kernel_controller::{
     ControllerError, FencedStore, LeaderIdentity, LeadershipToken, TimestampClock,
@@ -40,7 +40,7 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     assert_eq!(
         resources.system_host_access.service_id.as_str(),
-        "maestro-system-tailscale-gateway"
+        TAILSCALE_GATEWAY_SERVICE_ID
     );
     assert_eq!(
         resources.system_host_access.trusted_source_cidrs,

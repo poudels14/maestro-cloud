@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
+use kernel_api::{
+    AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, TAILSCALE_GATEWAY_SERVICE_ID,
+    Timestamp, WorkloadId,
+};
 use node_agent::{WorkloadLogEntry, WorkloadLogSink};
 use runtime::{LogCursor, LogSource, WorkloadMetadata};
 
@@ -43,7 +46,7 @@ async fn standard_pipeline_drops_tailscale_noise_before_persistence()
     let store = Arc::new(InMemoryLogStore::new());
     let pipeline = RuntimeLogPipeline::standard(store.clone());
     let mut noisy = workload_entry();
-    noisy.metadata.service_id = ServiceId::new("tailscale")?;
+    noisy.metadata.service_id = ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)?;
     noisy.payload = b"magicsock: disco key changed".to_vec();
 
     pipeline.ingest(noisy).await?;
@@ -51,7 +54,7 @@ async fn standard_pipeline_drops_tailscale_noise_before_persistence()
 
     let mut useful = workload_entry();
     useful.cursor = LogCursor::new("cursor-2");
-    useful.metadata.service_id = ServiceId::new("tailscale")?;
+    useful.metadata.service_id = ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)?;
     useful.payload = b"listening on 100.64.0.1".to_vec();
     pipeline.ingest(useful).await?;
     assert_eq!(store.entries()?.len(), 1);

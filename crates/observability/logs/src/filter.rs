@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use kernel_api::TAILSCALE_GATEWAY_SERVICE_ID;
 use runtime::HEALTHCHECK_PATH_LABEL;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -34,7 +35,6 @@ const HTTP_PATH_KEYS: &[&str] = &[
     "target",
     "RequestPath",
 ];
-const TAILSCALE_COMPONENTS: &[&str] = &["tailscale", "tailscaled", "maestro-tailscale"];
 const TAILSCALE_NOISE_PREFIXES: &[&str] = &[
     "magicsock:",
     "derphttp.Client.",
@@ -108,7 +108,7 @@ pub fn standard_ingest_filters() -> LogFilterChain {
     LogFilterChain::configured([LogFilterKind::TailscaleNoise])
 }
 
-/// Drops legacy high-volume Tailscale chatter only for known Tailscale origins.
+/// Drops high-volume chatter only from the managed Tailscale gateway workload.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TailscaleNoiseFilter;
 
@@ -160,12 +160,11 @@ impl LogFilter for SuccessfulHealthcheckFilter {
 }
 
 fn is_tailscale_origin(origin: &LogOrigin) -> bool {
-    let component = match origin {
-        LogOrigin::Workload { metadata } => metadata.service_id.as_str(),
-        LogOrigin::System { component, .. } => component,
-        LogOrigin::Build { .. } => return false,
-    };
-    TAILSCALE_COMPONENTS.contains(&component)
+    matches!(
+        origin,
+        LogOrigin::Workload { metadata }
+            if metadata.service_id.as_str() == TAILSCALE_GATEWAY_SERVICE_ID
+    )
 }
 
 fn text_body(entry: &IngestLogEntry) -> Option<&str> {

@@ -1,6 +1,6 @@
 import { For, Show, type JSX } from "solid-js";
 import { Dialog } from "@kobalte/core/dialog";
-import { LogViewer, type LogsApi } from "@maestro/logs";
+import { LogViewer, TRAEFIK_SERVICE_ID, type LogsApi } from "@maestro/logs";
 import { timeAgo } from "@maestro/kit";
 import { X } from "lucide-solid";
 import clsx from "clsx";
@@ -76,9 +76,9 @@ function TrafficIpSheet(props: {
                 <div class="flex-1 min-h-0 overflow-hidden">
                   <LogViewer
                     api={props.logsApi}
-                    serviceId="maestro-ingress"
+                    serviceId={TRAEFIK_SERVICE_ID}
                     deploymentId={null}
-                    isSystem
+                    isSystem={false}
                     phase="deploy"
                     embedded={true}
                     fillHeight

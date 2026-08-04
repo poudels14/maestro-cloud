@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use flate2::read::GzDecoder;
-use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
+use kernel_api::{
+    AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, TAILSCALE_GATEWAY_SERVICE_ID,
+    TRAEFIK_SERVICE_ID, Timestamp, WorkloadId,
+};
 use runtime::{HEALTHCHECK_PATH_LABEL, WorkloadMetadata};
 
 use crate::{
@@ -106,8 +109,8 @@ async fn datadog_origin_and_healthcheck_filters_are_counted_without_requests()
     ]);
     let entries = [
         health,
-        workload_entry(2, "ingress", "access"),
-        workload_entry(3, "tailscale", "connected"),
+        workload_entry(2, TRAEFIK_SERVICE_ID, "access"),
+        workload_entry(3, TAILSCALE_GATEWAY_SERVICE_ID, "connected"),
         system_entry(4, "daemon", "startup"),
     ];
 
@@ -126,12 +129,34 @@ async fn included_ingress_logs_use_the_traefik_source() -> Result<(), Box<dyn st
         Arc::new(InMemoryDeadLetterStore::default()),
     );
 
-    sink.send(&[workload_entry(1, "ingress", "access")]).await?;
+    sink.send(&[workload_entry(1, TRAEFIK_SERVICE_ID, "access")])
+        .await?;
     let requests = transport.requests()?;
     let payload = decode_json(&requests.first().ok_or("missing request")?.body)?;
     assert_eq!(
         payload.pointer("/0/ddsource"),
         Some(&serde_json::json!("traefik"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tailscale_log_inclusion_uses_the_managed_gateway_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(FakeHttpTransport::new([accepted()]));
+    let sink = make_sink(
+        settings()?.tailscale_logs(LogSourceInclusion::Include),
+        transport.clone(),
+        Arc::new(InMemoryDeadLetterStore::default()),
+    );
+
+    sink.send(&[workload_entry(1, TAILSCALE_GATEWAY_SERVICE_ID, "connected")])
+        .await?;
+    let requests = transport.requests()?;
+    let payload = decode_json(&requests.first().ok_or("missing request")?.body)?;
+    assert_eq!(
+        payload.pointer("/0/service"),
+        Some(&serde_json::json!(TAILSCALE_GATEWAY_SERVICE_ID))
     );
     Ok(())
 }

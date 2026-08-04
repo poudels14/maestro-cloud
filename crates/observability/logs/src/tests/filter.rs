@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
+use kernel_api::{
+    AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, TAILSCALE_GATEWAY_SERVICE_ID,
+    Timestamp, WorkloadId,
+};
 use runtime::{HEALTHCHECK_PATH_LABEL, WorkloadMetadata};
 
 use crate::{
@@ -9,7 +12,7 @@ use crate::{
 };
 
 #[test]
-fn tailscale_filter_drops_every_legacy_noise_prefix_only_for_tailscale_origins() {
+fn tailscale_filter_drops_noise_only_for_the_managed_gateway() {
     let filters = LogFilterChain::configured([LogFilterKind::TailscaleNoise]);
     let prefixes = [
         "magicsock: disco key changed",
@@ -23,11 +26,16 @@ fn tailscale_filter_drops_every_legacy_noise_prefix_only_for_tailscale_origins()
     ];
 
     for body in prefixes {
-        let entry = workload_entry("tailscale", body, BTreeMap::new(), BTreeMap::new());
+        let entry = workload_entry(
+            TAILSCALE_GATEWAY_SERVICE_ID,
+            body,
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
         assert_eq!(filters.dropped_by(&entry), Some("tailscaleNoise"));
     }
     let useful = workload_entry(
-        "tailscale",
+        TAILSCALE_GATEWAY_SERVICE_ID,
         "listening on 100.64.0.1",
         BTreeMap::new(),
         BTreeMap::new(),

@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ClusterId, DnsRecord, DnsRecordId, DnsRecordSpec, DnsRecordStatus, DnsRecordValue, Generation,
-    ObjectMeta, ResourceRevision,
+    ObjectMeta, ResourceRevision, TAILSCALE_GATEWAY_SERVICE_ID,
 };
 
 use crate::dns_plugin::TailscaleDnsResolverPlugin;
@@ -54,7 +54,7 @@ async fn plugin_forwards_only_declared_remote_cluster_suffixes()
     let base = AuthoritativeDnsResolver::new()?;
     base.replace(&[record(
         "gateway",
-        "maestro-system-tailscale-gateway.local.maestro.internal.",
+        &format!("{TAILSCALE_GATEWAY_SERVICE_ID}.local.maestro.internal."),
         Ipv4Addr::new(172, 22, 1, 8),
     )])
     .await?;

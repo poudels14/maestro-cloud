@@ -18,6 +18,7 @@ mod resource;
 mod schema;
 mod secret;
 mod service_validation;
+mod system_service;
 mod value_source;
 mod workload;
 
@@ -78,6 +79,10 @@ pub use schema::{
 };
 pub use secret::{MaskedSecret, SecretValue};
 pub use service_validation::ServiceSpecError;
+pub use system_service::{
+    CLOUDFLARE_SERVICE_ID, DNS_RESOLVER_SERVICE_ID, TAILSCALE_GATEWAY_SERVICE_ID,
+    TRAEFIK_SERVICE_ID,
+};
 pub use value_source::{ExternalValueSource, InvalidExternalValueSource};
 pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus,

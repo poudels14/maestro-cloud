@@ -8,7 +8,7 @@ use kernel_api::{
     ServiceStatus, WorkloadUserSpec,
 };
 
-pub(crate) const CLOUDFLARE_SERVICE_ID: &str = "maestro-system-cloudflared";
+pub(crate) use kernel_api::CLOUDFLARE_SERVICE_ID;
 pub(crate) const CLOUDFLARE_MANAGED_OWNER: &str = "cloudflare-tunnel";
 pub(crate) const CLOUDFLARE_IMAGE: &str = "cloudflare/cloudflared:2026.7.2@sha256:4f6655284ab3d252b7f28fedb19fe6c8fc82ee5b1295c20ac74d475e5398a52d";
 const CLOUDFLARE_VERSION: &str = "cloudflared-2026.7.2";

@@ -14,4 +14,5 @@ export { ClusterLogsPage } from "./ClusterLogsPage";
 export type { ClusterLogsLoaders, ClusterLogsNode, ClusterLogsService } from "./ClusterLogsPage";
 export { createLogsFeature } from "./manifest";
 export { HttpLogsPage } from "./HttpLogsPage";
+export { TRAEFIK_SERVICE_ID } from "./ingress";
 export { LogViewer } from "./LogViewer";

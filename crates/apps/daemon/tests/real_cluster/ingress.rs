@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use kernel_api::{
     Assignment, AssignmentPhase, Deployment, DeploymentPhase, NodeId, ReplicaState, Service,
-    assignment_workload_address,
+    TRAEFIK_SERVICE_ID, assignment_workload_address,
 };
 
 use super::workload::list_resources;
@@ -57,7 +57,7 @@ impl RealProcessCluster {
                     &replicas,
                 );
                 let traefik = ready_service_addresses(
-                    "maestro-system-traefik",
+                    TRAEFIK_SERVICE_ID,
                     &services,
                     &deployments,
                     &assignments,

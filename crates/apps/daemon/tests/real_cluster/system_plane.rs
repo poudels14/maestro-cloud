@@ -6,7 +6,7 @@ use clustertest::ClusterSetupCluster;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use kernel_api::{
     Assignment, AssignmentPhase, ClusterInfo, Deployment, DeploymentPhase, Generation, NodeId,
-    ReplicaState, Service,
+    ReplicaState, Service, TAILSCALE_GATEWAY_SERVICE_ID, TRAEFIK_SERVICE_ID,
 };
 use kernel_controller::LeaderIdentity;
 use kernel_store::{Keyspace, Store};
@@ -101,7 +101,7 @@ impl RealProcessCluster {
                         .map_err(RealClusterError::from_display)?;
                 if let Some(service) = services
                     .iter()
-                    .find(|service| service.meta.id.as_str() == "maestro-system-traefik")
+                    .find(|service| service.meta.id.as_str() == TRAEFIK_SERVICE_ID)
                 {
                     let deployments = list_resources::<Deployment>(
                         &store,
@@ -416,7 +416,7 @@ impl RealProcessCluster {
                 .await
                 .map_err(RealClusterError::from_display)?;
         for assignment in assignments.iter().filter(|assignment| {
-            assignment.spec.service_id.as_str() == "maestro-system-tailscale-gateway"
+            assignment.spec.service_id.as_str() == TAILSCALE_GATEWAY_SERVICE_ID
                 && assignment.status.phase == AssignmentPhase::Running
         }) {
             let Some(workload_id) = assignment.status.workload_id.as_ref() else {

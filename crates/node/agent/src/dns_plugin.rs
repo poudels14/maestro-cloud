@@ -4,14 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kernel_api::ClusterId;
+use kernel_api::{ClusterId, TAILSCALE_GATEWAY_SERVICE_ID};
 
 use crate::dns_socks::{DnsForwardClient, Socks5DnsForwardClient};
 use crate::{DnsLookup, DnsQueryType, DnsZoneReader, MAESTRO_DNS_ZONE};
 
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
 const REMOTE_DNS_PORT: u16 = 53;
-const GATEWAY_SERVICE_ID: &str = "maestro-system-tailscale-gateway";
 
 /// Optional lookup boundary invoked only after the local authoritative zone misses a name.
 #[async_trait]
@@ -153,7 +152,7 @@ impl TailscaleDnsResolverPlugin {
 }
 
 fn gateway_name(local_cluster_id: &ClusterId) -> String {
-    format!("{GATEWAY_SERVICE_ID}.{local_cluster_id}.{MAESTRO_DNS_ZONE}")
+    format!("{TAILSCALE_GATEWAY_SERVICE_ID}.{local_cluster_id}.{MAESTRO_DNS_ZONE}")
 }
 
 fn validate_routes(

@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { mergeDefinedProperties } from "@maestro/sdk";
 import type { LogsApi } from "./api";
+import { TRAEFIK_SERVICE_ID } from "./ingress";
 import { LogViewer } from "./LogViewer";
 
 const INGRESS_ACCESS_LOG_QUERY = "@maestro.log_type:ingress_access OR @RequestMethod:*";
@@ -25,9 +26,9 @@ function HttpLogsPage(props: { api: LogsApi }) {
       <div class="min-h-0 flex-1">
         <LogViewer
           api={props.api}
-          serviceId="maestro-ingress"
+          serviceId={TRAEFIK_SERVICE_ID}
           deploymentId={null}
-          isSystem
+          isSystem={false}
           phase="deploy"
           showHistogram
           histogramGroupBy="status"

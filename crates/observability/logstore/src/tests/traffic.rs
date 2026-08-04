@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use kernel_api::{AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, Timestamp, WorkloadId};
+use kernel_api::{
+    AssignmentId, ClusterId, DeploymentId, NodeId, ServiceId, TRAEFIK_SERVICE_ID, Timestamp,
+    WorkloadId,
+};
 use logs::{
     IngestLogEntry, IngressTrafficQuery, IngressTrafficScope, LogBody, LogOrigin, LogProducer,
     LogRecordId, LogStore, LogStream, OriginCursor, ServiceTrafficQuery, TrafficQueryStore,
@@ -202,17 +205,23 @@ fn access_entry(
     Ok(IngestLogEntry {
         id: LogRecordId {
             node_id: node_id.clone(),
-            producer: LogProducer::System("maestro-ingress".to_owned()),
+            producer: LogProducer::Workload(WorkloadId::new(format!("traefik-workload-{index}"))?),
             cursor: OriginCursor::new(index.to_string()),
         },
         observed_at: Timestamp(event_at),
         event_at: Timestamp(event_at),
         severity: "info".to_owned(),
-        stream: LogStream::System,
-        origin: LogOrigin::System {
-            cluster_id: ClusterId::new("cluster-one")?,
-            node_id: Some(node_id),
-            component: "maestro-ingress".to_owned(),
+        stream: LogStream::Stdout,
+        origin: LogOrigin::Workload {
+            metadata: WorkloadMetadata {
+                cluster_id: ClusterId::new("cluster-one")?,
+                node_id,
+                service_id: ServiceId::new(TRAEFIK_SERVICE_ID)?,
+                deployment_id: DeploymentId::new("traefik-v1")?,
+                assignment_id: AssignmentId::new(format!("traefik-assignment-{index}"))?,
+                workload_id: WorkloadId::new(format!("traefik-workload-{index}"))?,
+                labels: BTreeMap::new(),
+            },
         },
         body: LogBody::Text(String::new()),
         attributes: BTreeMap::from([

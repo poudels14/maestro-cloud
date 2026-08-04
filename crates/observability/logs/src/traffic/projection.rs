@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use kernel_api::TRAEFIK_SERVICE_ID;
+
 use super::{
     IngressTrafficBreakdown, IngressTrafficQuery, ServiceTrafficQuery, TRAFFIC_BUCKET_MS,
     TrafficBreakdownEntry, TrafficMetricPoint,
@@ -128,13 +130,12 @@ struct IngressTrafficEvent {
 }
 
 fn ingress_traffic_event(entry: &IngestLogEntry) -> Option<IngressTrafficEvent> {
-    let component = match &entry.origin {
-        LogOrigin::System { component, .. } => component.as_str(),
-        LogOrigin::Workload { .. } | LogOrigin::Build { .. } => return None,
-    };
-    if !matches!(component, "ingress" | "maestro-ingress")
-        || attribute(entry, "maestro.log_type") != Some("ingress_access")
-    {
+    let trusted_origin = matches!(
+        &entry.origin,
+        LogOrigin::Workload { metadata }
+            if metadata.service_id.as_str() == TRAEFIK_SERVICE_ID
+    );
+    if !trusted_origin || attribute(entry, "maestro.log_type") != Some("ingress_access") {
         return None;
     }
     let router = attribute(entry, "RouterName")?.to_owned();

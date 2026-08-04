@@ -6,10 +6,9 @@ use kernel_api::{
     AnnotationKey, ArtifactTemplate, CommandSpec, ExecPolicy, Generation, HealthCheckSpec,
     HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ReplicaSpread,
     ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec,
-    ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource,
+    ServiceStatus, TAILSCALE_GATEWAY_SERVICE_ID, VolumeAccess, VolumeMountSpec, VolumeSource,
 };
 
-const GATEWAY_SERVICE_ID: &str = "maestro-system-tailscale-gateway";
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "tailscale-gateway";
 const TAILSCALE_SOCKS_PORT: u16 = 1_055;
@@ -103,7 +102,7 @@ impl TailscaleSystemResources {
         let Some(config) = &cluster.tailscale else {
             return Ok(None);
         };
-        let service_id = ServiceId::new(GATEWAY_SERVICE_ID)?;
+        let service_id = ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)?;
         let workload_subnets = cluster
             .nodes
             .values()
@@ -266,7 +265,7 @@ pub(crate) fn is_managed(annotations: &BTreeMap<AnnotationKey, String>) -> bool 
 }
 
 pub(crate) fn resource_id() -> Result<ServiceId, kernel_api::InvalidIdentifier> {
-    ServiceId::new(GATEWAY_SERVICE_ID)
+    ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)
 }
 
 fn managed_annotation() -> AnnotationKey {

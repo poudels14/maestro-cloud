@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use kernel_api::{
-    BuiltinKind, ClusterId, IngressBlocklist, IngressBlocklistId, NodeId, ResourceKind,
-    SecretValue, ServiceId, Timestamp,
+    AssignmentId, BuiltinKind, ClusterId, DeploymentId, IngressBlocklist, IngressBlocklistId,
+    NodeId, ResourceKind, SecretValue, ServiceId, TRAEFIK_SERVICE_ID, Timestamp, WorkloadId,
 };
 use kernel_store::{Keyspace, Store};
 use logs::{
@@ -15,6 +15,7 @@ use logs::{
     NodeTrafficQueryStore, OriginCursor, ServiceTrafficQuery, TrafficMetricPoint,
     TrafficQueryError, TrafficQueryStore,
 };
+use runtime::WorkloadMetadata;
 use tower::ServiceExt;
 
 use super::{decode, request, seeded_store, token};
@@ -371,20 +372,27 @@ fn access_entry(
     status: u16,
     bytes_in: i64,
 ) -> Result<IngestLogEntry, kernel_api::InvalidIdentifier> {
+    let workload_id = WorkloadId::new(format!("traefik-workload-{index}"))?;
     Ok(IngestLogEntry {
         id: LogRecordId {
             node_id: node_id.clone(),
-            producer: LogProducer::System("maestro-ingress".to_owned()),
+            producer: LogProducer::Workload(workload_id.clone()),
             cursor: OriginCursor::new(index.to_string()),
         },
         observed_at: Timestamp(event_at),
         event_at: Timestamp(event_at),
         severity: "info".to_owned(),
-        stream: LogStream::System,
-        origin: LogOrigin::System {
-            cluster_id: cluster_id.clone(),
-            node_id: Some(node_id.clone()),
-            component: "maestro-ingress".to_owned(),
+        stream: LogStream::Stdout,
+        origin: LogOrigin::Workload {
+            metadata: WorkloadMetadata {
+                cluster_id: cluster_id.clone(),
+                node_id: node_id.clone(),
+                service_id: ServiceId::new(TRAEFIK_SERVICE_ID)?,
+                deployment_id: DeploymentId::new("traefik-v1")?,
+                assignment_id: AssignmentId::new(format!("traefik-assignment-{index}"))?,
+                workload_id,
+                labels: BTreeMap::new(),
+            },
         },
         body: LogBody::Text(String::new()),
         attributes: BTreeMap::from([

@@ -14,7 +14,7 @@ use kernel_api::{
 #[cfg(any(target_os = "macos", feature = "macos-platform", test))]
 use semver::Version;
 
-pub(crate) const DNS_RESOLVER_SERVICE_ID: &str = "maestro-system-dns";
+pub(crate) use kernel_api::DNS_RESOLVER_SERVICE_ID;
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
 const MANAGED_VALUE: &str = "dns-resolver";
 #[cfg(any(target_os = "macos", feature = "macos-platform", test))]

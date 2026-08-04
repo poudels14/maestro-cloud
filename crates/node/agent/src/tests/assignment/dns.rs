@@ -1,14 +1,12 @@
 use super::*;
 
-use kernel_api::WorkloadId;
-
-const RESOLVER_SERVICE_ID: &str = "maestro-system-dns";
+use kernel_api::{DNS_RESOLVER_SERVICE_ID, WorkloadId};
 
 #[tokio::test]
 async fn delegated_dns_starts_the_resolver_before_injecting_its_address()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
-    let resolver_service_id = ServiceId::new(RESOLVER_SERVICE_ID)?;
+    let resolver_service_id = ServiceId::new(DNS_RESOLVER_SERVICE_ID)?;
     let resolver_deployment = resolver_deployment(DeploymentPhase::Ready);
     let resolver_assignment = resolver_assignment();
     let application_deployment = deployment();
@@ -74,7 +72,7 @@ async fn delegated_dns_starts_the_resolver_before_injecting_its_address()
 async fn delegated_dns_defers_applications_until_the_resolver_is_ready()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
-    let resolver_service_id = ServiceId::new(RESOLVER_SERVICE_ID)?;
+    let resolver_service_id = ServiceId::new(DNS_RESOLVER_SERVICE_ID)?;
     let resolver_deployment = resolver_deployment(DeploymentPhase::PendingReady);
     let resolver_assignment = resolver_assignment();
     let application_deployment = deployment();
@@ -141,7 +139,7 @@ fn delegated_dns_agent(world: &World, resolver_service_id: ServiceId) -> Assignm
 fn resolver_deployment(phase: DeploymentPhase) -> Deployment {
     let mut deployment = deployment();
     deployment.meta.id = DeploymentId::new("maestro-system-dns-deployment").unwrap();
-    deployment.spec.service_id = ServiceId::new(RESOLVER_SERVICE_ID).unwrap();
+    deployment.spec.service_id = ServiceId::new(DNS_RESOLVER_SERVICE_ID).unwrap();
     deployment.spec.service.name = "Maestro DNS".to_owned();
     deployment.status.phase = phase;
     deployment
@@ -150,7 +148,7 @@ fn resolver_deployment(phase: DeploymentPhase) -> Deployment {
 fn resolver_assignment() -> Assignment {
     let mut assignment = assignment();
     assignment.meta.id = AssignmentId::new("maestro-system-dns-assignment").unwrap();
-    assignment.spec.service_id = ServiceId::new(RESOLVER_SERVICE_ID).unwrap();
+    assignment.spec.service_id = ServiceId::new(DNS_RESOLVER_SERVICE_ID).unwrap();
     assignment.spec.deployment_id = DeploymentId::new("maestro-system-dns-deployment").unwrap();
     assignment.spec.workload_address = None;
     assignment
