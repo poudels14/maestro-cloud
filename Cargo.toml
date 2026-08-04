@@ -101,6 +101,7 @@ thiserror = "=2.0.18"
 time = "=0.3.53"
 tokio = { version = "=1.52.3", features = ["macros", "rt"] }
 tokio-stream = "=0.1.18"
+tokio-socks = "=0.5.3"
 tokio-test = "=0.4.5"
 tokio-tungstenite = { version = "=0.30.0", default-features = false }
 tokio-util = { version = "=0.7.18", features = ["io", "io-util"] }
