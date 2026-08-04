@@ -244,6 +244,7 @@ pub(super) fn build(
             phase: BuildPhase::Succeeded,
             image_digest: Some("registry.test/api@sha256:abc".to_string()),
             source_revision: Some("abc123".to_string()),
+            source_title: Some("Ship the API".to_string()),
             conditions: Vec::new(),
         },
     })

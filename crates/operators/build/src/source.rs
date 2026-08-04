@@ -9,6 +9,8 @@ pub struct PreparedBuildSource {
     pub artifact_source: ArtifactSource,
     /// Immutable source identity resolved by the source backend.
     pub revision: String,
+    /// Git commit subject, when the prepared source is Git.
+    pub title: Option<String>,
 }
 
 /// Matchable source preparation failure.

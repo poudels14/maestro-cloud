@@ -75,6 +75,7 @@ pub(crate) fn new_deployment(
             ready_at: None,
             draining_at: None,
             image_digest: None,
+            git_commit: None,
             conditions: Vec::new(),
         },
     })
@@ -118,6 +119,7 @@ pub(crate) fn new_build(
             phase: BuildPhase::Queued,
             image_digest: None,
             source_revision: None,
+            source_title: None,
             conditions: Vec::new(),
         },
     })

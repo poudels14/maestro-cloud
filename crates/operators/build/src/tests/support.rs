@@ -233,6 +233,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
             phase: BuildPhase::Queued,
             image_digest: None,
             source_revision: None,
+            source_title: None,
             conditions: Vec::new(),
         },
     })
@@ -310,6 +311,7 @@ pub(super) fn prepared(revision: &str) -> PreparedBuildSource {
             definition: PathBuf::new(),
         },
         revision: revision.to_string(),
+        title: Some("Ship the API".to_string()),
     }
 }
 

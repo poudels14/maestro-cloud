@@ -32,6 +32,7 @@ async fn git_source_clones_fetches_pins_and_resets_with_header_auth() -> TestRes
         .prepare(&build_id, &source, None, Some(&github_token))
         .await?;
     assert_eq!(prepared.revision, TEST_REVISION);
+    assert_eq!(prepared.title.as_deref(), Some(TEST_TITLE));
     assert_eq!(
         prepared.artifact_source,
         ArtifactSource::Directory {
@@ -52,9 +53,11 @@ async fn git_source_clones_fetches_pins_and_resets_with_header_auth() -> TestRes
             "rev-parse",
             "reset",
             "clean",
+            "show",
             "cat-file",
             "reset",
-            "clean"
+            "clean",
+            "show"
         ]
     );
     assert!(
@@ -328,6 +331,7 @@ fn assert_environment(invocation: &GitInvocation) -> TestResult {
 }
 
 const TEST_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+const TEST_TITLE: &str = "Ship the API";
 
 #[derive(Clone, Copy)]
 enum FakeGitMode {
@@ -380,6 +384,8 @@ impl GitRunner for FakeGitRunner {
             format!("{TEST_REVISION}\n")
         } else if command(&invocation) == Some("ls-remote") {
             format!("{TEST_REVISION}\trefs/heads/main\n")
+        } else if command(&invocation) == Some("show") {
+            format!("{TEST_TITLE}\n")
         } else {
             String::new()
         };

@@ -102,6 +102,7 @@ impl BuildSourceProvider for FakeBuildBackend {
                 definition: PathBuf::new(),
             },
             revision,
+            title: Some("Ship the API".to_string()),
         })
     }
 

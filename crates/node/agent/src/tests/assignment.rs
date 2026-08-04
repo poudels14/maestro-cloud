@@ -607,6 +607,7 @@ pub(crate) fn deployment() -> Deployment {
                 "registry.test/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_owned(),
             ),
+            git_commit: None,
             conditions: Vec::new(),
         },
     }

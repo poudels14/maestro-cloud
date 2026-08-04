@@ -1475,6 +1475,8 @@ export interface components {
             phase: components["schemas"]["BuildPhase"];
             /** @description Source revision resolved by the build backend. */
             sourceRevision?: string | null;
+            /** @description Git commit title resolved with `source_revision`, when the source is Git. */
+            sourceTitle?: string | null;
         };
         /** @description Source and build environment applied to each generated build resource. */
         BuildTemplate: {
@@ -1661,6 +1663,8 @@ export interface components {
             createdAt: components["schemas"]["Timestamp"];
             /** @description Time draining began. */
             drainingAt?: components["schemas"]["Timestamp"] | (null);
+            /** @description Exact Git commit used by this deployment, when its build source is Git. */
+            gitCommit?: components["schemas"]["GitCommit"] | (null);
             /** @description Immutable image digest selected or produced for workloads. */
             imageDigest?: string | null;
             /** @description Current lifecycle phase. */
@@ -1839,6 +1843,13 @@ export interface components {
          * @description Monotonic desired-state generation assigned when a resource specification changes.
          */
         Generation: number;
+        /** @description Immutable Git commit selected for a deployment. */
+        GitCommit: {
+            /** @description Full commit object identifier. */
+            revision: string;
+            /** @description First line of the commit message. */
+            title: string;
+        };
         /** @description Timing and failure policy for a workload health probe. */
         HealthCheckSpec: {
             /**

@@ -11,7 +11,7 @@ use crate::{
 mod build;
 mod placement;
 
-pub use build::{Build, BuildPhase, BuildSpec, BuildStatus};
+pub use build::{Build, BuildPhase, BuildSpec, BuildStatus, GitCommit};
 pub use placement::{
     Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, PlacementHistory,
     PlacementHistorySpec, PlacementHistoryStatus, ReplicaState, ReplicaStateSpec,
@@ -531,6 +531,9 @@ pub struct DeploymentStatus {
     /// Immutable image digest selected or produced for workloads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_digest: Option<String>,
+    /// Exact Git commit used by this deployment, when its build source is Git.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_commit: Option<GitCommit>,
     /// Generic lifecycle and availability evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

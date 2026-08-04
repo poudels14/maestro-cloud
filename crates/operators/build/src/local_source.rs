@@ -124,12 +124,22 @@ impl LocalBuildSourceProvider {
         .await?;
         self.run_local(GitInvocation::new(["clean", "-ffd", "--"]).in_directory(workspace.clone()))
             .await?;
+        let title = self
+            .run_local(
+                GitInvocation::new(["show", "-s", "--format=%s", revision.as_str(), "--"])
+                    .in_directory(workspace.clone()),
+            )
+            .await?
+            .stdout
+            .trim_end()
+            .to_string();
         Ok(PreparedBuildSource {
             artifact_source: ArtifactSource::Directory {
                 root: workspace,
                 definition: PathBuf::new(),
             },
             revision,
+            title: Some(title),
         })
     }
 
@@ -202,6 +212,7 @@ impl LocalBuildSourceProvider {
                 definition: PathBuf::new(),
             },
             revision,
+            title: None,
         })
     }
 

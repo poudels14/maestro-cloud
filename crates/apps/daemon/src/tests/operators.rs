@@ -426,6 +426,7 @@ fn queued_build() -> Result<Build, kernel_api::InvalidIdentifier> {
             phase: BuildPhase::Queued,
             image_digest: None,
             source_revision: None,
+            source_title: None,
             conditions: Vec::new(),
         },
     })

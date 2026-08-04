@@ -288,6 +288,7 @@ fn deployment(phase: DeploymentPhase) -> Result<Deployment, kernel_api::InvalidI
             ready_at: None,
             draining_at: None,
             image_digest: None,
+            git_commit: None,
             conditions: Vec::new(),
         },
     })

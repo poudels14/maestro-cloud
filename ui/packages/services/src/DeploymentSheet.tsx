@@ -6,7 +6,7 @@ import { useQuery } from "@maestro/sdk";
 import { ErrorBanner, formatDateTime, StatusBadge, timeAgo } from "@maestro/kit";
 import { LogViewer, type LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
-import { replicaFailure } from "./deploymentView";
+import { deploymentGitRevision, deploymentTitle, replicaFailure } from "./deploymentView";
 import { deploymentReplicasQuery } from "./queries";
 import { secretNames } from "./secretView";
 import type { Deployment } from "./types";
@@ -35,12 +35,8 @@ function DeploymentSheet(props: {
           <Show when={props.deployment}>
             {(selected) => {
               const deployment = selected();
-              const shortId = deployment.meta.id.split("-").at(-1) ?? deployment.meta.id;
               const artifact = deployment.spec.service.artifact;
-              const sourceRevision =
-                artifact.type === "build" && artifact.source.type === "git"
-                  ? artifact.source.revision
-                  : null;
+              const sourceRevision = deploymentGitRevision(deployment);
               const hasBuild = artifact.type === "build";
               return (
                 <>
@@ -48,7 +44,7 @@ function DeploymentSheet(props: {
                     <div class="flex items-start justify-between gap-3 mb-3">
                       <div class="min-w-0 flex-1">
                         <div class="text-xl font-semibold text-gray-900 leading-snug tracking-tight">
-                          {shortId}
+                          {deploymentTitle(deployment)}
                         </div>
                         <div class="flex items-center gap-2 flex-wrap text-xs mt-1.5">
                           <StatusBadge status={deployment.status.phase} />

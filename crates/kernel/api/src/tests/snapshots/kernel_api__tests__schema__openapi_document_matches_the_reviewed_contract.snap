@@ -1,6 +1,5 @@
 ---
 source: crates/kernel/api/src/tests/schema.rs
-assertion_line: 43
 expression: document
 ---
 {
@@ -472,6 +471,11 @@ expression: document
           },
           "sourceRevision": {
             "description": "Source revision resolved by the build backend.",
+            "nullable": true,
+            "type": "string"
+          },
+          "sourceTitle": {
+            "description": "Git commit title resolved with `source_revision`, when the source is Git.",
             "nullable": true,
             "type": "string"
           }
@@ -1011,6 +1015,20 @@ expression: document
             ],
             "description": "Time draining began."
           },
+          "gitCommit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitCommit"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Exact Git commit used by this deployment, when its build source is Git."
+          },
           "imageDigest": {
             "description": "Immutable image digest selected or produced for workloads.",
             "nullable": true,
@@ -1500,6 +1518,24 @@ expression: document
         "format": "uint64",
         "minimum": 0,
         "type": "integer"
+      },
+      "GitCommit": {
+        "description": "Immutable Git commit selected for a deployment.",
+        "properties": {
+          "revision": {
+            "description": "Full commit object identifier.",
+            "type": "string"
+          },
+          "title": {
+            "description": "First line of the commit message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "title"
+        ],
+        "type": "object"
       },
       "HealthCheckSpec": {
         "description": "Timing and failure policy for a workload health probe.",

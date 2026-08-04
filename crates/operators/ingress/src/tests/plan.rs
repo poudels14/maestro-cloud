@@ -363,6 +363,7 @@ impl World {
                 ready_at: Some(Timestamp(2_000)),
                 draining_at: None,
                 image_digest: None,
+                git_commit: None,
                 conditions: Vec::new(),
             },
         };

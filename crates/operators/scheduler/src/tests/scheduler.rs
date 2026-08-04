@@ -461,6 +461,7 @@ fn deployment() -> Deployment {
             ready_at: None,
             draining_at: None,
             image_digest: Some("registry.test/api@sha256:abc".to_owned()),
+            git_commit: None,
             conditions: Vec::new(),
         },
     }

@@ -188,6 +188,7 @@ pub(super) fn fixture(
             ready_at: None,
             draining_at: None,
             image_digest: None,
+            git_commit: None,
             conditions: Vec::new(),
         },
     };
@@ -209,6 +210,7 @@ pub(super) fn fixture(
             },
             image_digest: source_revision.map(|_| "sha256:image".to_string()),
             source_revision: source_revision.map(str::to_string),
+            source_title: None,
             conditions: Vec::new(),
         },
     };

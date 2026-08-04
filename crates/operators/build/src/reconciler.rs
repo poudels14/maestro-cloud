@@ -108,6 +108,7 @@ impl BuildReconciler {
                 build.status.phase = BuildPhase::Preparing;
                 build.status.image_digest = None;
                 build.status.source_revision = None;
+                build.status.source_title = None;
                 self.set_condition(
                     &mut build,
                     ConditionState::False,
@@ -169,6 +170,7 @@ impl BuildReconciler {
                 }
                 build.status.phase = BuildPhase::Building;
                 build.status.source_revision = Some(prepared.revision);
+                build.status.source_title = prepared.title;
                 self.set_condition(
                     &mut build,
                     ConditionState::False,

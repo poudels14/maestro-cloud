@@ -115,6 +115,7 @@ pub(super) fn deployment_generation(
             ready_at: (phase == DeploymentPhase::Ready).then_some(Timestamp(1_000)),
             draining_at: None,
             image_digest: None,
+            git_commit: None,
             conditions: Vec::new(),
         },
     }

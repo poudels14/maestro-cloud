@@ -5,7 +5,7 @@ import { useQuery } from "@maestro/sdk";
 import { STATUS_COLORS, StatusBadge, StatusDot } from "@maestro/kit";
 import type { ServicesApi } from "./api";
 import type { Deployment, ReplicaState } from "./types";
-import { replicaDisplayName } from "./deploymentView";
+import { deploymentGitRevision, deploymentTitle, replicaDisplayName } from "./deploymentView";
 import { deploymentReplicasQuery } from "./queries";
 import { formatDateTime } from "@maestro/kit";
 import { DeploymentMenu } from "./DeploymentMenu";
@@ -26,14 +26,8 @@ type Props = {
 };
 
 function DeploymentRow(props: Props) {
-  const shortId = () => props.deployment.meta.id.split("-").at(-1) ?? props.deployment.meta.id;
   const phase = () => props.deployment.status.phase;
-  const sourceRevision = () => {
-    const artifact = props.deployment.spec.service.artifact;
-    return artifact.type === "build" && artifact.source.type === "git"
-      ? artifact.source.revision
-      : null;
-  };
+  const sourceRevision = () => deploymentGitRevision(props.deployment);
   const isLive = () => ["BUILDING", "PENDING_READY", "READY"].includes(phase());
   const replicas = useQuery(() => ({
     ...deploymentReplicasQuery(props.api, props.deployment),
@@ -64,7 +58,9 @@ function DeploymentRow(props: Props) {
         </div>
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2 min-w-0">
-            <span class="text-sm font-medium text-gray-800 truncate">{shortId()}</span>
+            <span class="text-sm font-medium text-gray-800 truncate">
+              {deploymentTitle(props.deployment)}
+            </span>
           </div>
           <div class="mt-0.5 flex items-center gap-4 flex-wrap text-[11px] text-gray-400">
             <Show when={sourceRevision()}>

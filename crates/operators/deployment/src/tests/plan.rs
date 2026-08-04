@@ -332,6 +332,7 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
             phase: BuildPhase::Succeeded,
             image_digest: Some("registry.test/api@sha256:abc".to_string()),
             source_revision: Some("abc".to_string()),
+            source_title: Some("Ship the API".to_string()),
             conditions: Vec::new(),
         },
     };
@@ -341,6 +342,13 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
     assert_eq!(
         waiting.deployment_updates[0].status.image_digest.as_deref(),
         Some("registry.test/api@sha256:abc")
+    );
+    assert_eq!(
+        waiting.deployment_updates[0].status.git_commit,
+        Some(kernel_api::GitCommit {
+            revision: "abc".to_string(),
+            title: "Ship the API".to_string(),
+        })
     );
     assert_eq!(
         waiting.deployment_updates[0].status.phase,

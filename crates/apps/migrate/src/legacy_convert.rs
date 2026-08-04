@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use kernel_api::{
     AnnotationKey, ArtifactTemplate, BUILD_WATCH_REVISION_ANNOTATION, Build, BuildId, BuildPhase,
     BuildSpec, BuildStatus, BuiltinResource, Deployment, DeploymentGoal, DeploymentId,
-    DeploymentPhase, DeploymentSpec, DeploymentStatus, Generation, Object, ObjectMeta,
+    DeploymentPhase, DeploymentSpec, DeploymentStatus, Generation, GitCommit, Object, ObjectMeta,
     OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, ResourceRevision,
     RolloutState, Service, ServiceId, ServiceStatus, Timestamp,
 };
@@ -351,6 +351,10 @@ fn convert_deployment(
             ready_at: optional_timestamp("deployment.deployedAt", legacy.deployed_at)?,
             draining_at: optional_timestamp("deployment.drainedAt", legacy.drained_at)?,
             image_digest: image_digest.clone(),
+            git_commit: legacy.git_commit.as_ref().map(|commit| GitCommit {
+                revision: commit.reference.clone(),
+                title: commit.message.clone(),
+            }),
             conditions: Vec::new(),
         },
     };
@@ -430,6 +434,11 @@ fn convert_build(
             phase,
             image_digest,
             source_revision: source_revision.map(str::to_owned),
+            source_title: deployment
+                .status
+                .git_commit
+                .as_ref()
+                .map(|commit| commit.title.clone()),
             conditions: Vec::new(),
         },
     })

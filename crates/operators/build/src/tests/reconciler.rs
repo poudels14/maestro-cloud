@@ -38,6 +38,10 @@ async fn queued_build_pins_source_and_persists_immutable_digest() -> TestResult 
         building.status.source_revision.as_deref(),
         Some("commit-abc")
     );
+    assert_eq!(
+        building.status.source_title.as_deref(),
+        Some("Ship the API")
+    );
     assert_eq!(controller.reconcile_snapshot().await?, 1);
 
     let succeeded = world.build().await?;

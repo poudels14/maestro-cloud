@@ -433,6 +433,7 @@ fn deployment(
             ready_at: None,
             draining_at: None,
             image_digest: image_digest.map(str::to_owned),
+            git_commit: None,
             conditions: Vec::new(),
         },
     })

@@ -41,6 +41,16 @@ impl BuildPhase {
     }
 }
 
+/// Immutable Git commit selected for a deployment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    /// Full commit object identifier.
+    pub revision: String,
+    /// First line of the commit message.
+    pub title: String,
+}
+
 /// Desired build source and service association.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +75,9 @@ pub struct BuildStatus {
     /// Source revision resolved by the build backend.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_revision: Option<String>,
+    /// Git commit title resolved with `source_revision`, when the source is Git.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_title: Option<String>,
     /// Generic progress and failure evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,

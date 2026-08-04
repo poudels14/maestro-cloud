@@ -1,6 +1,12 @@
 import { expect, test } from "vitest";
 import type { Deployment, ReplicaState } from "./types";
-import { replicaDisplayName, replicaFailure, sortDeploymentHistory } from "./deploymentView";
+import {
+  deploymentGitRevision,
+  deploymentTitle,
+  replicaDisplayName,
+  replicaFailure,
+  sortDeploymentHistory
+} from "./deploymentView";
 
 function deployment(id: string, createdAt: number): Deployment {
   return {
@@ -53,6 +59,19 @@ test("deployment history sorts newest first without mutating API results", () =>
     "deployment-a"
   ]);
   expect(source).toEqual([older, newer]);
+});
+
+test("deployment title uses the exact Git commit title with an id fallback", () => {
+  const gitDeployment = deployment("deployment-a", 10);
+  gitDeployment.status.gitCommit = {
+    revision: "0123456789abcdef0123456789abcdef01234567",
+    title: "Ship the API"
+  };
+
+  expect(deploymentTitle(gitDeployment)).toBe("Ship the API");
+  expect(deploymentGitRevision(gitDeployment)).toBe("0123456789abcdef0123456789abcdef01234567");
+  expect(deploymentTitle(deployment("deployment-fallback", 10))).toBe("fallback");
+  expect(deploymentGitRevision(deployment("deployment-fallback", 10))).toBeNull();
 });
 
 test("replica presentation prefers workload identity and surfaces failed conditions", () => {

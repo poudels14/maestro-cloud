@@ -7,6 +7,18 @@ function sortDeploymentHistory(deployments: Deployment[]): Deployment[] {
   );
 }
 
+function deploymentTitle(deployment: Deployment): string {
+  return (
+    deployment.status.gitCommit?.title.trim() ||
+    deployment.meta.id.split("-").at(-1) ||
+    deployment.meta.id
+  );
+}
+
+function deploymentGitRevision(deployment: Deployment): string | null {
+  return deployment.status.gitCommit?.revision ?? null;
+}
+
 function replicaDisplayName(deployment: Deployment, replica: ReplicaState): string {
   return (
     replica.status.workloadId ?? `${deployment.spec.serviceId}-${String(replica.spec.replicaIndex)}`
@@ -18,4 +30,10 @@ function replicaFailure(replica: ReplicaState): string | null {
   return condition?.message || condition?.reason || null;
 }
 
-export { replicaDisplayName, replicaFailure, sortDeploymentHistory };
+export {
+  deploymentGitRevision,
+  deploymentTitle,
+  replicaDisplayName,
+  replicaFailure,
+  sortDeploymentHistory
+};

@@ -105,6 +105,7 @@ pub(super) fn deployment_in_phase(
             ready_at: Some(Timestamp(2_000)),
             draining_at: None,
             image_digest: Some("registry.test/api@sha256:abc".to_string()),
+            git_commit: None,
             conditions: Vec::new(),
         },
     })

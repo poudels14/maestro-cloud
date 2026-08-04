@@ -3,9 +3,9 @@ mod cutover;
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, Build, BuildId, BuildPhase, Deployment, DeploymentId,
-    DeploymentPhase, DeploymentStatus, InvalidIdentifier, ReplicaState, Service, ServiceId,
-    Timestamp,
+    ArtifactTemplate, Assignment, Build, BuildId, BuildPhase, BuildSource, Deployment,
+    DeploymentId, DeploymentPhase, DeploymentStatus, GitCommit, InvalidIdentifier, ReplicaState,
+    Service, ServiceId, Timestamp,
 };
 
 use crate::readiness::{all_exhausted, all_ready, current_slots, drain_elapsed, has_assignments};
@@ -271,6 +271,7 @@ fn desired_deployment_status(
                 ArtifactTemplate::Image { .. } => true,
                 ArtifactTemplate::Build { .. } => {
                     let build = ensure_build(deployment, builds, create_builds)?;
+                    desired.git_commit = build.and_then(resolved_git_commit);
                     match build {
                         Some(build) if build.status.phase == BuildPhase::Succeeded => {
                             desired.image_digest =
@@ -375,6 +376,16 @@ fn ensure_build<'a>(
         create_builds.push(new_build(deployment, build_id.clone())?);
     }
     Ok(None)
+}
+
+fn resolved_git_commit(build: &Build) -> Option<GitCommit> {
+    if !matches!(build.spec.template.source, BuildSource::Git { .. }) {
+        return None;
+    }
+    Some(GitCommit {
+        revision: build.status.source_revision.clone()?,
+        title: build.status.source_title.clone()?,
+    })
 }
 
 fn validate_build(deployment: &Deployment, build: &Build) -> Result<(), DeploymentPlanError> {
