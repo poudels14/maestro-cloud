@@ -1,9 +1,6 @@
 use std::collections::BTreeSet;
-use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
-use std::mem::MaybeUninit;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -238,29 +235,16 @@ fn relevant_mount(mount: &MountEntry) -> bool {
         && !mount.name.starts_with("sunrpc")
 }
 
-#[allow(clippy::unnecessary_cast)]
 fn statvfs_space(path: &Path) -> std::io::Result<Option<(u64, u64)>> {
-    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "mount point contains an interior null byte",
-        )
-    })?;
-    let mut stats = MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: `path` is a live NUL-terminated byte string and `stats` points to writable memory.
-    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: a successful `statvfs` call initialized the complete output structure.
-    let stats = unsafe { stats.assume_init() };
-    let block_size = (stats.f_frsize as u64).max(1);
-    let total_bytes = (stats.f_blocks as u64)
+    let stats = nix::sys::statvfs::statvfs(path).map_err(std::io::Error::from)?;
+    let block_size = u64::from(stats.fragment_size()).max(1);
+    let total_bytes = u64::from(stats.blocks())
         .checked_mul(block_size)
         .ok_or_else(|| std::io::Error::other("filesystem capacity exceeds u64"))?;
     if total_bytes == 0 {
         return Ok(None);
     }
-    let available_bytes = (stats.f_bavail as u64)
+    let available_bytes = u64::from(stats.blocks_available())
         .checked_mul(block_size)
         .ok_or_else(|| std::io::Error::other("available filesystem capacity exceeds u64"))?;
     Ok(Some((total_bytes, available_bytes)))

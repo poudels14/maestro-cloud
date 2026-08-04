@@ -196,19 +196,10 @@ fn removal_request_id(
             digest.update([0]);
             digest.update(node_id.as_str().as_bytes());
             digest.update(attempt.to_be_bytes());
-            RequestId::new(lowercase_hex(&digest.finalize()))
+            RequestId::new(hex::encode(digest.finalize()))
                 .map_err(|error| CliError::invalid_input(error.to_string()))
         }
     }
-}
-
-fn lowercase_hex(bytes: &[u8]) -> String {
-    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        encoded.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        encoded.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    encoded
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

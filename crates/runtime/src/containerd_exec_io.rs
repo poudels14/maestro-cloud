@@ -1,6 +1,4 @@
-use std::ffi::CString;
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -104,21 +102,8 @@ pub(crate) async fn remove_exec_directory(directory: &Path) {
 }
 
 fn create_fifo(path: &Path) -> Result<(), RuntimeError> {
-    let path_value =
-        CString::new(path.as_os_str().as_bytes()).map_err(|error| RuntimeError::InvalidSpec {
-            message: format!("containerd exec FIFO path contains NUL: {error}"),
-        })?;
-    // SAFETY: `path_value` is a live NUL-terminated path and the mode contains no invalid bits.
-    let status = unsafe { libc::mkfifo(path_value.as_ptr(), 0o600) };
-    if status == 0 {
-        Ok(())
-    } else {
-        Err(exec_file_error(
-            "create FIFO",
-            path,
-            std::io::Error::last_os_error(),
-        ))
-    }
+    nix::unistd::mkfifo(path, nix::sys::stat::Mode::from_bits_truncate(0o600))
+        .map_err(|error| exec_file_error("create FIFO", path, std::io::Error::from(error)))
 }
 
 pub(crate) fn exec_io_error(error: std::io::Error) -> RuntimeError {

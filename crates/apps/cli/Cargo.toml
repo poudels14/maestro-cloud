@@ -24,13 +24,14 @@ crossterm.workspace = true
 dotenvy.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
+hex.workspace = true
 ignore.workspace = true
 jsonwebtoken.workspace = true
 json5.workspace = true
 ipnet.workspace = true
 kernel-api = { path = "../../kernel/api" }
-libc.workspace = true
 logs = { version = "0.1.0", path = "../../observability/logs" }
+nix = { workspace = true, features = ["fs"] }
 reqwest = { workspace = true, features = ["json"] }
 rpassword.workspace = true
 rustls = { workspace = true, default-features = false, features = ["ring", "std"] }

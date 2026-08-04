@@ -361,9 +361,9 @@ async fn drive(
     terminal_mode: TerminalMode,
     initial_size: Option<TerminalSize>,
 ) -> Result<Option<i32>, CliError> {
-    let mut stdin = duplicate_file(libc::STDIN_FILENO, "standard input")?;
-    let mut stdout = duplicate_file(libc::STDOUT_FILENO, "standard output")?;
-    let mut stderr = duplicate_file(libc::STDERR_FILENO, "standard error")?;
+    let mut stdin = duplicate_file(std::io::stdin(), "standard input")?;
+    let mut stdout = duplicate_file(std::io::stdout(), "standard output")?;
+    let mut stderr = duplicate_file(std::io::stderr(), "standard error")?;
     let mut input = vec![0_u8; INPUT_BYTES];
     let mut input_open = true;
     let mut last_size = initial_size;
@@ -481,18 +481,16 @@ impl Drop for RawModeGuard {
     }
 }
 
-fn duplicate_file(file_descriptor: i32, description: &str) -> Result<tokio::fs::File, CliError> {
-    use std::os::fd::FromRawFd;
-
-    // SAFETY: `dup` does not borrow the source descriptor and returns a new owned descriptor.
-    let duplicated = unsafe { libc::dup(file_descriptor) };
-    if duplicated < 0 {
-        return Err(CliError::io(
+fn duplicate_file(
+    file_descriptor: impl std::os::fd::AsFd,
+    description: &str,
+) -> Result<tokio::fs::File, CliError> {
+    let duplicated = nix::unistd::dup(file_descriptor).map_err(|error| {
+        CliError::io(
             format!("failed to duplicate {description}"),
-            std::io::Error::last_os_error(),
-        ));
-    }
-    // SAFETY: a successful `dup` result is a fresh descriptor now owned by this file.
-    let file = unsafe { std::fs::File::from_raw_fd(duplicated) };
+            std::io::Error::from(error),
+        )
+    })?;
+    let file = std::fs::File::from(duplicated);
     Ok(tokio::fs::File::from_std(file))
 }
