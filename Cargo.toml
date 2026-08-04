@@ -78,6 +78,7 @@ oci-spec = "=0.10.0"
 parking_lot = "=0.12.5"
 prost = "=0.14.4"
 prost-types = "=0.14.4"
+procfs-core = { version = "=0.18.0", default-features = false }
 proptest = "=1.11.0"
 rcgen = "=0.14.8"
 reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls", "stream"] }

@@ -6,11 +6,8 @@ use crate::{HostStatsError, HostStatsReader, LinuxHostStatsReader};
 async fn linux_reader_parses_cumulative_cpu_memory_and_network_stats()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = HostStatsFixture::new()?;
-    fixture.write("stat", "cpu  100 20 30 400 50 6 7 8 9 10\ncpu0 1 2 3 4\n")?;
-    fixture.write(
-        "meminfo",
-        "MemTotal:       2048 kB\nMemFree:         256 kB\nMemAvailable:    512 kB\n",
-    )?;
+    fixture.write_stat("cpu  100 20 30 400 50 6 7 8 9 10\ncpu0 1 2 3 4")?;
+    fixture.write_meminfo(2048, 512)?;
     fixture.write("net/dev", NETWORK_STATS)?;
 
     let stats = fixture.reader().read().await?;
@@ -33,8 +30,8 @@ async fn linux_reader_rejects_missing_malformed_and_oversized_stats()
         Err(HostStatsError::Io { .. })
     ));
 
-    fixture.write("stat", "cpu nope\n")?;
-    fixture.write("meminfo", "MemTotal: 1 kB\nMemAvailable: 1 kB\n")?;
+    fixture.write_stat("cpu nope")?;
+    fixture.write_meminfo(1, 1)?;
     fixture.write("net/dev", NETWORK_STATS)?;
     assert!(matches!(
         fixture.reader().read().await,
@@ -53,8 +50,8 @@ async fn linux_reader_rejects_missing_malformed_and_oversized_stats()
 async fn linux_reader_rejects_links_impossible_memory_and_counter_overflow()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = HostStatsFixture::new()?;
-    fixture.write("stat", "cpu 1 1 1 1\n")?;
-    fixture.write("meminfo", "MemTotal: 1 kB\nMemAvailable: 2 kB\n")?;
+    fixture.write_stat("cpu 1 1 1 1")?;
+    fixture.write_meminfo(1, 2)?;
     fixture.write("net/dev", NETWORK_STATS)?;
     assert!(matches!(
         fixture.reader().read().await,
@@ -64,7 +61,7 @@ async fn linux_reader_rejects_links_impossible_memory_and_counter_overflow()
         })
     ));
 
-    fixture.write("meminfo", "MemTotal: 2 kB\nMemAvailable: 1 kB\n")?;
+    fixture.write_meminfo(2, 1)?;
     fixture.write(
         "net/dev",
         &format!(
@@ -104,8 +101,43 @@ impl HostStatsFixture {
         std::fs::write(self.directory.path().join(name), contents)
     }
 
+    fn write_stat(&self, cpu_rows: &str) -> std::io::Result<()> {
+        self.write(
+            "stat",
+            &format!("{cpu_rows}\nctxt 1\nbtime 1\nprocesses 1\n"),
+        )
+    }
+
+    fn write_meminfo(&self, total_kib: u64, available_kib: u64) -> std::io::Result<()> {
+        self.write(
+            "meminfo",
+            &format!(
+                "MemTotal: {total_kib} kB\n\
+                 MemFree: 0 kB\n\
+                 MemAvailable: {available_kib} kB\n\
+                 Buffers: 0 kB\n\
+                 Cached: 0 kB\n\
+                 SwapCached: 0 kB\n\
+                 Active: 0 kB\n\
+                 Inactive: 0 kB\n\
+                 SwapTotal: 0 kB\n\
+                 SwapFree: 0 kB\n\
+                 Dirty: 0 kB\n\
+                 Writeback: 0 kB\n\
+                 Mapped: 0 kB\n\
+                 Slab: 0 kB\n\
+                 Committed_AS: 0 kB\n\
+                 VmallocTotal: 0 kB\n\
+                 VmallocUsed: 0 kB\n\
+                 VmallocChunk: 0 kB\n"
+            ),
+        )
+    }
+
     fn reader(&self) -> LinuxHostStatsReader {
-        LinuxHostStatsReader::from_proc_root(self.directory.path().to_path_buf())
+        LinuxHostStatsReader::from_proc_root(
+            std::fs::canonicalize(self.directory.path()).expect("canonical fixture directory"),
+        )
     }
 }
 

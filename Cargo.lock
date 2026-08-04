@@ -3832,6 +3832,7 @@ dependencies = [
  "netlink-packet-route 0.30.0",
  "nix 0.30.1",
  "node-fabric",
+ "procfs-core",
  "reqwest",
  "rtnetlink",
  "runtime",
@@ -4365,6 +4366,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "procfs-core"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6401bf7b6af22f78b563665d15a22e9aef27775b79b149a66ca022468a4e405"
+dependencies = [
+ "bitflags 2.13.0",
+ "hex",
 ]
 
 [[package]]
@@ -5569,6 +5580,7 @@ name = "supervisor"
 version = "0.1.0"
 dependencies = [
  "nix 0.30.1",
+ "procfs-core",
  "serde",
  "tempfile",
  "thiserror 2.0.18",

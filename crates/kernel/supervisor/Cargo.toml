@@ -17,3 +17,6 @@ workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs-core.workspace = true

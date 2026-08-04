@@ -15,6 +15,7 @@ kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 ipnet.workspace = true
 node-fabric = { version = "0.1.0", path = "../fabric" }
+procfs-core.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["rustls-tls"] }
 runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 semver.workspace = true

@@ -20,9 +20,9 @@ mod exec;
 mod fake_mesh;
 mod firewall;
 mod health;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod host_disks;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod host_stats;
 #[cfg(target_os = "linux")]
 mod host_telemetry;

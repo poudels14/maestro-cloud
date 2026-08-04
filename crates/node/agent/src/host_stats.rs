@@ -3,6 +3,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use procfs_core::net::InterfaceDeviceStatus;
+use procfs_core::prelude::{FromRead, FromReadSI};
+use procfs_core::{ExplicitSystemInfo, KernelStats, Meminfo};
 
 const MAX_HOST_STATS_FILE_BYTES: u64 = 1024 * 1024;
 const PROC_STAT: &str = "stat";
@@ -138,33 +141,42 @@ fn read_bounded_file(root: &Path, name: &'static str) -> Result<String, HostStat
 }
 
 fn parse_cpu(contents: &str) -> Result<HostCpuStats, HostStatsError> {
-    let line = contents
-        .lines()
-        .find(|line| line.starts_with("cpu "))
-        .ok_or(HostStatsError::MissingField {
+    if !contents.lines().any(|line| line.starts_with("cpu ")) {
+        return Err(HostStatsError::MissingField {
             file: PROC_STAT,
             field: "cpu",
-        })?;
-    let values = line
-        .split_ascii_whitespace()
-        .skip(1)
-        .map(|value| value.parse::<u64>().map_err(|_| invalid(PROC_STAT, line)))
-        .collect::<Result<Vec<_>, _>>()?;
-    if values.len() < 4 {
-        return Err(invalid(PROC_STAT, line));
+        });
     }
-    let idle = value_at(&values, 3, PROC_STAT, line)?;
-    let io_wait = values.get(4).copied().unwrap_or_default();
-    let idle_ticks = idle
-        .checked_add(io_wait)
+    let system_info = ExplicitSystemInfo {
+        boot_time_secs: 0,
+        ticks_per_second: 100,
+        page_size: 4096,
+        is_little_endian: cfg!(target_endian = "little"),
+    };
+    let stats = KernelStats::from_read(contents.as_bytes(), &system_info)
+        .map_err(|error| invalid(PROC_STAT, &error.to_string()))?;
+    let cpu = stats.total;
+    let idle_ticks = cpu
+        .idle
+        .checked_add(cpu.iowait.unwrap_or_default())
         .ok_or(HostStatsError::CounterOverflow { file: PROC_STAT })?;
-    let total_ticks = values.iter().take(8).try_fold(0_u64, |total, value| {
+    let fields = [
+        cpu.user,
+        cpu.nice,
+        cpu.system,
+        cpu.idle,
+        cpu.iowait.unwrap_or_default(),
+        cpu.irq.unwrap_or_default(),
+        cpu.softirq.unwrap_or_default(),
+        cpu.steal.unwrap_or_default(),
+    ];
+    let total_ticks = fields.iter().try_fold(0_u64, |total, value| {
         total
             .checked_add(*value)
             .ok_or(HostStatsError::CounterOverflow { file: PROC_STAT })
     })?;
     if idle_ticks > total_ticks {
-        return Err(invalid(PROC_STAT, line));
+        return Err(invalid(PROC_STAT, "idle ticks exceed total ticks"));
     }
     Ok(HostCpuStats {
         total_ticks,
@@ -173,111 +185,45 @@ fn parse_cpu(contents: &str) -> Result<HostCpuStats, HostStatsError> {
 }
 
 fn parse_memory(contents: &str) -> Result<HostMemoryStats, HostStatsError> {
-    let mut total_kibibytes = None;
-    let mut available_kibibytes = None;
-    for line in contents.lines().filter(|line| !line.trim().is_empty()) {
-        let Some((name, raw_value)) = line.split_once(':') else {
-            return Err(invalid(PROC_MEMINFO, line));
-        };
-        if name != "MemTotal" && name != "MemAvailable" {
-            continue;
-        }
-        let mut fields = raw_value.split_ascii_whitespace();
-        let value = fields
-            .next()
-            .ok_or_else(|| invalid(PROC_MEMINFO, line))?
-            .parse::<u64>()
-            .map_err(|_| invalid(PROC_MEMINFO, line))?;
-        if fields.next() != Some("kB") || fields.next().is_some() {
-            return Err(invalid(PROC_MEMINFO, line));
-        }
-        let target = if name == "MemTotal" {
-            &mut total_kibibytes
-        } else {
-            &mut available_kibibytes
-        };
-        if target.replace(value).is_some() {
-            return Err(invalid(PROC_MEMINFO, line));
-        }
-    }
-    let total_kibibytes = required(total_kibibytes, PROC_MEMINFO, "MemTotal")?;
-    let available_kibibytes = required(available_kibibytes, PROC_MEMINFO, "MemAvailable")?;
-    let used_kibibytes = total_kibibytes
-        .checked_sub(available_kibibytes)
+    let memory = Meminfo::from_read(contents.as_bytes())
+        .map_err(|error| invalid(PROC_MEMINFO, &error.to_string()))?;
+    let available_bytes = memory.mem_available.ok_or(HostStatsError::MissingField {
+        file: PROC_MEMINFO,
+        field: "MemAvailable",
+    })?;
+    let used_bytes = memory
+        .mem_total
+        .checked_sub(available_bytes)
         .ok_or_else(|| invalid(PROC_MEMINFO, "MemAvailable exceeds MemTotal"))?;
     Ok(HostMemoryStats {
-        used_bytes: kibibytes_to_bytes(used_kibibytes)?,
-        total_bytes: kibibytes_to_bytes(total_kibibytes)?,
+        used_bytes,
+        total_bytes: memory.mem_total,
     })
 }
 
 fn parse_network(contents: &str) -> Result<HostNetworkStats, HostStatsError> {
-    let mut receive_bytes = 0_u64;
-    let mut transmit_bytes = 0_u64;
-    let mut interfaces = 0_usize;
-    for line in contents
-        .lines()
-        .skip(2)
-        .filter(|line| !line.trim().is_empty())
-    {
-        let (_interface, counters) = line
-            .rsplit_once(':')
-            .ok_or_else(|| invalid(PROC_NET_DEV, line))?;
-        let values = counters
-            .split_ascii_whitespace()
-            .map(|value| {
-                value
-                    .parse::<u64>()
-                    .map_err(|_| invalid(PROC_NET_DEV, line))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if values.len() < 16 {
-            return Err(invalid(PROC_NET_DEV, line));
-        }
-        receive_bytes = receive_bytes
-            .checked_add(value_at(&values, 0, PROC_NET_DEV, line)?)
-            .ok_or(HostStatsError::CounterOverflow { file: PROC_NET_DEV })?;
-        transmit_bytes = transmit_bytes
-            .checked_add(value_at(&values, 8, PROC_NET_DEV, line)?)
-            .ok_or(HostStatsError::CounterOverflow { file: PROC_NET_DEV })?;
-        interfaces = interfaces.saturating_add(1);
-    }
-    if interfaces == 0 {
+    let interfaces = InterfaceDeviceStatus::from_read(contents.as_bytes())
+        .map_err(|error| invalid(PROC_NET_DEV, &error.to_string()))?;
+    if interfaces.0.is_empty() {
         return Err(HostStatsError::MissingField {
             file: PROC_NET_DEV,
             field: "interface counters",
         });
     }
+    let mut receive_bytes = 0_u64;
+    let mut transmit_bytes = 0_u64;
+    for interface in interfaces.0.values() {
+        receive_bytes = receive_bytes
+            .checked_add(interface.recv_bytes)
+            .ok_or(HostStatsError::CounterOverflow { file: PROC_NET_DEV })?;
+        transmit_bytes = transmit_bytes
+            .checked_add(interface.sent_bytes)
+            .ok_or(HostStatsError::CounterOverflow { file: PROC_NET_DEV })?;
+    }
     Ok(HostNetworkStats {
         receive_bytes,
         transmit_bytes,
     })
-}
-
-fn value_at(
-    values: &[u64],
-    index: usize,
-    file: &'static str,
-    line: &str,
-) -> Result<u64, HostStatsError> {
-    values
-        .get(index)
-        .copied()
-        .ok_or_else(|| invalid(file, line))
-}
-
-fn required(
-    value: Option<u64>,
-    file: &'static str,
-    field: &'static str,
-) -> Result<u64, HostStatsError> {
-    value.ok_or(HostStatsError::MissingField { file, field })
-}
-
-fn kibibytes_to_bytes(value: u64) -> Result<u64, HostStatsError> {
-    value
-        .checked_mul(1024)
-        .ok_or(HostStatsError::CounterOverflow { file: PROC_MEMINFO })
 }
 
 fn invalid(file: &'static str, value: &str) -> HostStatsError {

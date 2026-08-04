@@ -4,6 +4,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use procfs_core::FromRead;
+use procfs_core::MountEntry as ProcMountEntry;
 
 const MAX_MOUNTS_FILE_BYTES: u64 = 1024 * 1024;
 
@@ -151,61 +153,35 @@ struct MountEntry {
 }
 
 fn parse_mounts(contents: &str) -> Result<Vec<MountEntry>, HostDiskError> {
-    contents
+    let lines = contents
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let mut fields = line.split_ascii_whitespace();
-            let name = decode_mount_field(fields.next().ok_or_else(|| invalid(line))?, line)?;
-            let mount_point =
-                decode_mount_field(fields.next().ok_or_else(|| invalid(line))?, line)?;
-            let file_system =
-                decode_mount_field(fields.next().ok_or_else(|| invalid(line))?, line)?;
-            let _options = fields.next().ok_or_else(|| invalid(line))?;
-            let dump_frequency = fields
-                .next()
-                .ok_or_else(|| invalid(line))?
-                .parse::<u8>()
-                .map_err(|_| invalid(line))?;
-            let check_order = fields
-                .next()
-                .ok_or_else(|| invalid(line))?
-                .parse::<u8>()
-                .map_err(|_| invalid(line))?;
-            if fields.next().is_some()
-                || dump_frequency > 1
-                || check_order > 2
-                || !Path::new(&mount_point).is_absolute()
-            {
-                return Err(invalid(line));
+        .collect::<Vec<_>>();
+    if let Some(line) = lines
+        .iter()
+        .find(|line| line.split_ascii_whitespace().count() != 6)
+    {
+        return Err(invalid(line));
+    }
+    // procfs-core decodes the kernel's other octal escapes but currently leaves
+    // spaces encoded. A NUL is safe as a temporary sentinel because mount names
+    // cannot contain one.
+    let normalized = lines.join("\n").replace(r"\040", "\0");
+    Vec::<ProcMountEntry>::from_read(normalized.as_bytes())
+        .map_err(|error| invalid(&error.to_string()))?
+        .into_iter()
+        .map(|mount| {
+            let mount_point = mount.fs_file.replace('\0', " ");
+            if mount.fs_freq > 1 || mount.fs_passno > 2 || !Path::new(&mount_point).is_absolute() {
+                return Err(invalid(&mount_point));
             }
             Ok(MountEntry {
-                name,
+                name: mount.fs_spec.replace('\0', " "),
                 mount_point,
-                file_system,
+                file_system: mount.fs_vfstype.replace('\0', " "),
             })
         })
         .collect()
-}
-
-fn decode_mount_field(field: &str, line: &str) -> Result<String, HostDiskError> {
-    let mut decoded = String::with_capacity(field.len());
-    let mut characters = field.chars();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            decoded.push(character);
-            continue;
-        }
-        let escape = [characters.next(), characters.next(), characters.next()];
-        match escape {
-            [Some('0'), Some('4'), Some('0')] => decoded.push(' '),
-            [Some('0'), Some('1'), Some('1')] => decoded.push('\t'),
-            [Some('0'), Some('1'), Some('2')] => decoded.push('\n'),
-            [Some('1'), Some('3'), Some('4')] => decoded.push('\\'),
-            _ => return Err(invalid(line)),
-        }
-    }
-    Ok(decoded)
 }
 
 fn relevant_mount(mount: &MountEntry) -> bool {

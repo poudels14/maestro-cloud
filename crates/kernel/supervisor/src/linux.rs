@@ -6,6 +6,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
+use procfs_core::FromRead;
 
 use crate::{
     EnvironmentInheritance, ProcessExit, ProcessHandle, ProcessSignal, ProcessSpec, ProcessStatus,
@@ -151,26 +152,16 @@ fn inspect_pid(pid: u32) -> Result<ProcObservation, SupervisorError> {
 }
 
 fn parse_proc_stat(contents: &str) -> Result<ProcObservation, String> {
-    let command_end = contents
-        .rfind(") ")
-        .ok_or_else(|| "proc stat command boundary is missing".to_owned())?;
-    let fields = contents
-        .get(command_end.saturating_add(2)..)
-        .ok_or_else(|| "proc stat fields are missing".to_owned())?;
-    let mut fields = fields.split_whitespace();
-    let state = fields
-        .next()
-        .and_then(|value| value.chars().next())
-        .ok_or_else(|| "proc stat state is missing".to_owned())?;
-    let start_time_ticks = fields
-        .nth(18)
-        .ok_or_else(|| "proc stat start time is missing".to_owned())?
-        .parse::<u64>()
-        .map_err(|error| format!("proc stat start time is invalid: {error}"))?;
-    if matches!(state, 'Z' | 'X' | 'x') {
-        Ok(ProcObservation::Exited { start_time_ticks })
+    let stat = procfs_core::process::Stat::from_read(contents.as_bytes())
+        .map_err(|error| error.to_string())?;
+    if matches!(stat.state, 'Z' | 'X' | 'x') {
+        Ok(ProcObservation::Exited {
+            start_time_ticks: stat.starttime,
+        })
     } else {
-        Ok(ProcObservation::Running { start_time_ticks })
+        Ok(ProcObservation::Running {
+            start_time_ticks: stat.starttime,
+        })
     }
 }
 
