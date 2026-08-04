@@ -68,23 +68,12 @@ fn parse_key_values(
         validate_values(source, &values)?;
         return Ok(values);
     }
-    let mut values = BTreeMap::new();
-    for (index, line) in raw.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let (key, value) = line
-            .split_once('=')
-            .ok_or_else(|| ValueSourceError::Rejected {
-                message: format!(
-                    "external value source `{source}` line {} is not KEY=VALUE",
-                    index + 1
-                ),
-            })?;
-        values.insert(key.trim().to_owned(), SecretValue::new(value.trim()));
-    }
+    let values = dotenvy::Iter::new(raw.as_bytes())
+        .map(|entry| entry.map(|(key, value)| (key, SecretValue::new(value))))
+        .collect::<dotenvy::Result<BTreeMap<_, _>>>()
+        .map_err(|_| ValueSourceError::Rejected {
+            message: format!("external value source `{source}` contains invalid dotenv syntax"),
+        })?;
     validate_values(source, &values)?;
     Ok(values)
 }
@@ -128,12 +117,24 @@ mod tests {
 
         let dotenv = parse_key_values(
             "aws-secret://dotenv",
-            "# comment\nexport TOKEN=rotated\nMODE=production",
+            "# comment\nexport TOKEN=\"rotated value\" # current token\nMODE='production mode'",
         )?;
         assert_eq!(
             dotenv.get("TOKEN").map(SecretValue::expose),
-            Some("rotated")
+            Some("rotated value")
+        );
+        assert_eq!(
+            dotenv.get("MODE").map(SecretValue::expose),
+            Some("production mode")
         );
         Ok(())
+    }
+
+    #[test]
+    fn dotenv_parse_errors_do_not_expose_secret_contents() {
+        let error = parse_key_values("aws-secret://dotenv", "TOKEN='super-secret")
+            .expect_err("unterminated quote must be rejected");
+        assert!(error.to_string().contains("invalid dotenv syntax"));
+        assert!(!error.to_string().contains("super-secret"));
     }
 }

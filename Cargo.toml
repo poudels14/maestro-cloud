@@ -53,6 +53,7 @@ clap = { version = "=4.6.1", features = ["derive"] }
 containerd = { version = "=0.9.0", package = "containerd-client" }
 crossterm = "=0.29.0"
 docker = { version = "=0.21.0", package = "bollard" }
+dotenvy = "=0.15.7"
 duckdb = "=1.4.1"
 etcd-client = { version = "=0.19.0", features = ["tls"] }
 flate2 = "=1.1.9"

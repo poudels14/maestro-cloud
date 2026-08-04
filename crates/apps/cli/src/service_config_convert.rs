@@ -480,19 +480,9 @@ fn parse_key_values(field: &str, raw: &str) -> Result<BTreeMap<String, String>, 
             })
             .collect());
     }
-    let mut values = BTreeMap::new();
-    for (index, line) in raw.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let (key, value) = line
-            .split_once('=')
-            .ok_or_else(|| invalid(field, format!("source line {} is not KEY=VALUE", index + 1)))?;
-        values.insert(key.trim().to_string(), value.trim().to_string());
-    }
-    Ok(values)
+    dotenvy::Iter::new(raw.as_bytes())
+        .collect::<dotenvy::Result<BTreeMap<_, _>>>()
+        .map_err(|_| invalid(field, "source contains invalid dotenv syntax"))
 }
 
 fn validate_ingress(

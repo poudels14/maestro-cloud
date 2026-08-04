@@ -21,6 +21,7 @@ aws-sdk-secretsmanager.workspace = true
 clap.workspace = true
 cluster = { version = "0.1.0", path = "../../cluster" }
 crossterm.workspace = true
+dotenvy.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
 ignore.workspace = true

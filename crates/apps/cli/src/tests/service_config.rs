@@ -195,7 +195,8 @@ async fn value_sources_resolve_relative_files_and_preserve_expanded_aws_referenc
             ),
             (
                 "file:///config/build.env".to_string(),
-                "PROFILE=release\nFEATURES=default".to_string(),
+                "PROFILE=\"release candidate\" # build profile\nFEATURES=default\\ features\nexport TARGET=musl"
+                    .to_string(),
             ),
         ]),
     };
@@ -210,7 +211,15 @@ async fn value_sources_resolve_relative_files_and_preserve_expanded_aws_referenc
     };
     assert_eq!(
         template.environment.get("PROFILE").map(String::as_str),
-        Some("release")
+        Some("release candidate")
+    );
+    assert_eq!(
+        template.environment.get("FEATURES").map(String::as_str),
+        Some("default features")
+    );
+    assert_eq!(
+        template.environment.get("TARGET").map(String::as_str),
+        Some("musl")
     );
     assert!(template.secrets.is_empty());
     assert_eq!(template.registry.as_deref(), Some("registry.example/team"));
