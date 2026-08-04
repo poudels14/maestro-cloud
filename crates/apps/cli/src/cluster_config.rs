@@ -14,7 +14,9 @@ use crate::cluster_config_document::{
     CloudflareInput, ClusterDocument, ClusterInput, NodeInput, TailscaleInput,
 };
 use crate::cluster_config_launch::convert_launch_policy;
-use crate::config_source::{ConfigSourceReader, decode_document, resolve_relative_source};
+use crate::config_source::{
+    ConfigSourceReader, decode_document, is_explicit_value_source, resolve_relative_source,
+};
 
 const DEFAULT_API_PORT: u16 = 3_000;
 
@@ -134,13 +136,12 @@ async fn convert_tailscale(
     let Some(input) = input else {
         return Ok(None);
     };
-    let auth_key =
-        if input.auth_key.starts_with("aws-secret://") || input.auth_key.starts_with("file://") {
-            let source = resolve_relative_source(config_source, &input.auth_key)?;
-            reader.read(&source).await?
-        } else {
-            input.auth_key
-        };
+    let auth_key = if is_explicit_value_source(&input.auth_key)? {
+        let source = resolve_relative_source(config_source, &input.auth_key)?;
+        reader.read(&source).await?
+    } else {
+        input.auth_key
+    };
     let auth_key = required("tailscale.auth-key", auth_key)?;
     let advertise_routes = input
         .advertise_routes
@@ -205,9 +206,7 @@ async fn convert_cloudflare(
     let Some(input) = input else {
         return Ok(None);
     };
-    let token = if input.tunnel.token.starts_with("aws-secret://")
-        || input.tunnel.token.starts_with("file://")
-    {
+    let token = if is_explicit_value_source(&input.tunnel.token)? {
         let source = resolve_relative_source(config_source, &input.tunnel.token)?;
         reader.read(&source).await?
     } else {

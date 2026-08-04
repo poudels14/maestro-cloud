@@ -7,6 +7,8 @@ mod automation;
 mod command;
 mod condition;
 mod config;
+mod dns;
+mod environment;
 mod exec_stream;
 mod identity;
 mod metadata;
@@ -16,6 +18,7 @@ mod resource;
 mod schema;
 mod secret;
 mod service_validation;
+mod value_source;
 mod workload;
 
 pub use crate::version::MAESTRO_VERSION;
@@ -41,6 +44,8 @@ pub use config::{
     MaskedClusterConfigNode, MaskedClusterConfigPorts, MaskedCrossClusterDnsRoute,
     MaskedTailscaleConfig, PreviewLaunchConfigUpdateRequest, PreviewLaunchConfigUpdateResponse,
 };
+pub use dns::{DnsLabel, DnsName, DnsNameError, WildcardDnsName};
+pub use environment::{EnvironmentName, InvalidEnvironmentName};
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,
@@ -73,6 +78,7 @@ pub use schema::{
 };
 pub use secret::{MaskedSecret, SecretValue};
 pub use service_validation::ServiceSpecError;
+pub use value_source::{ExternalValueSource, InvalidExternalValueSource};
 pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     BUILD_WATCH_REVISION_ANNOTATION, Build, BuildPhase, BuildSource, BuildSpec, BuildStatus,

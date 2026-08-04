@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
-use kernel_api::NodeRole;
+use kernel_api::{DnsLabel, DnsName, NodeRole};
 use serde::{Deserialize, Serialize};
 
 use crate::legacy_nodes::LegacyNodeError;
@@ -123,23 +123,11 @@ pub(crate) fn classify_key(key: &str) -> Result<Option<NodeKey>, LegacyNodeError
 }
 
 pub(crate) fn is_hostname(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 253 && value.split('.').all(is_dns_label)
+    DnsName::parse(value).is_ok()
 }
 
 pub(crate) fn is_dns_label(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        && value
-            .bytes()
-            .next_back()
-            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    DnsLabel::parse(value).is_ok()
 }
 
 pub(crate) const fn convert_role(role: LegacyNodeRole) -> NodeRole {

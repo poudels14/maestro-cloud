@@ -10,10 +10,9 @@ use kernel_api::SecretValue;
 use runtime::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
     ArtifactDigest, ArtifactStore, ArtifactStoreError, DiscardArtifactBuildOutput,
+    build_context::{BuildContext as DepotBuildContext, prepare_context},
     forward_artifact_build_output,
 };
-
-use crate::depot_context::{DepotBuildContext, prepare_context};
 
 const FILE_CHUNK_BYTES: usize = 64 * 1_024;
 
@@ -151,6 +150,7 @@ impl ProcessDepotBuildBackend {
             workspace.path(),
             self.settings.max_context_bytes,
             self.settings.max_context_entries,
+            "Depot",
         )
         .await?;
         let output = workspace.path().join("image.docker.tar");

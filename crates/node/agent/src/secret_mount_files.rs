@@ -5,7 +5,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
-use kernel_api::{SecretMountSpec, SecretValue, WorkloadId};
+use kernel_api::{EnvironmentName, SecretMountSpec, SecretValue, WorkloadId};
 use runtime::{MountAccess, MountSource, WorkloadMount};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -62,7 +62,7 @@ fn encode_dotenv(
 ) -> Result<Zeroizing<String>, SecretMountError> {
     let mut content = Zeroizing::new(String::new());
     for (name, value) in items {
-        if !valid_environment_name(name) {
+        if EnvironmentName::parse(name).is_err() {
             return Err(SecretMountError::InvalidKey { name: name.clone() });
         }
         let encoded = Zeroizing::new(serde_json::to_string(value.expose()).map_err(|error| {
@@ -427,14 +427,6 @@ fn zeroize_and_remove(path: &Path) -> Result<(), SecretMountError> {
         .map_err(|source| io_error("sync zeroed secret", path, source))?;
     drop(file);
     fs::remove_file(path).map_err(|source| io_error("remove zeroed secret", path, source))
-}
-
-fn valid_environment_name(name: &str) -> bool {
-    let mut bytes = name.bytes();
-    bytes
-        .next()
-        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn sync_directory(directory: &Path) -> Result<(), SecretMountError> {

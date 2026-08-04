@@ -6,7 +6,6 @@
 
 mod archive;
 mod depot;
-mod depot_context;
 mod git_process;
 mod local_fs;
 mod local_source;

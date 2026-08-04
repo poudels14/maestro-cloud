@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use http::HeaderName;
 use kernel_api::{
-    ArtifactTemplate, BuildSource, BuildTemplate, CommandSpec, ExecPolicy, FirewallDirection,
-    FirewallPolicySpec, FirewallRule, FirewallSubject, FirewallVerdict, HealthCheckSpec,
-    HealthProbe, IngressRouteSpec, NodeApiAccess, NodeId, PlacementConstraint, PortRange,
-    PreviewPolicy, SecretMountSpec, SecretValue, ServiceId, ServiceSpec, SessionAffinity,
-    TransportProtocol, VolumeAccess, VolumeMountSpec, VolumeSource,
+    ArtifactTemplate, BuildSource, BuildTemplate, CommandSpec, ExecPolicy, ExternalValueSource,
+    FirewallDirection, FirewallPolicySpec, FirewallRule, FirewallSubject, FirewallVerdict,
+    HealthCheckSpec, HealthProbe, IngressRouteSpec, NodeApiAccess, NodeId, PlacementConstraint,
+    PortRange, PreviewPolicy, SecretMountSpec, SecretValue, ServiceId, ServiceSpec,
+    SessionAffinity, TransportProtocol, VolumeAccess, VolumeMountSpec, VolumeSource,
+    WildcardDnsName,
 };
 use sha2::{Digest, Sha256};
 
@@ -230,7 +232,12 @@ fn convert_secrets(
     let source = secrets
         .source
         .as_ref()
-        .filter(|source| source.starts_with("aws-secret://"))
+        .filter(|source| {
+            matches!(
+                ExternalValueSource::parse(source),
+                Ok(ExternalValueSource::AwsSecret { .. })
+            )
+        })
         .cloned();
     let values = if source.is_some() {
         secrets.items.clone()
@@ -479,33 +486,11 @@ fn convert_egress(
 }
 
 fn valid_host(host: &str) -> bool {
-    if host.is_empty()
-        || host.len() > 253
-        || host.ends_with('.')
-        || host.bytes().any(|byte| byte.is_ascii_uppercase())
-    {
-        return false;
-    }
-    let host = host.strip_prefix("*.").unwrap_or(host);
-    !host.is_empty()
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
+    WildcardDnsName::parse(host).is_ok()
 }
 
 fn valid_header_name(header: &str) -> bool {
-    const PUNCTUATION: &[u8] = b"!#$%&'*+-.^_`|~";
-    !header.is_empty()
-        && !header.eq_ignore_ascii_case("host")
-        && header
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || PUNCTUATION.contains(&byte))
+    !header.eq_ignore_ascii_case("host") && HeaderName::from_bytes(header.as_bytes()).is_ok()
 }
 
 fn converted_values(
@@ -514,11 +499,12 @@ fn converted_values(
     config: &LegacyEnvConfig,
     sidecar: &BTreeMap<String, String>,
 ) -> Result<(Option<String>, BTreeMap<String, String>), LegacyPlanError> {
-    if let Some(source) = config
-        .source
-        .as_ref()
-        .filter(|source| source.starts_with("aws-secret://"))
-    {
+    if let Some(source) = config.source.as_ref().filter(|source| {
+        matches!(
+            ExternalValueSource::parse(source),
+            Ok(ExternalValueSource::AwsSecret { .. })
+        )
+    }) {
         return Ok((Some(source.clone()), config.items.clone()));
     }
     let values = resolved_map(service_id, field, &config.items, sidecar)?;
@@ -550,19 +536,11 @@ fn resolved_map(
 
 fn parse_duration(service_id: &str, value: &str) -> Result<u64, LegacyPlanError> {
     let value = value.trim();
-    let split = value
-        .find(|character: char| !character.is_ascii_digit())
-        .unwrap_or(value.len());
-    let (amount, unit) = value.split_at(split);
-    let amount = amount.parse::<u64>().ok().filter(|amount| *amount > 0);
-    let seconds = match (amount, unit) {
-        (Some(amount), "s") => Some(amount),
-        (Some(amount), "m") => amount.checked_mul(60),
-        (Some(amount), "h") => amount.checked_mul(60 * 60),
-        (Some(amount), "d") => amount.checked_mul(24 * 60 * 60),
-        _ => None,
-    };
-    seconds.ok_or_else(|| invalid(service_id, format!("invalid preview duration `{value}`")))
+    let duration = humantime::parse_duration(value)
+        .ok()
+        .filter(|duration| !duration.is_zero() && duration.subsec_nanos() == 0)
+        .ok_or_else(|| invalid(service_id, format!("invalid preview duration `{value}`")))?;
+    Ok(duration.as_secs())
 }
 
 fn service_id(value: &str, field: &'static str) -> Result<ServiceId, LegacyPlanError> {
@@ -605,5 +583,17 @@ fn unsupported(
         service_id: service_id.to_owned(),
         field: field.into(),
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::parse_duration;
+
+    #[test]
+    fn parses_human_durations_as_positive_whole_seconds() {
+        assert_eq!(parse_duration("service", "1h 15m").ok(), Some(4_500));
+        assert!(parse_duration("service", "500ms").is_err());
+        assert!(parse_duration("service", "0s").is_err());
     }
 }

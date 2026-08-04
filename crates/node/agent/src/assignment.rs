@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, Deployment, ReplicaState, ResourceKind, ResourceName,
-    SecretMountSpec, SecretValue,
+    ArtifactTemplate, Assignment, Deployment, EnvironmentName, ReplicaState, ResourceKind,
+    ResourceName, SecretMountSpec, SecretValue,
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
@@ -54,12 +54,7 @@ fn validate_runtime_environment(
     values: &std::collections::BTreeMap<String, SecretValue>,
 ) -> Result<(), ConvergeFailure> {
     for (key, value) in values {
-        let mut characters = key.chars();
-        let valid_key = characters
-            .next()
-            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-            && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
-        if !valid_key {
+        if EnvironmentName::parse(key).is_err() {
             return Err(ConvergeFailure::failed(
                 "ExternalValueSourceRejected",
                 format!("environment key `{key}` must match [A-Za-z_][A-Za-z0-9_]*"),

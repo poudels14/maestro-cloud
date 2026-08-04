@@ -25,6 +25,7 @@ dotenvy.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
 hex.workspace = true
+humantime.workspace = true
 ignore.workspace = true
 jsonwebtoken.workspace = true
 json5.workspace = true

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use http::HeaderName;
 use kernel_api::{
     IngressRoute, IngressRouteId, IngressRouteSpec, Service, ServiceSpec, TrafficRoute,
+    WildcardDnsName,
 };
 
 use crate::IngressPlanError;
@@ -104,32 +106,11 @@ pub fn validate_route_spec(
 }
 
 fn valid_host(host: &str) -> bool {
-    if host.is_empty()
-        || host.len() > 253
-        || host.ends_with('.')
-        || host.bytes().any(|byte| byte.is_ascii_uppercase())
-    {
-        return false;
-    }
-    let host = host.strip_prefix("*.").unwrap_or(host);
-    !host.is_empty()
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
+    WildcardDnsName::parse(host).is_ok()
 }
 
 fn valid_header_name(header: &str) -> bool {
-    const PUNCTUATION: &[u8] = b"!#$%&'*+-.^_`|~";
-    !header.is_empty()
-        && header
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || PUNCTUATION.contains(&byte))
+    HeaderName::from_bytes(header.as_bytes()).is_ok()
 }
 
 pub(crate) fn validate_route_ownership(

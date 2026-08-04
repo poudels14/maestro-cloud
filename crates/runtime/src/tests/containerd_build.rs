@@ -9,10 +9,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::SecretValue;
 
+use crate::build_context::prepare_context;
 use crate::containerd_build::{
     BuildctlInvocation, BuildctlRunner, ProcessBuildctlRunner, run_build,
 };
-use crate::containerd_build_context::prepare_context;
 use crate::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactReference,
     ArtifactSource, ArtifactStoreError, ContainerdRuntimeSettings, DiscardArtifactBuildOutput,
@@ -284,7 +284,7 @@ async fn buildkit_extracts_gzip_tarballs_with_bounded_regular_entries() {
         definition: PathBuf::new(),
     };
 
-    let context = prepare_context(&source, &workspace, 1_024, 10)
+    let context = prepare_context(&source, &workspace, 1_024, 10, "BuildKit")
         .await
         .unwrap();
 
@@ -303,7 +303,7 @@ async fn buildkit_archive_limits_and_link_rejection_are_matchable() {
         path: archive,
         definition: PathBuf::new(),
     };
-    let error = prepare_context(&source, &first_workspace, 4, 10)
+    let error = prepare_context(&source, &first_workspace, 4, 10, "BuildKit")
         .await
         .unwrap_err();
     assert!(matches!(error, ArtifactStoreError::Rejected { .. }));
@@ -317,7 +317,7 @@ async fn buildkit_archive_limits_and_link_rejection_are_matchable() {
         path: link_archive,
         definition: PathBuf::new(),
     };
-    let error = prepare_context(&source, &second_workspace, 1_024, 10)
+    let error = prepare_context(&source, &second_workspace, 1_024, 10, "BuildKit")
         .await
         .unwrap_err();
     assert!(matches!(error, ArtifactStoreError::Rejected { .. }));

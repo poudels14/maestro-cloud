@@ -6,6 +6,7 @@ use axum::http::{Method, Uri, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use cluster::Ipv4Cidr;
+use cookie::Cookie;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use kernel_api::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -172,7 +173,7 @@ fn authenticate_operator(
         .or_else(|| cookie(request, TAILNET_BROWSER_SESSION_COOKIE))
         .ok_or_else(|| ApiError::unauthorized("missing operator authorization"))?;
     validate_cookie_origin(request)?;
-    authenticate_browser_session(token, secret)
+    authenticate_browser_session(&token, secret)
 }
 
 fn authenticate_bearer(
@@ -355,17 +356,16 @@ fn authenticate_browser_session(
     })
 }
 
-fn cookie<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
+fn cookie(request: &Request, name: &str) -> Option<String> {
     request
         .headers()
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
-        .filter_map(|pair| pair.trim().split_once('='))
-        .find_map(|(cookie_name, value)| {
-            (cookie_name == name && !value.is_empty()).then_some(value)
-        })
+        .flat_map(Cookie::split_parse)
+        .filter_map(Result::ok)
+        .find(|cookie| cookie.name() == name && !cookie.value().is_empty())
+        .map(|cookie| cookie.value().to_owned())
 }
 
 fn validate_cookie_origin(request: &Request) -> Result<(), ApiError> {
@@ -427,4 +427,28 @@ fn clear_browser_session(channel: OperatorChannel) -> String {
         "{cookie}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; \
          HttpOnly{secure}; SameSite=Strict"
     )
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+
+    use super::cookie;
+
+    #[test]
+    fn parses_request_cookie_headers_with_the_cookie_crate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = Request::builder()
+            .header(header::COOKIE, "malformed; other=first")
+            .header(header::COOKIE, "session=token=with=equals; empty=")
+            .body(Body::empty())?;
+
+        assert_eq!(
+            cookie(&request, "session").as_deref(),
+            Some("token=with=equals")
+        );
+        assert_eq!(cookie(&request, "empty"), None);
+        Ok(())
+    }
 }

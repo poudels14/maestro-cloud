@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use kernel_api::{
-    AssignmentId, BuiltinResource, DeploymentId, Generation, NodeId, Object, ObjectMeta,
+    AssignmentId, BuiltinResource, DeploymentId, DnsName, Generation, NodeId, Object, ObjectMeta,
     OwnerReference, Ownership, PlacementHistorySpec, PlacementHistoryStatus, ResourceId,
     ResourceKind, ResourceRevision, ServiceId, Timestamp,
 };
@@ -267,17 +267,7 @@ fn target_node(target: &str) -> Result<&str, LegacyPlacementError> {
 }
 
 fn valid_hostname(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 253
-        && value.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-        })
+    DnsName::parse_case_insensitive(value).is_ok()
 }
 
 fn validate_id<Id>(key: &str, value: &str, kind: &str) -> Result<(), LegacyPlacementError>

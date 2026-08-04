@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use aws_sdk_secretsmanager::error::DisplayErrorContext;
-use kernel_api::SecretValue;
+use kernel_api::{EnvironmentName, ExternalValueSource, SecretValue};
 use runtime::{ValueSourceError, ValueSourceResolver};
 
 pub(crate) struct AwsValueSourceResolver {
@@ -23,9 +23,12 @@ impl ValueSourceResolver for AwsValueSourceResolver {
         &self,
         source: &str,
     ) -> Result<BTreeMap<String, SecretValue>, ValueSourceError> {
-        let secret_id = source
-            .strip_prefix("aws-secret://")
-            .filter(|secret_id| !secret_id.is_empty())
+        let parsed =
+            ExternalValueSource::parse(source).map_err(|_| ValueSourceError::Rejected {
+                message: format!("unsupported external value source `{source}`"),
+            })?;
+        let secret_id = parsed
+            .aws_secret_id()
             .ok_or_else(|| ValueSourceError::Rejected {
                 message: format!("unsupported external value source `{source}`"),
             })?;
@@ -83,12 +86,7 @@ fn validate_values(
     values: &BTreeMap<String, SecretValue>,
 ) -> Result<(), ValueSourceError> {
     for (key, value) in values {
-        let mut characters = key.chars();
-        let valid_key = characters
-            .next()
-            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-            && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
-        if !valid_key {
+        if EnvironmentName::parse(key).is_err() {
             return Err(ValueSourceError::Rejected {
                 message: format!(
                     "external value source `{source}` key `{key}` must match [A-Za-z_][A-Za-z0-9_]*"

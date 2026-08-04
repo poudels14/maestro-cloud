@@ -48,7 +48,8 @@ workspace = true
 default = ["docker", "containerd"]
 test-util = ["dep:parking_lot"]
 docker = ["dep:bytes", "dep:docker", "dep:ignore", "dep:tar", "dep:tokio-util"]
-containerd = ["dep:containerd", "dep:flate2", "dep:tar", "dep:uuid"]
+build-context = ["dep:flate2", "dep:tar"]
+containerd = ["dep:containerd", "build-context", "dep:uuid"]
 
 [dev-dependencies]
 parking_lot.workspace = true

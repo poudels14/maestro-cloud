@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use kernel_api::SecretValue;
 
 use crate::artifact::parse_oci_reference;
-use crate::containerd_build_context::prepare_context;
+use crate::build_context::prepare_context;
 use crate::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
     ArtifactStoreError, ContainerdRuntimeSettings, forward_artifact_build_output,
@@ -181,6 +181,7 @@ pub(crate) async fn run_build(
         workspace.path(),
         settings.max_build_context_bytes,
         settings.max_build_context_entries,
+        "BuildKit",
     )
     .await?;
     let output = workspace.path().join("image.oci.tar");
@@ -199,7 +200,7 @@ pub(crate) async fn run_build(
 fn build_invocation(
     request: &ArtifactBuildRequest,
     settings: &ContainerdRuntimeSettings,
-    context: &crate::containerd_build_context::BuildContext,
+    context: &crate::build_context::BuildContext,
     output: PathBuf,
 ) -> Result<BuildctlInvocation, ArtifactStoreError> {
     let root = path_text(&context.root, "BuildKit context")?;

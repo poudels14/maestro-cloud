@@ -1217,7 +1217,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "flate2",
  "gix-url",
  "hex",
  "kernel-api",
@@ -1588,6 +1587,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
+]
+
+[[package]]
+name = "cookie"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddef33a339a91ea89fb53151bd0a4689cfce27055c291dfa69945475d22c747"
+dependencies = [
+ "time",
+ "version_check",
 ]
 
 [[package]]
@@ -2803,6 +2812,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "humantime"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3079,6 +3094,7 @@ name = "ingress"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "http 1.4.2",
  "kernel-api",
  "kernel-controller",
  "kernel-store",
@@ -3259,6 +3275,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "url",
  "zeroize",
 ]
 
@@ -3526,6 +3543,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hex",
+ "humantime",
  "ignore",
  "ipnet",
  "json5",
@@ -3634,6 +3652,7 @@ dependencies = [
  "gix-url",
  "hex",
  "http 1.4.2",
+ "humantime",
  "ipnet",
  "kernel-api",
  "kernel-controller",
@@ -5350,6 +5369,7 @@ dependencies = [
  "axum-server",
  "build",
  "cluster",
+ "cookie",
  "firewall",
  "futures-util",
  "http-body-util",

@@ -6,6 +6,8 @@
 
 mod artifact;
 mod artifact_output;
+#[cfg(feature = "build-context")]
+pub mod build_context;
 mod capabilities;
 #[cfg(target_os = "linux")]
 mod cgroup;
@@ -20,8 +22,6 @@ mod containerd_artifact_stream;
 mod containerd_artifact_support;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_build;
-#[cfg(all(feature = "containerd", target_os = "linux"))]
-mod containerd_build_context;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_config;
 #[cfg(all(feature = "containerd", target_os = "linux"))]

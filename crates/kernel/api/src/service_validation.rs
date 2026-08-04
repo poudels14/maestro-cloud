@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use crate::{
-    ArtifactTemplate, BuildSource, HealthProbe, NodeApiAccess, SecretMountSpec, ServiceSpec,
-    VolumeSource,
+    ArtifactTemplate, BuildSource, EnvironmentName, ExternalValueSource, HealthProbe,
+    NodeApiAccess, SecretMountSpec, ServiceSpec, VolumeSource,
 };
 
 impl ServiceSpec {
@@ -169,19 +169,16 @@ fn validate_external_source(field: &str, source: Option<&str>) -> Result<(), Ser
     let Some(source) = source else {
         return Ok(());
     };
-    let Some(secret_id) = source.strip_prefix("aws-secret://") else {
-        return invalid(field, "only aws-secret:// sources may enter desired state");
-    };
-    if secret_id.is_empty()
-        || secret_id.chars().any(char::is_whitespace)
-        || secret_id.chars().any(char::is_control)
-    {
-        return invalid(
+    match ExternalValueSource::parse_supported(source) {
+        Ok(Some(ExternalValueSource::AwsSecret { .. })) => Ok(()),
+        Ok(Some(ExternalValueSource::File { .. })) | Ok(None) => {
+            invalid(field, "only aws-secret:// sources may enter desired state")
+        }
+        Err(_) => invalid(
             field,
             "AWS secret ID must be non-empty and contain no whitespace",
-        );
+        ),
     }
-    Ok(())
 }
 
 fn validate_public_environment(
@@ -207,16 +204,12 @@ fn validate_secret_environment(
 }
 
 fn validate_environment_key(field: &str, key: &str) -> Result<(), ServiceSpecError> {
-    let mut characters = key.chars();
-    if !characters
-        .next()
-        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        || !characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
-    {
-        invalid(field, "environment keys must match [A-Za-z_][A-Za-z0-9_]*")
-    } else {
-        Ok(())
-    }
+    EnvironmentName::parse(key)
+        .map(|_| ())
+        .map_err(|_| ServiceSpecError {
+            field: field.to_owned(),
+            message: "environment keys must match [A-Za-z_][A-Za-z0-9_]*".to_owned(),
+        })
 }
 
 fn validate_probe_port(port: u16) -> Result<(), ServiceSpecError> {

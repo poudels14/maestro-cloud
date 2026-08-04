@@ -11,7 +11,7 @@ use crate::cluster_config::{invalid, required};
 use crate::cluster_config_document::{
     ClusterDocument, DepotInput, LogBackupInput, NixosUpgradeInput, PreviewInput,
 };
-use crate::config_source::{ConfigSourceReader, resolve_relative_source};
+use crate::config_source::{ConfigSourceReader, is_explicit_value_source, resolve_relative_source};
 
 pub(crate) async fn convert_launch_policy(
     config_source: &str,
@@ -284,7 +284,7 @@ async fn resolve_secret(
     value: &str,
     reader: &impl ConfigSourceReader,
 ) -> Result<String, CliError> {
-    let value = if value.starts_with("aws-secret://") || value.starts_with("file://") {
+    let value = if is_explicit_value_source(value)? {
         let source = resolve_relative_source(config_source, value)?;
         reader.read(&source).await?
     } else {

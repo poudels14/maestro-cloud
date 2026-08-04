@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use aws_sdk_secretsmanager::error::DisplayErrorContext;
+use kernel_api::ExternalValueSource;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use url::Url;
@@ -38,7 +39,7 @@ impl ConfigSourceReader for SystemConfigSourceReader {
         let sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
         let response = aws_sdk_secretsmanager::Client::new(&sdk)
             .get_secret_value()
-            .secret_id(reference)
+            .secret_id(&reference)
             .send()
             .await
             .map_err(|error| {
@@ -202,47 +203,28 @@ fn resolve_extended_source(current: &str, extends: &str) -> Result<String, CliEr
 }
 
 fn local_path(source: &str) -> Option<PathBuf> {
-    match Url::parse(source) {
-        Ok(url) if url.scheme() == "file" => file_url_path(&url),
-        Ok(_) => None,
-        Err(_) if source.contains("://") => None,
-        Err(_) => Some(PathBuf::from(source)),
+    match ExternalValueSource::parse_supported(source) {
+        Ok(Some(ExternalValueSource::File { path })) => Some(path),
+        Ok(Some(ExternalValueSource::AwsSecret { .. })) | Err(_) => None,
+        Ok(None) if source.contains("://") => None,
+        Ok(None) => Some(PathBuf::from(source)),
     }
 }
 
-fn file_url_path(url: &Url) -> Option<PathBuf> {
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return None;
-    }
-    match url.host_str() {
-        None | Some("") | Some("localhost") => url.to_file_path().ok(),
-        Some(host) if url.path().is_empty() || url.path() == "/" => Some(PathBuf::from(host)),
-        Some(host) => {
-            // Preserve Maestro's historical `file://relative/path` spelling
-            // while letting `url` validate and percent-decode its components.
-            let mut path_url = url.clone();
-            path_url.set_host(None).ok()?;
-            let suffix = path_url.to_file_path().ok()?;
-            let suffix = suffix.strip_prefix(Path::new("/")).ok()?;
-            Some(PathBuf::from(host).join(suffix))
-        }
-    }
+fn aws_secret_reference(source: &str) -> Option<String> {
+    ExternalValueSource::parse_supported(source)
+        .ok()
+        .flatten()?
+        .aws_secret_id()
+        .map(ToOwned::to_owned)
 }
 
-fn aws_secret_reference(source: &str) -> Option<&str> {
-    let url = Url::parse(source).ok()?;
-    if url.scheme() != "aws-secret" {
-        return None;
-    }
-    let separator = source.find(':')?;
-    source
-        .get(separator.saturating_add(1)..)?
-        .strip_prefix("//")
+pub(crate) fn is_explicit_value_source(source: &str) -> Result<bool, CliError> {
+    ExternalValueSource::parse_supported(source)
+        .map(|source| source.is_some())
+        .map_err(|error| {
+            CliError::invalid_input(format!("invalid external value source `{source}`: {error}"))
+        })
 }
 
 fn file_source(path: &Path) -> Result<String, CliError> {

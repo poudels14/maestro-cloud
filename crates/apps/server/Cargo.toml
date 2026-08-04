@@ -11,6 +11,7 @@ axum = { workspace = true, features = ["ws"] }
 axum-server = { workspace = true, features = ["tls-rustls-no-provider"] }
 build = { version = "0.1.0", path = "../../operators/build" }
 cluster = { version = "0.1.0", path = "../../cluster" }
+cookie.workspace = true
 firewall = { version = "0.1.0", path = "../../operators/firewall" }
 futures-util.workspace = true
 ingress = { version = "0.1.0", path = "../../operators/ingress" }

@@ -415,7 +415,10 @@ async fn resolve_values(
         let source = expand_local_environment(&source, MaestroTemplatePolicy::Reject)
             .map_err(|error| invalid(&format!("{field}.source"), error))?;
         let source = resolve_relative_source(config_source, &source)?;
-        if source.starts_with("aws-secret://") {
+        if matches!(
+            kernel_api::ExternalValueSource::parse(&source),
+            Ok(kernel_api::ExternalValueSource::AwsSecret { .. })
+        ) {
             (Some(source), BTreeMap::new())
         } else {
             (None, parse_key_values(field, &reader.read(&source).await?)?)
@@ -521,27 +524,19 @@ fn validate_ingress(
 }
 
 fn parse_duration(field: &str, value: &str) -> Result<u64, CliError> {
-    let split = value
-        .find(|character: char| !character.is_ascii_digit())
-        .unwrap_or(value.len());
-    let (amount, unit) = value.split_at(split);
-    let amount = amount.parse::<u64>().map_err(|_| {
+    let duration = humantime::parse_duration(value).map_err(|_| {
         invalid(
             field,
             "expected a duration such as `1d`, `12h`, `30m`, or `60s`",
         )
     })?;
-    let multiplier = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 60 * 60,
-        "d" => 24 * 60 * 60,
-        _ => return Err(invalid(field, "duration unit must be s, m, h, or d")),
-    };
-    amount
-        .checked_mul(multiplier)
-        .filter(|seconds| *seconds > 0)
-        .ok_or_else(|| invalid(field, "duration must be greater than zero"))
+    if duration.is_zero() || duration.subsec_nanos() != 0 {
+        return Err(invalid(
+            field,
+            "duration must be a positive whole number of seconds",
+        ));
+    }
+    Ok(duration.as_secs())
 }
 
 fn required_text(field: &str, value: &str) -> Result<String, CliError> {
@@ -555,4 +550,16 @@ fn required_text(field: &str, value: &str) -> Result<String, CliError> {
 
 fn invalid(field: &str, message: impl std::fmt::Display) -> CliError {
     CliError::invalid_input(format!("{field}: {message}"))
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::parse_duration;
+
+    #[test]
+    fn parses_human_durations_as_positive_whole_seconds() {
+        assert_eq!(parse_duration("preview", "2h 30m").ok(), Some(9_000));
+        assert!(parse_duration("preview", "1.5s").is_err());
+        assert!(parse_duration("preview", "0s").is_err());
+    }
 }

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use kernel_api::{NodeId, NodeRole, SecretValue};
+use kernel_api::{DnsLabel, DnsName, NodeId, NodeRole, SecretValue};
 
 use crate::Ipv4Cidr;
 
@@ -181,9 +181,7 @@ fn validate_workload_subnet(
 }
 
 fn validate_hostname(node_id: &NodeId, hostname: &str) -> Result<(), ClusterPreflightError> {
-    let valid =
-        !hostname.is_empty() && hostname.len() <= 253 && hostname.split('.').all(is_dns_label);
-    if !valid {
+    if DnsName::parse(hostname).is_err() {
         return Err(ClusterPreflightError::InvalidHostname {
             node_id: node_id.clone(),
             hostname: hostname.to_owned(),
@@ -193,27 +191,11 @@ fn validate_hostname(node_id: &NodeId, hostname: &str) -> Result<(), ClusterPref
 }
 
 fn validate_dns_label(field: &'static str, value: &str) -> Result<(), ClusterPreflightError> {
-    if !is_dns_label(value) {
+    if DnsLabel::parse(value).is_err() {
         return Err(ClusterPreflightError::InvalidDnsLabel {
             field,
             value: value.to_owned(),
         });
     }
     Ok(())
-}
-
-fn is_dns_label(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        })
-        && value
-            .chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
-        && value
-            .chars()
-            .next_back()
-            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
 }

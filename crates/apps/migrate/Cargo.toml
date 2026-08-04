@@ -16,6 +16,7 @@ etcd-client.workspace = true
 gix-url.workspace = true
 hex.workspace = true
 http.workspace = true
+humantime.workspace = true
 ipnet.workspace = true
 kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }

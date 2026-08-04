@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+http.workspace = true
 kernel-api = { path = "../../kernel/api" }
 kernel-controller = { version = "0.1.0", path = "../../kernel/controller" }
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
