@@ -14,7 +14,7 @@ use upgrade::NodeUpgradeAgent;
 use crate::agent_network::AgentNetworkAgents;
 use crate::control_plane::role_error;
 use crate::stats_metric_sampler::StatsMetricSampler;
-use crate::{LogMaintenanceWorker, RoleError};
+use crate::{ControllerLogWorker, LogMaintenanceWorker, RoleError};
 
 pub(crate) struct AgentTaskInputs<MeshBackendType, FirewallBackendType, BridgeBackendType> {
     pub(crate) api_servers: Vec<server::BoundApiServer>,
@@ -34,6 +34,7 @@ pub(crate) struct AgentTaskInputs<MeshBackendType, FirewallBackendType, BridgeBa
     pub(crate) metric_sink_workers: Vec<MetricSinkWorker>,
     pub(crate) host_metric_sink_workers: Vec<HostMetricSinkWorker>,
     pub(crate) log_maintenance: Option<LogMaintenanceWorker>,
+    pub(crate) controller_log_worker: Option<ControllerLogWorker>,
 }
 
 pub(crate) struct AgentTasks {
@@ -74,6 +75,7 @@ where
         metric_sink_workers,
         host_metric_sink_workers,
         log_maintenance,
+        controller_log_worker,
     } = inputs;
     let (shutdown, task_shutdown) = watch::channel(false);
     let assignment_shutdown = task_shutdown.clone();
@@ -105,6 +107,13 @@ where
             Ok(())
         }),
     ];
+    if let Some(worker) = controller_log_worker {
+        let controller_log_shutdown = task_shutdown.clone();
+        tasks.push(tokio::spawn(async move {
+            worker.run(controller_log_shutdown).await;
+            Ok(())
+        }));
+    }
     for api_server in api_servers {
         let api_shutdown = task_shutdown.clone();
         tasks.push(tokio::spawn(async move {

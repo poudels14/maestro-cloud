@@ -5,14 +5,15 @@ use clap::{Parser, Subcommand};
 use daemon::{
     ClusterConfigFallbacks, DEFAULT_DNS_RESOLVER_PORT, DeadLetterAdminCommand,
     DeadLetterAdminOutput, DnsResolverLaunchConfig, LocalLogOptions, administer_dead_letters,
-    launch_daemon, load_launch_config, load_launch_config_with_fallbacks, run_dns_resolver,
-    stream_local_logs,
+    controller_log_capture, launch_daemon_with_controller_logs, load_launch_config,
+    load_launch_config_with_fallbacks, run_dns_resolver, stream_local_logs,
 };
 use logs::{LogSequence, LogSinkId};
 use maestro_cli::{NodeLaunchOptions, prepare_node_launch};
 use node_agent::{TailscaleDnsPluginSettings, TailscaleDnsRoute};
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Debug, Parser)]
@@ -140,28 +141,36 @@ async fn main() {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    initialize_tracing();
-    if let Err(error) = run(cli).await {
+    let controller_logs = initialize_tracing();
+    if let Err(error) = run(cli, controller_logs).await {
         tracing::error!(error = %error, "maestro daemon failed");
         std::process::exit(1);
     }
 }
 
-fn initialize_tracing() {
+fn initialize_tracing() -> daemon::ControllerLogCapture {
     let filter = EnvFilter::builder()
         .with_default_directive(tracing::Level::INFO.into())
         .from_env_lossy();
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .json()
-        .flatten_event(true)
-        .with_ansi(false)
-        .with_writer(std::io::stderr)
-        .finish()
+    let (controller_layer, controller_logs) = controller_log_capture();
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .flatten_event(true)
+                .with_ansi(false)
+                .with_writer(std::io::stderr),
+        )
+        .with(controller_layer)
         .init();
+    controller_logs
 }
 
-async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(
+    cli: Cli,
+    controller_logs: daemon::ControllerLogCapture,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         DaemonCommand::Start {
             config,
@@ -169,7 +178,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             data_dir,
             containerd_socket,
             etcd_binary,
-        } => start(config, subnet, data_dir, containerd_socket, etcd_binary).await,
+        } => {
+            start(
+                config,
+                subnet,
+                data_dir,
+                containerd_socket,
+                etcd_binary,
+                controller_logs,
+            )
+            .await
+        }
         DaemonCommand::Dns {
             cluster_id,
             node_id,
@@ -280,6 +299,7 @@ async fn start(
     data_directory: PathBuf,
     containerd_socket: PathBuf,
     etcd_binary: PathBuf,
+    controller_logs: daemon::ControllerLogCapture,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !data_directory.is_absolute() {
         return Err(std::io::Error::new(
@@ -316,7 +336,7 @@ async fn start(
     let cluster_id = config.cluster.cluster_id.clone();
     let node_id = config.node_id.clone();
     tracing::info!(%cluster_id, %node_id, "starting maestro daemon");
-    let mut running = launch_daemon(config).await?;
+    let mut running = launch_daemon_with_controller_logs(config, controller_logs).await?;
     tracing::info!(%cluster_id, %node_id, "maestro daemon started");
     tokio::select! {
         signal = shutdown_signal() => {

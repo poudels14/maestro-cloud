@@ -47,9 +47,9 @@ use crate::tailscale_resources::TailscaleSystemResources;
 use crate::traefik_resources::TraefikSystemResources;
 use crate::value_source::AwsValueSourceResolver;
 use crate::{
-    AdmissionDependencies, AgentStore, BuildOperatorBackends, Daemon, DaemonPlan,
-    DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings, HostTelemetryDependencies,
-    OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    AdmissionDependencies, AgentStore, BuildOperatorBackends, ControllerLogCapture, Daemon,
+    DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
+    HostTelemetryDependencies, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
 };
 
 mod config;
@@ -61,12 +61,22 @@ pub use config::{
 
 /// Builds production adapters and starts one daemon instance for its declared node role.
 pub async fn launch_daemon(config: DaemonLaunchConfig) -> Result<RunningDaemon, DaemonLaunchError> {
-    launch_daemon_inner(config, None).await
+    launch_daemon_inner(config, None, None).await
+}
+
+/// Builds and starts a production daemon while retaining accepted tracing events as controller
+/// system logs.
+pub async fn launch_daemon_with_controller_logs(
+    config: DaemonLaunchConfig,
+    controller_logs: ControllerLogCapture,
+) -> Result<RunningDaemon, DaemonLaunchError> {
+    launch_daemon_inner(config, None, Some(controller_logs)).await
 }
 
 async fn launch_daemon_inner(
     config: DaemonLaunchConfig,
     launch_config_admin: Option<Arc<dyn server::LaunchConfigAdmin>>,
+    controller_logs: Option<ControllerLogCapture>,
 ) -> Result<RunningDaemon, DaemonLaunchError> {
     config.validate()?;
     let DaemonLaunchConfig {
@@ -289,6 +299,17 @@ async fn launch_daemon_inner(
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);
     let (log_store_runtime, metric_store_runtime) =
         open_observability_stores(plan.data_directory()).await?;
+    let controller_log_worker = controller_logs
+        .map(|capture| {
+            capture.attach(
+                plan.cluster().cluster_id.clone(),
+                plan.node_id().clone(),
+                instance_id.clone(),
+                log_store_runtime.store(),
+            )
+        })
+        .transpose()
+        .map_err(|error| invalid(error.to_string()))?;
     let operator_workload = Arc::new(
         OperatorLeaderWorkload::new(
             plan.cluster().cluster_id.clone(),
@@ -396,6 +417,9 @@ async fn launch_daemon_inner(
     .with_value_source_resolver(value_sources)
     .with_webhook_backend(webhook_backend)
     .with_leader_workload(operator_workload);
+    if let Some(worker) = controller_log_worker {
+        factory = factory.with_controller_log_worker(worker);
+    }
     if let Some(admin) = launch_config_admin {
         factory = factory.with_launch_config_admin(admin);
     }

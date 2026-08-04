@@ -2,7 +2,7 @@ import { createSignal, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import clsx from "clsx";
 import { useQuery } from "../../lib/useQuery";
-import { useNavigate } from "@tanstack/solid-router";
+import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Menu } from "lucide-solid";
 import { ServiceSidebar, servicesQuery, type Service } from "@maestro/services";
 import { clusterConfigQuery, clusterInfoQuery } from "@maestro/cluster";
@@ -14,6 +14,7 @@ import { clusterApi, panelFeatureRegistry, servicesApi } from "../../features";
 
 function HomeShell(props: { path: HomePath }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const services = useQuery(() => servicesQuery(servicesApi));
   const cluster = useQuery(() => clusterInfoQuery(clusterApi));
   const config = useQuery(() => clusterConfigQuery(clusterApi));
@@ -33,6 +34,13 @@ function HomeShell(props: { path: HomePath }) {
       params: { serviceId: service.meta.id, tab: "overview" }
     });
   };
+  const controllerLogsSelected = () =>
+    props.path === "/cluster/logs" &&
+    (location().search as { component?: string }).component === "controller";
+  const navigateControllerLogs = () => {
+    setDrawerOpen(false);
+    navigate({ to: "/cluster/logs", search: { component: "controller" } });
+  };
 
   return (
     <div class="h-screen flex bg-[#fafafa]">
@@ -44,6 +52,8 @@ function HomeShell(props: { path: HomePath }) {
           setDrawerOpen(false);
           navigate({ to: "/" });
         }}
+        controllerLogsSelected={controllerLogsSelected()}
+        onSelectControllerLogs={navigateControllerLogs}
         topSection={<NodeNavSection active={props.path} onNavigate={() => setDrawerOpen(false)} />}
         footer={<SessionControls />}
         mobileOpen={drawerOpen()}

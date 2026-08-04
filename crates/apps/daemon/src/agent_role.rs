@@ -70,6 +70,11 @@ where
         .lock()
         .map_err(|_| RoleError::new("log-maintenance lock was poisoned"))?
         .take();
+    let controller_log_worker = factory
+        .controller_log_worker
+        .lock()
+        .map_err(|_| RoleError::new("controller-log worker lock was poisoned"))?
+        .take();
     let (store, store_runtime, joined_member) = match &factory.agent_store {
         AgentStore::Managed {
             provider,
@@ -360,6 +365,7 @@ where
         metric_sink_workers,
         host_metric_sink_workers,
         log_maintenance,
+        controller_log_worker,
     })
     .into_parts();
     let owned_runtimes = runtimes.into_owned();

@@ -23,6 +23,7 @@ interface ClusterLogsLoaders {
 interface ClusterLogsSearch {
   node?: string | undefined;
   service?: string | undefined;
+  component?: string | undefined;
   query?: string | undefined;
   range?: string | undefined;
 }
@@ -64,6 +65,21 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
     const nodeId = search().node;
     return nodeId ? { nodeId } : {};
   };
+  const sourceSelection = () =>
+    search().component
+      ? `system:${search().component}`
+      : search().service
+        ? `service:${search().service}`
+        : "";
+  const selectSource = (value: string) => {
+    if (value.startsWith("system:")) {
+      setUrlSearch({ component: value.slice("system:".length), service: undefined });
+    } else if (value.startsWith("service:")) {
+      setUrlSearch({ component: undefined, service: value.slice("service:".length) });
+    } else {
+      setUrlSearch({ component: undefined, service: undefined });
+    }
+  };
 
   return (
     <div class="h-full min-h-0 flex flex-col gap-3">
@@ -97,21 +113,27 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
             </select>
           </label>
           <label class="grid gap-1 text-[11px] font-medium text-gray-500">
-            Service
+            Source
             <select
-              value={search().service ?? ""}
-              onChange={(event) =>
-                setUrlSearch({ service: event.currentTarget.value || undefined })
-              }
+              value={sourceSelection()}
+              onChange={(event) => selectSource(event.currentTarget.value)}
               class="min-w-48 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-brand-border focus:ring-2 focus:ring-brand-ring"
             >
-              <option value="" selected={!search().service}>
-                All services
+              <option value="" selected={!sourceSelection()}>
+                All sources
               </option>
+              <optgroup label="System">
+                <option value="system:controller" selected={search().component === "controller"}>
+                  Controller
+                </option>
+              </optgroup>
               <optgroup label="User services">
                 <For each={sortedServices()}>
                   {(service) => (
-                    <option value={service.id} selected={service.id === search().service}>
+                    <option
+                      value={`service:${service.id}`}
+                      selected={service.id === search().service}
+                    >
                       {service.name}
                     </option>
                   )}
@@ -124,9 +146,9 @@ function ClusterLogsPage(props: ClusterLogsPageProps) {
       <div class="min-h-0 flex-1">
         <LogViewer
           api={props.api}
-          serviceId={search().service ?? ""}
+          serviceId={search().component ?? search().service ?? ""}
           deploymentId={null}
-          isSystem={false}
+          isSystem={Boolean(search().component)}
           showHistogram
           fillHeight
           cluster={clusterSelection()}

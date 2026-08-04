@@ -30,7 +30,8 @@ use crate::agent_role::start_agent;
 use crate::leadership::run_leadership;
 use crate::role_tasks::{shutdown_role_tasks, wait_for_role_task};
 use crate::{
-    DaemonPlan, DaemonRole, LogMaintenanceWorker, RoleError, RoleFactory, RoleRuntime, RoleSpec,
+    ControllerLogWorker, DaemonPlan, DaemonRole, LogMaintenanceWorker, RoleError, RoleFactory,
+    RoleRuntime, RoleSpec,
 };
 
 mod settings;
@@ -167,6 +168,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
     pub(crate) sink_runtime: SinkRuntimeRegistry,
     pub(crate) log_maintenance: Mutex<Option<LogMaintenanceWorker>>,
+    pub(crate) controller_log_worker: Mutex<Option<ControllerLogWorker>>,
     pub(crate) metric_store_runtime: Mutex<Option<Box<dyn MetricStoreRuntime>>>,
     pub(crate) metric_sinks: Vec<Arc<dyn MetricSink>>,
     pub(crate) host_metric_sinks: Vec<Arc<dyn HostMetricSink>>,
@@ -223,6 +225,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             log_sinks: dependencies.log_sinks,
             sink_runtime: SinkRuntimeRegistry::default(),
             log_maintenance: Mutex::new(None),
+            controller_log_worker: Mutex::new(None),
             metric_store_runtime: Mutex::new(Some(dependencies.metric_store_runtime)),
             metric_sinks: dependencies.metric_sinks,
             host_metric_sinks: dependencies.host_metric_sinks,
@@ -286,6 +289,12 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
     /// Attaches node-local log rollover, backup, and retention to the agent lifetime.
     pub fn with_log_maintenance(mut self, worker: LogMaintenanceWorker) -> Self {
         self.log_maintenance = Mutex::new(Some(worker));
+        self
+    }
+
+    /// Attaches the node-local controller tracing drain to the agent role lifetime.
+    pub fn with_controller_log_worker(mut self, worker: ControllerLogWorker) -> Self {
+        self.controller_log_worker = Mutex::new(Some(worker));
         self
     }
 

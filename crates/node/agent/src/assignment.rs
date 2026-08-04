@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, Deployment, EnvironmentName, ReplicaState, ResourceKind,
-    ResourceName, SecretMountSpec, SecretValue,
+    ArtifactTemplate, Assignment, AssignmentPhase, ConditionType, Deployment, EnvironmentName,
+    ReplicaState, ResourceKind, ResourceName, SecretMountSpec, SecretValue,
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
@@ -484,11 +484,81 @@ impl AssignmentAgent {
                 })
                 .await?;
             if matches!(result, CasOutcome::Applied(_)) {
+                trace_assignment_transition(&current);
                 return Ok(());
             }
         }
         Err(AssignmentAgentError::Contention {
             assignment_id: assignment.meta.id.to_string(),
         })
+    }
+}
+
+fn trace_assignment_transition(assignment: &Assignment) {
+    let condition = assignment
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady);
+    let reason = condition.map_or("Unknown", |condition| condition.reason.0.as_str());
+    let detail = condition.map_or("assignment status changed", |condition| {
+        condition.message.as_str()
+    });
+    match assignment.status.phase {
+        AssignmentPhase::Failed => tracing::error!(
+            target: "maestro::controller",
+            kind = ASSIGNMENT_KIND,
+            resource_id = %assignment.meta.id,
+            service_id = %assignment.spec.service_id,
+            deployment_id = %assignment.spec.deployment_id,
+            node_id = %assignment.spec.node_id,
+            reason,
+            error = detail,
+            "assignment failed: {detail}"
+        ),
+        AssignmentPhase::Pending => tracing::warn!(
+            target: "maestro::controller",
+            kind = ASSIGNMENT_KIND,
+            resource_id = %assignment.meta.id,
+            service_id = %assignment.spec.service_id,
+            deployment_id = %assignment.spec.deployment_id,
+            node_id = %assignment.spec.node_id,
+            reason,
+            error = detail,
+            "assignment is pending: {detail}"
+        ),
+        AssignmentPhase::Running => tracing::info!(
+            target: "maestro::controller",
+            kind = ASSIGNMENT_KIND,
+            resource_id = %assignment.meta.id,
+            service_id = %assignment.spec.service_id,
+            deployment_id = %assignment.spec.deployment_id,
+            node_id = %assignment.spec.node_id,
+            reason,
+            detail,
+            "assignment is running"
+        ),
+        AssignmentPhase::Draining => tracing::info!(
+            target: "maestro::controller",
+            kind = ASSIGNMENT_KIND,
+            resource_id = %assignment.meta.id,
+            service_id = %assignment.spec.service_id,
+            deployment_id = %assignment.spec.deployment_id,
+            node_id = %assignment.spec.node_id,
+            reason,
+            detail,
+            "assignment is draining"
+        ),
+        AssignmentPhase::Stopped => tracing::info!(
+            target: "maestro::controller",
+            kind = ASSIGNMENT_KIND,
+            resource_id = %assignment.meta.id,
+            service_id = %assignment.spec.service_id,
+            deployment_id = %assignment.spec.deployment_id,
+            node_id = %assignment.spec.node_id,
+            reason,
+            detail,
+            "assignment stopped"
+        ),
     }
 }

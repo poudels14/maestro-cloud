@@ -15,6 +15,7 @@ mod cloudflare_resources;
 mod cluster_query_clients;
 mod config_view;
 mod control_plane;
+mod controller_logs;
 mod datadog;
 mod dead_letter_admin;
 mod depot_config;
@@ -60,6 +61,10 @@ pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
     HostTelemetryDependencies, LeaderWorkload, NodeUpgradeDependencies,
 };
+pub use controller_logs::{
+    CONTROLLER_LOG_COMPONENT, ControllerLogCapture, ControllerLogCaptureError, ControllerLogLayer,
+    ControllerLogWorker, controller_log_capture,
+};
 pub use dead_letter_admin::{
     DeadLetterAdminCommand, DeadLetterAdminError, DeadLetterAdminOutput, administer_dead_letters,
 };
@@ -69,8 +74,9 @@ pub use dns_launch::{
 };
 pub use error::{DaemonError, RoleError, RoleFailure};
 pub use launch::{
-    DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, launch_daemon, load_launch_config,
-    load_launch_config_with_fallbacks, load_launch_document,
+    DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, launch_daemon,
+    launch_daemon_with_controller_logs, load_launch_config, load_launch_config_with_fallbacks,
+    load_launch_document,
 };
 pub use launch_error::DaemonLaunchError;
 pub use local_logs::{LocalLogError, LocalLogOptions, stream_local_logs};

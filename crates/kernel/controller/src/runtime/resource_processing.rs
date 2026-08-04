@@ -180,7 +180,11 @@ where
             },
             Err(ReconcileError::Retryable { message }) => {
                 span.in_scope(|| {
-                    tracing::warn!(kind = R::KIND, %message, "reconcile will be retried");
+                    tracing::warn!(
+                        kind = R::KIND,
+                        error = %message,
+                        "reconcile will be retried: {message}"
+                    );
                 });
                 ProcessResult {
                     action: Some(Action::Requeue(self.config.retry_backoff.delay(attempt))),
@@ -194,8 +198,8 @@ where
                     tracing::error!(
                         kind = R::KIND,
                         %reason,
-                        %message,
-                        "reconcile requires an external change"
+                        error = %message,
+                        "reconcile requires an external change: {message}"
                     );
                 });
                 ProcessResult {

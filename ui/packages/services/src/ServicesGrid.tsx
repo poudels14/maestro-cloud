@@ -2,7 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "@maestro/sdk";
 import { useNavigate } from "@tanstack/solid-router";
-import { Rocket } from "lucide-solid";
+import { ScrollText, Rocket } from "lucide-solid";
 import type { ServicesApi } from "./api";
 import type { Service } from "./types";
 import { serviceQueryKeys, servicesQuery } from "./queries";
@@ -41,6 +41,11 @@ function ServicesGrid(props: { api: ServicesApi }) {
     navigate({
       to: "/services/$serviceId/$tab",
       params: { serviceId: service.meta.id, tab: "overview" }
+    });
+  const openControllerLogs = () =>
+    navigate({
+      to: "/cluster/logs",
+      search: { component: "controller" }
     });
 
   return (
@@ -82,12 +87,31 @@ function ServicesGrid(props: { api: ServicesApi }) {
             </For>
           </div>
         </Show>
-        <Show when={systemServices().length > 0}>
-          <div class="mt-10">
-            <div class="mb-4">
-              <SectionHeader>System</SectionHeader>
-            </div>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div class="mt-10">
+          <div class="mb-4">
+            <SectionHeader>System</SectionHeader>
+          </div>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={openControllerLogs}
+              class="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 shadow-[0_1px_2px_rgb(0_0_0/0.04)] hover:border-gray-300 transition-colors duration-150 text-left w-full cursor-pointer outline-none"
+            >
+              <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <div class="mb-1 flex items-center gap-2.5">
+                    <ScrollText class="size-4 text-gray-400" />
+                    <span class="truncate text-base font-semibold text-gray-900">Controller</span>
+                  </div>
+                  <p class="text-sm text-gray-500">Control-plane and deployment events</p>
+                  <p class="mt-2 text-[11px] text-gray-400">View logs</p>
+                </div>
+                <span class="inline-flex items-center text-[10px] font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5">
+                  system
+                </span>
+              </div>
+            </button>
+            <Show when={systemServices().length > 0}>
               <For each={systemServices()}>
                 {(service) => (
                   <ServiceCard
@@ -100,9 +124,9 @@ function ServicesGrid(props: { api: ServicesApi }) {
                   />
                 )}
               </For>
-            </div>
+            </Show>
           </div>
-        </Show>
+        </div>
       </Show>
 
       <ConfirmDialog

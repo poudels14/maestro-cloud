@@ -1,5 +1,5 @@
 import { For, Show, type JSX } from "solid-js";
-import { Monitor, X } from "lucide-solid";
+import { Monitor, ScrollText, X } from "lucide-solid";
 import clsx from "clsx";
 import { SidebarSection, StatusDot } from "@maestro/kit";
 import type { Service } from "./types";
@@ -14,6 +14,8 @@ function ServiceSidebar(props: {
   selected: Service | null;
   onSelect: (service: Service) => void;
   onBack: () => void;
+  controllerLogsSelected?: boolean;
+  onSelectControllerLogs?: () => void;
   topSection?: JSX.Element;
   footer?: JSX.Element;
   mobileOpen?: boolean;
@@ -78,8 +80,32 @@ function ServiceSidebar(props: {
               </For>
             </SidebarSection>
           </Show>
-          <Show when={systemServices().length > 0}>
-            <SidebarSection title="System" count={systemServices().length}>
+          <Show when={systemServices().length > 0 || props.onSelectControllerLogs}>
+            <SidebarSection
+              title="System"
+              count={systemServices().length + (props.onSelectControllerLogs ? 1 : 0)}
+            >
+              <Show when={props.onSelectControllerLogs}>
+                <button
+                  type="button"
+                  onClick={() => props.onSelectControllerLogs?.()}
+                  class={clsx(
+                    "relative w-full text-left pl-2.5 pr-2 py-1.5 flex items-center gap-2 rounded-md text-sm transition-[transform,background-color,color] duration-150 ease-out-strong active:scale-[0.98] outline-none",
+                    {
+                      "bg-brand-light text-brand-hover font-medium": props.controllerLogsSelected,
+                      "text-gray-700 hover:bg-gray-50": !props.controllerLogsSelected
+                    }
+                  )}
+                >
+                  <Show when={props.controllerLogsSelected}>
+                    <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-brand" />
+                  </Show>
+                  <span class="size-3.5 flex items-center justify-center shrink-0">
+                    <ScrollText class="size-3.5" />
+                  </span>
+                  <span class="truncate flex-1">Controller</span>
+                </button>
+              </Show>
               <For each={systemServices()}>
                 {(service) => (
                   <SidebarServiceItem

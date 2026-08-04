@@ -75,6 +75,9 @@ function ServiceDetailPage() {
         selected={selected() ?? null}
         onSelect={navigateService}
         onBack={() => navigate({ to: "/" })}
+        onSelectControllerLogs={() =>
+          navigate({ to: "/cluster/logs", search: { component: "controller" } })
+        }
         topSection={<NodeNavSection onNavigate={() => setDrawerOpen(false)} />}
         footer={<SessionControls />}
         mobileOpen={drawerOpen()}
