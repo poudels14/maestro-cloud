@@ -1,5 +1,7 @@
 use clap::{CommandFactory, Parser};
 
+use crate::cluster_command::{UpgradeBatch, confirm_upgrade};
+use crate::cluster_restart::{RestartTarget, confirm as confirm_restart};
 use crate::{Cli, run};
 
 #[test]
@@ -427,46 +429,48 @@ async fn auth_token_uses_the_cluster_config_key_or_an_explicit_key()
     Ok(())
 }
 
-#[tokio::test]
-async fn restart_confirmation_can_abort_before_loading_an_api_context()
--> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::try_parse_from(["maestro", "cluster", "restart", "node-a"])?;
+#[test]
+fn restart_confirmation_identifies_the_admin_origin() -> Result<(), Box<dyn std::error::Error>> {
     let mut input = std::io::Cursor::new(b"no\n".to_vec());
     let mut output = Vec::new();
 
-    run(cli, &mut input, &mut output).await?;
+    let confirmed = confirm_restart(
+        &RestartTarget::Node("node-a".to_string()),
+        "http://10.50.0.250",
+        &mut input,
+        &mut output,
+    )?;
 
     let output = String::from_utf8(output)?;
+    assert!(!confirmed);
+    assert!(output.contains("Admin API: http://10.50.0.250"));
     assert!(output.contains("Restart cluster node `node-a`? [y/N]:"));
-    assert!(output.ends_with("[maestro]: aborted\n"));
     Ok(())
 }
 
-#[tokio::test]
-async fn upgrade_confirmation_warns_and_aborts_before_loading_an_api_context()
+#[test]
+fn upgrade_confirmation_identifies_the_admin_origin_and_warns_about_all_node_mode()
 -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::try_parse_from([
-        "maestro",
-        "cluster",
-        "upgrade",
-        "--batch=all",
-        "--node",
-        "node-b",
-        "--node",
-        "node-a",
-    ])?;
     let mut input = std::io::Cursor::new(b"no\n".to_vec());
     let mut output = Vec::new();
 
-    run(cli, &mut input, &mut output).await?;
+    let confirmed = confirm_upgrade(
+        kernel_api::MAESTRO_VERSION,
+        UpgradeBatch::All,
+        &["node-b".to_string(), "node-a".to_string()],
+        "https://admin.maestro.example.test",
+        &mut input,
+        &mut output,
+    )?;
 
     let output = String::from_utf8(output)?;
+    assert!(!confirmed);
+    assert!(output.contains("Admin API: https://admin.maestro.example.test"));
     let expected = format!(
         "Upgrade cluster nodes `node-b`, `node-a` to Maestro {} or newer in one batch; \
          services and the control plane will be unavailable? [y/N]:",
         kernel_api::MAESTRO_VERSION
     );
     assert!(output.contains(&expected));
-    assert!(output.ends_with("[maestro]: aborted\n"));
     Ok(())
 }

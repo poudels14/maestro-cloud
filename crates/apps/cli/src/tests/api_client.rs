@@ -15,6 +15,7 @@ fn api_client_builds_origin_scoped_endpoints_and_rejects_bad_credentials()
         client.endpoint("/api/services")?.as_str(),
         "https://maestro.example.test/api/services"
     );
+    assert_eq!(client.admin_origin(), "https://maestro.example.test");
     assert!(client.endpoint("api/services").is_err());
     assert!(
         ApiClient::new(Context {

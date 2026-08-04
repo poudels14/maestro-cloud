@@ -47,6 +47,12 @@ impl ApiClient {
         Ok(Self { origin, client })
     }
 
+    /// Normalized admin API origin shown before potentially disruptive mutations.
+    #[must_use]
+    pub(crate) fn admin_origin(&self) -> &str {
+        self.origin.as_str().trim_end_matches('/')
+    }
+
     pub(crate) async fn get<Response>(&self, path: &str) -> Result<Response, CliError>
     where
         Response: DeserializeOwned,

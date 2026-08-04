@@ -109,6 +109,25 @@ test("keeps a node schedulable while drain artifact replication is pending", () 
   assert.equal(projected[0]?.state.reason, "waiting for peer copies");
 });
 
+test("presents upgrade-owned maintenance as UI state instead of audit detail", () => {
+  const maintenance = {
+    type: "Maintenance",
+    status: "true",
+    reason: "UpgradeRun:upgrade-1",
+    message: "node reserved by upgrade run `upgrade-1`",
+    observedGeneration: 1,
+    lastTransitionTime: 75_000
+  } satisfies ApiSchemas["Condition"];
+  const projected = projectClusterNodes(
+    [node("node-b", "worker-b", 100_000, [maintenance])],
+    [network("node-b", 2, meshReady)],
+    100_000
+  );
+
+  assert.equal(projected[0]?.state.unschedulable, true);
+  assert.equal(projected[0]?.state.reason, "Upgrade in progress");
+});
+
 test("does not surface a completed restore as an active scheduling warning", () => {
   const restored = {
     type: "Draining",

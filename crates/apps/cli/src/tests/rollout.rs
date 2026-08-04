@@ -144,16 +144,17 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
         .to_string(),
     };
     let api = RecordingApi::default();
-    let mut input = std::io::Cursor::new(Vec::<u8>::new());
+    let mut input = std::io::Cursor::new(b"yes\n".to_vec());
     let mut output = Vec::new();
     run(
         &api,
         RolloutOptions {
+            admin_origin: "http://10.50.0.250",
             config_source: "services.jsonc",
             filters: &["api".to_string()],
             mode: RolloutMode::Apply,
             frozen_service_policy: FrozenServicePolicy::BypassFreeze,
-            confirmation: ConfirmationMode::AssumeYes,
+            confirmation: ConfirmationMode::Prompt,
             idempotency_key: Some("rollout-1".to_string()),
         },
         &mut input,
@@ -162,6 +163,8 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
     )
     .await?;
     let output = String::from_utf8(output)?;
+    assert!(output.contains("Admin API: http://10.50.0.250"));
+    assert!(output.contains("Apply 1 service change(s)? [y/N]:"));
     assert!(output.contains("warning: ignored field `futureRoot`"));
     assert!(output.contains("environment.TOKEN: ••••-old -> ••••-new"));
     assert!(output.contains("rollout accepted for `api` at generation 8"));
@@ -205,6 +208,7 @@ async fn rollout_dry_run_never_writes_and_prompts_for_apply()
     run(
         &api,
         RolloutOptions {
+            admin_origin: "http://10.50.0.250",
             config_source: "services.jsonc",
             filters: &[],
             mode: RolloutMode::Preview,

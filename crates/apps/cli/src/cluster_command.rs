@@ -362,19 +362,19 @@ pub(crate) async fn run(
         } => {
             let selection = RestartSelection::try_from(selection)?;
             let confirm_after_resolution = selection.direct_target().is_none();
+            let client = active_client()?;
             if !yes
                 && let Some(target) = selection.direct_target()
-                && !cluster_restart::confirm(target, input, output)?
+                && !cluster_restart::confirm(target, client.admin_origin(), input, output)?
             {
                 writeln!(output, "[maestro]: aborted")
                     .map_err(|source| CliError::io("failed to write command output", source))?;
                 return Ok(());
             }
-            let client = active_client()?;
             let target = cluster_restart::resolve(&client, selection, input, output).await?;
             if !yes
                 && confirm_after_resolution
-                && !cluster_restart::confirm(&target, input, output)?
+                && !cluster_restart::confirm(&target, client.admin_origin(), input, output)?
             {
                 writeln!(output, "[maestro]: aborted")
                     .map_err(|source| CliError::io("failed to write command output", source))?;
@@ -397,13 +397,23 @@ pub(crate) async fn run(
             idempotency_key,
             yes,
         } => {
-            if !yes && !confirm_upgrade(&target_version, batch, &node_ids, input, output)? {
+            let client = active_client()?;
+            if !yes
+                && !confirm_upgrade(
+                    &target_version,
+                    batch,
+                    &node_ids,
+                    client.admin_origin(),
+                    input,
+                    output,
+                )?
+            {
                 writeln!(output, "[maestro]: aborted")
                     .map_err(|source| CliError::io("failed to write command output", source))?;
                 return Ok(());
             }
             upgrades::start(
-                &active_client()?,
+                &client,
                 target_version,
                 batch.into(),
                 node_ids,
@@ -428,10 +438,11 @@ pub(crate) async fn run(
     }
 }
 
-fn confirm_upgrade(
+pub(crate) fn confirm_upgrade(
     target_version: &str,
     batch: UpgradeBatch,
     node_ids: &[String],
+    admin_origin: &str,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<bool, CliError> {
@@ -444,6 +455,8 @@ fn confirm_upgrade(
         UpgradeBatch::Rolling => "serially with drain and verification",
         UpgradeBatch::All => "in one batch; services and the control plane will be unavailable",
     };
+    writeln!(output, "Admin API: {admin_origin}")
+        .map_err(|source| CliError::io("failed to write upgrade confirmation", source))?;
     write!(
         output,
         "Upgrade {target} to Maestro {target_version} or newer {strategy}? [y/N]: "

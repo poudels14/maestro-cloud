@@ -2,6 +2,7 @@ import type { ApiSchemas } from "@maestro/api-client";
 import type { ClusterNode } from "./types";
 
 const NODE_LIVENESS_WINDOW_MS = 30_000;
+const UPGRADE_IN_PROGRESS_LABEL = "Upgrade in progress";
 
 function projectClusterNodes(
   nodes: ApiSchemas["Node"][],
@@ -54,8 +55,7 @@ function projectClusterNodes(
             drainCondition.reason === "ReplicatingArtifacts",
           drainedAtMs: placementCondition?.lastTransitionTime ?? null,
           reason:
-            placementCondition?.message ||
-            placementCondition?.reason ||
+            placementConditionLabel(placementCondition) ||
             (drainCondition?.status === "unknown"
               ? drainCondition.message || drainCondition.reason
               : null) ||
@@ -64,6 +64,18 @@ function projectClusterNodes(
       } satisfies ClusterNode;
     })
     .sort((left, right) => left.hostname.localeCompare(right.hostname));
+}
+
+function placementConditionLabel(condition: ApiSchemas["Condition"] | undefined): string | null {
+  if (!condition) return null;
+  if (
+    condition.type === "Maintenance" &&
+    condition.status === "true" &&
+    condition.reason.startsWith("UpgradeRun:")
+  ) {
+    return UPGRADE_IN_PROGRESS_LABEL;
+  }
+  return condition.message || condition.reason || null;
 }
 
 function meshReadinessError(

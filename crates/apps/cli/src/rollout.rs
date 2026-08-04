@@ -30,6 +30,7 @@ pub(crate) enum ConfirmationMode {
 }
 
 pub(crate) struct RolloutOptions<'a> {
+    pub(crate) admin_origin: &'a str,
     pub(crate) config_source: &'a str,
     pub(crate) filters: &'a [String],
     pub(crate) mode: RolloutMode,
@@ -84,7 +85,9 @@ pub(crate) async fn run(
         writeln!(output, "[maestro]: all selected services are unchanged").map_err(output_error)?;
         return Ok(());
     }
-    if options.confirmation == ConfirmationMode::Prompt && !confirm(change_count, input, output)? {
+    if options.confirmation == ConfirmationMode::Prompt
+        && !confirm(change_count, options.admin_origin, input, output)?
+    {
         writeln!(output, "[maestro]: aborted").map_err(output_error)?;
         return Ok(());
     }
@@ -178,9 +181,11 @@ pub(crate) fn write_diff(
 
 fn confirm(
     change_count: usize,
+    admin_origin: &str,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<bool, CliError> {
+    writeln!(output, "Admin API: {admin_origin}").map_err(output_error)?;
     write!(output, "Apply {change_count} service change(s)? [y/N]: ").map_err(output_error)?;
     output
         .flush()

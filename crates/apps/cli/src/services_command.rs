@@ -163,6 +163,7 @@ pub(crate) async fn run(
             rollout::run(
                 &client,
                 rollout::RolloutOptions {
+                    admin_origin: client.admin_origin(),
                     config_source: &config,
                     filters: &services,
                     mode: if apply {

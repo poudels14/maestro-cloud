@@ -133,9 +133,12 @@ async fn prompt(
 
 pub(crate) fn confirm(
     target: &RestartTarget,
+    admin_origin: &str,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<bool, CliError> {
+    writeln!(output, "Admin API: {admin_origin}")
+        .map_err(|source| CliError::io("failed to write restart confirmation", source))?;
     write!(output, "Restart {}? [y/N]: ", target.description())
         .map_err(|source| CliError::io("failed to write restart confirmation", source))?;
     output

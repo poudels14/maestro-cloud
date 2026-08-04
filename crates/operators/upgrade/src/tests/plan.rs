@@ -32,6 +32,13 @@ fn rolling_upgrade_drains_retries_restarts_and_advances_one_node_at_a_time() -> 
     current_run = initialized.run;
     apply_updates(&mut nodes, initialized.node_updates);
     assert_eq!(maintained_nodes(&nodes), BTreeSet::from(["worker-1"]));
+    assert!(nodes.iter().any(|node| {
+        node.meta.id.as_str() == "worker-1"
+            && node.status.conditions.iter().any(|condition| {
+                condition.condition_type.0 == "Maintenance"
+                    && condition.message == "node reserved by upgrade run `upgrade-1`"
+            })
+    }));
 
     let waiting = plan_upgrade(
         input(current_run, &nodes, vec![assignment("worker-1")], 10_000),
