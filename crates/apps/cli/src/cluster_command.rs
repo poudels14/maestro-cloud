@@ -447,19 +447,19 @@ pub(crate) fn confirm_upgrade(
     output: &mut dyn Write,
 ) -> Result<bool, CliError> {
     let target = if node_ids.is_empty() {
-        "every cluster node".to_string()
+        "all nodes".to_string()
     } else {
-        format!("cluster nodes `{}`", node_ids.join("`, `"))
+        format!("nodes `{}`", node_ids.join("`, `"))
     };
     let strategy = match batch {
-        UpgradeBatch::Rolling => "serially with drain and verification",
-        UpgradeBatch::All => "in one batch; services and the control plane will be unavailable",
+        UpgradeBatch::Rolling => "one at a time",
+        UpgradeBatch::All => "at once (cluster unavailable)",
     };
     writeln!(output, "Admin API: {admin_origin}")
         .map_err(|source| CliError::io("failed to write upgrade confirmation", source))?;
     write!(
         output,
-        "Upgrade {target} to Maestro {target_version} or newer {strategy}? [y/N]: "
+        "Upgrade {target} to Maestro {target_version}+ {strategy}? [y/N]: "
     )
     .map_err(|source| CliError::io("failed to write upgrade confirmation", source))?;
     output

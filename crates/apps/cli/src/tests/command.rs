@@ -467,8 +467,31 @@ fn upgrade_confirmation_identifies_the_admin_origin_and_warns_about_all_node_mod
     assert!(!confirmed);
     assert!(output.contains("Admin API: https://admin.maestro.example.test"));
     let expected = format!(
-        "Upgrade cluster nodes `node-b`, `node-a` to Maestro {} or newer in one batch; \
-         services and the control plane will be unavailable? [y/N]:",
+        "Upgrade nodes `node-b`, `node-a` to Maestro {}+ at once \
+         (cluster unavailable)? [y/N]:",
+        kernel_api::MAESTRO_VERSION
+    );
+    assert!(output.contains(&expected));
+    Ok(())
+}
+
+#[test]
+fn rolling_upgrade_confirmation_is_succinct() -> Result<(), Box<dyn std::error::Error>> {
+    let mut input = std::io::Cursor::new(b"no\n".to_vec());
+    let mut output = Vec::new();
+
+    confirm_upgrade(
+        kernel_api::MAESTRO_VERSION,
+        UpgradeBatch::Rolling,
+        &[],
+        "http://10.50.0.250",
+        &mut input,
+        &mut output,
+    )?;
+
+    let output = String::from_utf8(output)?;
+    let expected = format!(
+        "Upgrade all nodes to Maestro {}+ one at a time? [y/N]:",
         kernel_api::MAESTRO_VERSION
     );
     assert!(output.contains(&expected));
