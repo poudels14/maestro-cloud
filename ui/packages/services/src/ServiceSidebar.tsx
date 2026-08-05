@@ -68,7 +68,7 @@ function ServiceSidebar(props: {
         <div class="flex-1 overflow-y-auto">
           {props.topSection}
           <Show when={userServices().length > 0}>
-            <SidebarSection title="Services" count={userServices().length}>
+            <SidebarSection title="Services">
               <For each={userServices()}>
                 {(service) => (
                   <SidebarServiceItem
@@ -81,10 +81,7 @@ function ServiceSidebar(props: {
             </SidebarSection>
           </Show>
           <Show when={systemServices().length > 0 || props.onSelectControllerLogs}>
-            <SidebarSection
-              title="System"
-              count={systemServices().length + (props.onSelectControllerLogs ? 1 : 0)}
-            >
+            <SidebarSection title="System">
               <Show when={props.onSelectControllerLogs}>
                 <button
                   type="button"

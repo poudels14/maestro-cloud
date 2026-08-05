@@ -111,8 +111,6 @@ function ServiceDetailPanel(props: {
           <Show when={props.service.previewResource}>
             {(resource) => (
               <PreviewOriginBanner
-                service={props.service}
-                services={props.services}
                 resource={resource()}
                 url={props.previewUrl(props.service.meta.id)}
               />
@@ -179,8 +177,11 @@ function ServiceIdentity(props: {
           {baseService()?.spec.name ?? preview()!.spec.baseServiceId}
         </button>
         <ChevronRight class="size-3.5 shrink-0 text-gray-300" aria-hidden="true" />
-        <span class="min-w-0 truncate font-semibold text-gray-900" title={props.service.meta.id}>
-          {props.service.meta.id}
+        <span
+          class="min-w-0 truncate font-semibold text-gray-900"
+          title={`PR #${preview()!.spec.pullRequestNumber}`}
+        >
+          PR #{preview()!.spec.pullRequestNumber}
         </span>
       </Show>
     </div>
@@ -188,42 +189,16 @@ function ServiceIdentity(props: {
 }
 
 function PreviewOriginBanner(props: {
-  service: Service;
-  services: Service[];
   resource: NonNullable<Service["previewResource"]>;
   url: string | null;
 }) {
-  const baseService = () =>
-    props.services.find((candidate) => candidate.meta.id === props.resource.spec.baseServiceId);
-  const pullRequestUrl = () =>
-    `https://github.com/${props.resource.spec.repository}/pull/${props.resource.spec.pullRequestNumber}`;
-
   return (
     <div class="mb-4 flex flex-col gap-2.5 rounded-lg border border-brand-ring bg-brand-light px-4 py-3 sm:flex-row sm:items-center">
       <div class="flex min-w-0 flex-1 items-center gap-2.5">
         <GitPullRequest class="size-4 shrink-0 text-brand/60" />
-        <span class="min-w-0 truncate text-xs text-brand-hover">
-          Preview of{" "}
-          <a
-            href={`/services/${encodeURIComponent(props.resource.spec.baseServiceId)}/overview`}
-            class="font-semibold outline-none hover:underline"
-          >
-            {baseService()?.spec.name ?? props.resource.spec.baseServiceId}
-          </a>{" "}
-          for{" "}
-          <a
-            href={pullRequestUrl()}
-            target="_blank"
-            rel="noreferrer"
-            class="font-semibold outline-none hover:underline"
-          >
-            PR #{props.resource.spec.pullRequestNumber}
-          </a>
-          <span class="text-brand/60">
-            {" · "}
-            {props.resource.spec.title || props.resource.spec.repository}
-          </span>
-        </span>
+        <div class="min-w-0 flex-1 truncate text-sm font-semibold text-brand-hover">
+          {props.resource.spec.title || `PR #${props.resource.spec.pullRequestNumber}`}
+        </div>
       </div>
       <Show when={props.url}>
         {(url) => (
