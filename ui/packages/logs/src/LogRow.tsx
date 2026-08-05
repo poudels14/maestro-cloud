@@ -39,6 +39,7 @@ function LogRow(props: {
   const http = () => httpFields(props.line.attrs);
   return (
     <li
+      data-log-entry
       class={clsx("border-b border-gray-50 transition-colors", {
         "cursor-pointer": !props.stream,
         "bg-brand-light": props.expanded,

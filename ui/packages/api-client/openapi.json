@@ -777,11 +777,24 @@
               "$ref": "#/components/schemas/ClusterLogEntry"
             },
             "type": "array"
+          },
+          "hasPrevious": {
+            "type": "boolean"
+          },
+          "previousCursor": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ClusterLogCursor"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
           "entries",
-          "cursor"
+          "cursor",
+          "previousCursor",
+          "hasPrevious"
         ],
         "type": "object"
       },
@@ -9827,6 +9840,15 @@
           },
           {
             "in": "query",
+            "name": "beforeCursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "from",
             "required": false,
             "schema": {
@@ -10579,6 +10601,15 @@
           },
           {
             "in": "query",
+            "name": "beforeCursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "from",
             "required": false,
             "schema": {
@@ -11039,6 +11070,15 @@
           {
             "in": "query",
             "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "beforeCursor",
             "required": false,
             "schema": {
               "maxLength": 65536,
@@ -11604,6 +11644,15 @@
           {
             "in": "query",
             "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "beforeCursor",
             "required": false,
             "schema": {
               "maxLength": 65536,
@@ -12593,6 +12642,15 @@
           {
             "in": "query",
             "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 65536,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "beforeCursor",
             "required": false,
             "schema": {
               "maxLength": 65536,

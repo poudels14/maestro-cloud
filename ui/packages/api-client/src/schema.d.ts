@@ -1540,6 +1540,8 @@ export interface components {
         ClusterLogPage: {
             cursor: components["schemas"]["ClusterLogCursor"];
             entries: components["schemas"]["ClusterLogEntry"][];
+            hasPrevious: boolean;
+            previousCursor: components["schemas"]["ClusterLogCursor"] | null;
         };
         ClusterPorts: {
             /** Format: uint8 */
@@ -5108,6 +5110,7 @@ export interface operations {
             query?: {
                 tail?: number;
                 cursor?: string;
+                beforeCursor?: string;
                 from?: number;
                 to?: number;
                 query?: string;
@@ -5575,6 +5578,7 @@ export interface operations {
             query?: {
                 tail?: number;
                 cursor?: string;
+                beforeCursor?: string;
                 from?: number;
                 to?: number;
                 query?: string;
@@ -5826,6 +5830,7 @@ export interface operations {
             query?: {
                 tail?: number;
                 cursor?: string;
+                beforeCursor?: string;
                 from?: number;
                 to?: number;
                 query?: string;
@@ -6178,6 +6183,7 @@ export interface operations {
             query?: {
                 tail?: number;
                 cursor?: string;
+                beforeCursor?: string;
                 from?: number;
                 to?: number;
                 query?: string;
@@ -6823,6 +6829,7 @@ export interface operations {
             query?: {
                 tail?: number;
                 cursor?: string;
+                beforeCursor?: string;
                 from?: number;
                 to?: number;
                 query?: string;

@@ -97,13 +97,18 @@ pub(crate) fn insert_schemas(schemas: &mut Map<String, Value>) {
         "ClusterLogPage".to_owned(),
         json!({
             "type": "object",
-            "required": ["entries", "cursor"],
+            "required": ["entries", "cursor", "previousCursor", "hasPrevious"],
             "properties": {
                 "entries": {
                     "type": "array",
                     "items": {"$ref": "#/components/schemas/ClusterLogEntry"}
                 },
-                "cursor": {"$ref": "#/components/schemas/ClusterLogCursor"}
+                "cursor": {"$ref": "#/components/schemas/ClusterLogCursor"},
+                "previousCursor": {
+                    "allOf": [{"$ref": "#/components/schemas/ClusterLogCursor"}],
+                    "nullable": true
+                },
+                "hasPrevious": {"type": "boolean"}
             }
         }),
     );
@@ -163,6 +168,10 @@ fn read_operation(operation_id: &str, path_names: &[&str], scope: LogScope) -> V
             json!({"type": "integer", "minimum": 1, "maximum": 10000}),
         ),
         query_parameter("cursor", json!({"type": "string", "maxLength": 65536})),
+        query_parameter(
+            "beforeCursor",
+            json!({"type": "string", "maxLength": 65536}),
+        ),
         query_parameter("from", json!({"type": "integer", "format": "int64"})),
         query_parameter("to", json!({"type": "integer", "format": "int64"})),
         query_parameter("query", json!({"type": "string", "maxLength": 4096})),

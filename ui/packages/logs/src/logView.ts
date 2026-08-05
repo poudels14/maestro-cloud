@@ -36,10 +36,11 @@ function mapClusterLogEntry(wire: ApiSchemas["ClusterLogEntry"]): LogEntry {
 }
 
 function sortLogEntries(entries: LogEntry[]): LogEntry[] {
-  return entries.sort(
-    (left, right) =>
-      left.ts - right.ts || left.nodeId.localeCompare(right.nodeId) || left.seq - right.seq
-  );
+  return entries.sort(compareLogEntries);
+}
+
+function compareLogEntries(left: LogEntry, right: LogEntry): number {
+  return left.ts - right.ts || left.nodeId.localeCompare(right.nodeId) || left.seq - right.seq;
 }
 
 function mapOrigin(value: unknown): OriginView {
@@ -121,5 +122,5 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-export { mapClusterLogEntry, sortLogEntries };
+export { compareLogEntries, mapClusterLogEntry, sortLogEntries };
 export type { OriginView };

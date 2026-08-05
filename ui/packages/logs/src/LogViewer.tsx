@@ -54,6 +54,9 @@ function LogViewer(props: {
   };
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [pollCursor, setPollCursor] = createSignal<LogPage["cursor"]>({});
+  const [previousCursor, setPreviousCursor] = createSignal<LogPage["previousCursor"]>(null);
+  const [hasPrevious, setHasPrevious] = createSignal(false);
+  const [loadingPrevious, setLoadingPrevious] = createSignal(false);
   const [internalRangeMs, setInternalRangeMs] = createSignal(DEFAULT_TIME_RANGE.ms);
   const rangeMs = () => {
     if (props.onRangeChange) {
@@ -77,6 +80,8 @@ function LogViewer(props: {
   const [selectedBucket, setSelectedBucket] = createSignal<SelectedLogBucket | null>(null);
   let fetchGeneration = 0;
   let histogramGeneration = 0;
+  let previousLoadToken = 0;
+  let pollInFlight = false;
 
   const phaseLines = () => {
     const all = lines().filter((line) => line.text.trim().length > 0);
@@ -192,12 +197,18 @@ function LogViewer(props: {
     return { type: "all" };
   };
 
-  const fetchPage = async (searchQuery: string, cursor?: LogPage["cursor"]) => {
+  const fetchPage = async (
+    searchQuery: string,
+    cursors: {
+      cursor?: LogPage["cursor"];
+      beforeCursor?: NonNullable<LogPage["previousCursor"]>;
+    } = {}
+  ) => {
     const { from, to } = activeTimeRange();
     return props.api.getLogPage({
       scope: logScope(),
       tail: PAGE_SIZE,
-      ...(cursor ? { cursor } : {}),
+      ...cursors,
       ...(props.cluster?.nodeId ? { nodeId: props.cluster.nodeId } : {}),
       ...(searchQuery ? { query: searchQuery } : {}),
       ...(from != null ? { from } : {}),
@@ -247,6 +258,8 @@ function LogViewer(props: {
       if (generation !== fetchGeneration) return;
       setLines(page.entries);
       setPollCursor(page.cursor);
+      setPreviousCursor(page.previousCursor);
+      setHasPrevious(page.hasPrevious);
       setError(null);
     } catch (err) {
       if (generation !== fetchGeneration) return;
@@ -257,11 +270,12 @@ function LogViewer(props: {
   };
 
   const pollLogs = async () => {
-    if (selectedBucket()) return;
+    if (selectedBucket() || loading() || loadingPrevious() || pollInFlight) return;
+    pollInFlight = true;
     const searchQuery = requestQuery();
     const requestContext = rowRequestContext();
     try {
-      const page = await fetchPage(searchQuery, pollCursor());
+      const page = await fetchPage(searchQuery, { cursor: pollCursor() });
       if (requestContext !== rowRequestContext()) return;
       setPollCursor(page.cursor);
       const { from, to } = activeTimeRange();
@@ -273,6 +287,9 @@ function LogViewer(props: {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");
+    } finally {
+      pollInFlight = false;
+      if (scrollRef && scrollRef.scrollTop <= 80) void loadPreviousLogs();
     }
   };
 
@@ -280,6 +297,10 @@ function LogViewer(props: {
     on(rowRequestContext, () => {
       setLines([]);
       setPollCursor({});
+      setPreviousCursor(null);
+      setHasPrevious(false);
+      setLoadingPrevious(false);
+      previousLoadToken += 1;
       setExpanded(new Set<string>());
       setLoading(true);
       const generation = ++fetchGeneration;
@@ -338,6 +359,58 @@ function LogViewer(props: {
 
   const onScroll = () => {
     updateScrollFlags();
+    if (scrollRef && scrollRef.scrollTop <= 80) void loadPreviousLogs();
+  };
+
+  const loadPreviousLogs = async () => {
+    const beforeCursor = previousCursor();
+    if (
+      !scrollRef ||
+      !beforeCursor ||
+      !hasPrevious() ||
+      loading() ||
+      loadingPrevious() ||
+      pollInFlight
+    )
+      return;
+
+    const token = ++previousLoadToken;
+    const generation = fetchGeneration;
+    const requestContext = rowRequestContext();
+    const previousHeight = scrollRef.scrollHeight;
+    const previousTop = scrollRef.scrollTop;
+    const anchor = scrollRef.querySelector<HTMLElement>("[data-log-entry]");
+    const anchorOffset = anchor ? anchor.offsetTop - previousTop : null;
+    setLoadingPrevious(true);
+    try {
+      const page = await fetchPage(requestQuery(), {
+        cursor: pollCursor(),
+        beforeCursor
+      });
+      if (
+        token !== previousLoadToken ||
+        generation !== fetchGeneration ||
+        requestContext !== rowRequestContext()
+      )
+        return;
+      setLines((current) => mergeLogEntries(page.entries, current));
+      setPreviousCursor(page.previousCursor);
+      setHasPrevious(page.hasPrevious);
+      setError(null);
+      requestAnimationFrame(() => {
+        if (!scrollRef || token !== previousLoadToken) return;
+        scrollRef.scrollTop =
+          anchor && anchor.isConnected && anchorOffset != null
+            ? anchor.offsetTop - anchorOffset
+            : previousTop + scrollRef.scrollHeight - previousHeight;
+        updateScrollFlags();
+      });
+    } catch (err) {
+      if (token !== previousLoadToken || generation !== fetchGeneration) return;
+      setError(err instanceof Error ? err.message : "Failed to load earlier logs");
+    } finally {
+      if (token === previousLoadToken) setLoadingPrevious(false);
+    }
   };
 
   const streamView = () => props.phase === "build";
@@ -398,6 +471,11 @@ function LogViewer(props: {
           "max-h-[600px]": !props.fillHeight
         })}
       >
+        <Show when={loadingPrevious()}>
+          <div class="border-b border-gray-100 py-2 text-center font-mono text-[11px] text-gray-400">
+            Loading earlier logs…
+          </div>
+        </Show>
         <LogTable
           lines={filteredLines()}
           loading={loading()}

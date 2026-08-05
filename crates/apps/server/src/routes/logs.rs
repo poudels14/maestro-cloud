@@ -61,6 +61,7 @@ struct ReadParameters {
     after: Option<u64>,
     before: Option<u64>,
     cursor: Option<String>,
+    before_cursor: Option<String>,
     from: Option<i64>,
     to: Option<i64>,
     query: Option<String>,
@@ -117,6 +118,7 @@ async fn node_logs(
         after: parameters.after,
         before: parameters.before,
         cursor: None,
+        before_cursor: None,
         from: parameters.from,
         to: parameters.to,
         query: parameters.query,
@@ -267,9 +269,14 @@ async fn cluster_read(
         .as_deref()
         .map(|cursor| parse_cluster_cursor(state, cursor))
         .transpose()?;
+    let before_cursor = parameters
+        .before_cursor
+        .as_deref()
+        .map(|cursor| parse_cluster_cursor(state, cursor))
+        .transpose()?;
     let query = read_query(scope, parameters)?;
     cluster_query_store(state)?
-        .query_logs(&node_ids, &query, cursor.as_ref())
+        .query_logs(&node_ids, &query, cursor.as_ref(), before_cursor.as_ref())
         .await
         .map(Json)
         .map_err(query_error)

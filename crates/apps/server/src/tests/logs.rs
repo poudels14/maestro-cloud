@@ -144,6 +144,80 @@ async fn service_deployment_system_and_histogram_routes_share_typed_queries()
 }
 
 #[tokio::test]
+async fn build_log_route_loads_preceding_pages_without_moving_the_poll_cursor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let deployment = deployment("api-deployment", "api")?;
+    put(
+        &store,
+        &cluster_id,
+        "Deployment",
+        deployment.meta.id.as_str(),
+        &deployment,
+    )
+    .await?;
+    let build = build("api-build", "api", "api-deployment")?;
+    put(&store, &cluster_id, "Build", build.meta.id.as_str(), &build).await?;
+    let logs = Arc::new(InMemoryLogStore::new());
+    logs.append(&[
+        build_entry(1, 100)?,
+        build_entry(2, 200)?,
+        build_entry(3, 300)?,
+    ])
+    .await?;
+    let server = with_test_logs(
+        ApiServer::new(
+            store,
+            cluster_id,
+            ServerSettings::new("127.0.0.1:3000".parse()?, None),
+        )?,
+        logs,
+    )?;
+
+    let first: ClusterLogPage = decode(
+        request(
+            &server,
+            "/api/services/api/builds/api-build/logs?tail=2",
+            None,
+        )
+        .await?,
+    )
+    .await?;
+    assert_eq!(
+        first
+            .entries
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![LogSequence(3), LogSequence(2)]
+    );
+    assert!(first.has_previous);
+
+    let second: ClusterLogPage = decode(
+        request(
+            &server,
+            "/api/services/api/builds/api-build/logs?tail=2&cursor=%7B%22node-one%22%3A3%7D&beforeCursor=%7B%22node-one%22%3A2%7D",
+            None,
+        )
+        .await?,
+    )
+    .await?;
+    assert_eq!(
+        second.entries.first().map(|entry| entry.sequence),
+        Some(LogSequence(1))
+    );
+    assert_eq!(
+        second
+            .cursor
+            .get(&NodeId::new("node-one")?)
+            .map(|sequence| sequence.0),
+        Some(3)
+    );
+    assert!(!second.has_previous);
+    Ok(())
+}
+
+#[tokio::test]
 async fn log_routes_reject_ambiguous_cursors_and_missing_store()
 -> Result<(), Box<dyn std::error::Error>> {
     let (store, cluster_id) = seeded_store().await?;

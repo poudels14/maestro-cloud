@@ -1,4 +1,4 @@
-import type { LogEntry } from "./api";
+import { compareLogEntries, type LogEntry } from "./logView";
 import { httpFields } from "./logFormat";
 import type { LogQueryCatalog } from "./logQuerySuggestions";
 
@@ -10,7 +10,22 @@ function mergeLogEntries(current: LogEntry[], incoming: LogEntry[]) {
     existing.add(key);
     return true;
   });
-  return [...current, ...unique];
+  const merged: LogEntry[] = [];
+  let currentIndex = 0;
+  let incomingIndex = 0;
+  while (currentIndex < current.length && incomingIndex < unique.length) {
+    const currentEntry = current[currentIndex]!;
+    const incomingEntry = unique[incomingIndex]!;
+    if (compareLogEntries(currentEntry, incomingEntry) <= 0) {
+      merged.push(currentEntry);
+      currentIndex += 1;
+    } else {
+      merged.push(incomingEntry);
+      incomingIndex += 1;
+    }
+  }
+  merged.push(...current.slice(currentIndex), ...unique.slice(incomingIndex));
+  return merged;
 }
 
 function logEntryKey(entry: LogEntry) {

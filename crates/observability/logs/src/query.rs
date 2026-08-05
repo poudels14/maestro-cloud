@@ -140,6 +140,12 @@ impl LogReadQuery {
         self
     }
 
+    pub(crate) fn with_limit(mut self, limit: usize) -> Self {
+        debug_assert!((1..=MAXIMUM_LOG_QUERY_LIMIT).contains(&limit));
+        self.limit = limit;
+        self
+    }
+
     /// Returns the validated maximum row count.
     pub fn limit(&self) -> usize {
         self.limit

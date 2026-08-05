@@ -14,6 +14,18 @@ test("merges polling pages without duplicating stable log identities", () => {
   );
 });
 
+test("prepends preceding pages without duplicating their boundary", () => {
+  const earlier = entry({ seq: 1, ts: 100, text: "earlier" });
+  const boundary = entry({ seq: 2, ts: 300, text: "boundary" });
+  const duplicate = entry({ seq: 2, ts: 300, text: "replayed boundary" });
+  const interleaved = entry({ seq: 3, ts: 200, text: "interleaved" });
+
+  assert.deepEqual(
+    mergeLogEntries([earlier, boundary], [interleaved, duplicate]).map((value) => value.text),
+    ["earlier", "interleaved", "boundary"]
+  );
+});
+
 test("builds bounded query suggestions from normalized log fields", () => {
   const catalog = buildLogQueryCatalog("api", [
     entry({

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     IngestLogEntry, LogHistogramBucket, LogHistogramQuery, LogQueryStoreError, LogReadCursor,
-    LogReadOrder, LogReadQuery, LogSequence, SequencedLogEntry,
+    LogReadOrder, LogReadQuery, LogSequence, MAXIMUM_LOG_QUERY_LIMIT, SequencedLogEntry,
 };
 
 /// Independent node-local cursors carried across one cluster log stream.
@@ -38,6 +38,13 @@ impl ClusterLogCursor {
             .and_modify(|current| *current = (*current).max(sequence))
             .or_insert(sequence);
     }
+
+    fn retreat(&mut self, node_id: NodeId, sequence: LogSequence) {
+        self.0
+            .entry(node_id)
+            .and_modify(|current| *current = (*current).min(sequence))
+            .or_insert(sequence);
+    }
 }
 
 /// One normalized node-local record after deterministic cluster merge.
@@ -58,8 +65,12 @@ pub struct ClusterLogEntry {
 pub struct ClusterLogPage {
     /// Deterministically merged records.
     pub entries: Vec<ClusterLogEntry>,
-    /// Cursor safe to use for the next cluster request.
+    /// Cursor safe to use when polling for newer records.
     pub cursor: ClusterLogCursor,
+    /// Exclusive per-node boundary for loading the preceding page.
+    pub previous_cursor: Option<ClusterLogCursor>,
+    /// Whether another preceding page may exist.
+    pub has_previous: bool,
 }
 
 /// Transport-neutral ability to run an already-validated query on one selected node.
@@ -97,12 +108,24 @@ impl ClusterLogQueryCoordinator {
         node_ids: &[NodeId],
         query: &LogReadQuery,
         cursor: Option<&ClusterLogCursor>,
+        before: Option<&ClusterLogCursor>,
     ) -> Result<ClusterLogPage, LogQueryStoreError> {
         let node_ids = distinct_nodes(node_ids);
-        let follow = cursor.is_some();
+        let follow = cursor.is_some() && before.is_none();
+        let preceding =
+            before.is_some() || (cursor.is_none() && query.order() == LogReadOrder::NewestFirst);
+        let probe_limit = query.limit().saturating_add(1).min(MAXIMUM_LOG_QUERY_LIMIT);
         let pages = try_join_all(node_ids.iter().cloned().map(|node_id| {
             let mut node_query = query.clone();
-            if let Some(cursor) = cursor {
+            if preceding {
+                node_query = node_query.with_limit(probe_limit);
+            }
+            if let Some(before) = before {
+                node_query = node_query.with_order(LogReadOrder::NewestFirst);
+                if let Some(sequence) = before.get(&node_id) {
+                    node_query = node_query.with_cursor(LogReadCursor::Before(sequence));
+                }
+            } else if let Some(cursor) = cursor {
                 node_query = node_query
                     .with_order(LogReadOrder::OldestFirst)
                     .with_cursor(LogReadCursor::After(
@@ -118,9 +141,38 @@ impl ClusterLogQueryCoordinator {
         }))
         .await?;
 
-        let sequence_prefix = follow || query.order() == LogReadOrder::OldestFirst;
+        let has_previous = preceding
+            && (pages
+                .iter()
+                .map(|(_, entries)| entries.len())
+                .sum::<usize>()
+                > query.limit()
+                || (probe_limit == query.limit()
+                    && pages
+                        .iter()
+                        .any(|(_, entries)| entries.len() == query.limit())));
+        let mut previous_cursor = preceding.then(|| {
+            before.cloned().unwrap_or_else(|| {
+                let mut initial = ClusterLogCursor::new();
+                for (node_id, entries) in &pages {
+                    let high_watermark = entries
+                        .iter()
+                        .map(|entry| entry.sequence.0)
+                        .max()
+                        .unwrap_or(0);
+                    initial.advance(
+                        node_id.clone(),
+                        LogSequence(high_watermark.saturating_add(1)),
+                    );
+                }
+                initial
+            })
+        });
+        let sequence_prefix = follow || preceding || query.order() == LogReadOrder::OldestFirst;
+        let capture_high_watermarks =
+            cursor.is_none() && before.is_none() && query.order() == LogReadOrder::NewestFirst;
         let mut next_cursor = cursor.cloned().unwrap_or_default();
-        if !sequence_prefix {
+        if capture_high_watermarks {
             for (node_id, entries) in &pages {
                 next_cursor.advance(
                     node_id.clone(),
@@ -133,21 +185,33 @@ impl ClusterLogQueryCoordinator {
             }
         }
         let entries = if sequence_prefix {
-            merge_follow_pages(pages, query.limit())
+            let order = if preceding {
+                LogReadOrder::NewestFirst
+            } else {
+                LogReadOrder::OldestFirst
+            };
+            merge_sequence_prefixes(pages, query.limit(), order)
         } else {
             let mut entries = flatten_pages(pages);
             sort_entries(&mut entries, query.order());
             entries.truncate(query.limit());
             entries
         };
-        if sequence_prefix {
+        if follow || (!preceding && query.order() == LogReadOrder::OldestFirst) {
             for entry in &entries {
                 next_cursor.advance(entry.node_id.clone(), entry.sequence);
+            }
+        }
+        if let Some(previous) = &mut previous_cursor {
+            for entry in &entries {
+                previous.retreat(entry.node_id.clone(), entry.sequence);
             }
         }
         Ok(ClusterLogPage {
             entries,
             cursor: next_cursor,
+            previous_cursor,
+            has_previous,
         })
     }
 
@@ -206,9 +270,10 @@ fn flatten_pages(pages: Vec<(NodeId, Vec<SequencedLogEntry>)>) -> Vec<ClusterLog
         .collect()
 }
 
-fn merge_follow_pages(
+fn merge_sequence_prefixes(
     pages: Vec<(NodeId, Vec<SequencedLogEntry>)>,
     limit: usize,
+    order: LogReadOrder,
 ) -> Vec<ClusterLogEntry> {
     let mut pages = pages
         .into_iter()
@@ -220,11 +285,16 @@ fn merge_follow_pages(
             .iter()
             .filter_map(|(node_id, entries)| entries.front().map(|entry| (node_id, entry)))
             .min_by(|(left_node, left), (right_node, right)| {
-                left.entry
+                let ordering = left
+                    .entry
                     .event_at
                     .cmp(&right.entry.event_at)
                     .then_with(|| left_node.cmp(right_node))
-                    .then_with(|| left.sequence.cmp(&right.sequence))
+                    .then_with(|| left.sequence.cmp(&right.sequence));
+                match order {
+                    LogReadOrder::OldestFirst => ordering,
+                    LogReadOrder::NewestFirst => ordering.reverse(),
+                }
             })
             .map(|(node_id, _)| node_id.clone())
         else {

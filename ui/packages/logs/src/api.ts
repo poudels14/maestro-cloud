@@ -16,6 +16,8 @@ export type LogScope =
 export interface LogPage {
   entries: LogEntry[];
   cursor: ApiSchemas["ClusterLogCursor"];
+  previousCursor: ApiSchemas["ClusterLogCursor"] | null;
+  hasPrevious: boolean;
 }
 
 export interface LogHistogramBucket {
@@ -35,6 +37,7 @@ export interface LogPageRequest {
   scope: LogScope;
   tail?: number;
   cursor?: ApiSchemas["ClusterLogCursor"];
+  beforeCursor?: ApiSchemas["ClusterLogCursor"];
   nodeId?: string;
   query?: string;
   from?: number;
@@ -68,6 +71,8 @@ async function getLogPage(
     const page = await readScope(client, request.scope, query);
     return {
       cursor: page.cursor,
+      previousCursor: page.previousCursor,
+      hasPrevious: page.hasPrevious,
       entries: sortLogEntries(page.entries.map(mapClusterLogEntry))
     };
   } catch (error) {
@@ -110,6 +115,9 @@ function readQuery(request: LogPageRequest): LogReadQuery {
     ...(request.tail != null ? { tail: request.tail } : {}),
     ...(request.cursor && Object.keys(request.cursor).length > 0
       ? { cursor: JSON.stringify(request.cursor) }
+      : {}),
+    ...(request.beforeCursor && Object.keys(request.beforeCursor).length > 0
+      ? { beforeCursor: JSON.stringify(request.beforeCursor) }
       : {}),
     ...(request.from != null ? { from: request.from } : {}),
     ...(request.to != null ? { to: request.to } : {}),
