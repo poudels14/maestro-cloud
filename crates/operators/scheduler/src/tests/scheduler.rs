@@ -452,6 +452,7 @@ fn deployment() -> Deployment {
             restart_generation: Generation(1),
             bypass_rollout_freeze: false,
             service: service(1).spec,
+            environment_template: Default::default(),
             goal: kernel_api::DeploymentGoal::Run,
             build_id: None,
         },

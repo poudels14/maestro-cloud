@@ -227,6 +227,7 @@ fn deployment() -> Deployment {
                 placement: PlacementConstraint::default(),
                 exec: ExecPolicy::Allowed,
             },
+            environment_template: Default::default(),
             build_id: None,
         },
         status: DeploymentStatus {

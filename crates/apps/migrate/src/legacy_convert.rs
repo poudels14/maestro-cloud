@@ -342,6 +342,7 @@ fn convert_deployment(
             restart_generation: Generation(1),
             bypass_rollout_freeze: false,
             service: converted.spec,
+            environment_template: Default::default(),
             goal: deployment_goal(legacy.status),
             build_id: build_id.clone(),
         },

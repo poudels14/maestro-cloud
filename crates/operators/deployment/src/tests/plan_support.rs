@@ -105,6 +105,7 @@ pub(super) fn deployment_generation(
             restart_generation: Generation(1),
             bypass_rollout_freeze: false,
             service: service.spec.clone(),
+            environment_template: Default::default(),
             goal: kernel_api::DeploymentGoal::Run,
             build_id: matches!(service.spec.artifact, ArtifactTemplate::Build { .. })
                 .then(|| kernel_api::BuildId::new(format!("build-{id}")).unwrap()),

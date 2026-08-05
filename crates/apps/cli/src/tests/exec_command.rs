@@ -148,6 +148,7 @@ fn deployment(
             restart_generation: Generation(1),
             bypass_rollout_freeze: false,
             service: service_spec(),
+            environment_template: Default::default(),
             goal: DeploymentGoal::Run,
             build_id: None,
         },

@@ -25,9 +25,13 @@ fn resolves_preview_host_templates_inside_runtime_environment_values() {
         ("LITERAL".to_owned(), "unchanged".to_owned()),
     ]);
 
-    let fingerprint = resolve(&service, &routes, &mut environment).expect("resolve environment");
+    let resolution = resolve(&service, &routes, &mut environment).expect("resolve environment");
 
-    assert!(fingerprint.is_some());
+    assert!(resolution.fingerprint.is_some());
+    assert_eq!(
+        resolution.context.preview_host.as_deref(),
+        Some("api-pr-42.preview.example.test")
+    );
     assert_eq!(
         environment.get("PREVIEW_URL").map(String::as_str),
         Some("https://api-pr-42.preview.example.test/v1")

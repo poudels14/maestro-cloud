@@ -1,90 +1,76 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use kernel_api::{IngressRoute, Ownership, Service};
+use kernel_api::{
+    EnvironmentTemplateContext, EnvironmentTemplateError, IngressRoute, MAESTRO_PREVIEW_HOST,
+    Ownership, Service,
+};
 use sha2::{Digest, Sha256};
 
 use crate::DeploymentPlanError;
 
-const TEMPLATE_OPEN: &str = "${{";
-const TEMPLATE_CLOSE: &str = "}}";
-const PREVIEW_HOST: &str = "MAESTRO_PREVIEW_HOST";
 const FINGERPRINT_DOMAIN: &[u8] = b"maestro-dynamic-environment-v1\0";
+
+#[derive(Debug)]
+pub(crate) struct EnvironmentResolution {
+    pub(crate) context: EnvironmentTemplateContext,
+    pub(crate) fingerprint: Option<String>,
+}
 
 pub(crate) fn resolve(
     service: &Service,
     routes: &[IngressRoute],
     environment: &mut BTreeMap<String, String>,
-) -> Result<Option<String>, DeploymentPlanError> {
+) -> Result<EnvironmentResolution, DeploymentPlanError> {
+    let context = template_context(service, routes)?;
     let mut expanded = false;
     for (key, value) in environment.iter_mut() {
-        let (resolved, changed) = resolve_value(service, routes, key, value)?;
+        let resolved = context
+            .resolve(value)
+            .map_err(|error| template_error(service, key, error))?;
+        let changed = resolved != *value;
         *value = resolved;
         expanded |= changed;
     }
-    Ok(expanded.then(|| fingerprint(environment)))
+    Ok(EnvironmentResolution {
+        context,
+        fingerprint: expanded.then(|| fingerprint(environment)),
+    })
 }
 
-fn resolve_value(
+fn template_context(
     service: &Service,
     routes: &[IngressRoute],
-    key: &str,
-    value: &str,
-) -> Result<(String, bool), DeploymentPlanError> {
-    let mut remaining = value;
-    let mut output = String::with_capacity(value.len());
-    let mut expanded = false;
-    while let Some(open) = remaining.find(TEMPLATE_OPEN) {
-        output.push_str(&remaining[..open]);
-        let expression = &remaining[open + TEMPLATE_OPEN.len()..];
-        let Some(close) = expression.find(TEMPLATE_CLOSE) else {
-            return Err(invalid_template(
-                service,
-                key,
-                "template is missing its closing `}}`",
-            ));
-        };
-        let variable = expression[..close].trim();
-        if variable.is_empty()
-            || !variable
-                .bytes()
-                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-        {
-            return Err(invalid_template(
-                service,
-                key,
-                format!("`{variable}` is not a valid Maestro variable name"),
-            ));
-        }
-        output.push_str(resolve_variable(service, routes, key, variable)?.as_str());
-        remaining = &expression[close + TEMPLATE_CLOSE.len()..];
-        expanded = true;
+) -> Result<EnvironmentTemplateContext, DeploymentPlanError> {
+    if !is_preview_service(service) {
+        return Ok(EnvironmentTemplateContext::default());
     }
-    output.push_str(remaining);
-    Ok((output, expanded))
+    Ok(EnvironmentTemplateContext {
+        preview_host: Some(canonical_ingress_host(
+            service,
+            routes,
+            MAESTRO_PREVIEW_HOST,
+            MAESTRO_PREVIEW_HOST,
+        )?),
+    })
 }
 
-fn resolve_variable(
+fn template_error(
     service: &Service,
-    routes: &[IngressRoute],
     key: &str,
-    variable: &str,
-) -> Result<String, DeploymentPlanError> {
-    match variable {
-        PREVIEW_HOST if is_preview_service(service) => {
-            canonical_ingress_host(service, routes, key, variable)
-        }
-        PREVIEW_HOST => Err(unavailable_variable(
+    error: EnvironmentTemplateError,
+) -> DeploymentPlanError {
+    match error {
+        EnvironmentTemplateError::Invalid { message } => invalid_template(service, key, message),
+        EnvironmentTemplateError::Unavailable { variable, message } => unavailable_variable(
             service,
             key,
-            variable,
-            "the service is not owned by a Preview",
-        )),
-        _ => Err(unavailable_variable(
-            service,
-            key,
-            variable,
-            "the variable is not supported",
-        )),
+            &variable,
+            if variable == MAESTRO_PREVIEW_HOST && !is_preview_service(service) {
+                "the service is not owned by a Preview".to_owned()
+            } else {
+                message
+            },
+        ),
     }
 }
 

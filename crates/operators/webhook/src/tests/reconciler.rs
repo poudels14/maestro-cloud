@@ -279,6 +279,7 @@ fn deployment(phase: DeploymentPhase) -> Result<Deployment, kernel_api::InvalidI
                 placement: PlacementConstraint::default(),
                 exec: ExecPolicy::Allowed,
             },
+            environment_template: Default::default(),
             goal: DeploymentGoal::Run,
             build_id: None,
         },

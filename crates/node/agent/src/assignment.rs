@@ -379,6 +379,10 @@ impl AssignmentAgent {
             resolved_source = true;
             environment.extend(self.resolve_value_source(&source).await?);
         }
+        resolve_external_environment_templates(
+            &deployment.spec.environment_template,
+            &mut environment,
+        )?;
         environment.extend(
             deployment
                 .spec
@@ -526,6 +530,25 @@ impl AssignmentAgent {
             assignment_id: assignment.meta.id.to_string(),
         })
     }
+}
+
+fn resolve_external_environment_templates(
+    context: &kernel_api::EnvironmentTemplateContext,
+    environment: &mut std::collections::BTreeMap<String, SecretValue>,
+) -> Result<(), ConvergeFailure> {
+    for (key, value) in environment.iter_mut() {
+        if !value.expose().contains("${{") {
+            continue;
+        }
+        let resolved = context.resolve(value.expose()).map_err(|error| {
+            ConvergeFailure::failed(
+                "ExternalEnvironmentTemplateRejected",
+                format!("external environment key `{key}` has an invalid template: {error}"),
+            )
+        })?;
+        *value = SecretValue::new(resolved);
+    }
+    Ok(())
 }
 
 pub(crate) fn host_secret_owner(

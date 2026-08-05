@@ -36,6 +36,10 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
         "PREVIEW_URL".to_owned(),
         "https://${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
     );
+    service
+        .spec
+        .environment_sources
+        .push("aws-secret://preview-environment".to_owned());
     let mut first_input = input(service.clone(), Vec::new());
     first_input.ingress_routes = vec![Object {
         meta: metadata(IngressRouteId::new("api-route").unwrap(), Generation(1)),
@@ -60,6 +64,10 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
     assert_eq!(
         first.spec.service.environment.get("PREVIEW_URL"),
         Some(&"https://api-pr-42.preview.example.test".to_owned())
+    );
+    assert_eq!(
+        first.spec.environment_template.preview_host.as_deref(),
+        Some("api-pr-42.preview.example.test")
     );
     assert_eq!(
         service.spec.environment.get("PREVIEW_URL"),
@@ -90,6 +98,10 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
     assert_eq!(
         changed.spec.service.environment.get("PREVIEW_URL"),
         Some(&"https://api-pr-42-new.preview.example.test".to_owned())
+    );
+    assert_eq!(
+        changed.spec.environment_template.preview_host.as_deref(),
+        Some("api-pr-42-new.preview.example.test")
     );
 }
 

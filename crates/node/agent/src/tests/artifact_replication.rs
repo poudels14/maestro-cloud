@@ -424,6 +424,7 @@ fn deployment(
                     secrets_source: None,
                 },
             })?,
+            environment_template: Default::default(),
             goal: DeploymentGoal::Run,
             build_id: None,
         },

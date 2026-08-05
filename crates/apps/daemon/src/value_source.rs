@@ -115,7 +115,7 @@ mod tests {
 
         let dotenv = parse_key_values(
             "aws-secret://dotenv",
-            "# comment\nexport TOKEN=\"rotated value\" # current token\nMODE='production mode'",
+            "# comment\nexport TOKEN=\"rotated value\" # current token\nMODE='production mode'\nBATON_HOST=\"https://\\${{ MAESTRO_PREVIEW_HOST }}/\"",
         )?;
         assert_eq!(
             dotenv.get("TOKEN").map(SecretValue::expose),
@@ -124,6 +124,10 @@ mod tests {
         assert_eq!(
             dotenv.get("MODE").map(SecretValue::expose),
             Some("production mode")
+        );
+        assert_eq!(
+            dotenv.get("BATON_HOST").map(SecretValue::expose),
+            Some("https://${{ MAESTRO_PREVIEW_HOST }}/")
         );
         Ok(())
     }

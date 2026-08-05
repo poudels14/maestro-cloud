@@ -179,6 +179,7 @@ pub(super) fn fixture(
             restart_generation: Generation(1),
             bypass_rollout_freeze: false,
             service: spec.clone(),
+            environment_template: Default::default(),
             goal: DeploymentGoal::Run,
             build_id: Some(build_id.clone()),
         },

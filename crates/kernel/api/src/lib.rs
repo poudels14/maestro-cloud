@@ -46,7 +46,10 @@ pub use config::{
     MaskedTailscaleConfig, PreviewLaunchConfigUpdateRequest, PreviewLaunchConfigUpdateResponse,
 };
 pub use dns::{DnsLabel, DnsName, DnsNameError, WildcardDnsName};
-pub use environment::{EnvironmentName, InvalidEnvironmentName};
+pub use environment::{
+    EnvironmentName, EnvironmentTemplateContext, EnvironmentTemplateError, InvalidEnvironmentName,
+    MAESTRO_PREVIEW_HOST,
+};
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{
     ArtifactArchiveId, AssignmentId, BuildId, ClusterId, DeploymentId, DnsRecordId,

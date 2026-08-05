@@ -39,13 +39,16 @@ pub(crate) fn new_deployment(
     {
         *desired = revision.to_string();
     }
-    let environment_fingerprint =
+    let environment_resolution =
         crate::environment::resolve(service, routes, &mut captured_service.environment)?;
     let mut identity = vec![cluster_id.as_str(), service.meta.id.as_str(), &generation];
     if let Some(revision) = watched_revision {
         identity.push(revision);
     }
-    if let Some(fingerprint) = environment_fingerprint.as_deref() {
+    if let Some(host) = environment_resolution.context.preview_host.as_deref() {
+        identity.push(host);
+    }
+    if let Some(fingerprint) = environment_resolution.fingerprint.as_deref() {
         identity.push(fingerprint);
     }
     let deployment_id = DeploymentId::new(stable_id("deployment", &identity))?;
@@ -66,6 +69,7 @@ pub(crate) fn new_deployment(
             bypass_rollout_freeze: service.status.rollout_bypass_generation
                 == Some(service.meta.generation),
             service: captured_service,
+            environment_template: environment_resolution.context,
             goal: DeploymentGoal::Run,
             build_id,
         },

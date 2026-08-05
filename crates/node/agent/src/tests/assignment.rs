@@ -479,6 +479,8 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
     deployment.spec.service.environment.clear();
     deployment.spec.service.environment_sources =
         vec!["aws-secret://runtime-environment".to_owned()];
+    deployment.spec.environment_template.preview_host =
+        Some("api-pr-42.preview.example.test".to_owned());
     deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
         source: Some("aws-secret://runtime-secrets".to_owned()),
@@ -497,7 +499,13 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
         values: BTreeMap::from([
             (
                 "aws-secret://runtime-environment".to_owned(),
-                BTreeMap::from([("MODE".to_owned(), SecretValue::new("resolved-mode"))]),
+                BTreeMap::from([
+                    ("MODE".to_owned(), SecretValue::new("resolved-mode")),
+                    (
+                        "BATON_HOST".to_owned(),
+                        SecretValue::new("https://${{ MAESTRO_PREVIEW_HOST }}/"),
+                    ),
+                ]),
             ),
             (
                 "aws-secret://runtime-secrets".to_owned(),
@@ -529,6 +537,14 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
             .get("MODE")
             .map(SecretValue::expose),
         Some("resolved-mode")
+    );
+    assert_eq!(
+        workload
+            .configuration
+            .environment
+            .get("BATON_HOST")
+            .map(SecretValue::expose),
+        Some("https://api-pr-42.preview.example.test/")
     );
 
     let replica = world.load_replica().await?;
@@ -694,6 +710,7 @@ pub(crate) fn deployment() -> Deployment {
                 placement: PlacementConstraint::default(),
                 exec: ExecPolicy::Allowed,
             },
+            environment_template: Default::default(),
             build_id: None,
         },
         status: DeploymentStatus {

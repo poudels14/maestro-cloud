@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactArchiveId, BuildId, Condition, DeploymentId, Generation, MaskedSecret, NodeId, Object,
-    SecretValue, ServiceId, Timestamp,
+    ArtifactArchiveId, BuildId, Condition, DeploymentId, EnvironmentTemplateContext, Generation,
+    MaskedSecret, NodeId, Object, SecretValue, ServiceId, Timestamp,
 };
 
 mod build;
@@ -521,6 +521,9 @@ pub struct DeploymentSpec {
     pub bypass_rollout_freeze: bool,
     /// Immutable service configuration used for every replica.
     pub service: ServiceSpec,
+    /// Non-secret values used to resolve external environment templates on the workload node.
+    #[serde(default, skip_serializing_if = "EnvironmentTemplateContext::is_empty")]
+    pub environment_template: EnvironmentTemplateContext,
     /// User-requested lifecycle outcome reconciled by the deployment operator.
     #[serde(default)]
     pub goal: DeploymentGoal,

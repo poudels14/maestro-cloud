@@ -96,6 +96,7 @@ pub(super) fn deployment_in_phase(
             restart_generation: kernel_api::Generation(1),
             bypass_rollout_freeze: false,
             service: captured_service,
+            environment_template: Default::default(),
             goal: DeploymentGoal::Run,
             build_id: None,
         },

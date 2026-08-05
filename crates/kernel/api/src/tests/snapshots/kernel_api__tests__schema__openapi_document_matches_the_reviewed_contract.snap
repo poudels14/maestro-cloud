@@ -940,6 +940,14 @@ expression: document
             "description": "Whether this immutable deployment may begin while its service is frozen.",
             "type": "boolean"
           },
+          "environmentTemplate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentTemplateContext"
+              }
+            ],
+            "description": "Non-secret values used to resolve external environment templates on the workload node."
+          },
           "goal": {
             "allOf": [
               {
@@ -1292,6 +1300,17 @@ expression: document
             "type": "object"
           }
         ]
+      },
+      "EnvironmentTemplateContext": {
+        "description": "Non-secret values captured with a Deployment for resolving environment templates on its node.",
+        "properties": {
+          "previewHost": {
+            "description": "Canonical ingress hostname assigned to a pull-request preview.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
       },
       "ExecPolicy": {
         "description": "Whether API-initiated interactive execution is available to a workload.",
