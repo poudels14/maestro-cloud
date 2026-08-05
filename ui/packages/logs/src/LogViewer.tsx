@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, Show, on, onCleanup } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { ChevronDown } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry, LogHistogram, LogHistogramBucket, LogPage, LogScope, LogsApi } from "./api";
@@ -39,7 +40,12 @@ function LogViewer(props: {
   onRangeChange?: (range: string) => void;
   cluster?: { nodeId?: string };
 }) {
-  const [lines, setLines] = createSignal<LogEntry[]>([]);
+  const [logState, setLogState] = createStore<{ lines: LogEntry[] }>({ lines: [] });
+  const lines = () => logState.lines;
+  const setLines = (update: LogEntry[] | ((current: LogEntry[]) => LogEntry[])) => {
+    const next = typeof update === "function" ? update(logState.lines) : update;
+    setLogState("lines", reconcile(next, { key: null }));
+  };
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
   const [queryDraft, setQueryDraft] = createSignal("");
@@ -83,20 +89,18 @@ function LogViewer(props: {
   let previousLoadToken = 0;
   let pollInFlight = false;
 
-  const phaseLines = () => {
+  const phaseLines = createMemo(() => {
     const all = lines().filter((line) => line.text.trim().length > 0);
     if (!props.phase) return all;
     if (props.phase === "build") return all.filter((line) => line.source?.endsWith("/build"));
     return all.filter((line) => !line.source?.endsWith("/build"));
-  };
+  });
 
   const queryCatalog = createMemo<LogQueryCatalog>(() =>
     buildLogQueryCatalog(props.serviceId, phaseLines())
   );
 
-  const filteredLines = () => {
-    return phaseLines();
-  };
+  const filteredLines = phaseLines;
 
   const requestQuery = () => {
     return combineLogQueries(props.requiredQuery ?? "", query());
@@ -153,7 +157,7 @@ function LogViewer(props: {
     setQuery(withLogHistogramGroupFilter(query(), props.histogramGroupBy ?? "level", group));
   };
 
-  const showHost = () => {
+  const showHost = createMemo(() => {
     if (props.cluster) return true;
     const seen = new Set<string>();
     for (const line of phaseLines()) {
@@ -162,15 +166,15 @@ function LogViewer(props: {
       if (seen.size > 1) return true;
     }
     return false;
-  };
+  });
 
-  const showHttp = () => {
+  const showHttp = createMemo(() => {
     for (const line of phaseLines()) {
       const { method, status, path } = httpFields(line.attrs);
       if (method || status || path) return true;
     }
     return false;
-  };
+  });
 
   const toggleExpanded = (key: string) => {
     const next = new Set(expanded());
@@ -325,10 +329,16 @@ function LogViewer(props: {
   onCleanup(() => {
     clearInterval(pollTimer);
     if (histogramTimer != null) clearInterval(histogramTimer);
+    if (scrollFrame != null) cancelAnimationFrame(scrollFrame);
+    if (linesFrame != null) cancelAnimationFrame(linesFrame);
+    if (prependFrame != null) cancelAnimationFrame(prependFrame);
   });
 
   let scrollRef: HTMLDivElement | undefined;
   let wasAtBottom = true;
+  let scrollFrame: number | undefined;
+  let linesFrame: number | undefined;
+  let prependFrame: number | undefined;
   const [atBottom, setAtBottom] = createSignal(true);
 
   const updateScrollFlags = () => {
@@ -346,20 +356,25 @@ function LogViewer(props: {
 
   createEffect(
     on(filteredLines, () => {
-      if (wasAtBottom && scrollRef) {
-        requestAnimationFrame(() => {
-          scrollRef!.scrollTop = scrollRef!.scrollHeight;
-          updateScrollFlags();
-        });
-      } else {
+      if (loadingPrevious()) return;
+      if (linesFrame != null) cancelAnimationFrame(linesFrame);
+      const shouldStickToBottom = wasAtBottom;
+      linesFrame = requestAnimationFrame(() => {
+        linesFrame = undefined;
+        if (!scrollRef) return;
+        if (shouldStickToBottom) scrollRef.scrollTop = scrollRef.scrollHeight;
         updateScrollFlags();
-      }
+      });
     })
   );
 
   const onScroll = () => {
-    updateScrollFlags();
-    if (scrollRef && scrollRef.scrollTop <= 80) void loadPreviousLogs();
+    if (scrollFrame != null) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = undefined;
+      updateScrollFlags();
+      if (scrollRef && scrollRef.scrollTop <= 80) void loadPreviousLogs();
+    });
   };
 
   const loadPreviousLogs = async () => {
@@ -379,8 +394,6 @@ function LogViewer(props: {
     const requestContext = rowRequestContext();
     const previousHeight = scrollRef.scrollHeight;
     const previousTop = scrollRef.scrollTop;
-    const anchor = scrollRef.querySelector<HTMLElement>("[data-log-entry]");
-    const anchorOffset = anchor ? anchor.offsetTop - previousTop : null;
     setLoadingPrevious(true);
     try {
       const page = await fetchPage(requestQuery(), {
@@ -397,12 +410,12 @@ function LogViewer(props: {
       setPreviousCursor(page.previousCursor);
       setHasPrevious(page.hasPrevious);
       setError(null);
-      requestAnimationFrame(() => {
+      if (prependFrame != null) cancelAnimationFrame(prependFrame);
+      prependFrame = requestAnimationFrame(() => {
+        prependFrame = undefined;
         if (!scrollRef || token !== previousLoadToken) return;
-        scrollRef.scrollTop =
-          anchor && anchor.isConnected && anchorOffset != null
-            ? anchor.offsetTop - anchorOffset
-            : previousTop + scrollRef.scrollHeight - previousHeight;
+        const desiredTop = previousTop + scrollRef.scrollHeight - previousHeight;
+        if (Math.abs(scrollRef.scrollTop - desiredTop) > 1) scrollRef.scrollTop = desiredTop;
         updateScrollFlags();
       });
     } catch (err) {

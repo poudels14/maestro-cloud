@@ -88,7 +88,7 @@ function ServiceDetailRoute(props: { serviceId: string; pullRequestId?: string; 
   const navigateBaseService = () =>
     navigate({
       to: "/services/$serviceId/$tab",
-      params: { serviceId: props.serviceId, tab: "overview" }
+      params: { serviceId: props.serviceId, tab: "pull-requests" }
     });
   const updateSearch = (updates: ServiceDetailSearchUpdate) => {
     const search = mergeDefinedProperties(location().search as ServiceDetailSearch, updates);

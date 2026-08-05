@@ -26,7 +26,6 @@ const LOG_COLUMNS = {
 
 function LogRow(props: {
   line: LogEntry;
-  index: number;
   showHost: boolean;
   showService: boolean;
   showHttp: boolean;
@@ -43,8 +42,8 @@ function LogRow(props: {
       class={clsx("border-b border-gray-50 transition-colors", {
         "cursor-pointer": !props.stream,
         "bg-brand-light": props.expanded,
-        "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
-        "bg-gray-50/60 hover:bg-gray-100/60": !props.expanded && props.index % 2 === 1
+        "even:bg-white even:hover:bg-gray-50 odd:bg-gray-50/60 odd:hover:bg-gray-100/60":
+          !props.expanded
       })}
       onClick={() => {
         if (!props.stream) props.onToggle();

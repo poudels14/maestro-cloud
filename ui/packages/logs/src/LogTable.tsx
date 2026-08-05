@@ -63,12 +63,11 @@ function LogTable(props: {
             </span>
           </li>
           <For each={props.lines}>
-            {(line, index) => {
+            {(line) => {
               const key = logEntryKey(line);
               return (
                 <LogRow
                   line={line}
-                  index={index()}
                   showHost={props.showHost}
                   showService={props.cluster}
                   showHttp={props.showHttp}
