@@ -34,7 +34,7 @@ function DeploymentRow(props: Props) {
   const phase = () => props.deployment.status.phase;
   const sourceRevision = () => deploymentGitRevision(props.deployment);
   const failure = () => deploymentFailure(props.deployment);
-  const isLive = () => ["BUILDING", "PENDING_READY", "READY"].includes(phase());
+  const isLive = () => ["BUILDING", "PUBLISHING", "PENDING_READY", "READY"].includes(phase());
   const replicas = useQuery(() => ({
     ...deploymentReplicasQuery(props.api, props.deployment),
     enabled: props.showReplicas && isLive()

@@ -454,6 +454,8 @@ pub enum DeploymentPhase {
     Queued,
     /// Preparing or resolving the deployment artifact.
     Building,
+    /// Publishing the deployment artifact to assigned nodes before workloads start.
+    Publishing,
     /// Workloads started but have not passed readiness checks.
     PendingReady,
     /// Workloads are healthy and may receive traffic.
@@ -474,10 +476,14 @@ impl DeploymentPhase {
     /// Whether the old-system lifecycle permits this phase transition.
     pub fn can_transition_to(self, target: Self) -> bool {
         match target {
-            Self::PendingReady => matches!(self, Self::Building),
-            Self::Ready => matches!(self, Self::Building | Self::PendingReady),
+            Self::Publishing => matches!(self, Self::Building | Self::PendingReady),
+            Self::PendingReady => matches!(self, Self::Building | Self::Publishing),
+            Self::Ready => matches!(self, Self::Building | Self::Publishing | Self::PendingReady),
             Self::Crashed => !matches!(self, Self::Crashed | Self::Canceled | Self::Terminated),
-            Self::Draining => matches!(self, Self::Ready | Self::PendingReady | Self::Building),
+            Self::Draining => matches!(
+                self,
+                Self::Ready | Self::PendingReady | Self::Publishing | Self::Building
+            ),
             Self::Terminated => !matches!(self, Self::Terminated),
             Self::Queued | Self::Building | Self::Removed | Self::Canceled => true,
         }

@@ -1226,6 +1226,13 @@
             "type": "string"
           },
           {
+            "description": "Publishing the deployment artifact to assigned nodes before workloads start.",
+            "enum": [
+              "PUBLISHING"
+            ],
+            "type": "string"
+          },
+          {
             "description": "Workloads started but have not passed readiness checks.",
             "enum": [
               "PENDING_READY"
@@ -6499,7 +6506,7 @@
                 "nullable": true
               }
             ],
-            "description": "Explicit numeric process identity, required when the node API is enabled."
+            "description": "Explicit numeric process identity, required when the node API is enabled.\nAbsence preserves the container image's configured user."
           },
           "version": {
             "description": "Operator-supplied version used in rollout history.",
@@ -8096,7 +8103,7 @@
   },
   "info": {
     "title": "Maestro Cloud API",
-    "version": "0.6.26"
+    "version": "0.6.29"
   },
   "openapi": "3.0.4",
   "paths": {

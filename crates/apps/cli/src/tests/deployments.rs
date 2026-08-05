@@ -9,13 +9,14 @@ fn deployment_history_is_newest_first_complete_and_secret_safe()
     let phases = [
         ("queued", "QUEUED", 1),
         ("building", "BUILDING", 2),
-        ("pending", "PENDING_READY", 3),
-        ("ready", "READY", 4),
-        ("crashed", "CRASHED", 5),
-        ("terminated", "TERMINATED", 6),
-        ("removed", "REMOVED", 7),
-        ("draining", "DRAINING", 8),
-        ("canceled", "CANCELED", 9),
+        ("publishing", "PUBLISHING", 3),
+        ("pending", "PENDING_READY", 4),
+        ("ready", "READY", 5),
+        ("crashed", "CRASHED", 6),
+        ("terminated", "TERMINATED", 7),
+        ("removed", "REMOVED", 8),
+        ("draining", "DRAINING", 9),
+        ("canceled", "CANCELED", 10),
     ];
     let deployments = phases
         .iter()
@@ -27,6 +28,7 @@ fn deployment_history_is_newest_first_complete_and_secret_safe()
     for expected in [
         "queued",
         "building",
+        "publishing",
         "pending-ready",
         "ready",
         "crashed",

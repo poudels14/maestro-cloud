@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use kernel_api::{
     Assignment, DeploymentPhase, Generation, MaskedSecret, Object, ObjectMeta, OwnerReference,
     Ownership, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceId,
-    ResourceKind, ResourceName,
+    ResourceKind, ResourceName, WorkloadId,
 };
 use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store};
 
@@ -106,7 +106,7 @@ fn initial_replica(
             replica_index: assignment.spec.replica_index,
         },
         status: ReplicaStateStatus {
-            phase: DeploymentPhase::PendingReady,
+            phase: DeploymentPhase::Publishing,
             node_id: Some(assignment.spec.node_id.clone()),
             workload_id: None,
             healthcheck_failures: 0,
@@ -119,12 +119,13 @@ fn initial_replica(
     }
 }
 
-pub(crate) async fn record_resolved_secrets(
+pub(crate) async fn record_started(
     store: &dyn Store,
     keyspace: &Keyspace,
     replica_kind: &ResourceKind,
     assignment: &Assignment,
     replica_id: &ReplicaStateId,
+    workload_id: &WorkloadId,
     resolved_secrets: &BTreeMap<String, MaskedSecret>,
 ) -> Result<(), AssignmentAgentError> {
     let key = keyspace.resource(replica_kind, &ResourceName::from(replica_id.clone()));
@@ -146,9 +147,19 @@ pub(crate) async fn record_resolved_secrets(
                 assignment_id: assignment.meta.id.to_string(),
             });
         }
-        if current.status.resolved_secrets.as_ref() == Some(resolved_secrets) {
+        let phase = if current.status.phase == DeploymentPhase::Publishing {
+            DeploymentPhase::PendingReady
+        } else {
+            current.status.phase
+        };
+        if current.status.phase == phase
+            && current.status.workload_id.as_ref() == Some(workload_id)
+            && current.status.resolved_secrets.as_ref() == Some(resolved_secrets)
+        {
             return Ok(());
         }
+        current.status.phase = phase;
+        current.status.workload_id = Some(workload_id.clone());
         current.status.resolved_secrets = Some(resolved_secrets.clone());
         current.meta.revision = stored.version.resource_revision();
         let value = serde_json::to_vec(&current).map_err(|error| {

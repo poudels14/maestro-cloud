@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentPhase, BuildSource, BuildTemplate, Deployment,
-    ResourceKind, ResourceName, Timestamp,
+    DeploymentPhase, ReplicaState, ResourceKind, ResourceName, Timestamp,
 };
 use kernel_store::{
     CasOutcome, ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, TokioClock,
@@ -114,6 +114,9 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
     );
     let pending = load_assignment(&store).await?;
     assert_eq!(pending.status.phase, AssignmentPhase::Pending);
+    let publishing = load_replica(&store).await?;
+    assert_eq!(publishing.status.phase, DeploymentPhase::Publishing);
+    assert_eq!(publishing.status.workload_id, None);
     assert_eq!(
         pending
             .status
@@ -129,6 +132,12 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
     assert_eq!(
         runtime.list(&cluster_id(), &node_id("node-1")).await?.len(),
         1
+    );
+    let started = load_replica(&store).await?;
+    assert_eq!(started.status.phase, DeploymentPhase::PendingReady);
+    assert_eq!(
+        started.status.workload_id.as_ref().map(|id| id.as_str()),
+        Some("assignment-1")
     );
     let readers =
         ArtifactHolderRegistry::new(store, &cluster_id(), node_id("node-1"), session.id());
@@ -198,6 +207,17 @@ async fn load_assignment(
         &ResourceName::new("assignment-1")?,
     );
     let stored = store.get(&key).await?.ok_or("assignment missing")?;
+    Ok(serde_json::from_slice(&stored.value)?)
+}
+
+async fn load_replica(
+    store: &Arc<InMemoryStore>,
+) -> Result<ReplicaState, Box<dyn std::error::Error>> {
+    let key = Keyspace::new(&cluster_id()).resource(
+        &ResourceKind::new("ReplicaState")?,
+        &ResourceName::new("assignment-1")?,
+    );
+    let stored = store.get(&key).await?.ok_or("replica missing")?;
     Ok(serde_json::from_slice(&stored.value)?)
 }
 

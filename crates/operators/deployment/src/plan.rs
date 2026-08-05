@@ -9,7 +9,10 @@ use kernel_api::{
     Service, ServiceId, Timestamp,
 };
 
-use crate::readiness::{all_exhausted, all_ready, current_slots, drain_elapsed, has_assignments};
+use crate::readiness::{
+    all_exhausted, all_ready, all_started, current_slots, drain_elapsed, has_assignments,
+    has_unstarted,
+};
 use crate::resource::{index, new_build, new_deployment, validate_ownership};
 use crate::{DeploymentInput, DeploymentPlan, ResourceStatusUpdate};
 
@@ -310,7 +313,7 @@ fn desired_deployment_status(
                 );
             }
         }
-        DeploymentPhase::PendingReady | DeploymentPhase::Ready => {
+        DeploymentPhase::Publishing | DeploymentPhase::PendingReady | DeploymentPhase::Ready => {
             advance_readiness(
                 service,
                 deployment,
@@ -395,7 +398,11 @@ fn advance_readiness(
     } else if desired.phase != DeploymentPhase::Ready
         && slots.len() == usize::try_from(count).unwrap_or(usize::MAX)
     {
-        desired.phase = DeploymentPhase::PendingReady;
+        if all_started(deployment, &slots, replicas, count) {
+            desired.phase = DeploymentPhase::PendingReady;
+        } else if has_unstarted(deployment, &slots, replicas, count) {
+            desired.phase = DeploymentPhase::Publishing;
+        }
     }
 }
 

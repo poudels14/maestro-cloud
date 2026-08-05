@@ -192,6 +192,7 @@ fn mutate_deployment(
                 || !matches!(
                     deployment.status.phase,
                     DeploymentPhase::Building
+                        | DeploymentPhase::Publishing
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Ready
                 )

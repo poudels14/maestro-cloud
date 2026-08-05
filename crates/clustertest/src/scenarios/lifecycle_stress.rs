@@ -145,6 +145,7 @@ where
                 deployment.phase,
                 DeploymentPhase::Queued
                     | DeploymentPhase::Building
+                    | DeploymentPhase::Publishing
                     | DeploymentPhase::PendingReady
                     | DeploymentPhase::Ready
             )

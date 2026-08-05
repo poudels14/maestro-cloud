@@ -861,6 +861,13 @@ expression: document
             "type": "string"
           },
           {
+            "description": "Publishing the deployment artifact to assigned nodes before workloads start.",
+            "enum": [
+              "PUBLISHING"
+            ],
+            "type": "string"
+          },
+          {
             "description": "Workloads started but have not passed readiness checks.",
             "enum": [
               "PENDING_READY"
@@ -5720,7 +5727,7 @@ expression: document
                 "nullable": true
               }
             ],
-            "description": "Explicit numeric process identity, required when the node API is enabled."
+            "description": "Explicit numeric process identity, required when the node API is enabled.\nAbsence preserves the container image's configured user."
           },
           "version": {
             "description": "Operator-supplied version used in rollout history.",

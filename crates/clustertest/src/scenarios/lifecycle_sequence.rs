@@ -147,7 +147,10 @@ where
     let Some(deployment) = service.deployments.iter().rev().find(|deployment| {
         matches!(
             deployment.phase,
-            DeploymentPhase::Ready | DeploymentPhase::PendingReady | DeploymentPhase::Building
+            DeploymentPhase::Ready
+                | DeploymentPhase::PendingReady
+                | DeploymentPhase::Publishing
+                | DeploymentPhase::Building
         )
     }) else {
         return Ok(());

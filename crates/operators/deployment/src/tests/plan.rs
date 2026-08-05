@@ -398,7 +398,22 @@ fn readiness_requires_the_exact_current_assignment() {
     let mut snapshot = input(service.clone(), vec![deployment.clone()]);
     snapshot.assignments = vec![stale.clone(), current.clone()];
     snapshot.replicas = vec![replica(&deployment, &stale, DeploymentPhase::Ready, 0)];
-    let pending = plan(snapshot).expect("pending plan");
+    let publishing = plan(snapshot).expect("publishing plan");
+    assert_eq!(
+        publishing.deployment_updates[0].status.phase,
+        DeploymentPhase::Publishing
+    );
+
+    deployment.status.phase = DeploymentPhase::Publishing;
+    let mut snapshot = input(service.clone(), vec![deployment.clone()]);
+    snapshot.assignments = vec![stale.clone(), current.clone()];
+    snapshot.replicas = vec![replica(
+        &deployment,
+        &current,
+        DeploymentPhase::PendingReady,
+        0,
+    )];
+    let pending = plan(snapshot).expect("pending-ready plan");
     assert_eq!(
         pending.deployment_updates[0].status.phase,
         DeploymentPhase::PendingReady

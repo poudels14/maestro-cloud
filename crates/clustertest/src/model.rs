@@ -349,6 +349,8 @@ pub enum DeploymentPhase {
     Queued,
     /// Preparing or building the workload artifact.
     Building,
+    /// Publishing the workload artifact to assigned nodes.
+    Publishing,
     /// Running but not yet ready for traffic.
     PendingReady,
     /// Ready for traffic.

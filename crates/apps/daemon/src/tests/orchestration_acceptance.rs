@@ -395,6 +395,7 @@ fn project_phase(phase: ResourceDeploymentPhase) -> SnapshotDeploymentPhase {
     match phase {
         ResourceDeploymentPhase::Queued => SnapshotDeploymentPhase::Queued,
         ResourceDeploymentPhase::Building => SnapshotDeploymentPhase::Building,
+        ResourceDeploymentPhase::Publishing => SnapshotDeploymentPhase::Publishing,
         ResourceDeploymentPhase::PendingReady => SnapshotDeploymentPhase::PendingReady,
         ResourceDeploymentPhase::Ready => SnapshotDeploymentPhase::Ready,
         ResourceDeploymentPhase::Crashed => SnapshotDeploymentPhase::Crashed,

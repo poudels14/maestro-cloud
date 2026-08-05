@@ -122,6 +122,7 @@ fn phase_name(phase: DeploymentPhase) -> &'static str {
     match phase {
         DeploymentPhase::Queued => "queued",
         DeploymentPhase::Building => "building",
+        DeploymentPhase::Publishing => "publishing",
         DeploymentPhase::PendingReady => "pending-ready",
         DeploymentPhase::Ready => "ready",
         DeploymentPhase::Crashed => "crashed",

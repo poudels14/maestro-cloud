@@ -96,6 +96,10 @@ async fn assignment_reconcile_creates_and_reuses_missing_replica_state()
     assert_eq!(replica.spec.assignment_id, assignment.meta.id);
     assert_eq!(replica.status.phase, DeploymentPhase::PendingReady);
     assert_eq!(replica.status.node_id, Some(node_id("node-1")));
+    assert_eq!(
+        replica.status.workload_id.as_ref().map(|id| id.as_str()),
+        Some("assignment-1")
+    );
 
     let second = world.agent().reconcile_once().await?;
     assert_eq!(second.replica_states_created, 0);
@@ -118,6 +122,10 @@ async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_sta
     assert_eq!(first.unresolved, 1);
     let pending = world.load_assignment().await?;
     assert_eq!(pending.status.phase, AssignmentPhase::Pending);
+    assert_eq!(
+        world.load_replica().await?.status.phase,
+        DeploymentPhase::Publishing
+    );
     assert_eq!(
         pending
             .status
@@ -167,6 +175,7 @@ async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failu
     assert_eq!(interrupted.unresolved, 1);
     assert_eq!(interrupted.requeue_at, Some(Timestamp(1_750_000_005_000)));
     let reserved = world.load_replica().await?;
+    assert_eq!(reserved.status.phase, DeploymentPhase::Publishing);
     assert_eq!(reserved.status.restart_attempts, 1);
     assert_eq!(reserved.status.restart_pending_attempt, Some(1));
     assert_eq!(
@@ -178,6 +187,7 @@ async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failu
     let failed_start = world.agent().reconcile_once().await?;
     assert_eq!(failed_start.unresolved, 1);
     let still_reserved = world.load_replica().await?;
+    assert_eq!(still_reserved.status.phase, DeploymentPhase::Publishing);
     assert_eq!(still_reserved.status.restart_attempts, 1);
     assert_eq!(still_reserved.status.restart_pending_attempt, Some(1));
 
@@ -185,6 +195,7 @@ async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failu
     assert_eq!(recovered.running, 1);
     assert_eq!(recovered.restarted, 1);
     let finished = world.load_replica().await?;
+    assert_eq!(finished.status.phase, DeploymentPhase::PendingReady);
     assert_eq!(finished.status.restart_attempts, 1);
     assert_eq!(finished.status.restart_pending_attempt, None);
     assert_eq!(finished.status.restart_not_before, None);
@@ -648,7 +659,7 @@ pub(crate) fn deployment() -> Deployment {
             build_id: None,
         },
         status: DeploymentStatus {
-            phase: DeploymentPhase::PendingReady,
+            phase: DeploymentPhase::Publishing,
             created_at: Timestamp(1_750_000_000_000),
             ready_at: None,
             draining_at: None,
@@ -871,7 +882,7 @@ fn replica(assignment: &Assignment) -> ReplicaState {
             replica_index: assignment.spec.replica_index,
         },
         status: ReplicaStateStatus {
-            phase: DeploymentPhase::PendingReady,
+            phase: DeploymentPhase::Publishing,
             node_id: Some(assignment.spec.node_id.clone()),
             workload_id: None,
             healthcheck_failures: 0,

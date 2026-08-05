@@ -38,6 +38,38 @@ pub(crate) fn all_ready(
     })
 }
 
+pub(crate) fn all_started(
+    deployment: &Deployment,
+    slots: &BTreeMap<u32, &Assignment>,
+    replicas: &[ReplicaState],
+    count: u32,
+) -> bool {
+    (0..count).all(|index| {
+        slots.get(&index).is_some_and(|assignment| {
+            exact_replica(deployment, assignment, replicas).is_some_and(|replica| {
+                matches!(
+                    replica.status.phase,
+                    DeploymentPhase::PendingReady | DeploymentPhase::Ready
+                )
+            })
+        })
+    })
+}
+
+pub(crate) fn has_unstarted(
+    deployment: &Deployment,
+    slots: &BTreeMap<u32, &Assignment>,
+    replicas: &[ReplicaState],
+    count: u32,
+) -> bool {
+    (0..count).any(|index| {
+        slots.get(&index).is_some_and(|assignment| {
+            exact_replica(deployment, assignment, replicas)
+                .is_none_or(|replica| replica.status.phase == DeploymentPhase::Publishing)
+        })
+    })
+}
+
 pub(crate) fn all_exhausted(
     deployment: &Deployment,
     slots: &BTreeMap<u32, &Assignment>,

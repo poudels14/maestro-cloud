@@ -1628,7 +1628,7 @@ export interface components {
         /** @description Stable identity of one immutable service deployment. */
         DeploymentId: string;
         /** @description Persisted phase of an immutable deployment. */
-        DeploymentPhase: "QUEUED" | "BUILDING" | "PENDING_READY" | "READY" | "CRASHED" | "TERMINATED" | "REMOVED" | "DRAINING" | "CANCELED";
+        DeploymentPhase: "QUEUED" | "BUILDING" | "PUBLISHING" | "PENDING_READY" | "READY" | "CRASHED" | "TERMINATED" | "REMOVED" | "DRAINING" | "CANCELED";
         /** @description Captured service snapshot and desired lifecycle for one deployment. */
         DeploymentSpec: {
             /** @description Build generated for this deployment, when the artifact needs building. */
@@ -3193,7 +3193,10 @@ export interface components {
             replicas: number;
             /** @description Secret values delivered through a private read-only file mount. */
             secrets?: components["schemas"]["SecretMountSpec"] | (null);
-            /** @description Explicit numeric process identity, required when the node API is enabled. */
+            /**
+             * @description Explicit numeric process identity, required when the node API is enabled.
+             *     Absence preserves the container image's configured user.
+             */
             user?: components["schemas"]["WorkloadUserSpec"] | (null);
             /** @description Operator-supplied version used in rollout history. */
             version: string;

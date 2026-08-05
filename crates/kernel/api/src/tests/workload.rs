@@ -128,6 +128,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
     let phases = [
         DeploymentPhase::Queued,
         DeploymentPhase::Building,
+        DeploymentPhase::Publishing,
         DeploymentPhase::PendingReady,
         DeploymentPhase::Ready,
         DeploymentPhase::Crashed,
@@ -140,10 +141,19 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
     for current in phases {
         for target in phases {
             let expected = match target {
-                DeploymentPhase::PendingReady => current == DeploymentPhase::Building,
-                DeploymentPhase::Ready => matches!(
+                DeploymentPhase::Publishing => matches!(
                     current,
                     DeploymentPhase::Building | DeploymentPhase::PendingReady
+                ),
+                DeploymentPhase::PendingReady => matches!(
+                    current,
+                    DeploymentPhase::Building | DeploymentPhase::Publishing
+                ),
+                DeploymentPhase::Ready => matches!(
+                    current,
+                    DeploymentPhase::Building
+                        | DeploymentPhase::Publishing
+                        | DeploymentPhase::PendingReady
                 ),
                 DeploymentPhase::Crashed => !matches!(
                     current,
@@ -155,6 +165,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                     current,
                     DeploymentPhase::Ready
                         | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Publishing
                         | DeploymentPhase::Building
                 ),
                 DeploymentPhase::Terminated => current != DeploymentPhase::Terminated,

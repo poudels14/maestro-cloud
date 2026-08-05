@@ -230,7 +230,7 @@ fn deployment() -> Deployment {
             build_id: None,
         },
         status: DeploymentStatus {
-            phase: DeploymentPhase::PendingReady,
+            phase: DeploymentPhase::Publishing,
             created_at: Timestamp(1_750_000_000_000),
             ready_at: None,
             draining_at: None,
@@ -264,7 +264,7 @@ fn replica(assignment: &Assignment) -> ReplicaState {
             replica_index: assignment.spec.replica_index,
         },
         status: ReplicaStateStatus {
-            phase: DeploymentPhase::PendingReady,
+            phase: DeploymentPhase::Publishing,
             node_id: Some(assignment.spec.node_id.clone()),
             workload_id: None,
             healthcheck_failures: 0,

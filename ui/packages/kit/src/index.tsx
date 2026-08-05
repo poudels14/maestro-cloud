@@ -27,6 +27,7 @@ export function timeAgo(ms: number): string {
 export const STATUS_COLORS: Record<string, { dot: string; pill: string }> = {
   QUEUED: { dot: "bg-amber-400", pill: "bg-amber-50 text-amber-700 border-amber-100" },
   BUILDING: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },
+  PUBLISHING: { dot: "bg-sky-400", pill: "bg-sky-50 text-sky-700 border-sky-100" },
   PENDING_READY: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },
   READY: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
   DEPLOYING: { dot: "bg-brand", pill: "bg-brand-light text-brand-hover border-brand-ring" },

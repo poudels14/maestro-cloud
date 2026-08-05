@@ -93,7 +93,7 @@ pub(crate) async fn reserve_restart(
         current.status.restart_pending_attempt = Some(next_attempt);
         current.status.restart_not_before = Some(not_before);
         current.status.healthcheck_failures = 0;
-        current.status.phase = DeploymentPhase::PendingReady;
+        current.status.phase = DeploymentPhase::Publishing;
         upsert_restart_condition(
             &mut current,
             ConditionState::Unknown,

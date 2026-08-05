@@ -101,7 +101,10 @@ pub(super) fn coordinate_active_deployment(
         };
         if matches!(
             status.phase,
-            DeploymentPhase::Building | DeploymentPhase::PendingReady | DeploymentPhase::Ready
+            DeploymentPhase::Building
+                | DeploymentPhase::Publishing
+                | DeploymentPhase::PendingReady
+                | DeploymentPhase::Ready
         ) {
             status.phase = DeploymentPhase::Draining;
             status.draining_at.get_or_insert(now);
@@ -145,7 +148,9 @@ fn retire_superseded_nonserving(
         // Draining.
         match deployment.status.phase {
             DeploymentPhase::Queued => status.phase = DeploymentPhase::Canceled,
-            DeploymentPhase::Building | DeploymentPhase::PendingReady => {
+            DeploymentPhase::Building
+            | DeploymentPhase::Publishing
+            | DeploymentPhase::PendingReady => {
                 status.phase = DeploymentPhase::Draining;
                 status.draining_at.get_or_insert(now);
             }

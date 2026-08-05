@@ -34,6 +34,7 @@ pub(crate) fn retained_digests(
             ) && (matches!(
                 deployment.status.phase,
                 DeploymentPhase::Building
+                    | DeploymentPhase::Publishing
                     | DeploymentPhase::PendingReady
                     | DeploymentPhase::Ready
                     | DeploymentPhase::Draining
@@ -56,6 +57,7 @@ pub(crate) fn preserved_digests(
             matches!(
                 deployment.status.phase,
                 DeploymentPhase::Building
+                    | DeploymentPhase::Publishing
                     | DeploymentPhase::PendingReady
                     | DeploymentPhase::Ready
                     | DeploymentPhase::Draining

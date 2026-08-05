@@ -43,7 +43,7 @@ async fn store_backed_controller_advances_only_from_exact_replica_state()
         .await?;
     world.reconcile(Timestamp(3_000)).await?;
     deployment = world.one::<Deployment>("Deployment").await?;
-    assert_eq!(deployment.status.phase, DeploymentPhase::PendingReady);
+    assert_eq!(deployment.status.phase, DeploymentPhase::Publishing);
 
     let replica = ready_replica(&deployment, &assignment.meta.id);
     world
