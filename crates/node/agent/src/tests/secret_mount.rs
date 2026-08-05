@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -17,6 +17,11 @@ use crate::secret_mount::{
 async fn secret_mount_is_private_idempotent_and_zeroized_on_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
+    let temporary_owner = fs::metadata(temporary.path())?;
+    let owner = runtime::WorkloadUser {
+        user_id: temporary_owner.uid(),
+        group_id: temporary_owner.gid(),
+    };
     let root = temporary.path().join("secrets");
     let manager = SecretMountManager::new(root.clone())?;
     let workload_id = WorkloadId::new("workload-1")?;
@@ -30,7 +35,9 @@ async fn secret_mount_is_private_idempotent_and_zeroized_on_cleanup()
         ]),
     };
 
-    let mount = manager.materialize(&workload_id, &spec).await?;
+    let mount = manager
+        .materialize(&workload_id, &spec, Some(owner))
+        .await?;
     assert_eq!(mount.target, std::path::Path::new(spec.mount_path()));
     assert_eq!(mount.access, MountAccess::ReadOnly);
     let MountSource::HostPath(ref secret_path) = mount.source else {
@@ -51,7 +58,14 @@ async fn secret_mount_is_private_idempotent_and_zeroized_on_cleanup()
             & 0o777,
         0o700
     );
-    assert_eq!(manager.materialize(&workload_id, &spec).await?, mount);
+    assert_eq!(
+        manager
+            .materialize(&workload_id, &spec, Some(owner))
+            .await?,
+        mount
+    );
+    assert_eq!(fs::metadata(secret_path)?.uid(), owner.user_id);
+    assert_eq!(fs::metadata(secret_path)?.gid(), owner.group_id);
 
     let observer = temporary.path().join("secret-observer");
     fs::hard_link(secret_path, &observer)?;
@@ -82,7 +96,7 @@ async fn secret_file_set_preserves_exact_bytes_and_zeroizes_every_file()
         ]),
     };
 
-    let mount = manager.materialize(&workload_id, &spec).await?;
+    let mount = manager.materialize(&workload_id, &spec, None).await?;
     assert_eq!(mount.target, std::path::Path::new("/run/secrets/etcd"));
     assert_eq!(mount.access, MountAccess::ReadOnly);
     let MountSource::HostPath(ref directory) = mount.source else {
@@ -100,14 +114,14 @@ async fn secret_file_set_preserves_exact_bytes_and_zeroizes_every_file()
     );
     assert_eq!(fs::metadata(directory)?.permissions().mode() & 0o777, 0o700);
     assert_eq!(fs::metadata(&ca_path)?.permissions().mode() & 0o777, 0o600);
-    assert_eq!(manager.materialize(&workload_id, &spec).await?, mount);
+    assert_eq!(manager.materialize(&workload_id, &spec, None).await?, mount);
 
     let SecretMountSpec::Files { files, .. } = &mut spec else {
         return Err("test secret unexpectedly changed representation".into());
     };
     files.insert("ca.pem".to_owned(), SecretValue::new("changed"));
     assert!(matches!(
-        manager.materialize(&workload_id, &spec).await,
+        manager.materialize(&workload_id, &spec, None).await,
         Err(SecretMountError::ContentConflict { .. })
     ));
 
@@ -135,14 +149,14 @@ async fn secret_mount_rejects_identity_mutation_and_collects_only_stale_workload
         source: None,
         items: BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("first"))]),
     };
-    let first_mount = manager.materialize(&first, &spec).await?;
-    manager.materialize(&second, &spec).await?;
+    let first_mount = manager.materialize(&first, &spec, None).await?;
+    manager.materialize(&second, &spec, None).await?;
     let SecretMountSpec::Dotenv { items, .. } = &mut spec else {
         return Err("test secret unexpectedly changed representation".into());
     };
     items.insert("TOKEN".to_owned(), SecretValue::new("changed"));
     assert!(matches!(
-        manager.materialize(&first, &spec).await,
+        manager.materialize(&first, &spec, None).await,
         Err(SecretMountError::ContentConflict { .. })
     ));
 
@@ -167,7 +181,9 @@ async fn secret_mount_rejects_unsafe_targets_and_keys() -> Result<(), Box<dyn st
         items: BTreeMap::new(),
     };
     assert!(matches!(
-        manager.materialize(&workload_id, &invalid_target).await,
+        manager
+            .materialize(&workload_id, &invalid_target, None)
+            .await,
         Err(SecretMountError::InvalidTarget { .. })
     ));
     let invalid_key = SecretMountSpec::Dotenv {
@@ -176,7 +192,7 @@ async fn secret_mount_rejects_unsafe_targets_and_keys() -> Result<(), Box<dyn st
         items: BTreeMap::from([("BAD-KEY".to_owned(), SecretValue::new("value"))]),
     };
     assert!(matches!(
-        manager.materialize(&workload_id, &invalid_key).await,
+        manager.materialize(&workload_id, &invalid_key, None).await,
         Err(SecretMountError::InvalidKey { .. })
     ));
     let invalid_file = SecretMountSpec::Files {
@@ -184,7 +200,7 @@ async fn secret_mount_rejects_unsafe_targets_and_keys() -> Result<(), Box<dyn st
         files: BTreeMap::from([("../key.pem".to_owned(), SecretValue::new("value"))]),
     };
     assert!(matches!(
-        manager.materialize(&workload_id, &invalid_file).await,
+        manager.materialize(&workload_id, &invalid_file, None).await,
         Err(SecretMountError::InvalidFileName { .. })
     ));
 
@@ -223,14 +239,14 @@ async fn slow_materialization_does_not_block_an_unrelated_workload()
     let blocked_spec = spec.clone();
     let blocked = tokio::spawn(async move {
         blocked_manager
-            .materialize(&blocked_workload, &blocked_spec)
+            .materialize(&blocked_workload, &blocked_spec, None)
             .await
     });
     tokio::task::spawn_blocking(move || started_receiver.recv()).await??;
 
     let unrelated = tokio::time::timeout(
         Duration::from_secs(2),
-        manager.materialize(&unrelated_workload, &spec),
+        manager.materialize(&unrelated_workload, &spec, None),
     )
     .await;
     release_sender.send(())?;
@@ -265,7 +281,7 @@ async fn cleanup_waits_for_same_workload_materialization() -> Result<(), Box<dyn
     let materialized_workload = blocked_workload.clone();
     let blocked = tokio::spawn(async move {
         blocked_manager
-            .materialize(&materialized_workload, &secret_spec("value"))
+            .materialize(&materialized_workload, &secret_spec("value"), None)
             .await
     });
     tokio::task::spawn_blocking(move || started_receiver.recv()).await??;
@@ -300,6 +316,7 @@ impl SecretMountFileSystem for BlockingSecretMountFileSystem {
         root: &std::path::Path,
         workload_id: &WorkloadId,
         spec: &SecretMountSpec,
+        owner: Option<runtime::WorkloadUser>,
     ) -> Result<WorkloadMount, SecretMountError> {
         if workload_id == &self.blocked_workload {
             self.started_sender
@@ -313,7 +330,7 @@ impl SecretMountFileSystem for BlockingSecretMountFileSystem {
                 .recv()
                 .map_err(|error| task_failure(error.to_string()))?;
         }
-        materialize(root, workload_id, spec)
+        materialize(root, workload_id, spec, owner)
     }
 
     fn cleanup(&self, directory: &std::path::Path) -> Result<(), SecretMountError> {

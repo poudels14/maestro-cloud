@@ -7,6 +7,7 @@ use kernel_api::{
     HealthProbe, NodeApiAccess, Object, ObjectMeta, PlacementConstraint, ReplicaSpread,
     ResourceRevision, RolloutState, SecretMountSpec, SecretValue, Service, ServiceId, ServiceSpec,
     ServiceStatus, TAILSCALE_GATEWAY_SERVICE_ID, VolumeAccess, VolumeMountSpec, VolumeSource,
+    WorkloadUserSpec,
 };
 
 const MANAGED_ANNOTATION: &str = "system.maestro.dev/owner";
@@ -195,7 +196,7 @@ impl TailscaleSystemResources {
                 max_restarts: None,
                 environment,
                 environment_sources: Vec::new(),
-                user: None,
+                user: Some(WorkloadUserSpec::UNPRIVILEGED),
                 node_api: NodeApiAccess::Disabled,
                 secrets: Some(SecretMountSpec::Dotenv {
                     mount_path: "/run/secrets/tailscale.env".to_owned(),

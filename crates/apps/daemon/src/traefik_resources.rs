@@ -125,10 +125,7 @@ impl TraefikSystemResources {
                 max_restarts: None,
                 environment: BTreeMap::new(),
                 environment_sources: Vec::new(),
-                user: Some(WorkloadUserSpec {
-                    user_id: 0,
-                    group_id: 0,
-                }),
+                user: Some(WorkloadUserSpec::UNPRIVILEGED),
                 node_api: NodeApiAccess::IdentityAndTelemetry,
                 secrets: Some(SecretMountSpec::Files {
                     mount_path: ETCD_SECRET_DIRECTORY.to_owned(),

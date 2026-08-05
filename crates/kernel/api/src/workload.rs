@@ -245,6 +245,14 @@ pub struct WorkloadUserSpec {
     pub group_id: u32,
 }
 
+impl WorkloadUserSpec {
+    /// Shared non-root identity used by Maestro-managed system services.
+    pub const UNPRIVILEGED: Self = Self {
+        user_id: 65_532,
+        group_id: 65_532,
+    };
+}
+
 /// Read/write policy for a mounted volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -378,6 +386,7 @@ pub struct ServiceSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub environment_sources: Vec<String>,
     /// Explicit numeric process identity, required when the node API is enabled.
+    /// Absence preserves the container image's configured user.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<WorkloadUserSpec>,
     /// Private downward API, OTLP ingest, and optional privileged Control access.

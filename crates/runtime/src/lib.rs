@@ -140,9 +140,9 @@ pub use value_source::{ValueSourceError, ValueSourceResolver};
 pub use workload::{
     ContainerWorkload, EventCursor, EventRequest, HEALTHCHECK_PATH_LABEL, HostPortPublication,
     MountAccess, MountSource, ObservedWorkload, PortProtocol, ProcessWorkload, RuntimeEvent,
-    RuntimeEventKind, RuntimeEventStream, ShutdownRequest, VmWorkload, WorkloadConfiguration,
-    WorkloadHandle, WorkloadMetadata, WorkloadMount, WorkloadRuntime, WorkloadSpec, WorkloadState,
-    WorkloadStatus, WorkloadUser,
+    RuntimeEventKind, RuntimeEventStream, ShutdownRequest, VmWorkload, WorkloadCapability,
+    WorkloadConfiguration, WorkloadHandle, WorkloadMetadata, WorkloadMount, WorkloadRuntime,
+    WorkloadSpec, WorkloadState, WorkloadStatus, WorkloadUser,
 };
 
 /// Reusable backend-neutral conformance batteries.

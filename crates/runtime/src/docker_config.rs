@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::managed_volume::managed_volume_key;
 use crate::{
     ContainerWorkload, HostPortPublication, MountAccess, MountSource, PortProtocol, RuntimeError,
-    WorkloadConfiguration, WorkloadMount, WorkloadSpec,
+    WorkloadCapability, WorkloadConfiguration, WorkloadMount, WorkloadSpec,
 };
 
 pub(crate) const MANAGED_LABEL: &str = "com.maestro.managed";
@@ -154,6 +154,7 @@ fn host_config(
         .map(|mount| docker_mount(mount, cluster_id))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(HostConfig {
+        cap_add: capabilities(&container.configuration),
         dns: container
             .configuration
             .dns_server
@@ -172,6 +173,17 @@ fn host_config(
         mounts: Some(mounts),
         ..Default::default()
     })
+}
+
+fn capabilities(configuration: &WorkloadConfiguration) -> Option<Vec<String>> {
+    let capabilities = configuration
+        .capabilities
+        .iter()
+        .map(|capability| match capability {
+            WorkloadCapability::NetBindService => "NET_BIND_SERVICE".to_owned(),
+        })
+        .collect::<Vec<_>>();
+    (!capabilities.is_empty()).then_some(capabilities)
 }
 
 fn published_ports(

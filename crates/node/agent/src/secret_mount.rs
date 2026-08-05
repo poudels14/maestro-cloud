@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use kernel_api::{SecretMountSpec, WorkloadId};
-use runtime::WorkloadMount;
+use runtime::{WorkloadMount, WorkloadUser};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 
 pub(crate) use crate::secret_mount_files::{cleanup_directory, cleanup_stale, materialize};
@@ -44,6 +44,7 @@ impl SecretMountManager {
         &self,
         workload_id: &WorkloadId,
         spec: &SecretMountSpec,
+        owner: Option<WorkloadUser>,
     ) -> Result<WorkloadMount, SecretMountError> {
         let _cleanup = self.cleanup_gate.read().await;
         let _operation = self.operation(workload_id).await?;
@@ -51,7 +52,7 @@ impl SecretMountManager {
         let root = self.root.clone();
         let workload_id = workload_id.clone();
         let spec = spec.clone();
-        tokio::task::spawn_blocking(move || files.materialize(&root, &workload_id, &spec))
+        tokio::task::spawn_blocking(move || files.materialize(&root, &workload_id, &spec, owner))
             .await
             .map_err(task_error)?
     }
@@ -109,6 +110,7 @@ pub(crate) trait SecretMountFileSystem: Send + Sync {
         root: &Path,
         workload_id: &WorkloadId,
         spec: &SecretMountSpec,
+        owner: Option<WorkloadUser>,
     ) -> Result<WorkloadMount, SecretMountError>;
 
     fn cleanup(&self, directory: &Path) -> Result<(), SecretMountError>;
@@ -128,8 +130,9 @@ impl SecretMountFileSystem for HostSecretMountFileSystem {
         root: &Path,
         workload_id: &WorkloadId,
         spec: &SecretMountSpec,
+        owner: Option<WorkloadUser>,
     ) -> Result<WorkloadMount, SecretMountError> {
-        materialize(root, workload_id, spec)
+        materialize(root, workload_id, spec, owner)
     }
 
     fn cleanup(&self, directory: &Path) -> Result<(), SecretMountError> {

@@ -1,4 +1,4 @@
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
 use crate::containerd_volume::{managed_volume_path, prepare_managed_volumes};
 use crate::{MountSource, RuntimeError, WorkloadSpec};
@@ -9,7 +9,15 @@ use super::containerd_fixture::container_spec;
 async fn managed_volume_directories_are_cluster_scoped_private_and_persistent()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
-    let spec = managed_spec("shared-data");
+    let mut spec = managed_spec("shared-data");
+    let owner = std::fs::metadata(root.path())?;
+    let WorkloadSpec::Container(workload) = &mut spec else {
+        unreachable!();
+    };
+    workload.configuration.user = Some(crate::WorkloadUser {
+        user_id: owner.uid(),
+        group_id: owner.gid(),
+    });
     let configuration = spec.configuration();
     prepare_managed_volumes(root.path(), configuration).await?;
 
@@ -28,8 +36,11 @@ async fn managed_volume_directories_are_cluster_scoped_private_and_persistent()
     );
     assert_eq!(
         std::fs::metadata(&path)?.permissions().mode() & 0o777,
-        0o755
+        0o700
     );
+    let metadata = std::fs::metadata(&path)?;
+    assert_eq!(metadata.uid(), owner.uid());
+    assert_eq!(metadata.gid(), owner.gid());
     std::fs::write(path.join("marker"), "persisted")?;
 
     prepare_managed_volumes(root.path(), configuration).await?;

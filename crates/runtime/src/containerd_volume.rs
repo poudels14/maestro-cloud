@@ -4,9 +4,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use kernel_api::ClusterId;
+use nix::unistd::{Gid, Uid, chown};
 
 use crate::managed_volume::managed_volume_key;
-use crate::{MountSource, RuntimeError, WorkloadConfiguration};
+use crate::{MountSource, RuntimeError, WorkloadConfiguration, WorkloadUser};
 
 const VOLUME_DIRECTORY: &str = "volumes";
 
@@ -39,29 +40,46 @@ pub(crate) async fn prepare_managed_volumes(
     if paths.is_empty() {
         return Ok(());
     }
+    let owner = configuration.user;
     let root = state_root.join(VOLUME_DIRECTORY);
-    tokio::task::spawn_blocking(move || prepare_directories(&root, &paths))
+    tokio::task::spawn_blocking(move || prepare_directories(&root, &paths, owner))
         .await
         .map_err(|error| RuntimeError::Unavailable {
             message: format!("containerd volume preparation task failed: {error}"),
         })?
 }
 
-fn prepare_directories(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<(), RuntimeError> {
+fn prepare_directories(
+    root: &Path,
+    paths: &BTreeSet<PathBuf>,
+    owner: Option<WorkloadUser>,
+) -> Result<(), RuntimeError> {
     fs::create_dir_all(root).map_err(|error| io_error("create", root, error))?;
     require_directory(root, "root")?;
     fs::set_permissions(root, fs::Permissions::from_mode(0o700))
         .map_err(|error| io_error("protect", root, error))?;
     for path in paths {
-        let created = match fs::create_dir(path) {
-            Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        match fs::create_dir(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(io_error("create", path, error)),
-        };
+        }
         require_directory(path, "data")?;
-        if created {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-                .map_err(|error| io_error("protect", path, error))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| io_error("protect", path, error))?;
+        if let Some(owner) = owner {
+            chown(
+                path,
+                Some(Uid::from_raw(owner.user_id)),
+                Some(Gid::from_raw(owner.group_id)),
+            )
+            .map_err(|error| {
+                io_error(
+                    "set owner on",
+                    path,
+                    std::io::Error::from_raw_os_error(error as i32),
+                )
+            })?;
         }
     }
     fs::File::open(root)

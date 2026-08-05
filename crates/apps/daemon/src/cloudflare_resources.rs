@@ -76,11 +76,7 @@ impl CloudflareSystemResources {
                 max_restarts: None,
                 environment: BTreeMap::new(),
                 environment_sources: Vec::new(),
-                // Node secret mounts are root-owned and mode 0600.
-                user: Some(WorkloadUserSpec {
-                    user_id: 0,
-                    group_id: 0,
-                }),
+                user: Some(WorkloadUserSpec::UNPRIVILEGED),
                 node_api: NodeApiAccess::Disabled,
                 secrets: Some(SecretMountSpec::Files {
                     mount_path: SECRET_DIRECTORY.to_owned(),

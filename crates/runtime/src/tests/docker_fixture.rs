@@ -36,6 +36,7 @@ pub(crate) fn container_spec() -> WorkloadSpec {
                 user_id: 1000,
                 group_id: 1001,
             }),
+            capabilities: Default::default(),
         },
         image: ArtifactReference::new(
             "maestro.test/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

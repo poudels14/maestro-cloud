@@ -22,7 +22,7 @@ use crate::assignment_error::AssignmentAgentError;
 use crate::assignment_node_api::mount_node_api;
 #[cfg(not(unix))]
 use crate::assignment_plan::node_api_user;
-use crate::assignment_plan::{workload_id, workload_spec_with_environment};
+use crate::assignment_plan::{workload_id, workload_spec_with_environment, workload_user};
 use crate::assignment_resource::decode_assignment;
 use crate::assignment_restart::{
     RestartReservation, finish_pending_restart, reserve_restart, restart_failure,
@@ -198,9 +198,14 @@ impl AssignmentAgent {
             })
             .unwrap_or_default();
         let workload_id = workload_id(assignment)?;
+        let workload_user = workload_user(deployment);
         let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {
-            Some(secrets) => Some(self.secrets.materialize(&workload_id, secrets).await?),
+            Some(secrets) => Some(
+                self.secrets
+                    .materialize(&workload_id, secrets, workload_user)
+                    .await?,
+            ),
             None => None,
         };
         additional_mounts.extend(secret_mount);

@@ -105,6 +105,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
             workload_address: None,
             dns_server: None,
             user: None,
+            capabilities: Default::default(),
         },
         image: ArtifactReference::new(image).unwrap(),
         command: Some(CommandSpec {

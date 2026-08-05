@@ -234,7 +234,10 @@ fn deployment() -> Deployment {
             created_at: Timestamp(1_750_000_000_000),
             ready_at: None,
             draining_at: None,
-            image_digest: Some("registry.test/api@sha256:abc".to_owned()),
+            image_digest: Some(
+                "registry.test/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+            ),
             git_commit: None,
             resolved_secrets: Default::default(),
             conditions: Vec::new(),

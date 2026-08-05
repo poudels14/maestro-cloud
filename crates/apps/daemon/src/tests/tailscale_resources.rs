@@ -6,7 +6,7 @@ use cluster::TailscaleAuthKeyRecord;
 use kernel_api::{
     ArtifactTemplate, ClusterId, ExecPolicy, FirewallPolicy, HealthProbe, NodeId, NodeInstanceId,
     NodeRole, ReplicaSpread, ResourceKind, ResourceName, SecretValue, Service,
-    TAILSCALE_GATEWAY_SERVICE_ID, Timestamp, VolumeSource,
+    TAILSCALE_GATEWAY_SERVICE_ID, Timestamp, VolumeSource, WorkloadUserSpec,
 };
 use kernel_controller::{
     ControllerError, FencedStore, LeaderIdentity, LeadershipToken, TimestampClock,
@@ -70,6 +70,7 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
         ReplicaSpread::BestEffort
     );
     assert_eq!(service.spec.exec, ExecPolicy::Denied);
+    assert_eq!(service.spec.user, Some(WorkloadUserSpec::UNPRIVILEGED));
     assert_eq!(service.spec.exposed_ports, vec![1_055, 9_002]);
     assert_eq!(
         service.spec.environment.get("TS_SOCKS5_SERVER"),

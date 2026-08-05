@@ -254,6 +254,7 @@ fn process_spec(executable: &str) -> WorkloadSpec {
             workload_address: None,
             dns_server: None,
             user: None,
+            capabilities: Default::default(),
         },
         command: CommandSpec {
             executable: executable.to_owned(),

@@ -48,13 +48,7 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
     assert_eq!(service.spec.name, "Traefik");
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.node_api, NodeApiAccess::IdentityAndTelemetry);
-    assert_eq!(
-        service.spec.user,
-        Some(WorkloadUserSpec {
-            user_id: 0,
-            group_id: 0
-        })
-    );
+    assert_eq!(service.spec.user, Some(WorkloadUserSpec::UNPRIVILEGED));
     assert_eq!(
         service.spec.placement.replica_spread,
         ReplicaSpread::BestEffort

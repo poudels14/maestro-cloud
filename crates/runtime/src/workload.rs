@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -46,6 +46,22 @@ pub struct WorkloadUser {
     pub user_id: u32,
     /// Host or namespace group identity.
     pub group_id: u32,
+}
+
+impl WorkloadUser {
+    /// Shared non-root identity used by Maestro-managed system services.
+    pub const UNPRIVILEGED: Self = Self {
+        user_id: 65_532,
+        group_id: 65_532,
+    };
+}
+
+/// Narrow Linux process privilege granted to a workload by the node agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkloadCapability {
+    /// Bind TCP or UDP listeners below the unprivileged-port threshold.
+    NetBindService,
 }
 
 /// Host-side source mounted into a workload.
@@ -102,8 +118,11 @@ pub struct WorkloadConfiguration {
     /// Runtime-visible DNS server, normally the node workload-bridge gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns_server: Option<IpAddr>,
-    /// Runtime user, or the backend's isolated default when absent.
+    /// Runtime user, or the image default when absent.
     pub user: Option<WorkloadUser>,
+    /// Explicitly granted narrow process capabilities.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub capabilities: BTreeSet<WorkloadCapability>,
 }
 
 /// Transport protocol for one container port published on its runtime host.

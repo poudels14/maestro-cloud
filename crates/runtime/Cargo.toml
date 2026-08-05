@@ -15,7 +15,7 @@ flate2 = { workspace = true, optional = true }
 hex.workspace = true
 ignore = { workspace = true, optional = true }
 kernel-api = { path = "../kernel/api" }
-nix = { workspace = true, features = ["fs", "sched"] }
+nix = { workspace = true, features = ["fs", "sched", "user"] }
 oci-spec.workspace = true
 prost.workspace = true
 prost-types.workspace = true

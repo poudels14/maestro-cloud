@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use kernel_api::{HealthCheckSpec, HealthProbe, SecretValue, VolumeSource, WorkloadUserSpec};
 use runtime::{
     HEALTHCHECK_PATH_LABEL, HostPortPublication, MountAccess, MountSource, PortProtocol,
-    WorkloadSpec, WorkloadUser,
+    WorkloadCapability, WorkloadSpec, WorkloadUser,
 };
 
 use crate::assignment_plan::{WorkloadPlanError, node_api_user, workload_spec};
@@ -62,6 +62,39 @@ fn assignment_plan_preserves_identity_artifact_configuration_and_address()
         MountSource::HostPath(_)
     ));
     assert_eq!(workload.configuration.user, None);
+    assert!(workload.configuration.capabilities.is_empty());
+    Ok(())
+}
+
+#[test]
+fn assignment_plan_grants_low_port_binding_only_to_the_managed_ingress_and_dns_services()
+-> Result<(), Box<dyn std::error::Error>> {
+    for service_id in [
+        kernel_api::TRAEFIK_SERVICE_ID,
+        kernel_api::DNS_RESOLVER_SERVICE_ID,
+    ] {
+        let mut assignment = assignment();
+        let mut deployment = deployment();
+        let service_id = kernel_api::ServiceId::new(service_id)?;
+        assignment.spec.service_id = service_id.clone();
+        deployment.spec.service_id = service_id;
+
+        let WorkloadSpec::Container(workload) = workload_spec(
+            &cluster_id(),
+            &assignment,
+            &deployment,
+            Some(dns_server()),
+            Vec::new(),
+            Vec::new(),
+        )?
+        else {
+            return Err("assignment did not produce a container workload".into());
+        };
+        assert_eq!(
+            workload.configuration.capabilities,
+            std::collections::BTreeSet::from([WorkloadCapability::NetBindService])
+        );
+    }
     Ok(())
 }
 

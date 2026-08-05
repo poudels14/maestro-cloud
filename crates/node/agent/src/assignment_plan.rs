@@ -1,16 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, ClusterId, Deployment, HealthProbe, SecretValue, VolumeAccess,
-    VolumeSource, WorkloadId, workload_hostname,
+    ArtifactTemplate, Assignment, ClusterId, DNS_RESOLVER_SERVICE_ID, Deployment, HealthProbe,
+    SecretValue, TRAEFIK_SERVICE_ID, VolumeAccess, VolumeSource, WorkloadId, workload_hostname,
 };
 use node_fabric::WORKLOAD_NODE_DIRECTORY;
 use runtime::{
     ArtifactReference, ContainerWorkload, HEALTHCHECK_PATH_LABEL, HostPortPublication, MountAccess,
-    MountSource, WorkloadConfiguration, WorkloadMetadata, WorkloadMount, WorkloadSpec,
-    WorkloadUser,
+    MountSource, WorkloadCapability, WorkloadConfiguration, WorkloadMetadata, WorkloadMount,
+    WorkloadSpec, WorkloadUser,
 };
 
 #[cfg(test)]
@@ -81,15 +81,29 @@ pub(crate) fn workload_spec_with_environment(
             mounts,
             workload_address: assignment.spec.workload_address,
             dns_server,
-            user: deployment.spec.service.user.map(|user| WorkloadUser {
-                user_id: user.user_id,
-                group_id: user.group_id,
-            }),
+            user: workload_user(deployment),
+            capabilities: workload_capabilities(&assignment.spec.service_id),
         },
         image,
         command: deployment.spec.service.command.clone(),
         published_ports,
     }))
+}
+
+pub(crate) fn workload_user(deployment: &Deployment) -> Option<WorkloadUser> {
+    deployment.spec.service.user.map(|user| WorkloadUser {
+        user_id: user.user_id,
+        group_id: user.group_id,
+    })
+}
+
+fn workload_capabilities(service_id: &kernel_api::ServiceId) -> BTreeSet<WorkloadCapability> {
+    match service_id.as_str() {
+        TRAEFIK_SERVICE_ID | DNS_RESOLVER_SERVICE_ID => {
+            BTreeSet::from([WorkloadCapability::NetBindService])
+        }
+        _ => BTreeSet::new(),
+    }
 }
 
 pub(crate) fn workload_labels(

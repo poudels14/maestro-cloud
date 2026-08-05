@@ -27,6 +27,7 @@ fn workload_kinds_share_metadata_without_fake_container_fields() {
             workload_address: None,
             dns_server: None,
             user: None,
+            capabilities: Default::default(),
         },
         command: kernel_api::CommandSpec {
             executable: "/bin/true".to_owned(),

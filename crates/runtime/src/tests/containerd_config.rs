@@ -5,7 +5,8 @@ use crate::containerd_image::ImageDefaults;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_volume::managed_volume_path;
 use crate::{
-    HostPortPublication, MountSource, PortProtocol, RuntimeCapability, RuntimeError, WorkloadSpec,
+    HostPortPublication, MountSource, PortProtocol, RuntimeCapability, RuntimeError,
+    WorkloadCapability, WorkloadSpec, WorkloadUser,
 };
 
 use super::containerd_fixture::container_spec;
@@ -166,6 +167,78 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
         ),
         Err(RuntimeError::InvalidSpec { .. })
     ));
+}
+
+#[test]
+fn container_record_allows_an_explicit_root_identity() {
+    let mut spec = container_spec();
+    let WorkloadSpec::Container(workload) = &mut spec else {
+        unreachable!();
+    };
+    workload.configuration.user = Some(WorkloadUser {
+        user_id: 0,
+        group_id: 1000,
+    });
+    let record = container_record(
+        &spec,
+        &ImageDefaults {
+            environment: Vec::new(),
+            entrypoint: vec!["/bin/true".to_owned()],
+            command: Vec::new(),
+            working_directory: None,
+            user: "1000:1000".to_owned(),
+        },
+        &ContainerdRuntimeSettings::default(),
+        "snapshot".to_owned(),
+        fingerprint(&spec).unwrap(),
+    )
+    .unwrap();
+    let oci: Value = serde_json::from_slice(&record.spec.unwrap().value).unwrap();
+    assert_eq!(oci.pointer("/process/user/uid").unwrap(), 0);
+    assert_eq!(oci.pointer("/process/user/gid").unwrap(), 1000);
+}
+
+#[test]
+fn container_record_resolves_named_root_and_grants_only_requested_capabilities() {
+    let mut spec = container_spec();
+    let WorkloadSpec::Container(workload) = &mut spec else {
+        unreachable!();
+    };
+    workload.configuration.user = None;
+    workload
+        .configuration
+        .capabilities
+        .insert(WorkloadCapability::NetBindService);
+    let record = container_record(
+        &spec,
+        &ImageDefaults {
+            environment: Vec::new(),
+            entrypoint: vec!["/bin/true".to_owned()],
+            command: Vec::new(),
+            working_directory: None,
+            user: "root".to_owned(),
+        },
+        &ContainerdRuntimeSettings::default(),
+        "snapshot".to_owned(),
+        fingerprint(&spec).unwrap(),
+    )
+    .unwrap();
+    let oci: Value = serde_json::from_slice(&record.spec.unwrap().value).unwrap();
+    assert_eq!(oci.pointer("/process/user/uid").unwrap(), 0);
+    assert_eq!(oci.pointer("/process/user/gid").unwrap(), 0);
+    for set in [
+        "bounding",
+        "effective",
+        "inheritable",
+        "permitted",
+        "ambient",
+    ] {
+        assert_eq!(
+            oci.pointer(&format!("/process/capabilities/{set}"))
+                .unwrap(),
+            &serde_json::json!(["CAP_NET_BIND_SERVICE"])
+        );
+    }
 }
 
 #[test]

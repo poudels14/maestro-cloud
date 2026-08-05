@@ -7,7 +7,7 @@ use cluster::{
 };
 use kernel_api::{
     ArtifactTemplate, ClusterId, HealthProbe, NodeApiAccess, NodeId, NodeInstanceId, NodeRole,
-    ResourceKind, SecretMountSpec, SecretValue, Service, Timestamp,
+    ResourceKind, SecretMountSpec, SecretValue, Service, Timestamp, WorkloadUserSpec,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -47,6 +47,7 @@ fn builds_store_authenticated_delegated_dns_service() -> Result<(), Box<dyn std:
     assert_eq!(service.spec.version, "maestro-dns-1.2.3");
     assert_eq!(service.spec.replicas, 1);
     assert_eq!(service.spec.node_api, NodeApiAccess::Disabled);
+    assert_eq!(service.spec.user, Some(WorkloadUserSpec::UNPRIVILEGED));
     assert_eq!(service.spec.placement.node_id, Some(node_id));
     assert!(matches!(
         &service.spec.artifact,

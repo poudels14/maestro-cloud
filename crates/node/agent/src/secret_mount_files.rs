@@ -6,7 +6,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use kernel_api::{EnvironmentName, SecretMountSpec, SecretValue, WorkloadId};
-use runtime::{MountAccess, MountSource, WorkloadMount};
+use nix::unistd::{Gid, Uid, chown};
+use runtime::{MountAccess, MountSource, WorkloadMount, WorkloadUser};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::secret_mount::SecretMountError;
@@ -19,15 +20,16 @@ pub(crate) fn materialize(
     root: &Path,
     workload_id: &WorkloadId,
     spec: &SecretMountSpec,
+    owner: Option<WorkloadUser>,
 ) -> Result<WorkloadMount, SecretMountError> {
     let target = validate_target(spec.mount_path())?;
     ensure_private_directory(root)?;
     match spec {
         SecretMountSpec::Dotenv { items, .. } => {
-            materialize_dotenv(root, workload_id, target, items)
+            materialize_dotenv(root, workload_id, target, items, owner)
         }
         SecretMountSpec::Files { files, .. } => {
-            materialize_file_set(root, workload_id, target, files)
+            materialize_file_set(root, workload_id, target, files, owner)
         }
     }
 }
@@ -37,6 +39,7 @@ fn materialize_dotenv(
     workload_id: &WorkloadId,
     target: PathBuf,
     items: &BTreeMap<String, SecretValue>,
+    owner: Option<WorkloadUser>,
 ) -> Result<WorkloadMount, SecretMountError> {
     let content = encode_dotenv(items)?;
     let directory = root.join(workload_id.as_str());
@@ -53,6 +56,10 @@ fn materialize_dotenv(
     } else {
         ensure_expected_entries(&directory, &BTreeSet::new(), workload_id)?;
         install_secret(&directory, &secret_path, content.as_bytes(), workload_id)?;
+    }
+    if let Some(owner) = owner {
+        set_owner(&secret_path, owner)?;
+        set_owner(&directory, owner)?;
     }
     Ok(read_only_mount(secret_path, target))
 }
@@ -84,12 +91,16 @@ fn materialize_file_set(
     workload_id: &WorkloadId,
     target: PathBuf,
     files: &BTreeMap<String, SecretValue>,
+    owner: Option<WorkloadUser>,
 ) -> Result<WorkloadMount, SecretMountError> {
     validate_file_names(files.keys())?;
     let directory = root.join(workload_id.as_str());
     if directory.exists() {
         ensure_private_directory(&directory)?;
         ensure_existing_file_set(&directory, files, workload_id)?;
+        if let Some(owner) = owner {
+            set_file_set_owner(&directory, files, owner)?;
+        }
         return Ok(read_only_mount(directory, target));
     }
 
@@ -122,7 +133,36 @@ fn materialize_file_set(
         let _cleanup = cleanup_directory(&temporary);
         return Err(error);
     }
+    if let Some(owner) = owner {
+        set_file_set_owner(&directory, files, owner)?;
+    }
     Ok(read_only_mount(directory, target))
+}
+
+fn set_file_set_owner(
+    directory: &Path,
+    files: &BTreeMap<String, SecretValue>,
+    owner: WorkloadUser,
+) -> Result<(), SecretMountError> {
+    for name in files.keys() {
+        set_owner(&directory.join(name), owner)?;
+    }
+    set_owner(directory, owner)
+}
+
+fn set_owner(path: &Path, owner: WorkloadUser) -> Result<(), SecretMountError> {
+    chown(
+        path,
+        Some(Uid::from_raw(owner.user_id)),
+        Some(Gid::from_raw(owner.group_id)),
+    )
+    .map_err(|source| {
+        io_error(
+            "set secret owner",
+            path,
+            std::io::Error::from_raw_os_error(source as i32),
+        )
+    })
 }
 
 fn install_file_set(

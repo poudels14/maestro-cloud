@@ -3,7 +3,10 @@ use std::net::{IpAddr, Ipv4Addr};
 use docker::models::{MountType, RestartPolicyNameEnum};
 
 use crate::docker_config::{METADATA_LABEL, SPEC_LABEL, container_config};
-use crate::{HostPortPublication, MountSource, PortProtocol, RuntimeError, WorkloadSpec};
+use crate::{
+    HostPortPublication, MountSource, PortProtocol, RuntimeError, WorkloadCapability, WorkloadSpec,
+    WorkloadUser,
+};
 
 use super::docker_fixture::container_spec;
 
@@ -50,6 +53,46 @@ fn docker_config_preserves_identity_and_disables_runtime_restarts() {
         mounts.get(1).unwrap().source.as_deref(),
         Some("maestro-sha256-f36cb2e71951fe9ac6bb55e9874b077a78c2172270b79b410ea0330e7c03a053")
     );
+}
+
+#[test]
+fn docker_config_preserves_image_and_explicit_root_identities() {
+    let mut implicit = container_spec();
+    let WorkloadSpec::Container(container) = &mut implicit else {
+        unreachable!();
+    };
+    container.configuration.user = None;
+    let implicit = container_config(&implicit).unwrap();
+    assert_eq!(implicit.body.user, None);
+
+    let mut explicit = container_spec();
+    let WorkloadSpec::Container(container) = &mut explicit else {
+        unreachable!();
+    };
+    container.configuration.user = Some(WorkloadUser {
+        user_id: 0,
+        group_id: 1000,
+    });
+    let explicit = container_config(&explicit).unwrap();
+    assert_eq!(explicit.body.user.as_deref(), Some("0:1000"));
+}
+
+#[test]
+fn docker_config_grants_only_requested_extra_capabilities() {
+    let mut spec = container_spec();
+    let WorkloadSpec::Container(container) = &mut spec else {
+        unreachable!();
+    };
+    container.configuration.user = None;
+    container
+        .configuration
+        .capabilities
+        .insert(WorkloadCapability::NetBindService);
+    let config = container_config(&spec).unwrap();
+    assert_eq!(config.body.user, None);
+    let host = config.body.host_config.unwrap();
+    assert_eq!(host.cap_drop, None);
+    assert_eq!(host.cap_add, Some(vec!["NET_BIND_SERVICE".to_owned()]));
 }
 
 #[test]

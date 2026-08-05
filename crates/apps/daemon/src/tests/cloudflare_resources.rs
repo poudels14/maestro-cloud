@@ -29,13 +29,7 @@ fn builds_a_pinned_secret_mounted_ready_connector_service() -> Result<(), Box<dy
     assert_eq!(service.spec.replicas, 2);
     assert_eq!(service.spec.node_api, NodeApiAccess::Disabled);
     assert_eq!(service.spec.exec, ExecPolicy::Denied);
-    assert_eq!(
-        service.spec.user,
-        Some(WorkloadUserSpec {
-            user_id: 0,
-            group_id: 0,
-        })
-    );
+    assert_eq!(service.spec.user, Some(WorkloadUserSpec::UNPRIVILEGED));
     assert_eq!(
         service.spec.placement.replica_spread,
         ReplicaSpread::BestEffort

@@ -118,10 +118,7 @@ impl DnsResolverSystemResources {
                 max_restarts: None,
                 environment: BTreeMap::new(),
                 environment_sources: Vec::new(),
-                user: Some(WorkloadUserSpec {
-                    user_id: 0,
-                    group_id: 0,
-                }),
+                user: Some(WorkloadUserSpec::UNPRIVILEGED),
                 node_api: NodeApiAccess::Disabled,
                 secrets: Some(SecretMountSpec::Files {
                     mount_path: CREDENTIAL_DIRECTORY.to_owned(),

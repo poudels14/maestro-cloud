@@ -11,8 +11,8 @@ use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_support::{container_name, metadata_labels};
 use crate::containerd_volume::managed_volume_path;
 use crate::{
-    ContainerWorkload, MountAccess, MountSource, RuntimeError, WorkloadConfiguration,
-    WorkloadMount, WorkloadSpec,
+    ContainerWorkload, MountAccess, MountSource, RuntimeError, WorkloadCapability,
+    WorkloadConfiguration, WorkloadMount, WorkloadSpec,
 };
 
 const OCI_SPEC_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Spec";
@@ -86,6 +86,7 @@ fn oci_spec(
         || parse_image_user(&image.user),
         |user| Ok((user.user_id, user.group_id)),
     )?;
+    let capabilities = process_capabilities(&workload.configuration);
     let mut mounts = base_mounts();
     mounts.extend(
         workload
@@ -133,7 +134,8 @@ fn oci_spec(
             "args": arguments,
             "env": environment,
             "cwd": image.working_directory.as_deref().unwrap_or("/"),
-            "noNewPrivileges": true
+            "noNewPrivileges": true,
+            "capabilities": capabilities
         },
         "root": { "path": "rootfs", "readonly": false },
         "hostname": workload.configuration.hostname,
@@ -158,6 +160,23 @@ fn oci_spec(
             ]
         }
     }))
+}
+
+fn process_capabilities(configuration: &WorkloadConfiguration) -> Value {
+    let values = configuration
+        .capabilities
+        .iter()
+        .map(|capability| match capability {
+            WorkloadCapability::NetBindService => "CAP_NET_BIND_SERVICE",
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "bounding": values,
+        "effective": values,
+        "inheritable": values,
+        "permitted": values,
+        "ambient": values
+    })
 }
 
 fn environment(configuration: &WorkloadConfiguration, image: &ImageDefaults) -> Vec<String> {
@@ -200,14 +219,26 @@ fn parse_image_user(value: &str) -> Result<(u32, u32), RuntimeError> {
     if value.is_empty() {
         return Ok((0, 0));
     }
-    let (user, group) = value.split_once(':').map_or((value, "0"), |parts| parts);
-    let user_id = user.parse().map_err(|_| RuntimeError::InvalidSpec {
-        message: format!("containerd cannot resolve named image user `{value}` without NSS"),
-    })?;
-    let group_id = group.parse().map_err(|_| RuntimeError::InvalidSpec {
-        message: format!("containerd cannot resolve named image group `{value}` without NSS"),
-    })?;
+    let (user, group) = value
+        .split_once(':')
+        .map_or((value, None), |(user, group)| (user, Some(group)));
+    let user_id = parse_identity(user, value, "user")?;
+    let group_id = match group {
+        Some(group) => parse_identity(group, value, "group")?,
+        None => user_id,
+    };
     Ok((user_id, group_id))
+}
+
+fn parse_identity(value: &str, image_user: &str, component: &str) -> Result<u32, RuntimeError> {
+    if value == "root" {
+        return Ok(0);
+    }
+    value.parse().map_err(|_| RuntimeError::InvalidSpec {
+        message: format!(
+            "containerd cannot resolve named image {component} `{image_user}` without NSS"
+        ),
+    })
 }
 
 fn oci_mount(
