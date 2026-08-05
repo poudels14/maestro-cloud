@@ -262,7 +262,7 @@ fn oci_mount(
         "destination": destination,
         "type": "bind",
         "source": source,
-        "options": ["rbind", "rprivate", access],
+        "options": ["rbind", "rprivate", "ridmap", access],
         "uidMappings": [id_mapping(user_namespace.uid)],
         "gidMappings": [id_mapping(user_namespace.gid)]
     }))

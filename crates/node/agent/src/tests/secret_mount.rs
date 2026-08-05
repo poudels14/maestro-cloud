@@ -49,7 +49,7 @@ async fn secret_mount_is_private_idempotent_and_zeroized_on_cleanup()
     );
     assert_eq!(
         fs::metadata(secret_path)?.permissions().mode() & 0o777,
-        0o600
+        0o444
     );
     assert_eq!(
         fs::metadata(secret_path.parent().unwrap())?

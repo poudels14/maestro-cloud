@@ -105,7 +105,10 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
     );
     let mounts = oci.get("mounts").unwrap().as_array().unwrap();
     assert_eq!(mounts.len(), 9);
-    assert_eq!(mounts.get(7).unwrap().pointer("/options/2").unwrap(), "ro");
+    assert_eq!(
+        mounts.get(7).unwrap().get("options").unwrap(),
+        &serde_json::json!(["rbind", "rprivate", "ridmap", "ro"])
+    );
     assert_eq!(
         mounts.get(7).unwrap().pointer("/uidMappings/0").unwrap(),
         &serde_json::json!({"containerID": 0, "hostID": 1_048_576, "size": 65_536})
@@ -186,6 +189,10 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
         .find(|mount| mount.get("destination").unwrap() == "/data")
         .unwrap();
     assert_eq!(managed.get("type").unwrap(), "bind");
+    assert_eq!(
+        managed.get("options").unwrap(),
+        &serde_json::json!(["rbind", "rprivate", "ridmap", "rw"])
+    );
     assert_eq!(
         managed.get("source").unwrap(),
         managed_volume_path(
