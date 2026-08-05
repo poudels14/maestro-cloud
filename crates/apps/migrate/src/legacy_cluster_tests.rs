@@ -376,7 +376,12 @@ fn deployment_history() -> LegacyEntry {
             "deployedAt": 2_000,
             "status": "READY",
             "config": service_config(),
-            "build": {"dockerImageId": "registry.example/api@sha256:abc"}
+            "build": {
+                "dockerImageId": concat!(
+                    "registry.example/api@sha256:",
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                )
+            }
         }),
     )
 }

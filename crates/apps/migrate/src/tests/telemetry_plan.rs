@@ -13,7 +13,7 @@ type TestResult<Value = ()> = Result<Value, Box<dyn std::error::Error>>;
 #[test]
 fn plan_fences_hot_and_manifest_committed_cold_rows() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let root = directory.path().join("probe-data");
+    let root = test_path(&directory, "probe-data")?;
     seed_databases(&root)?;
     seed_service_partition(&root)?;
 
@@ -39,7 +39,7 @@ fn plan_fences_hot_and_manifest_committed_cold_rows() -> TestResult {
 #[test]
 fn plan_rejects_parquet_not_committed_by_a_manifest() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let root = directory.path().join("probe-data");
+    let root = test_path(&directory, "probe-data")?;
     seed_databases(&root)?;
     let partition = root.join("parts/system-logs/date=2026-07-20");
     std::fs::create_dir_all(&partition)?;
@@ -62,7 +62,7 @@ fn plan_rejects_parquet_not_committed_by_a_manifest() -> TestResult {
 #[test]
 fn plan_fences_and_replays_a_required_database_wal_without_mutating_it() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let root = directory.path().join("probe-data");
+    let root = test_path(&directory, "probe-data")?;
     seed_databases(&root)?;
     let wal = append_service_log_in_wal(&root)?;
     assert!(wal.is_file(), "fixture must leave a real DuckDB WAL");
@@ -84,7 +84,7 @@ fn plan_fences_and_replays_a_required_database_wal_without_mutating_it() -> Test
 #[test]
 fn plan_rejects_a_wal_not_owned_by_a_required_database() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let root = directory.path().join("probe-data");
+    let root = test_path(&directory, "probe-data")?;
     seed_databases(&root)?;
     std::fs::write(root.join("duckdb/unknown.duckdb.wal"), b"not a known WAL")?;
 
@@ -96,6 +96,13 @@ fn plan_rejects_a_wal_not_owned_by_a_required_database() -> TestResult {
         LegacyTelemetryPlanError::UnexpectedEntry { .. }
     ));
     Ok(())
+}
+
+pub(super) fn test_path(
+    directory: &tempfile::TempDir,
+    name: &str,
+) -> TestResult<std::path::PathBuf> {
+    Ok(std::fs::canonicalize(directory.path())?.join(name))
 }
 
 pub(super) fn append_service_log_in_wal(root: &Path) -> TestResult<std::path::PathBuf> {

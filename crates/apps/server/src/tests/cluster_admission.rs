@@ -28,14 +28,11 @@ use super::decode;
 async fn declared_node_discovers_and_joins_without_operator_approval()
 -> Result<(), Box<dyn std::error::Error>> {
     let (config, worker_id) = cluster_config()?;
-    let store_secret = SecretValue::new("storage-test-secret-with-at-least-32-characters");
     let store = Arc::new(InMemoryStore::new(Arc::new(TokioClock::new())));
     let authority = ClusterCertificateAuthority::generate(&config.name, authority_validity()?)?;
     let coordinator = Arc::new(AdmissionCoordinator::new(
         config.clone(),
         authority,
-        store_secret.clone(),
-        cluster::ClusterLaunchPolicy::default(),
         Arc::new(UnusedProvider),
         store.clone(),
     )?);
@@ -89,7 +86,6 @@ async fn declared_node_discovers_and_joins_without_operator_approval()
         &encrypted,
         JoinResponseStatus::ACCEPTED,
     )?;
-    assert_eq!(payload.store_encryption_secret, store_secret);
     assert!(payload.store_join_ticket.is_none());
     assert!(payload.certificate_issuer.is_none());
 
@@ -119,8 +115,6 @@ async fn join_rejects_a_transport_source_other_than_the_signed_endpoint()
     let coordinator = Arc::new(AdmissionCoordinator::new(
         config.clone(),
         ClusterCertificateAuthority::generate(&config.name, authority_validity()?)?,
-        SecretValue::new("storage-test-secret-with-at-least-32-characters"),
-        cluster::ClusterLaunchPolicy::default(),
         Arc::new(UnusedProvider),
         store.clone(),
     )?);

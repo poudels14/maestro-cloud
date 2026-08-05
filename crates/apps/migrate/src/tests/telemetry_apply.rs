@@ -5,7 +5,9 @@ use kernel_api::{ClusterId, NodeId};
 use logs::{IngestLogEntry, LogOrigin};
 use metrics::{HostMetricPoint, WorkloadMetricPoint};
 
-use super::telemetry_plan::{append_service_log_in_wal, seed_databases, seed_service_partition};
+use super::telemetry_plan::{
+    append_service_log_in_wal, seed_databases, seed_service_partition, test_path,
+};
 use crate::{
     LegacyTelemetryApplyOutcome, LegacyTelemetryMigrationError, LegacyTelemetryPlan,
     apply_legacy_telemetry, verify_legacy_telemetry,
@@ -16,8 +18,8 @@ type TestResult<Value = ()> = Result<Value, Box<dyn std::error::Error>>;
 #[tokio::test]
 async fn apply_is_exact_verifiable_and_replay_safe() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let source = directory.path().join("probe-data");
-    let destination = directory.path().join("rewrite-data");
+    let source = test_path(&directory, "probe-data")?;
+    let destination = test_path(&directory, "rewrite-data")?;
     seed_databases(&source)?;
     seed_service_partition(&source)?;
     append_metric_samples(&source)?;
@@ -53,8 +55,8 @@ async fn apply_is_exact_verifiable_and_replay_safe() -> TestResult {
 #[tokio::test]
 async fn apply_rejects_a_source_changed_after_review() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let source = directory.path().join("probe-data");
-    let destination = directory.path().join("rewrite-data");
+    let source = test_path(&directory, "probe-data")?;
+    let destination = test_path(&directory, "rewrite-data")?;
     seed_databases(&source)?;
     let plan = LegacyTelemetryPlan::capture(
         &source,
@@ -80,8 +82,8 @@ async fn apply_rejects_a_source_changed_after_review() -> TestResult {
 #[tokio::test]
 async fn verification_requires_an_existing_destination_without_creating_it() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let source = directory.path().join("probe-data");
-    let destination = directory.path().join("missing-rewrite-data");
+    let source = test_path(&directory, "probe-data")?;
+    let destination = test_path(&directory, "missing-rewrite-data")?;
     seed_databases(&source)?;
     let plan = LegacyTelemetryPlan::capture(
         &source,
@@ -100,8 +102,8 @@ async fn verification_requires_an_existing_destination_without_creating_it() -> 
 #[tokio::test]
 async fn verification_rejects_a_divergent_query_tier() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let source = directory.path().join("probe-data");
-    let destination = directory.path().join("rewrite-data");
+    let source = test_path(&directory, "probe-data")?;
+    let destination = test_path(&directory, "rewrite-data")?;
     seed_databases(&source)?;
     let plan = LegacyTelemetryPlan::capture(
         &source,
@@ -132,8 +134,8 @@ async fn verification_rejects_a_divergent_query_tier() -> TestResult {
 #[tokio::test]
 async fn apply_resumes_after_the_contiguous_log_high_watermark() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let source = directory.path().join("probe-data");
-    let destination = directory.path().join("rewrite-data");
+    let source = test_path(&directory, "probe-data")?;
+    let destination = test_path(&directory, "rewrite-data")?;
     seed_databases(&source)?;
     seed_service_partition(&source)?;
     append_service_log_in_wal(&source)?;
@@ -177,8 +179,8 @@ async fn apply_resumes_after_the_contiguous_log_high_watermark() -> TestResult {
 #[tokio::test]
 async fn reused_legacy_units_keep_log_owners_and_use_a_synthetic_metric_owner() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let source = directory.path().join("probe-data");
-    let destination = directory.path().join("rewrite-data");
+    let source = test_path(&directory, "probe-data")?;
+    let destination = test_path(&directory, "rewrite-data")?;
     seed_databases(&source)?;
     let service = Connection::open(source.join("duckdb/service-logs.duckdb"))?;
     service.execute_batch(
