@@ -9,6 +9,7 @@ use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Sto
 use runtime::{
     AddressRequest, ArtifactDigest, NetworkHandle, NetworkProvider, RuntimeError, ShutdownRequest,
     ValueSourceError, ValueSourceResolver, WorkloadHandle, WorkloadRuntime, WorkloadState,
+    WorkloadUser, WorkloadUserNamespace,
 };
 
 #[path = "assignment_reconcile.rs"]
@@ -202,14 +203,12 @@ impl AssignmentAgent {
         let workload_id = workload_id(assignment)?;
         let user_namespace = self.runtime.prepare_user_namespace(&workload_id).await?;
         let workload_user = workload_user(deployment);
-        if let (Some(namespace), Some(user)) = (user_namespace, workload_user) {
-            namespace.host_user(user)?;
-        }
+        let secret_owner = host_secret_owner(user_namespace, workload_user)?;
         let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {
             Some(secrets) => Some(
                 self.secrets
-                    .materialize(&workload_id, secrets, workload_user)
+                    .materialize(&workload_id, secrets, secret_owner)
                     .await?,
             ),
             None => None,
@@ -527,6 +526,15 @@ impl AssignmentAgent {
             assignment_id: assignment.meta.id.to_string(),
         })
     }
+}
+
+pub(crate) fn host_secret_owner(
+    user_namespace: Option<WorkloadUserNamespace>,
+    workload_user: Option<WorkloadUser>,
+) -> Result<Option<WorkloadUser>, RuntimeError> {
+    workload_user
+        .map(|user| user_namespace.map_or_else(|| Ok(user), |namespace| namespace.host_user(user)))
+        .transpose()
 }
 
 fn trace_assignment_transition(assignment: &Assignment) {

@@ -14,6 +14,8 @@ use crate::secret_mount::SecretMountError;
 
 const DIRECTORY_MODE: u32 = 0o700;
 const SECRET_MODE: u32 = 0o600;
+const SHARED_DIRECTORY_MODE: u32 = 0o555;
+const SHARED_SECRET_MODE: u32 = 0o444;
 const DOTENV_FILE: &str = "secrets.env";
 
 pub(crate) fn materialize(
@@ -57,8 +59,8 @@ fn materialize_dotenv(
         ensure_expected_entries(&directory, &BTreeSet::new(), workload_id)?;
         install_secret(&directory, &secret_path, content.as_bytes(), workload_id)?;
     }
+    set_secret_access(&secret_path, owner)?;
     if let Some(owner) = owner {
-        set_owner(&secret_path, owner)?;
         set_owner(&directory, owner)?;
     }
     Ok(read_only_mount(secret_path, target))
@@ -96,11 +98,9 @@ fn materialize_file_set(
     validate_file_names(files.keys())?;
     let directory = root.join(workload_id.as_str());
     if directory.exists() {
-        ensure_private_directory(&directory)?;
+        ensure_directory(&directory)?;
         ensure_existing_file_set(&directory, files, workload_id)?;
-        if let Some(owner) = owner {
-            set_file_set_owner(&directory, files, owner)?;
-        }
+        set_file_set_access(&directory, files, owner)?;
         return Ok(read_only_mount(directory, target));
     }
 
@@ -133,21 +133,45 @@ fn materialize_file_set(
         let _cleanup = cleanup_directory(&temporary);
         return Err(error);
     }
-    if let Some(owner) = owner {
-        set_file_set_owner(&directory, files, owner)?;
-    }
+    set_file_set_access(&directory, files, owner)?;
     Ok(read_only_mount(directory, target))
 }
 
-fn set_file_set_owner(
+fn set_file_set_access(
     directory: &Path,
     files: &BTreeMap<String, SecretValue>,
-    owner: WorkloadUser,
+    owner: Option<WorkloadUser>,
 ) -> Result<(), SecretMountError> {
     for name in files.keys() {
-        set_owner(&directory.join(name), owner)?;
+        set_secret_access(&directory.join(name), owner)?;
     }
-    set_owner(directory, owner)
+    if let Some(owner) = owner {
+        set_owner(directory, owner)?;
+    }
+    fs::set_permissions(
+        directory,
+        fs::Permissions::from_mode(if owner.is_some() {
+            DIRECTORY_MODE
+        } else {
+            SHARED_DIRECTORY_MODE
+        }),
+    )
+    .map_err(|source| io_error("set secret directory access", directory, source))
+}
+
+fn set_secret_access(path: &Path, owner: Option<WorkloadUser>) -> Result<(), SecretMountError> {
+    if let Some(owner) = owner {
+        set_owner(path, owner)?;
+    }
+    fs::set_permissions(
+        path,
+        fs::Permissions::from_mode(if owner.is_some() {
+            SECRET_MODE
+        } else {
+            SHARED_SECRET_MODE
+        }),
+    )
+    .map_err(|source| io_error("set secret file access", path, source))
 }
 
 fn set_owner(path: &Path, owner: WorkloadUser) -> Result<(), SecretMountError> {
@@ -275,6 +299,12 @@ fn read_only_mount(source: PathBuf, target: PathBuf) -> WorkloadMount {
 
 fn ensure_private_directory(path: &Path) -> Result<(), SecretMountError> {
     fs::create_dir_all(path).map_err(|source| io_error("create directory", path, source))?;
+    ensure_directory(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(DIRECTORY_MODE))
+        .map_err(|source| io_error("protect directory", path, source))
+}
+
+fn ensure_directory(path: &Path) -> Result<(), SecretMountError> {
     let metadata =
         fs::symlink_metadata(path).map_err(|source| io_error("inspect directory", path, source))?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
@@ -282,8 +312,7 @@ fn ensure_private_directory(path: &Path) -> Result<(), SecretMountError> {
             path: path.to_path_buf(),
         });
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(DIRECTORY_MODE))
-        .map_err(|source| io_error("protect directory", path, source))
+    Ok(())
 }
 
 fn install_secret(
@@ -349,8 +378,7 @@ fn ensure_existing_content(
             workload_id: workload_id.to_string(),
         });
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(SECRET_MODE))
-        .map_err(|source| io_error("protect secret", path, source))
+    Ok(())
 }
 
 pub(crate) fn cleanup_stale(
@@ -397,6 +425,8 @@ pub(crate) fn cleanup_directory(directory: &Path) -> Result<(), SecretMountError
             path: directory.to_path_buf(),
         });
     }
+    fs::set_permissions(directory, fs::Permissions::from_mode(DIRECTORY_MODE))
+        .map_err(|source| io_error("open secret directory for cleanup", directory, source))?;
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(source) => return Err(io_error("list workload secrets", directory, source)),
@@ -448,6 +478,8 @@ fn zeroize_and_remove(path: &Path) -> Result<(), SecretMountError> {
     let length = fs::metadata(path)
         .map_err(|source| io_error("inspect secret for cleanup", path, source))?
         .len();
+    fs::set_permissions(path, fs::Permissions::from_mode(SECRET_MODE))
+        .map_err(|source| io_error("open secret for cleanup", path, source))?;
     let mut file = OpenOptions::new()
         .write(true)
         .open(path)

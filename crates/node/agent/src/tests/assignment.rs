@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
@@ -21,10 +21,12 @@ use kernel_store::{
 use runtime::{
     FakeNetworkProvider, FakeRuntime, FakeRuntimeOperation, NetworkAddressing, NetworkCidr,
     NetworkProvider, NetworkSpec, RuntimeError, ShutdownRequest, ValueSourceError,
-    ValueSourceResolver, WorkloadRuntime, WorkloadSpec,
+    ValueSourceResolver, WorkloadIdMapping, WorkloadRuntime, WorkloadSpec, WorkloadUser,
+    WorkloadUserNamespace,
 };
 use tokio::sync::{Notify, watch};
 
+use crate::assignment::host_secret_owner;
 use crate::{AssignmentAgent, AssignmentAgentSettings, NodeApiServices, StatusClock, WorkloadDns};
 
 mod dns;
@@ -418,6 +420,10 @@ async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
         std::fs::read_to_string(&secret_path)?,
         "TOKEN=\"sensitive\"\n"
     );
+    assert_eq!(
+        std::fs::metadata(&secret_path)?.permissions().mode() & 0o777,
+        0o444
+    );
 
     let key = world.assignment_key();
     let stored = world.store.get(&key).await?.ok_or("assignment missing")?;
@@ -430,6 +436,38 @@ async fn assignment_reconcile_mounts_and_cleans_private_secret_files()
         .await?;
     world.agent().reconcile_once().await?;
     assert!(!secret_path.exists());
+    Ok(())
+}
+
+#[test]
+fn assignment_maps_an_explicit_secret_owner_into_the_workload_user_namespace()
+-> Result<(), Box<dyn std::error::Error>> {
+    let namespace = WorkloadUserNamespace {
+        uid: WorkloadIdMapping {
+            container_id: 0,
+            host_id: 1_000_000,
+            size: 65_536,
+        },
+        gid: WorkloadIdMapping {
+            container_id: 0,
+            host_id: 2_000_000,
+            size: 65_536,
+        },
+    };
+    assert_eq!(
+        host_secret_owner(
+            Some(namespace),
+            Some(WorkloadUser {
+                user_id: 1_000,
+                group_id: 1_001,
+            }),
+        )?,
+        Some(WorkloadUser {
+            user_id: 1_001_000,
+            group_id: 2_001_001,
+        })
+    );
+    assert_eq!(host_secret_owner(Some(namespace), None)?, None);
     Ok(())
 }
 

@@ -112,9 +112,18 @@ async fn secret_file_set_preserves_exact_bytes_and_zeroizes_every_file()
         fs::read_to_string(&key_path)?,
         "-----BEGIN PRIVATE KEY-----\nkey\n"
     );
-    assert_eq!(fs::metadata(directory)?.permissions().mode() & 0o777, 0o700);
-    assert_eq!(fs::metadata(&ca_path)?.permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::metadata(directory)?.permissions().mode() & 0o777, 0o555);
+    assert_eq!(fs::metadata(&ca_path)?.permissions().mode() & 0o777, 0o444);
+    assert_eq!(
+        fs::metadata(directory.parent().ok_or("secret root missing")?)?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
     assert_eq!(manager.materialize(&workload_id, &spec, None).await?, mount);
+    assert_eq!(fs::metadata(directory)?.permissions().mode() & 0o777, 0o555);
+    assert_eq!(fs::metadata(&ca_path)?.permissions().mode() & 0o777, 0o444);
 
     let SecretMountSpec::Files { files, .. } = &mut spec else {
         return Err("test secret unexpectedly changed representation".into());
@@ -151,6 +160,14 @@ async fn secret_mount_rejects_identity_mutation_and_collects_only_stale_workload
     };
     let first_mount = manager.materialize(&first, &spec, None).await?;
     manager.materialize(&second, &spec, None).await?;
+    assert_eq!(manager.materialize(&first, &spec, None).await?, first_mount);
+    let MountSource::HostPath(first_path) = &first_mount.source else {
+        return Err("secret was not rendered into a host file".into());
+    };
+    assert_eq!(
+        fs::metadata(first_path)?.permissions().mode() & 0o777,
+        0o444
+    );
     let SecretMountSpec::Dotenv { items, .. } = &mut spec else {
         return Err("test secret unexpectedly changed representation".into());
     };
