@@ -509,7 +509,13 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
             ),
             (
                 "aws-secret://runtime-secrets".to_owned(),
-                BTreeMap::from([("TOKEN".to_owned(), SecretValue::new("resolved-token"))]),
+                BTreeMap::from([
+                    (
+                        "BATON_HOST".to_owned(),
+                        SecretValue::new("https://${{ MAESTRO_PREVIEW_HOST }}/"),
+                    ),
+                    ("TOKEN".to_owned(), SecretValue::new("resolved-token")),
+                ]),
             ),
         ]),
         calls: AtomicU64::new(0),
@@ -521,7 +527,7 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         std::fs::read_to_string(world.secrets.path().join("assignment-1/secrets.env"))?,
-        "TOKEN=\"resolved-token\"\n"
+        "BATON_HOST=\"https://api-pr-42.preview.example.test/\"\nTOKEN=\"resolved-token\"\n"
     );
     let spec = world
         .runtime

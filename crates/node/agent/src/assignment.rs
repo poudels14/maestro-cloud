@@ -379,9 +379,11 @@ impl AssignmentAgent {
             resolved_source = true;
             environment.extend(self.resolve_value_source(&source).await?);
         }
-        resolve_external_environment_templates(
+        resolve_value_templates(
             &deployment.spec.environment_template,
             &mut environment,
+            "ExternalEnvironmentTemplateRejected",
+            "external environment",
         )?;
         environment.extend(
             deployment
@@ -400,6 +402,12 @@ impl AssignmentAgent {
             let inline = std::mem::take(items);
             *items = values;
             items.extend(inline);
+            resolve_value_templates(
+                &deployment.spec.environment_template,
+                items,
+                "SecretMountTemplateRejected",
+                "secret mount",
+            )?;
         }
         validate_runtime_environment(&environment)?;
         if resolved_source {
@@ -532,18 +540,20 @@ impl AssignmentAgent {
     }
 }
 
-fn resolve_external_environment_templates(
+fn resolve_value_templates(
     context: &kernel_api::EnvironmentTemplateContext,
-    environment: &mut std::collections::BTreeMap<String, SecretValue>,
+    values: &mut std::collections::BTreeMap<String, SecretValue>,
+    rejection_reason: &'static str,
+    value_kind: &'static str,
 ) -> Result<(), ConvergeFailure> {
-    for (key, value) in environment.iter_mut() {
+    for (key, value) in values.iter_mut() {
         if !value.expose().contains("${{") {
             continue;
         }
         let resolved = context.resolve(value.expose()).map_err(|error| {
             ConvergeFailure::failed(
-                "ExternalEnvironmentTemplateRejected",
-                format!("external environment key `{key}` has an invalid template: {error}"),
+                rejection_reason,
+                format!("{value_kind} key `{key}` has an invalid template: {error}"),
             )
         })?;
         *value = SecretValue::new(resolved);
