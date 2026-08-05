@@ -13,11 +13,23 @@ function PreviewsPage(props: { api: ServicesApi }) {
   const navigate = useNavigate();
   const previews = () => previewServices(services.data ?? []);
   const enabledServices = () => previewEnabledServices(services.data ?? []);
-  const openService = (service: Service) =>
-    navigate({
+  const openService = (service: Service) => {
+    const preview = service.previewResource;
+    if (preview) {
+      return navigate({
+        to: "/services/$serviceId/prs/$prId/$tab",
+        params: {
+          serviceId: preview.spec.baseServiceId,
+          prId: String(preview.spec.pullRequestNumber),
+          tab: "overview"
+        }
+      });
+    }
+    return navigate({
       to: "/services/$serviceId/$tab",
       params: { serviceId: service.meta.id, tab: "overview" }
     });
+  };
 
   return (
     <>

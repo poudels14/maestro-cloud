@@ -90,7 +90,8 @@ test("joins preview ownership and sorts deployment reads at the boundary", async
       headRevision: "abc",
       pullRequestNumber: 7,
       repository: "owner/repo",
-      serviceId: "service/a-pr-7"
+      serviceId: "service/a-pr-7",
+      title: "Preview seven"
     },
     status: { phase: "active" }
   } satisfies ApiSchemas["Preview"];

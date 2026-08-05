@@ -1,7 +1,7 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
-import { mergeDefinedProperties, useQuery } from "@maestro/sdk";
-import { useLocation, useNavigate } from "@tanstack/solid-router";
+import { useQuery } from "@maestro/sdk";
+import { useLocation } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import type { LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
@@ -10,7 +10,7 @@ import { ErrorBanner } from "@maestro/kit";
 import { ConfirmDialog } from "@maestro/kit";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
-import type { Deployment, Service } from "./types";
+import type { Deployment, Service, ServiceDetailSearchUpdate } from "./types";
 import { isSystemService } from "./serviceView";
 
 const INITIAL_VISIBLE = 10;
@@ -20,6 +20,7 @@ function DeploymentsTab(props: {
   api: ServicesApi;
   logsApi: LogsApi;
   service: Service;
+  onSearchChange: (updates: ServiceDetailSearchUpdate) => void;
   onError: (title: string, cause: unknown) => void;
 }) {
   const queryClient = useQueryClient();
@@ -46,7 +47,6 @@ function DeploymentsTab(props: {
   };
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
-  const navigate = useNavigate();
 
   const [confirmFrozenRedeploy, setConfirmFrozenRedeploy] = createSignal(false);
   const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
@@ -54,13 +54,7 @@ function DeploymentsTab(props: {
   const setUrlSheetState = (updates: {
     deployment?: string | undefined;
     tab?: SheetTabId | undefined;
-  }) =>
-    navigate({
-      to: "/services/$serviceId/$tab",
-      params: { serviceId: serviceId(), tab: "deployments" },
-      search: mergeDefinedProperties(search(), updates),
-      replace: true
-    });
+  }) => props.onSearchChange(updates);
 
   const selectedId = () => search().deployment ?? null;
   const sheetTab = () => search().tab ?? "logs";

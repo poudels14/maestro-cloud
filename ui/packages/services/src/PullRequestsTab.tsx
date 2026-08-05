@@ -45,7 +45,7 @@ function PullRequestRow(props: { preview: Service; url: string | null }) {
   return (
     <div class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:px-5">
       <a
-        href={`/services/${encodeURIComponent(props.preview.meta.id)}/overview`}
+        href={`/services/${encodeURIComponent(resource().spec.baseServiceId)}/prs/${resource().spec.pullRequestNumber}/overview`}
         class="group flex min-w-0 flex-1 items-start gap-3 outline-none"
       >
         <span class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50">

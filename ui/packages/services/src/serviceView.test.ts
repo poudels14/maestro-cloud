@@ -43,7 +43,8 @@ function previewResource(
       headRevision: "abc",
       pullRequestNumber,
       repository: "owner/repo",
-      serviceId
+      serviceId,
+      title: `Preview ${pullRequestNumber}`
     },
     status: { phase: "active" }
   };

@@ -1,5 +1,5 @@
 import { Show, type JSX } from "solid-js";
-import { ArrowUpRight, GitPullRequest, Menu } from "lucide-solid";
+import { ArrowUpRight, ChevronRight, GitPullRequest, Menu } from "lucide-solid";
 import clsx from "clsx";
 import { StatusDot, TabButton } from "@maestro/kit";
 import type { LogsApi } from "@maestro/logs";
@@ -9,7 +9,7 @@ import { LogsTab } from "./LogsTab";
 import { OverviewTab } from "./OverviewTab";
 import { PullRequestsTab } from "./PullRequestsTab";
 import { serviceDisplayStatus, servicePreviews } from "./serviceView";
-import type { Service } from "./types";
+import type { Service, ServiceDetailSearchUpdate } from "./types";
 
 type DetailTab = "overview" | "deployments" | "metrics" | "logs" | "pull-requests";
 
@@ -23,6 +23,8 @@ function ServiceDetailPanel(props: {
   renderIngress: () => JSX.Element;
   renderMetrics: () => JSX.Element;
   navigateTab: (tab: DetailTab) => void;
+  onSearchChange: (updates: ServiceDetailSearchUpdate) => void;
+  onNavigateBaseService: () => void;
   onOpenDrawer: () => void;
   onError: (title: string, cause: unknown) => void;
 }) {
@@ -36,25 +38,28 @@ function ServiceDetailPanel(props: {
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">
       <div class="shrink-0 bg-white border-b border-gray-200">
-        <div class="md:hidden h-12 px-3 flex items-center gap-2">
+        <div class="lg:hidden h-12 px-3 flex items-center gap-2">
           <button
             type="button"
             onClick={props.onOpenDrawer}
-            class="p-2 -ml-2 text-gray-500 hover:text-gray-700 rounded-md outline-none"
+            class="p-2 -ml-2 text-gray-500 hover:text-gray-700 rounded-md outline-none md:hidden"
             aria-label="Open menu"
           >
             <Menu class="size-5" />
           </button>
-          <span class="text-sm font-semibold text-gray-900 truncate">
-            {props.service.spec.name}
-          </span>
+          <ServiceIdentity
+            service={props.service}
+            services={props.services}
+            onNavigateBaseService={props.onNavigateBaseService}
+          />
         </div>
         <div class="relative px-3 sm:px-6 pt-1.5 sm:pt-2.5 overflow-x-auto">
-          <div class="absolute left-4 top-1/2 hidden -translate-y-1/2 items-center gap-2 lg:flex">
-            <StatusDot status={serviceDisplayStatus(props.service)} />
-            <span class="max-w-[13rem] truncate text-sm font-semibold text-gray-900">
-              {props.service.spec.name}
-            </span>
+          <div class="absolute left-4 top-1/2 hidden max-w-[15rem] -translate-y-1/2 lg:flex">
+            <ServiceIdentity
+              service={props.service}
+              services={props.services}
+              onNavigateBaseService={props.onNavigateBaseService}
+            />
           </div>
           <div
             class={clsx(
@@ -121,6 +126,7 @@ function ServiceDetailPanel(props: {
               api={props.api}
               logsApi={props.logsApi}
               service={props.service}
+              onSearchChange={props.onSearchChange}
               onError={props.onError}
             />
           </Show>
@@ -133,10 +139,50 @@ function ServiceDetailPanel(props: {
           </Show>
           <Show when={tab() === "metrics"}>{props.renderMetrics()}</Show>
           <Show when={tab() === "logs"}>
-            <LogsTab api={props.api} logsApi={props.logsApi} service={props.service} />
+            <LogsTab
+              api={props.api}
+              logsApi={props.logsApi}
+              service={props.service}
+              onSearchChange={props.onSearchChange}
+            />
           </Show>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ServiceIdentity(props: {
+  service: Service;
+  services: Service[];
+  onNavigateBaseService: () => void;
+}) {
+  const preview = () => props.service.previewResource;
+  const baseService = () =>
+    props.services.find((service) => service.meta.id === preview()?.spec.baseServiceId);
+
+  return (
+    <div class="flex min-w-0 items-center gap-2 text-sm">
+      <StatusDot status={serviceDisplayStatus(props.service)} />
+      <Show
+        when={preview()}
+        fallback={
+          <span class="truncate font-semibold text-gray-900">{props.service.spec.name}</span>
+        }
+      >
+        <button
+          type="button"
+          onClick={props.onNavigateBaseService}
+          class="min-w-0 truncate font-semibold text-gray-700 outline-none hover:text-brand hover:underline"
+          title={baseService()?.spec.name ?? preview()!.spec.baseServiceId}
+        >
+          {baseService()?.spec.name ?? preview()!.spec.baseServiceId}
+        </button>
+        <ChevronRight class="size-3.5 shrink-0 text-gray-300" aria-hidden="true" />
+        <span class="min-w-0 truncate font-semibold text-gray-900" title={props.service.meta.id}>
+          {props.service.meta.id}
+        </span>
+      </Show>
     </div>
   );
 }

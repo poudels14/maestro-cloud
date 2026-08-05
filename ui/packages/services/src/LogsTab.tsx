@@ -1,15 +1,19 @@
 import { Show } from "solid-js";
-import { mergeDefinedProperties, useQuery } from "@maestro/sdk";
-import { useLocation, useNavigate } from "@tanstack/solid-router";
+import { useQuery } from "@maestro/sdk";
+import { useLocation } from "@tanstack/solid-router";
 import { LogViewer, type LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
 import { deploymentsQuery } from "./queries";
-import type { Service } from "./types";
+import type { Service, ServiceDetailSearchUpdate } from "./types";
 
-function LogsTab(props: { api: ServicesApi; logsApi: LogsApi; service: Service }) {
+function LogsTab(props: {
+  api: ServicesApi;
+  logsApi: LogsApi;
+  service: Service;
+  onSearchChange: (updates: ServiceDetailSearchUpdate) => void;
+}) {
   const location = useLocation();
   const search = () => location().search as { query?: string; range?: string };
-  const navigate = useNavigate();
 
   const deployments = useQuery(() => ({
     ...deploymentsQuery(props.api, props.service.meta.id)
@@ -17,12 +21,7 @@ function LogsTab(props: { api: ServicesApi; logsApi: LogsApi; service: Service }
   const hasAnyDeployment = () => (deployments.data?.length ?? 0) > 0;
 
   const setUrlSearch = (updates: { query?: string | undefined; range?: string | undefined }) =>
-    navigate({
-      to: "/services/$serviceId/$tab",
-      params: { serviceId: props.service.meta.id, tab: "logs" },
-      search: mergeDefinedProperties(search(), updates),
-      replace: true
-    });
+    props.onSearchChange(updates);
 
   return (
     <Show
