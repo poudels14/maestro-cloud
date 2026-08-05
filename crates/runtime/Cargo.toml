@@ -56,5 +56,7 @@ parking_lot.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+csv.workspace = true
 netlink-packet-route.workspace = true
 rtnetlink.workspace = true
+rustix = { workspace = true, features = ["fs", "mount"] }

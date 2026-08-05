@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicU64;
 
 use async_trait::async_trait;
 use containerd::services::v1::snapshots::{
-    PrepareSnapshotRequest, RemoveSnapshotRequest, StatSnapshotRequest,
+    MountsRequest, PrepareSnapshotRequest, RemoveSnapshotRequest, StatSnapshotRequest,
 };
 use containerd::services::v1::{
     CreateContainerRequest, DeleteContainerRequest, GetContainerRequest, ListContainersRequest,
@@ -18,6 +18,7 @@ use crate::containerd_build::{BuildctlRunner, ProcessBuildctlRunner};
 use crate::containerd_config::{container_record, fingerprint, validate_runtime_features};
 use crate::containerd_event::ContainerdEventStream;
 use crate::containerd_exec::start_exec;
+use crate::containerd_identity::resolve_image_user;
 use crate::containerd_image::load_image;
 use crate::containerd_io::task_paths;
 use crate::containerd_network::ContainerdNetworkState;
@@ -252,10 +253,11 @@ impl WorkloadRuntime for ContainerdRuntime {
             workload_id,
         )
         .await?;
-        let snapshot_result =
+        let mut snapshots =
             containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
                 self.channel.clone(),
-            )
+            );
+        let snapshot_result = snapshots
             .prepare(namespaced_timeout(
                 PrepareSnapshotRequest {
                     snapshotter: self.settings.snapshotter.clone(),
@@ -267,11 +269,25 @@ impl WorkloadRuntime for ContainerdRuntime {
                 self.settings.rpc_timeout,
             )?)
             .await;
-        if let Err(error) = snapshot_result
-            && !is_already_exists(&error)
-        {
-            return Err(runtime_status(error, workload_id));
-        }
+        let snapshot_mounts = match snapshot_result {
+            Ok(response) => response.into_inner().mounts,
+            Err(error) if is_already_exists(&error) => {
+                snapshots
+                    .mounts(namespaced_timeout(
+                        MountsRequest {
+                            snapshotter: self.settings.snapshotter.clone(),
+                            key: snapshot_key.clone(),
+                        },
+                        &self.settings.namespace,
+                        self.settings.rpc_timeout,
+                    )?)
+                    .await
+                    .map_err(|error| runtime_status(error, workload_id))?
+                    .into_inner()
+                    .mounts
+            }
+            Err(error) => return Err(runtime_status(error, workload_id)),
+        };
         if !self
             .snapshot_exists(&snapshot_key, workload_id, &snapshot_labels)
             .await?
@@ -282,9 +298,15 @@ impl WorkloadRuntime for ContainerdRuntime {
                 ),
             });
         }
+        let resolved_image_user = if workload.configuration.user.is_none() {
+            Some(resolve_image_user(image.configuration.user.clone(), snapshot_mounts).await?)
+        } else {
+            None
+        };
         let record = container_record(
             spec,
             &image.configuration,
+            resolved_image_user,
             &self.settings,
             snapshot_key,
             fingerprint.clone(),

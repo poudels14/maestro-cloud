@@ -38,6 +38,7 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
     let record = container_record(
         &spec,
         &image,
+        None,
         &ContainerdRuntimeSettings::default(),
         "maestro-workload-1-rootfs".to_owned(),
         fingerprint.clone(),
@@ -138,6 +139,10 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
     let record = container_record(
         &spec,
         &image,
+        Some(WorkloadUser {
+            user_id: 2000,
+            group_id: 2001,
+        }),
         &ContainerdRuntimeSettings::default(),
         "snapshot".to_owned(),
         fingerprint(&spec).unwrap(),
@@ -162,6 +167,10 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
     let record = container_record(
         &spec,
         &image,
+        Some(WorkloadUser {
+            user_id: 2000,
+            group_id: 2001,
+        }),
         &settings,
         "snapshot".to_owned(),
         fingerprint(&spec).unwrap(),
@@ -202,6 +211,10 @@ fn container_record_uses_image_defaults_and_managed_volume_bindings() {
         container_record(
             &spec,
             &image,
+            Some(WorkloadUser {
+                user_id: 2000,
+                group_id: 2001,
+            }),
             &ContainerdRuntimeSettings::default(),
             "snapshot".to_owned(),
             fingerprint(&spec).unwrap(),
@@ -229,6 +242,7 @@ fn container_record_allows_an_explicit_root_identity() {
             working_directory: None,
             user: "1000:1000".to_owned(),
         },
+        None,
         &ContainerdRuntimeSettings::default(),
         "snapshot".to_owned(),
         fingerprint(&spec).unwrap(),
@@ -240,7 +254,7 @@ fn container_record_allows_an_explicit_root_identity() {
 }
 
 #[test]
-fn container_record_resolves_named_root_and_grants_only_requested_capabilities() {
+fn container_record_uses_resolved_image_user_and_only_requested_capabilities() {
     let mut spec = container_spec();
     let WorkloadSpec::Container(workload) = &mut spec else {
         unreachable!();
@@ -259,6 +273,10 @@ fn container_record_resolves_named_root_and_grants_only_requested_capabilities()
             working_directory: None,
             user: "root".to_owned(),
         },
+        Some(WorkloadUser {
+            user_id: 0,
+            group_id: 0,
+        }),
         &ContainerdRuntimeSettings::default(),
         "snapshot".to_owned(),
         fingerprint(&spec).unwrap(),
@@ -304,6 +322,7 @@ fn container_record_rejects_host_port_publication_without_capability() {
                 working_directory: None,
                 user: String::new(),
             },
+            None,
             &ContainerdRuntimeSettings::default(),
             "snapshot".to_owned(),
             fingerprint(&spec).unwrap(),

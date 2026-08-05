@@ -31,6 +31,8 @@ mod containerd_exec;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_exec_io;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_identity;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_image;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_io;

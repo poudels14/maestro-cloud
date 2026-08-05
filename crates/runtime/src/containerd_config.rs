@@ -29,6 +29,7 @@ pub(crate) fn fingerprint(spec: &WorkloadSpec) -> Result<String, RuntimeError> {
 pub(crate) fn container_record(
     spec: &WorkloadSpec,
     image: &ImageDefaults,
+    resolved_image_user: Option<WorkloadUser>,
     settings: &ContainerdRuntimeSettings,
     snapshot_key: String,
     fingerprint: String,
@@ -40,6 +41,10 @@ pub(crate) fn container_record(
     };
     validate_runtime_features(workload)?;
     let metadata = &workload.configuration.metadata;
+    let oci = oci_spec(workload, image, resolved_image_user, settings)?;
+    let encoded_oci = serde_json::to_vec(&oci).map_err(|error| RuntimeError::InvalidSpec {
+        message: format!("failed to encode containerd OCI specification: {error}"),
+    })?;
     Ok(Container {
         id: container_name(&metadata.workload_id),
         labels: metadata_labels(metadata, fingerprint)?,
@@ -50,11 +55,7 @@ pub(crate) fn container_record(
         }),
         spec: Some(Any {
             type_url: OCI_SPEC_TYPE.to_owned(),
-            value: serde_json::to_vec(&oci_spec(workload, image, settings)?).map_err(|error| {
-                RuntimeError::InvalidSpec {
-                    message: format!("failed to encode containerd OCI specification: {error}"),
-                }
-            })?,
+            value: encoded_oci,
         }),
         snapshotter: settings.snapshotter.clone(),
         snapshot_key,
@@ -75,6 +76,7 @@ pub(crate) fn validate_runtime_features(workload: &ContainerWorkload) -> Result<
 fn oci_spec(
     workload: &ContainerWorkload,
     image: &ImageDefaults,
+    resolved_image_user: Option<WorkloadUser>,
     settings: &ContainerdRuntimeSettings,
 ) -> Result<Value, RuntimeError> {
     let command = workload
@@ -85,10 +87,14 @@ fn oci_spec(
     arguments.push(command.executable);
     arguments.extend(command.arguments);
     let environment = environment(&workload.configuration, image);
-    let (user_id, group_id) = workload.configuration.user.map_or_else(
-        || parse_image_user(&image.user),
-        |user| Ok((user.user_id, user.group_id)),
-    )?;
+    let user = workload
+        .configuration
+        .user
+        .or(resolved_image_user)
+        .ok_or_else(|| RuntimeError::InvalidSpec {
+            message: "containerd image user was not resolved".to_owned(),
+        })?;
+    let (user_id, group_id) = (user.user_id, user.group_id);
     let user_namespace =
         workload
             .configuration
@@ -229,32 +235,6 @@ fn environment(configuration: &WorkloadConfiguration, image: &ImageDefaults) -> 
         .into_iter()
         .map(|(name, value)| format!("{name}={value}"))
         .collect()
-}
-
-fn parse_image_user(value: &str) -> Result<(u32, u32), RuntimeError> {
-    if value.is_empty() {
-        return Ok((0, 0));
-    }
-    let (user, group) = value
-        .split_once(':')
-        .map_or((value, None), |(user, group)| (user, Some(group)));
-    let user_id = parse_identity(user, value, "user")?;
-    let group_id = match group {
-        Some(group) => parse_identity(group, value, "group")?,
-        None => user_id,
-    };
-    Ok((user_id, group_id))
-}
-
-fn parse_identity(value: &str, image_user: &str, component: &str) -> Result<u32, RuntimeError> {
-    if value == "root" {
-        return Ok(0);
-    }
-    value.parse().map_err(|_| RuntimeError::InvalidSpec {
-        message: format!(
-            "containerd cannot resolve named image {component} `{image_user}` without NSS"
-        ),
-    })
 }
 
 fn oci_mount(

@@ -10,11 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(all(feature = "containerd", target_os = "linux"))]
-use kernel_api::SecretValue;
+use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, SecretValue, WorkloadId};
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 use runtime::{
     ArtifactBuildRequest, ArtifactDigest, ArtifactPrunePolicy, ArtifactReference, ArtifactSource,
-    ArtifactStore, ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock,
+    ArtifactStore, ContainerWorkload, ContainerdRuntime, ContainerdRuntimeSettings,
+    TokioRuntimeClock, WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime, WorkloadSpec,
 };
 
 #[cfg(all(feature = "containerd", target_os = "linux"))]
@@ -132,7 +133,9 @@ async fn containerd_buildkit_build_import_tag_and_prune_round_trip() {
         context.join("Dockerfile"),
         "FROM mirror.gcr.io/library/busybox:1.36.1\n\
          RUN --mount=type=secret,id=TOKEN test -s /run/secrets/TOKEN\n\
-         COPY payload /payload\n",
+         RUN addgroup -g 1234 baton && adduser -D -H -u 1234 -G baton baton\n\
+         COPY payload /payload\n\
+         USER baton\n",
     )
     .unwrap();
     std::fs::write(context.join("payload"), "maestro-buildkit-acceptance\n").unwrap();
@@ -156,7 +159,7 @@ async fn containerd_buildkit_build_import_tag_and_prune_round_trip() {
         build_timeout: Duration::from_secs(120),
         ..ContainerdRuntimeSettings::default()
     };
-    let runtime = ContainerdRuntime::connect(settings, Arc::new(TokioRuntimeClock::new()))
+    let runtime = ContainerdRuntime::connect(settings.clone(), Arc::new(TokioRuntimeClock::new()))
         .await
         .unwrap();
     let request = ArtifactBuildRequest {
@@ -179,6 +182,7 @@ async fn containerd_buildkit_build_import_tag_and_prune_round_trip() {
     assert!(built.as_str().contains("@sha256:"));
     let tagged = runtime.resolve_digest(&tag).await.unwrap();
     assert_eq!(content_digest(&tagged), content_digest(&built));
+    assert_named_image_user_resolves(&runtime, &settings, &built).await;
     let removed = runtime
         .prune(&ArtifactPrunePolicy::Preserve(Vec::new()))
         .await
@@ -189,6 +193,67 @@ async fn containerd_buildkit_build_import_tag_and_prune_round_trip() {
             .iter()
             .any(|digest| content_digest(digest) == content_digest(&built))
     );
+}
+
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+async fn assert_named_image_user_resolves(
+    runtime: &ContainerdRuntime,
+    settings: &ContainerdRuntimeSettings,
+    image: &ArtifactDigest,
+) {
+    let workload_id = WorkloadId::new(format!(
+        "containerd-named-image-user-{}",
+        std::process::id()
+    ))
+    .unwrap();
+    let user_namespace = runtime.prepare_user_namespace(&workload_id).await.unwrap();
+    let spec = WorkloadSpec::Container(ContainerWorkload {
+        configuration: WorkloadConfiguration {
+            metadata: WorkloadMetadata {
+                cluster_id: ClusterId::new("containerd-artifact-test").unwrap(),
+                node_id: NodeId::new("node-1").unwrap(),
+                service_id: kernel_api::ServiceId::new("named-user").unwrap(),
+                deployment_id: kernel_api::DeploymentId::new("deployment-1").unwrap(),
+                assignment_id: AssignmentId::new("assignment-1").unwrap(),
+                workload_id: workload_id.clone(),
+                labels: BTreeMap::new(),
+            },
+            hostname: workload_id.to_string(),
+            environment: BTreeMap::new(),
+            mounts: Vec::new(),
+            workload_address: None,
+            dns_server: None,
+            user: None,
+            user_namespace,
+            capabilities: Default::default(),
+        },
+        image: ArtifactReference::new(image.as_str()).unwrap(),
+        command: Some(CommandSpec {
+            executable: "/bin/true".to_owned(),
+            arguments: Vec::new(),
+        }),
+        published_ports: Vec::new(),
+    });
+    let handle = runtime.create(&spec).await.unwrap();
+    let channel = containerd::connect(&settings.socket).await.unwrap();
+    let mut request =
+        containerd::tonic::Request::new(containerd::services::v1::GetContainerRequest {
+            id: format!("maestro-{workload_id}"),
+        });
+    request
+        .metadata_mut()
+        .insert("containerd-namespace", settings.namespace.parse().unwrap());
+    let record = containerd::services::v1::containers_client::ContainersClient::new(channel)
+        .get(request)
+        .await
+        .unwrap()
+        .into_inner()
+        .container
+        .unwrap();
+    let oci: serde_json::Value = serde_json::from_slice(&record.spec.unwrap().value).unwrap();
+    assert_eq!(oci.pointer("/process/user/uid").unwrap(), 1234);
+    assert_eq!(oci.pointer("/process/user/gid").unwrap(), 1234);
+    runtime.remove(&handle).await.unwrap();
 }
 
 #[cfg(all(feature = "containerd", target_os = "linux"))]
