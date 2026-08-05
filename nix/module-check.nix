@@ -9,6 +9,23 @@
   daemonCommand = daemon.serviceConfig.ExecStart;
 in
   assert config.virtualisation.containerd.enable;
+  assert lib.versionAtLeast pkgs.containerd.version "2.0";
+  assert lib.versionAtLeast pkgs.runc.version "1.2";
+  assert lib.versionAtLeast config.boot.kernelPackages.kernel.version "6.3";
+  assert config.users.users.maestro-userns.isSystemUser;
+  assert config.users.users.maestro-userns.group == "maestro-userns";
+  assert config.users.users.maestro-userns.subUidRanges == [
+    {
+      startUid = 1048576;
+      count = 1073741824;
+    }
+  ];
+  assert config.users.users.maestro-userns.subGidRanges == [
+    {
+      startGid = 1048576;
+      count = 1073741824;
+    }
+  ];
   assert config.virtualisation.containerd.settings.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup;
   assert lib.all (interface: lib.elem interface config.networking.dhcpcd.denyInterfaces) ["maestro0" "mh*" "mp*" "wg0"];
   assert config.boot.kernel.sysctl."net.ipv4.ip_forward" == 1;

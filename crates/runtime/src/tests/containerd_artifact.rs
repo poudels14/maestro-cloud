@@ -186,9 +186,13 @@ fn containerd_transfer_requests_carry_namespace_and_lease_ownership() {
 #[tokio::test]
 async fn containerd_advertises_native_transport_and_buildkit() {
     let channel = Endpoint::from_static("http://[::]:50051").connect_lazy();
+    let state_root = tempfile::tempdir().unwrap();
     let runtime = ContainerdRuntime::new(
         channel,
-        ContainerdRuntimeSettings::default(),
+        ContainerdRuntimeSettings {
+            state_root: state_root.path().to_path_buf(),
+            ..ContainerdRuntimeSettings::default()
+        },
         Arc::new(TokioRuntimeClock::new()),
     )
     .unwrap();

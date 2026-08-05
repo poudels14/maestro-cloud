@@ -70,6 +70,12 @@ pub(crate) fn container_config(spec: &WorkloadSpec) -> Result<DockerContainerCon
 }
 
 fn validate_configuration(configuration: &WorkloadConfiguration) -> Result<(), RuntimeError> {
+    if configuration.user_namespace.is_some() {
+        return Err(RuntimeError::InvalidSpec {
+            message: "Docker development workloads cannot request production user namespaces"
+                .to_owned(),
+        });
+    }
     if configuration.hostname.is_empty() {
         return Err(RuntimeError::InvalidSpec {
             message: "container hostname cannot be empty".to_owned(),

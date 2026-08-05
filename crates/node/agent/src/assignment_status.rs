@@ -138,7 +138,7 @@ impl From<NodeApiMountError> for ConvergeFailure {
             | NodeApiMountError::InvalidCredential { .. }
             | NodeApiMountError::BindingConflict { .. }
             | NodeApiMountError::OwnerConflict { .. }
-            | NodeApiMountError::Server(NodeApiServerError::OwnerMismatch { .. }) => {
+            | NodeApiMountError::Server(NodeApiServerError::PeerIdentityMismatch { .. }) => {
                 Self::failed("NodeApiMountRejected", error.to_string())
             }
             NodeApiMountError::Random { .. }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -8,7 +8,7 @@ use containerd::services::v1::snapshots::{
 };
 use containerd::services::v1::{
     CreateContainerRequest, DeleteContainerRequest, GetContainerRequest, ListContainersRequest,
-    ListTasksRequest,
+    ListTasksRequest, Plugin, PluginsRequest,
 };
 use containerd::tonic::transport::Channel;
 use kernel_api::{ClusterId, NodeId, WorkloadId};
@@ -28,13 +28,14 @@ use crate::containerd_support::{
     namespaced_timeout, observed_workload, runtime_status, task_container_id, task_status,
     validate_existing,
 };
+use crate::containerd_user_namespace::ContainerdUserNamespaceAllocator;
 use crate::containerd_volume::prepare_managed_volumes;
 use crate::file_log::FileLogStream;
 use crate::{
     ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest,
     LogStream, ObservedWorkload, RuntimeCapability, RuntimeClock, RuntimeError, RuntimeEventStream,
     ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState,
-    WorkloadStatsReading, WorkloadStatus,
+    WorkloadStatsReading, WorkloadStatus, WorkloadUserNamespace,
 };
 
 /// Native containerd workload backend scoped to one explicit containerd namespace.
@@ -46,6 +47,7 @@ pub struct ContainerdRuntime {
     pub(crate) build_runner: Arc<dyn BuildctlRunner>,
     next_exec: Arc<AtomicU64>,
     pub(crate) network_state: Arc<tokio::sync::Mutex<ContainerdNetworkState>>,
+    user_namespaces: Arc<ContainerdUserNamespaceAllocator>,
 }
 
 impl ContainerdRuntime {
@@ -63,6 +65,7 @@ impl ContainerdRuntime {
                     settings.socket.display()
                 ),
             })?;
+        validate_snapshotter_remap(&channel, &settings).await?;
         Self::new(channel, settings, clock)
     }
 
@@ -74,6 +77,8 @@ impl ContainerdRuntime {
     ) -> Result<Self, RuntimeError> {
         settings.validate()?;
         let build_runner = Arc::new(ProcessBuildctlRunner);
+        let user_namespaces =
+            Arc::new(ContainerdUserNamespaceAllocator::new(&settings.state_root)?);
         Ok(Self {
             channel,
             settings: Arc::new(settings),
@@ -81,10 +86,11 @@ impl ContainerdRuntime {
             build_runner,
             next_exec: Arc::new(AtomicU64::new(1)),
             network_state: Arc::new(tokio::sync::Mutex::new(ContainerdNetworkState::default())),
+            user_namespaces,
         })
     }
 
-    async fn container(
+    pub(crate) async fn container(
         &self,
         container_id: &str,
         workload_id: &WorkloadId,
@@ -113,6 +119,7 @@ impl ContainerdRuntime {
         &self,
         key: &str,
         workload_id: &WorkloadId,
+        required_labels: &HashMap<String, String>,
     ) -> Result<bool, RuntimeError> {
         let result = containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
             self.channel.clone(),
@@ -127,7 +134,24 @@ impl ContainerdRuntime {
         )?)
         .await;
         match result {
-            Ok(_) => Ok(true),
+            Ok(response) => {
+                let info = response
+                    .into_inner()
+                    .info
+                    .ok_or_else(|| RuntimeError::Unavailable {
+                        message: format!("containerd omitted snapshot metadata for `{key}`"),
+                    })?;
+                for (label, expected) in required_labels {
+                    if info.labels.get(label) != Some(expected) {
+                        return Err(RuntimeError::Rejected {
+                            message: format!(
+                                "containerd snapshot `{key}` has conflicting `{label}` ownership metadata"
+                            ),
+                        });
+                    }
+                }
+                Ok(true)
+            }
             Err(error) if is_not_found(&error) => Ok(false),
             Err(error) => Err(runtime_status(error, workload_id)),
         }
@@ -148,6 +172,33 @@ impl WorkloadRuntime for ContainerdRuntime {
         ])
     }
 
+    async fn prepare_user_namespace(
+        &self,
+        workload_id: &WorkloadId,
+    ) -> Result<Option<WorkloadUserNamespace>, RuntimeError> {
+        let allocator = self.user_namespaces.clone();
+        let workload_id = workload_id.clone();
+        tokio::task::spawn_blocking(move || allocator.allocate(&workload_id))
+            .await
+            .map_err(|error| RuntimeError::Unavailable {
+                message: format!("containerd user-namespace allocation task failed: {error}"),
+            })?
+            .map(Some)
+    }
+
+    async fn cleanup_user_namespaces(
+        &self,
+        active_workload_ids: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, RuntimeError> {
+        let allocator = self.user_namespaces.clone();
+        let active_workload_ids = active_workload_ids.clone();
+        tokio::task::spawn_blocking(move || allocator.cleanup(&active_workload_ids))
+            .await
+            .map_err(|error| RuntimeError::Unavailable {
+                message: format!("containerd user-namespace cleanup task failed: {error}"),
+            })?
+    }
+
     async fn create(&self, spec: &WorkloadSpec) -> Result<WorkloadHandle, RuntimeError> {
         let WorkloadSpec::Container(workload) = spec else {
             return Err(RuntimeError::InvalidSpec {
@@ -156,6 +207,7 @@ impl WorkloadRuntime for ContainerdRuntime {
         };
         validate_runtime_features(workload)?;
         let workload_id = &workload.configuration.metadata.workload_id;
+        let snapshot_labels = snapshot_labels(workload)?;
         let fingerprint = fingerprint(spec)?;
         let container_id = container_name(workload_id);
         let snapshot_key = snapshot_key(&container_id);
@@ -168,7 +220,10 @@ impl WorkloadRuntime for ContainerdRuntime {
                     &fingerprint,
                     &self.settings.namespace,
                 )?;
-                if self.snapshot_exists(&snapshot_key, workload_id).await? {
+                if self
+                    .snapshot_exists(&snapshot_key, workload_id, &snapshot_labels)
+                    .await?
+                {
                     prepare_managed_volumes(&self.settings.state_root, &workload.configuration)
                         .await?;
                     if let Some(dns_server) = workload.configuration.dns_server {
@@ -206,10 +261,7 @@ impl WorkloadRuntime for ContainerdRuntime {
                     snapshotter: self.settings.snapshotter.clone(),
                     key: snapshot_key.clone(),
                     parent: image.snapshot_parent,
-                    labels: HashMap::from([(
-                        "com.maestro.workload-id".to_owned(),
-                        workload_id.to_string(),
-                    )]),
+                    labels: snapshot_labels.clone(),
                 },
                 &self.settings.namespace,
                 self.settings.rpc_timeout,
@@ -219,6 +271,16 @@ impl WorkloadRuntime for ContainerdRuntime {
             && !is_already_exists(&error)
         {
             return Err(runtime_status(error, workload_id));
+        }
+        if !self
+            .snapshot_exists(&snapshot_key, workload_id, &snapshot_labels)
+            .await?
+        {
+            return Err(RuntimeError::Unavailable {
+                message: format!(
+                    "containerd snapshot `{snapshot_key}` disappeared during workload creation"
+                ),
+            });
         }
         let record = container_record(
             spec,
@@ -537,4 +599,90 @@ impl WorkloadRuntime for ContainerdRuntime {
 
 pub(crate) fn snapshot_key(container_id: &str) -> String {
     format!("{container_id}-rootfs")
+}
+
+pub(crate) fn snapshot_labels(
+    workload: &crate::ContainerWorkload,
+) -> Result<HashMap<String, String>, RuntimeError> {
+    let namespace =
+        workload
+            .configuration
+            .user_namespace
+            .ok_or_else(|| RuntimeError::InvalidSpec {
+                message: "containerd workloads require an allocated user namespace".to_owned(),
+            })?;
+    Ok(HashMap::from([
+        (
+            "com.maestro.workload-id".to_owned(),
+            workload.configuration.metadata.workload_id.to_string(),
+        ),
+        (
+            "containerd.io/snapshot/uidmapping".to_owned(),
+            format!(
+                "{}:{}:{}",
+                namespace.uid.container_id, namespace.uid.host_id, namespace.uid.size
+            ),
+        ),
+        (
+            "containerd.io/snapshot/gidmapping".to_owned(),
+            format!(
+                "{}:{}:{}",
+                namespace.gid.container_id, namespace.gid.host_id, namespace.gid.size
+            ),
+        ),
+    ]))
+}
+
+async fn validate_snapshotter_remap(
+    channel: &Channel,
+    settings: &ContainerdRuntimeSettings,
+) -> Result<(), RuntimeError> {
+    let plugins =
+        containerd::services::v1::introspection_client::IntrospectionClient::new(channel.clone())
+            .plugins(namespaced_timeout(
+                PluginsRequest::default(),
+                &settings.namespace,
+                settings.rpc_timeout,
+            )?)
+            .await
+            .map_err(|error| RuntimeError::Unavailable {
+                message: format!("failed to inspect containerd snapshotter capabilities: {error}"),
+            })?
+            .into_inner()
+            .plugins;
+    validate_snapshotter_plugin(&plugins, &settings.snapshotter)
+}
+
+pub(crate) fn validate_snapshotter_plugin(
+    plugins: &[Plugin],
+    snapshotter: &str,
+) -> Result<(), RuntimeError> {
+    let plugin = plugins
+        .iter()
+        .find(|plugin| plugin.r#type == "io.containerd.snapshotter.v1" && plugin.id == snapshotter)
+        .ok_or_else(|| RuntimeError::Unavailable {
+            message: format!(
+                "containerd snapshotter `{snapshotter}` is not registered; workload user namespaces require an idmapped snapshotter"
+            ),
+        })?;
+    if let Some(error) = &plugin.init_err {
+        return Err(RuntimeError::Unavailable {
+            message: format!(
+                "containerd snapshotter `{snapshotter}` failed initialization: {}",
+                error.message
+            ),
+        });
+    }
+    if !plugin
+        .capabilities
+        .iter()
+        .any(|capability| capability == "remap-ids")
+    {
+        return Err(RuntimeError::Unavailable {
+            message: format!(
+                "containerd snapshotter `{snapshotter}` does not support idmapped snapshots (`remap-ids`)"
+            ),
+        });
+    }
+    Ok(())
 }

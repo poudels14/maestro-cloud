@@ -3,6 +3,8 @@
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use std::collections::BTreeMap;
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
+use std::os::unix::fs::MetadataExt;
+#[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use std::path::PathBuf;
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use std::sync::Arc;
@@ -19,8 +21,8 @@ use runtime::conformance::{
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
 use runtime::{
     ArtifactReference, ContainerWorkload, ContainerdRuntime, ContainerdRuntimeSettings, ExecMode,
-    ExecRequest, TokioRuntimeClock, WorkloadConfiguration, WorkloadMetadata, WorkloadRuntime,
-    WorkloadSpec,
+    ExecOutput, ExecRequest, MountAccess, MountSource, TokioRuntimeClock, WorkloadConfiguration,
+    WorkloadMetadata, WorkloadMount, WorkloadRuntime, WorkloadSpec, WorkloadUser,
 };
 
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
@@ -47,8 +49,9 @@ async fn containerd_backend_passes_workload_runtime_conformance() {
         .await
         .unwrap();
     let workload_id = format!("containerd-conformance-{process_id}");
-    let spec = container_spec(&image, &workload_id, "containerd-conformance");
-    let conflicting_spec = container_spec(&image, &workload_id, "containerd-conflict");
+    let spec = container_spec(&runtime, &image, &workload_id, "containerd-conformance").await;
+    let conflicting_spec =
+        container_spec(&runtime, &image, &workload_id, "containerd-conflict").await;
 
     exercise_workload_runtime(
         &runtime,
@@ -60,8 +63,11 @@ async fn containerd_backend_passes_workload_runtime_conformance() {
     .await
     .unwrap();
 
+    assert_user_namespace_isolation(&runtime, &settings, &image, temporary_root.path()).await;
+
     let streaming_id = format!("containerd-streaming-{process_id}");
-    let streaming_spec = container_spec(&image, &streaming_id, "containerd-streaming");
+    let streaming_spec =
+        container_spec(&runtime, &image, &streaming_id, "containerd-streaming").await;
     let handle = runtime.create(&streaming_spec).await.unwrap();
     runtime.start(&handle).await.unwrap();
     let replacement = ContainerdRuntime::connect(settings, Arc::new(TokioRuntimeClock::new()))
@@ -77,7 +83,129 @@ async fn containerd_backend_passes_workload_runtime_conformance() {
 }
 
 #[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
-fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpec {
+async fn assert_user_namespace_isolation(
+    runtime: &ContainerdRuntime,
+    settings: &ContainerdRuntimeSettings,
+    image: &str,
+    temporary_root: &std::path::Path,
+) {
+    let workload_id = format!("containerd-userns-{}", std::process::id());
+    let source = temporary_root.join("idmapped-volume");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("input"), "mounted-secret\n").unwrap();
+    let mut spec = container_spec(runtime, image, &workload_id, "containerd-userns").await;
+    let WorkloadSpec::Container(workload) = &mut spec else {
+        unreachable!();
+    };
+    workload.configuration.user = Some(WorkloadUser {
+        user_id: 0,
+        group_id: 0,
+    });
+    workload.configuration.mounts.push(WorkloadMount {
+        source: MountSource::HostPath(source.clone()),
+        target: "/maestro-userns".into(),
+        access: MountAccess::ReadWrite,
+    });
+    let namespace = workload.configuration.user_namespace.unwrap();
+    let handle = runtime.create(&spec).await.unwrap();
+    runtime.start(&handle).await.unwrap();
+
+    let output = exec_stdout(
+        runtime,
+        &handle,
+        "cat /proc/self/uid_map; printf 'input='; cat /maestro-userns/input; printf written > /maestro-userns/output; stat -c 'inside=%u:%g' /maestro-userns/output",
+    )
+    .await;
+    let first_line = output.lines().next().unwrap();
+    assert_eq!(
+        first_line.split_whitespace().collect::<Vec<_>>(),
+        vec![
+            namespace.uid.container_id.to_string(),
+            namespace.uid.host_id.to_string(),
+            namespace.uid.size.to_string(),
+        ]
+    );
+    assert!(output.contains("input=mounted-secret"));
+    assert!(output.contains("inside=0:0"));
+    let output_metadata = std::fs::metadata(source.join("output")).unwrap();
+    assert_eq!(output_metadata.uid(), 0);
+    assert_eq!(output_metadata.gid(), 0);
+
+    let channel = containerd::connect(&settings.socket).await.unwrap();
+    let mut request =
+        containerd::tonic::Request::new(containerd::services::v1::ListTasksRequest::default());
+    request
+        .metadata_mut()
+        .insert("containerd-namespace", settings.namespace.parse().unwrap());
+    let tasks = containerd::services::v1::tasks_client::TasksClient::new(channel)
+        .list(request)
+        .await
+        .unwrap()
+        .into_inner()
+        .tasks;
+    let expected_container_id = format!("maestro-{workload_id}");
+    let task = tasks
+        .iter()
+        .find(|task| task.id == expected_container_id || task.container_id == expected_container_id)
+        .unwrap();
+    let status = std::fs::read_to_string(format!("/proc/{}/status", task.pid)).unwrap();
+    let host_uid = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|uid| uid.parse::<u32>().ok())
+        .unwrap();
+    assert_eq!(host_uid, namespace.uid.host_id);
+
+    runtime.kill(&handle).await.unwrap();
+    runtime.remove(&handle).await.unwrap();
+}
+
+#[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
+async fn exec_stdout(
+    runtime: &ContainerdRuntime,
+    handle: &runtime::WorkloadHandle,
+    command: &str,
+) -> String {
+    let mut session = runtime
+        .exec(
+            handle,
+            ExecRequest {
+                command: CommandSpec {
+                    executable: "/bin/sh".to_owned(),
+                    arguments: vec!["-c".to_owned(), command.to_owned()],
+                },
+                environment: BTreeMap::new(),
+                mode: ExecMode::Pipes,
+            },
+        )
+        .await
+        .unwrap();
+    let mut stdout = Vec::new();
+    while let Some(output) = session.next().await.unwrap() {
+        match output {
+            ExecOutput::Stdout(payload) => stdout.extend(payload),
+            ExecOutput::Stderr(payload) => {
+                panic!(
+                    "user-namespace acceptance exec wrote stderr: {}",
+                    String::from_utf8_lossy(&payload)
+                );
+            }
+            ExecOutput::Exited { code } => assert_eq!(code, Some(0)),
+        }
+    }
+    String::from_utf8(stdout).unwrap()
+}
+
+#[cfg(all(feature = "containerd", feature = "test-util", target_os = "linux"))]
+async fn container_spec(
+    runtime: &ContainerdRuntime,
+    image: &str,
+    workload_id: &str,
+    hostname: &str,
+) -> WorkloadSpec {
+    let workload_id = WorkloadId::new(workload_id).unwrap();
+    let user_namespace = runtime.prepare_user_namespace(&workload_id).await.unwrap();
     WorkloadSpec::Container(ContainerWorkload {
         configuration: WorkloadConfiguration {
             metadata: WorkloadMetadata {
@@ -86,7 +214,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
                 service_id: kernel_api::ServiceId::new("api").unwrap(),
                 deployment_id: kernel_api::DeploymentId::new("deployment-1").unwrap(),
                 assignment_id: AssignmentId::new("assignment-1").unwrap(),
-                workload_id: WorkloadId::new(workload_id).unwrap(),
+                workload_id,
                 labels: BTreeMap::new(),
             },
             hostname: hostname.to_owned(),
@@ -95,6 +223,7 @@ fn container_spec(image: &str, workload_id: &str, hostname: &str) -> WorkloadSpe
             workload_address: None,
             dns_server: None,
             user: None,
+            user_namespace,
             capabilities: Default::default(),
         },
         image: ArtifactReference::new(image).unwrap(),

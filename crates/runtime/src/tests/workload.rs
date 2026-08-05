@@ -4,7 +4,7 @@ use kernel_api::{AssignmentId, ClusterId, NodeId, WorkloadId};
 
 use crate::{
     CgroupPath, ProcessWorkload, RuntimeError, WorkloadConfiguration, WorkloadHandle,
-    WorkloadMetadata, WorkloadSpec,
+    WorkloadIdMapping, WorkloadMetadata, WorkloadSpec, WorkloadUser, WorkloadUserNamespace,
 };
 
 #[test]
@@ -27,6 +27,7 @@ fn workload_kinds_share_metadata_without_fake_container_fields() {
             workload_address: None,
             dns_server: None,
             user: None,
+            user_namespace: None,
             capabilities: Default::default(),
         },
         command: kernel_api::CommandSpec {
@@ -38,6 +39,41 @@ fn workload_kinds_share_metadata_without_fake_container_fields() {
     assert_eq!(spec.configuration().metadata.workload_id, workload_id);
     let wire = serde_json::to_value(&spec).unwrap();
     assert_eq!(wire.get("type"), Some(&serde_json::json!("process")));
+}
+
+#[test]
+fn workload_user_namespaces_translate_only_ids_inside_the_mapping() {
+    let namespace = WorkloadUserNamespace {
+        uid: WorkloadIdMapping {
+            container_id: 0,
+            host_id: 1_048_576,
+            size: 65_536,
+        },
+        gid: WorkloadIdMapping {
+            container_id: 0,
+            host_id: 2_097_152,
+            size: 65_536,
+        },
+    };
+    assert_eq!(
+        namespace
+            .host_user(WorkloadUser {
+                user_id: 0,
+                group_id: 65_535,
+            })
+            .unwrap(),
+        WorkloadUser {
+            user_id: 1_048_576,
+            group_id: 2_162_687,
+        }
+    );
+    assert!(matches!(
+        namespace.host_user(WorkloadUser {
+            user_id: 65_536,
+            group_id: 0,
+        }),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
 }
 
 #[test]

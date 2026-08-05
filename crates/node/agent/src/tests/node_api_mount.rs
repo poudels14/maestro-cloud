@@ -326,6 +326,7 @@ fn current_owner(path: &std::path::Path) -> std::io::Result<NodeApiSocketOwner> 
     Ok(NodeApiSocketOwner {
         user_id: metadata.uid(),
         group_id: metadata.gid(),
+        peer_user_id: metadata.uid(),
     })
 }
 

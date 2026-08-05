@@ -46,6 +46,8 @@ mod containerd_support;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_task;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_user_namespace;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_volume;
 #[cfg(all(feature = "docker", unix))]
 mod docker;
@@ -141,8 +143,9 @@ pub use workload::{
     ContainerWorkload, EventCursor, EventRequest, HEALTHCHECK_PATH_LABEL, HostPortPublication,
     MountAccess, MountSource, ObservedWorkload, PortProtocol, ProcessWorkload, RuntimeEvent,
     RuntimeEventKind, RuntimeEventStream, ShutdownRequest, VmWorkload, WorkloadCapability,
-    WorkloadConfiguration, WorkloadHandle, WorkloadMetadata, WorkloadMount, WorkloadRuntime,
-    WorkloadSpec, WorkloadState, WorkloadStatus, WorkloadUser,
+    WorkloadConfiguration, WorkloadHandle, WorkloadIdMapping, WorkloadMetadata, WorkloadMount,
+    WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatus, WorkloadUser,
+    WorkloadUserNamespace,
 };
 
 /// Reusable backend-neutral conformance batteries.

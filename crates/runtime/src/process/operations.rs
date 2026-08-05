@@ -30,6 +30,11 @@ impl WorkloadRuntime for ProcessRuntime {
                 message: "process runtime accepts only process workloads".to_owned(),
             });
         };
+        if process.configuration.user_namespace.is_some() {
+            return Err(RuntimeError::InvalidSpec {
+                message: "host-process workloads cannot request a user namespace".to_owned(),
+            });
+        }
         let fingerprint = spec_fingerprint(spec)?;
         let workload_id = process.configuration.metadata.workload_id.clone();
         let paths = process_paths(&self.root, &workload_id);

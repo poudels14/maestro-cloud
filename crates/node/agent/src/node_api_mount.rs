@@ -98,7 +98,7 @@ impl NodeApiMountManager {
             .await
             .map_err(task_error)??;
         let authorization =
-            WorkloadAuthorization::new(prepared.token, owner.user_id, claims.clone());
+            WorkloadAuthorization::new(prepared.token, owner.peer_user_id, claims.clone());
         let mut running = self.running.lock().await;
         let server = BoundWorkloadNodeApi::bind(
             &prepared.socket_path,

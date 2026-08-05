@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{Assignment, Deployment, DeploymentId, NodeApiAccess, WorkloadId};
 use node_fabric::WorkloadClaims;
-use runtime::WorkloadMount;
+use runtime::{WorkloadMount, WorkloadUserNamespace};
 
 use crate::assignment_plan::{node_api_user, workload_labels};
 use crate::assignment_status::ConvergeFailure;
@@ -14,6 +14,7 @@ pub(crate) async fn mount_node_api(
     assignment: &Assignment,
     deployment: &Deployment,
     workload_id: &WorkloadId,
+    user_namespace: Option<WorkloadUserNamespace>,
 ) -> Result<Option<WorkloadMount>, ConvergeFailure> {
     let Some(user) = node_api_user(deployment)? else {
         return Ok(None);
@@ -24,6 +25,10 @@ pub(crate) async fn mount_node_api(
             NodeApiSocketOwner {
                 user_id: user.user_id,
                 group_id: user.group_id,
+                peer_user_id: user_namespace
+                    .map(|namespace| namespace.host_user(user))
+                    .transpose()?
+                    .map_or(user.user_id, |host_user| host_user.user_id),
             },
             WorkloadClaims {
                 workload_id: workload_id.clone(),

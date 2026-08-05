@@ -22,7 +22,9 @@ use crate::assignment_error::AssignmentAgentError;
 use crate::assignment_node_api::mount_node_api;
 #[cfg(not(unix))]
 use crate::assignment_plan::node_api_user;
-use crate::assignment_plan::{workload_id, workload_spec_with_environment, workload_user};
+use crate::assignment_plan::{
+    WorkloadRuntimeInputs, workload_id, workload_spec_with_environment, workload_user,
+};
 use crate::assignment_resource::decode_assignment;
 use crate::assignment_restart::{
     RestartReservation, finish_pending_restart, reserve_restart, restart_failure,
@@ -198,7 +200,11 @@ impl AssignmentAgent {
             })
             .unwrap_or_default();
         let workload_id = workload_id(assignment)?;
+        let user_namespace = self.runtime.prepare_user_namespace(&workload_id).await?;
         let workload_user = workload_user(deployment);
+        if let (Some(namespace), Some(user)) = (user_namespace, workload_user) {
+            namespace.host_user(user)?;
+        }
         let mut additional_mounts = Vec::new();
         let secret_mount = match deployment.spec.service.secrets.as_ref() {
             Some(secrets) => Some(
@@ -210,8 +216,14 @@ impl AssignmentAgent {
         };
         additional_mounts.extend(secret_mount);
         #[cfg(unix)]
-        if let Some(node_api_mount) =
-            mount_node_api(&self.node_api, assignment, deployment, &workload_id).await?
+        if let Some(node_api_mount) = mount_node_api(
+            &self.node_api,
+            assignment,
+            deployment,
+            &workload_id,
+            user_namespace,
+        )
+        .await?
         {
             additional_mounts.push(node_api_mount);
         }
@@ -227,16 +239,19 @@ impl AssignmentAgent {
             assignment,
             deployment,
             resolved.environment.clone(),
-            dns_server,
-            additional_mounts,
-            runtime_host_ports(
-                self.settings.network.addressing,
-                self.settings
-                    .system_host_ports
-                    .get(&assignment.spec.service_id)
-                    .cloned()
-                    .unwrap_or_default(),
-            ),
+            WorkloadRuntimeInputs {
+                dns_server,
+                user_namespace,
+                additional_mounts,
+                published_ports: runtime_host_ports(
+                    self.settings.network.addressing,
+                    self.settings
+                        .system_host_ports
+                        .get(&assignment.spec.service_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            },
         )?;
         let handle = self.runtime.create(&spec).await?;
         let before = self.runtime.status(&handle).await?;

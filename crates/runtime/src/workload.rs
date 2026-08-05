@@ -56,6 +56,65 @@ impl WorkloadUser {
     };
 }
 
+/// One contiguous OCI user-namespace identity mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadIdMapping {
+    /// First identity visible inside the workload namespace.
+    pub container_id: u32,
+    /// First identity allocated on the host.
+    pub host_id: u32,
+    /// Number of consecutive identities in the mapping.
+    pub size: u32,
+}
+
+impl WorkloadIdMapping {
+    /// Translates one workload-visible identity into its host identity.
+    pub fn host_id(self, container_id: u32) -> Result<u32, RuntimeError> {
+        let offset = container_id.checked_sub(self.container_id).ok_or_else(|| {
+            RuntimeError::InvalidSpec {
+                message: format!(
+                    "workload identity {container_id} is below user-namespace mapping start {}",
+                    self.container_id
+                ),
+            }
+        })?;
+        if offset >= self.size {
+            return Err(RuntimeError::InvalidSpec {
+                message: format!(
+                    "workload identity {container_id} is outside user-namespace mapping of {} identities",
+                    self.size
+                ),
+            });
+        }
+        self.host_id
+            .checked_add(offset)
+            .ok_or_else(|| RuntimeError::InvalidSpec {
+                message: "user-namespace host identity overflowed u32".to_owned(),
+            })
+    }
+}
+
+/// UID and GID ranges allocated exclusively to one workload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadUserNamespace {
+    /// Mapping applied to workload user identities.
+    pub uid: WorkloadIdMapping,
+    /// Mapping applied to workload group identities.
+    pub gid: WorkloadIdMapping,
+}
+
+impl WorkloadUserNamespace {
+    /// Translates one workload-visible process identity into host credentials.
+    pub fn host_user(self, user: WorkloadUser) -> Result<WorkloadUser, RuntimeError> {
+        Ok(WorkloadUser {
+            user_id: self.uid.host_id(user.user_id)?,
+            group_id: self.gid.host_id(user.group_id)?,
+        })
+    }
+}
+
 /// Narrow Linux process privilege granted to a workload by the node agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +179,9 @@ pub struct WorkloadConfiguration {
     pub dns_server: Option<IpAddr>,
     /// Runtime user, or the image default when absent.
     pub user: Option<WorkloadUser>,
+    /// Exclusive user-namespace mapping required by production container runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_namespace: Option<WorkloadUserNamespace>,
     /// Explicitly granted narrow process capabilities.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub capabilities: BTreeSet<WorkloadCapability>,
@@ -360,6 +422,25 @@ pub struct ShutdownRequest {
 pub trait WorkloadRuntime: Send + Sync {
     /// Returns immutable optional behavior supported by this backend instance.
     fn capabilities(&self) -> Capabilities;
+
+    /// Allocates or returns the durable user namespace assigned to one workload.
+    ///
+    /// Development and host-process backends return `None`; production containerd returns a
+    /// mandatory exclusive mapping.
+    async fn prepare_user_namespace(
+        &self,
+        _workload_id: &WorkloadId,
+    ) -> Result<Option<WorkloadUserNamespace>, RuntimeError> {
+        Ok(None)
+    }
+
+    /// Reclaims durable user-namespace allocations that no active workload can own.
+    async fn cleanup_user_namespaces(
+        &self,
+        _active_workload_ids: &BTreeSet<WorkloadId>,
+    ) -> Result<usize, RuntimeError> {
+        Ok(0)
+    }
 
     /// Creates backend state without starting the primary process. Repeating the same stable
     /// workload identity and equivalent specification must return the existing handle; conflicting

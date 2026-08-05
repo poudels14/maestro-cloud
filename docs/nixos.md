@@ -84,6 +84,8 @@ selected etcd package into the system profile, enables native containerd, and
 starts the containerd-backed BuildKit worker. It also installs Depot and exposes
 the nftables, network, Git, and NixOS tools used by Maestro adapters. The module
 enables the `nix-command` and `flakes` features required by those adapters.
+It requires Linux 6.3, containerd 2.0, and runc 1.2 or newer, and reserves the
+host UID/GID ranges used for exclusive per-workload user namespaces.
 
 Create a new master document directly from the validated cluster config:
 

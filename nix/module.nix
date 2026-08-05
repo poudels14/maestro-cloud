@@ -7,6 +7,8 @@
 }: let
   cfg = config.services.maestro;
   depotPackage = import ./depot-package.nix {inherit pkgs;};
+  userNamespaceHostBase = 1048576;
+  userNamespaceRangeSize = 1073741824;
 in {
   options.services.maestro = {
     enable = lib.mkEnableOption "Maestro control plane";
@@ -63,7 +65,37 @@ in {
         assertion = lib.hasPrefix "/" cfg.dataDir;
         message = "services.maestro.dataDir must be an absolute runtime path";
       }
+      {
+        assertion = lib.versionAtLeast pkgs.containerd.version "2.0";
+        message = "Maestro workload user namespaces require containerd 2.0 or newer";
+      }
+      {
+        assertion = lib.versionAtLeast pkgs.runc.version "1.2";
+        message = "Maestro workload user namespaces require runc 1.2 or newer";
+      }
+      {
+        assertion = lib.versionAtLeast config.boot.kernelPackages.kernel.version "6.3";
+        message = "Maestro workload user namespaces require Linux 6.3 or newer";
+      }
     ];
+
+    users.groups.maestro-userns = {};
+    users.users.maestro-userns = {
+      isSystemUser = true;
+      group = "maestro-userns";
+      subUidRanges = [
+        {
+          startUid = userNamespaceHostBase;
+          count = userNamespaceRangeSize;
+        }
+      ];
+      subGidRanges = [
+        {
+          startGid = userNamespaceHostBase;
+          count = userNamespaceRangeSize;
+        }
+      ];
+    };
 
     virtualisation.containerd.enable = true;
     virtualisation.containerd.settings = {

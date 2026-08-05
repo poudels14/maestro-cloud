@@ -138,6 +138,7 @@ fn process_spec_for(workload_id: &str, executable: &str, arguments: &[&str]) -> 
             workload_address: None,
             dns_server: None,
             user: None,
+            user_namespace: None,
             capabilities: Default::default(),
         },
         command: CommandSpec {

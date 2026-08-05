@@ -5,8 +5,11 @@ use containerd::services::v1::{
     CreateTaskRequest, DeleteTaskRequest, GetRequest, KillRequest, StartRequest, WaitRequest,
 };
 use kernel_api::WorkloadId;
+use prost::Message;
+use prost_types::Any;
 
 use crate::containerd::{ContainerdRuntime, snapshot_key};
+use crate::containerd_config::task_host_user;
 use crate::containerd_io::{path_text, prepare_task_files};
 use crate::containerd_support::{
     container_id, is_not_found, namespaced, namespaced_timeout, runtime_status,
@@ -14,6 +17,15 @@ use crate::containerd_support::{
 use crate::{RuntimeError, WorkloadHandle};
 
 const TASK_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const RUNC_OPTIONS_TYPE: &str = "containerd.runc.v1.Options";
+
+#[derive(Clone, PartialEq, Message)]
+struct RuncOptions {
+    #[prost(uint32, tag = "4")]
+    io_uid: u32,
+    #[prost(uint32, tag = "5")]
+    io_gid: u32,
+}
 
 impl ContainerdRuntime {
     pub(crate) async fn task(
@@ -44,6 +56,8 @@ impl ContainerdRuntime {
         handle: &WorkloadHandle,
         container_id: &str,
     ) -> Result<u32, RuntimeError> {
+        let container = self.container(container_id, handle.workload_id()).await?;
+        let host_user = task_host_user(&container)?;
         let mounts = containerd::services::v1::snapshots::snapshots_client::SnapshotsClient::new(
             self.channel.clone(),
         )
@@ -68,6 +82,14 @@ impl ContainerdRuntime {
                         rootfs: mounts,
                         stdout: path_text(&paths.stdout)?,
                         stderr: path_text(&paths.stderr)?,
+                        options: Some(Any {
+                            type_url: RUNC_OPTIONS_TYPE.to_owned(),
+                            value: RuncOptions {
+                                io_uid: host_user.user_id,
+                                io_gid: host_user.group_id,
+                            }
+                            .encode_to_vec(),
+                        }),
                         ..Default::default()
                     },
                     &self.settings.namespace,

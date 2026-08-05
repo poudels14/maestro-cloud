@@ -262,13 +262,15 @@ pub struct BoundWorkloadNodeApi {
     service: WorkloadNodeApiService,
 }
 
-/// Filesystem owner allowed to connect to one workload-private socket.
+/// Filesystem and host peer identities for one workload-private socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeApiSocketOwner {
-    /// Numeric workload user identity.
+    /// Workload-visible UID used for the idmapped socket file.
     pub user_id: u32,
-    /// Numeric workload primary group identity.
+    /// Workload-visible GID used for the idmapped socket file.
     pub group_id: u32,
+    /// Host UID expected from `SO_PEERCRED` after user-namespace translation.
+    pub peer_user_id: u32,
 }
 
 impl BoundWorkloadNodeApi {
@@ -281,10 +283,10 @@ impl BoundWorkloadNodeApi {
         services: NodeApiServices,
     ) -> Result<Self, NodeApiServerError> {
         let socket_path = socket_path.as_ref().to_path_buf();
-        if authorization.expected_user_id() != owner.user_id {
-            return Err(NodeApiServerError::OwnerMismatch {
+        if authorization.expected_user_id() != owner.peer_user_id {
+            return Err(NodeApiServerError::PeerIdentityMismatch {
                 authorized_user_id: authorization.expected_user_id(),
-                socket_user_id: owner.user_id,
+                peer_user_id: owner.peer_user_id,
             });
         }
         let listener = bind_listener(&socket_path)
@@ -435,15 +437,15 @@ pub enum NodeApiServerError {
         /// Path whose identity changed.
         path: PathBuf,
     },
-    /// Socket ownership and authorization were configured for different users.
+    /// Peer-credential authorization and the remapped process identity disagree.
     #[error(
-        "node API authorized user {authorized_user_id} does not match socket owner {socket_user_id}"
+        "node API authorized user {authorized_user_id} does not match workload host user {peer_user_id}"
     )]
-    OwnerMismatch {
+    PeerIdentityMismatch {
         /// User accepted by peer-credential authentication.
         authorized_user_id: u32,
-        /// User able to open the socket by filesystem permissions.
-        socket_user_id: u32,
+        /// Remapped host user expected to connect from the workload.
+        peer_user_id: u32,
     },
 }
 

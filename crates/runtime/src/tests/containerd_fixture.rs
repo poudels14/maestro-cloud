@@ -6,7 +6,8 @@ use kernel_api::{AssignmentId, ClusterId, CommandSpec, NodeId, WorkloadId};
 
 use crate::{
     ArtifactReference, ContainerWorkload, MountAccess, MountSource, WorkloadConfiguration,
-    WorkloadMetadata, WorkloadMount, WorkloadSpec, WorkloadUser,
+    WorkloadIdMapping, WorkloadMetadata, WorkloadMount, WorkloadSpec, WorkloadUser,
+    WorkloadUserNamespace,
 };
 
 pub(crate) fn container_spec() -> WorkloadSpec {
@@ -28,6 +29,18 @@ pub(crate) fn container_spec() -> WorkloadSpec {
             user: Some(WorkloadUser {
                 user_id: 1000,
                 group_id: 1001,
+            }),
+            user_namespace: Some(WorkloadUserNamespace {
+                uid: WorkloadIdMapping {
+                    container_id: 0,
+                    host_id: 1_048_576,
+                    size: 65_536,
+                },
+                gid: WorkloadIdMapping {
+                    container_id: 0,
+                    host_id: 1_048_576,
+                    size: 65_536,
+                },
             }),
             capabilities: Default::default(),
         },

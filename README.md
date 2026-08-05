@@ -75,8 +75,9 @@ nix develop
 
 A Maestro daemon host requires:
 
-- Linux with stable private IPv4 addressing and synchronized time;
-- native containerd;
+- Linux 6.3 or newer with stable private IPv4 addressing and synchronized
+  time;
+- containerd 2.0 or newer with an idmapped snapshotter, and runc 1.2 or newer;
 - privileges for bridges, veth pairs, WireGuard, routes, cgroups, and
   nftables;
 - owner-only durable storage, conventionally `/var/lib/maestro`; and
@@ -106,6 +107,8 @@ local workload bridge, so it does not need a public security-group rule.
 
 The runtime crate also contains a native Docker API backend for its supported
 development capabilities. Production daemon composition selects containerd.
+Every production workload receives a durable, exclusive 65,536-ID user
+namespace, so container UID 0 is an unprivileged, workload-specific host UID.
 Cutover deliberately restarts migrated workloads under that runtime instead of
 carrying a legacy Docker adoption path.
 

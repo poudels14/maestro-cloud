@@ -10,7 +10,7 @@ use node_fabric::WORKLOAD_NODE_DIRECTORY;
 use runtime::{
     ArtifactReference, ContainerWorkload, HEALTHCHECK_PATH_LABEL, HostPortPublication, MountAccess,
     MountSource, WorkloadCapability, WorkloadConfiguration, WorkloadMetadata, WorkloadMount,
-    WorkloadSpec, WorkloadUser,
+    WorkloadSpec, WorkloadUser, WorkloadUserNamespace,
 };
 
 #[cfg(test)]
@@ -34,10 +34,20 @@ pub(crate) fn workload_spec(
         assignment,
         deployment,
         environment,
-        dns_server,
-        additional_mounts,
-        published_ports,
+        WorkloadRuntimeInputs {
+            dns_server,
+            user_namespace: None,
+            additional_mounts,
+            published_ports,
+        },
     )
+}
+
+pub(crate) struct WorkloadRuntimeInputs {
+    pub(crate) dns_server: Option<IpAddr>,
+    pub(crate) user_namespace: Option<WorkloadUserNamespace>,
+    pub(crate) additional_mounts: Vec<WorkloadMount>,
+    pub(crate) published_ports: Vec<HostPortPublication>,
 }
 
 pub(crate) fn workload_spec_with_environment(
@@ -45,9 +55,7 @@ pub(crate) fn workload_spec_with_environment(
     assignment: &Assignment,
     deployment: &Deployment,
     environment: BTreeMap<String, SecretValue>,
-    dns_server: Option<IpAddr>,
-    additional_mounts: Vec<WorkloadMount>,
-    published_ports: Vec<HostPortPublication>,
+    runtime: WorkloadRuntimeInputs,
 ) -> Result<WorkloadSpec, WorkloadPlanError> {
     if assignment.spec.deployment_id != deployment.meta.id
         || assignment.spec.service_id != deployment.spec.service_id
@@ -63,7 +71,7 @@ pub(crate) fn workload_spec_with_environment(
         .iter()
         .map(|mount| workload_mount(assignment, mount))
         .collect::<Result<Vec<_>, _>>()?;
-    mounts.extend(additional_mounts);
+    mounts.extend(runtime.additional_mounts);
     let labels = workload_labels(assignment, deployment);
     Ok(WorkloadSpec::Container(ContainerWorkload {
         configuration: WorkloadConfiguration {
@@ -80,13 +88,14 @@ pub(crate) fn workload_spec_with_environment(
             environment,
             mounts,
             workload_address: assignment.spec.workload_address,
-            dns_server,
+            dns_server: runtime.dns_server,
             user: workload_user(deployment),
+            user_namespace: runtime.user_namespace,
             capabilities: workload_capabilities(&assignment.spec.service_id),
         },
         image,
         command: deployment.spec.service.command.clone(),
-        published_ports,
+        published_ports: runtime.published_ports,
     }))
 }
 

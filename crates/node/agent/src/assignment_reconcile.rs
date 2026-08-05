@@ -110,6 +110,10 @@ impl AssignmentAgent {
                 .iter()
                 .map(|assignment| WorkloadId::new(assignment.meta.id.as_str()))
                 .collect::<Result<BTreeSet<_>, _>>()?;
+            report.user_namespaces_collected = self
+                .runtime
+                .cleanup_user_namespaces(&active_workload_ids)
+                .await?;
             report.address_reservations_collected = self
                 .network
                 .reconcile_address_owners(&network, &active_workload_ids)

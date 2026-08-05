@@ -1,6 +1,7 @@
 use serde_json::Value;
 
-use crate::containerd_config::{container_record, fingerprint};
+use crate::containerd::snapshot_labels;
+use crate::containerd_config::{container_record, fingerprint, task_host_user};
 use crate::containerd_image::ImageDefaults;
 use crate::containerd_settings::ContainerdRuntimeSettings;
 use crate::containerd_volume::managed_volume_path;
@@ -14,6 +15,18 @@ use super::containerd_fixture::container_spec;
 #[test]
 fn container_record_preserves_identity_and_oci_process_configuration() {
     let spec = container_spec();
+    let WorkloadSpec::Container(workload) = &spec else {
+        unreachable!();
+    };
+    let snapshot_labels = snapshot_labels(workload).unwrap();
+    assert_eq!(
+        snapshot_labels.get("containerd.io/snapshot/uidmapping"),
+        Some(&"0:1048576:65536".to_owned())
+    );
+    assert_eq!(
+        snapshot_labels.get("containerd.io/snapshot/gidmapping"),
+        Some(&"0:1048576:65536".to_owned())
+    );
     let image = ImageDefaults {
         environment: vec!["IMAGE=yes".to_owned(), "PLAIN=image".to_owned()],
         entrypoint: vec!["/image-entrypoint".to_owned()],
@@ -40,7 +53,16 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
     );
     assert!(!record.labels.values().any(|value| value.contains("TOKEN")));
 
+    assert_eq!(
+        task_host_user(&record).unwrap(),
+        WorkloadUser {
+            user_id: 1_049_576,
+            group_id: 1_049_577,
+        }
+    );
+
     let oci: Value = serde_json::from_slice(&record.spec.unwrap().value).unwrap();
+    assert_eq!(oci.get("ociVersion").unwrap(), "1.2.0");
     assert_eq!(oci.get("hostname").unwrap(), "workload-1");
     assert_eq!(
         oci.pointer("/process/args").unwrap(),
@@ -65,9 +87,28 @@ fn container_record_preserves_identity_and_oci_process_configuration() {
         oci.pointer("/linux/cgroupsPath").unwrap(),
         "/maestro/workload-1"
     );
+    assert_eq!(
+        oci.pointer("/linux/uidMappings/0").unwrap(),
+        &serde_json::json!({"containerID": 0, "hostID": 1_048_576, "size": 65_536})
+    );
+    assert_eq!(
+        oci.pointer("/linux/gidMappings/0").unwrap(),
+        &serde_json::json!({"containerID": 0, "hostID": 1_048_576, "size": 65_536})
+    );
+    assert!(
+        oci.pointer("/linux/namespaces")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!({"type": "user"}))
+    );
     let mounts = oci.get("mounts").unwrap().as_array().unwrap();
     assert_eq!(mounts.len(), 9);
     assert_eq!(mounts.get(7).unwrap().pointer("/options/2").unwrap(), "ro");
+    assert_eq!(
+        mounts.get(7).unwrap().pointer("/uidMappings/0").unwrap(),
+        &serde_json::json!({"containerID": 0, "hostID": 1_048_576, "size": 65_536})
+    );
     assert_eq!(
         mounts.get(8).unwrap().get("destination").unwrap(),
         "/etc/resolv.conf"

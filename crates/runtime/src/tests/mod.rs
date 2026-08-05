@@ -3,6 +3,8 @@
 mod artifact;
 mod capabilities;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_artifact;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_artifact_stream;
@@ -25,6 +27,8 @@ mod containerd_resolver;
 mod containerd_settings;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_support;
+#[cfg(all(feature = "containerd", target_os = "linux"))]
+mod containerd_user_namespace;
 #[cfg(all(feature = "containerd", target_os = "linux"))]
 mod containerd_volume;
 #[cfg(all(feature = "docker", unix))]

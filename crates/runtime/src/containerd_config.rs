@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use containerd::services::v1::{Container, container::Runtime};
 use prost_types::Any;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -12,7 +13,8 @@ use crate::containerd_support::{container_name, metadata_labels};
 use crate::containerd_volume::managed_volume_path;
 use crate::{
     ContainerWorkload, MountAccess, MountSource, RuntimeError, WorkloadCapability,
-    WorkloadConfiguration, WorkloadMount, WorkloadSpec,
+    WorkloadConfiguration, WorkloadIdMapping, WorkloadMount, WorkloadSpec, WorkloadUser,
+    WorkloadUserNamespace,
 };
 
 const OCI_SPEC_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Spec";
@@ -66,6 +68,7 @@ pub(crate) fn validate_runtime_features(workload: &ContainerWorkload) -> Result<
             capability: crate::RuntimeCapability::HostPortPublishing,
         });
     }
+    validate_user_namespace(&workload.configuration)?;
     Ok(())
 }
 
@@ -86,6 +89,14 @@ fn oci_spec(
         || parse_image_user(&image.user),
         |user| Ok((user.user_id, user.group_id)),
     )?;
+    let user_namespace =
+        workload
+            .configuration
+            .user_namespace
+            .ok_or_else(|| RuntimeError::InvalidSpec {
+                message: "containerd workloads require an allocated user namespace".to_owned(),
+            })?;
+    user_namespace.host_user(WorkloadUser { user_id, group_id })?;
     let capabilities = process_capabilities(&workload.configuration);
     let mut mounts = base_mounts();
     mounts.extend(
@@ -98,6 +109,7 @@ fn oci_spec(
                     mount,
                     &workload.configuration.metadata.cluster_id,
                     &settings.state_root,
+                    user_namespace,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?,
@@ -124,10 +136,11 @@ fn oci_spec(
             },
             &workload.configuration.metadata.cluster_id,
             &settings.state_root,
+            user_namespace,
         )?);
     }
     Ok(json!({
-        "ociVersion": "1.0.2",
+        "ociVersion": "1.2.0",
         "process": {
             "terminal": false,
             "user": { "uid": user_id, "gid": group_id },
@@ -148,8 +161,11 @@ fn oci_spec(
                 { "type": "network" },
                 { "type": "ipc" },
                 { "type": "uts" },
-                { "type": "mount" }
+                { "type": "mount" },
+                { "type": "user" }
             ],
+            "uidMappings": [id_mapping(user_namespace.uid)],
+            "gidMappings": [id_mapping(user_namespace.gid)],
             "maskedPaths": [
                 "/proc/acpi", "/proc/asound", "/proc/kcore", "/proc/keys",
                 "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats",
@@ -245,6 +261,7 @@ fn oci_mount(
     mount: &WorkloadMount,
     cluster_id: &kernel_api::ClusterId,
     state_root: &std::path::Path,
+    user_namespace: WorkloadUserNamespace,
 ) -> Result<Value, RuntimeError> {
     let source = match &mount.source {
         MountSource::HostPath(source) => source.clone(),
@@ -265,8 +282,134 @@ fn oci_mount(
         "destination": destination,
         "type": "bind",
         "source": source,
-        "options": ["rbind", "rprivate", access]
+        "options": ["rbind", "rprivate", access],
+        "uidMappings": [id_mapping(user_namespace.uid)],
+        "gidMappings": [id_mapping(user_namespace.gid)]
     }))
+}
+
+fn id_mapping(mapping: WorkloadIdMapping) -> Value {
+    json!({
+        "containerID": mapping.container_id,
+        "hostID": mapping.host_id,
+        "size": mapping.size
+    })
+}
+
+fn validate_user_namespace(configuration: &WorkloadConfiguration) -> Result<(), RuntimeError> {
+    let namespace = configuration
+        .user_namespace
+        .ok_or_else(|| RuntimeError::InvalidSpec {
+            message: "containerd workloads require an allocated user namespace".to_owned(),
+        })?;
+    for (kind, mapping) in [("UID", namespace.uid), ("GID", namespace.gid)] {
+        if mapping.container_id != 0 || mapping.size == 0 {
+            return Err(RuntimeError::InvalidSpec {
+                message: format!(
+                    "containerd workload {kind} mapping must start at container identity 0 and contain at least one identity"
+                ),
+            });
+        }
+        mapping
+            .host_id
+            .checked_add(mapping.size - 1)
+            .ok_or_else(|| RuntimeError::InvalidSpec {
+                message: format!("containerd workload {kind} mapping overflows u32"),
+            })?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskIdentitySpec {
+    process: TaskProcess,
+    linux: TaskLinux,
+}
+
+#[derive(Deserialize)]
+struct TaskProcess {
+    user: TaskUser,
+}
+
+#[derive(Deserialize)]
+struct TaskUser {
+    uid: u32,
+    gid: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskLinux {
+    uid_mappings: Vec<TaskIdMapping>,
+    gid_mappings: Vec<TaskIdMapping>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct TaskIdMapping {
+    #[serde(rename = "containerID")]
+    container_id: u32,
+    #[serde(rename = "hostID")]
+    host_id: u32,
+    size: u32,
+}
+
+impl From<TaskIdMapping> for WorkloadIdMapping {
+    fn from(mapping: TaskIdMapping) -> Self {
+        Self {
+            container_id: mapping.container_id,
+            host_id: mapping.host_id,
+            size: mapping.size,
+        }
+    }
+}
+
+pub(crate) fn task_host_user(container: &Container) -> Result<WorkloadUser, RuntimeError> {
+    let spec = container
+        .spec
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Unavailable {
+            message: format!(
+                "containerd container `{}` omitted its OCI specification",
+                container.id
+            ),
+        })?;
+    if spec.type_url != OCI_SPEC_TYPE {
+        return Err(RuntimeError::Rejected {
+            message: format!(
+                "containerd container `{}` has unexpected specification type `{}`",
+                container.id, spec.type_url
+            ),
+        });
+    }
+    let spec: TaskIdentitySpec =
+        serde_json::from_slice(&spec.value).map_err(|error| RuntimeError::Rejected {
+            message: format!(
+                "containerd container `{}` has invalid OCI identity configuration: {error}",
+                container.id
+            ),
+        })?;
+    let uid = exactly_one_mapping(&container.id, "UID", spec.linux.uid_mappings)?;
+    let gid = exactly_one_mapping(&container.id, "GID", spec.linux.gid_mappings)?;
+    WorkloadUserNamespace { uid, gid }.host_user(WorkloadUser {
+        user_id: spec.process.user.uid,
+        group_id: spec.process.user.gid,
+    })
+}
+
+fn exactly_one_mapping(
+    container_id: &str,
+    kind: &str,
+    mappings: Vec<TaskIdMapping>,
+) -> Result<WorkloadIdMapping, RuntimeError> {
+    let [mapping] = mappings.as_slice() else {
+        return Err(RuntimeError::Rejected {
+            message: format!(
+                "containerd container `{container_id}` must have exactly one {kind} mapping"
+            ),
+        });
+    };
+    Ok((*mapping).into())
 }
 
 fn base_mounts() -> Vec<Value> {

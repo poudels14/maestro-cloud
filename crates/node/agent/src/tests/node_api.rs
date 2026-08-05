@@ -117,6 +117,7 @@ async fn uds_server_authenticates_and_routes_every_node_api_service() {
         NodeApiSocketOwner {
             user_id: metadata.uid(),
             group_id: metadata.gid(),
+            peer_user_id: metadata.uid(),
         },
         WorkloadControlAccess::Allowed,
         services,
@@ -223,6 +224,7 @@ async fn uds_server_binds_through_a_short_alias_for_long_host_paths() {
         NodeApiSocketOwner {
             user_id: metadata.uid(),
             group_id: metadata.gid(),
+            peer_user_id: metadata.uid(),
         },
         WorkloadControlAccess::Denied,
         NodeApiServices::new(
@@ -254,6 +256,7 @@ async fn uds_server_rejects_unprivileged_control() {
         NodeApiSocketOwner {
             user_id: metadata.uid(),
             group_id: metadata.gid(),
+            peer_user_id: metadata.uid(),
         },
         WorkloadControlAccess::Denied,
         NodeApiServices::new(

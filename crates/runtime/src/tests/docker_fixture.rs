@@ -36,6 +36,7 @@ pub(crate) fn container_spec() -> WorkloadSpec {
                 user_id: 1000,
                 group_id: 1001,
             }),
+            user_namespace: None,
             capabilities: Default::default(),
         },
         image: ArtifactReference::new(

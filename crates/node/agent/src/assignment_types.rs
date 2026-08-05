@@ -72,6 +72,8 @@ pub struct AssignmentReconcileReport {
     pub secret_mounts_collected: usize,
     /// Stale per-workload node API credentials and listeners removed.
     pub node_api_mounts_collected: usize,
+    /// Stale per-workload user-namespace allocations reclaimed by the runtime.
+    pub user_namespaces_collected: usize,
     /// Malformed resources skipped without crashing the agent loop.
     pub malformed_resources: usize,
 }
