@@ -73,6 +73,10 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
         "--entrypoints.tunnel.address=:8888",
         "--entrypoints.websecure.address=:443",
         "--accesslog.format=json",
+        "--accesslog.fields.headers.defaultmode=drop",
+        "--accesslog.fields.headers.names.X-Forwarded-For=keep",
+        "--accesslog.fields.headers.names.X-Real-IP=keep",
+        "--accesslog.fields.headers.names.CF-Connecting-IP=keep",
     ] {
         assert!(
             command

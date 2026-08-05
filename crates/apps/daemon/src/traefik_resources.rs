@@ -85,6 +85,9 @@ impl TraefikSystemResources {
                 "--accesslog.format=json".to_owned(),
                 "--accesslog.fields.defaultmode=keep".to_owned(),
                 "--accesslog.fields.headers.defaultmode=drop".to_owned(),
+                "--accesslog.fields.headers.names.X-Forwarded-For=keep".to_owned(),
+                "--accesslog.fields.headers.names.X-Real-IP=keep".to_owned(),
+                "--accesslog.fields.headers.names.CF-Connecting-IP=keep".to_owned(),
             ],
         };
         let service = Object {
