@@ -4,10 +4,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use kernel_api::{SecretValue, Timestamp};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::{PullRequest, PullRequestApi, PullRequestApiError, PullRequestReadiness};
+use crate::{
+    PullRequest, PullRequestApi, PullRequestApiError, PullRequestDeployment,
+    PullRequestDeploymentState, PullRequestReadiness,
+};
 
 mod transport;
 
@@ -43,21 +46,38 @@ pub struct GithubPullRequestClient {
     token: SecretValue,
     api_base: String,
     clock: Arc<dyn GithubEpochClock>,
-    comments: Mutex<HashMap<CommentKey, CachedComment>>,
+    deployments: Mutex<HashMap<DeploymentKey, CachedDeployment>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct CommentKey {
+struct DeploymentKey {
     owner: String,
     repository: String,
-    pull_request_number: u64,
-    comment_key: String,
+    head_revision: String,
+    environment: String,
 }
 
-#[derive(Debug, Clone)]
-struct CachedComment {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedDeployment {
     id: u64,
-    body: String,
+    status: DesiredDeploymentStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesiredDeploymentStatus {
+    state: PullRequestDeploymentState,
+    description: String,
+    environment_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DeploymentStatusRequest<'a> {
+    state: &'a str,
+    description: &'a str,
+    environment: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_url: Option<&'a str>,
+    auto_inactive: bool,
 }
 
 pub(crate) trait GithubEpochClock: Send + Sync {
@@ -115,7 +135,7 @@ impl GithubPullRequestClient {
             token,
             api_base: api_base.trim_end_matches('/').to_string(),
             clock,
-            comments: Mutex::new(HashMap::new()),
+            deployments: Mutex::new(HashMap::new()),
         }
     }
 
@@ -147,37 +167,153 @@ impl GithubPullRequestClient {
         classify_response(response, self.clock.unix_seconds())
     }
 
-    async fn find_comment(
+    async fn list_deployments(
         &self,
         owner: &str,
         repository: &str,
-        pull_request_number: u64,
-        marker: &str,
-    ) -> Result<Option<IssueComment>, PullRequestApiError> {
+        environment: &str,
+    ) -> Result<Vec<GithubDeployment>, PullRequestApiError> {
+        let mut deployments = Vec::new();
         for page in 1..=MAX_PAGES {
-            let path = format!(
-                "/repos/{owner}/{repository}/issues/{pull_request_number}/comments?per_page={PAGE_SIZE}&page={page}"
-            );
+            let per_page = PAGE_SIZE.to_string();
+            let page_number = page.to_string();
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("environment", environment)
+                .append_pair("per_page", &per_page)
+                .append_pair("page", &page_number)
+                .finish();
+            let path = format!("/repos/{owner}/{repository}/deployments?{query}");
             let response = self
                 .request(GithubHttpMethod::Get, &path, Vec::new())
                 .await?;
-            let comments = decode::<Vec<IssueComment>>(&response.body, "issue comments")?;
-            let page_len = comments.len();
-            if let Some(comment) = comments.into_iter().find(|comment| {
-                comment
-                    .body
-                    .as_deref()
-                    .is_some_and(|body| body.contains(marker))
-            }) {
-                return Ok(Some(comment));
-            }
+            let page = decode::<Vec<GithubDeployment>>(&response.body, "deployments")?;
+            let page_len = page.len();
+            deployments.extend(page);
             if page_len < PAGE_SIZE {
-                return Ok(None);
+                return Ok(deployments);
             }
         }
         Err(PullRequestApiError::Rejected {
-            message: "GitHub issue-comment pagination exceeded its safety bound".to_string(),
+            message: "GitHub deployment pagination exceeded its safety bound".to_string(),
         })
+    }
+
+    async fn create_deployment(
+        &self,
+        owner: &str,
+        repository: &str,
+        deployment: &PullRequestDeployment,
+    ) -> Result<GithubDeployment, PullRequestApiError> {
+        let body = encode(
+            &serde_json::json!({
+                "ref": deployment.head_revision,
+                "task": "deploy",
+                "auto_merge": false,
+                "required_contexts": [],
+                "environment": deployment.environment,
+                "description": "Maestro pull-request preview",
+                "transient_environment": true,
+                "production_environment": false
+            }),
+            "deployment",
+        )?;
+        let response = self
+            .request(
+                GithubHttpMethod::Post,
+                &format!("/repos/{owner}/{repository}/deployments"),
+                body,
+            )
+            .await?;
+        decode(&response.body, "created deployment")
+    }
+
+    async fn latest_deployment_status(
+        &self,
+        owner: &str,
+        repository: &str,
+        deployment_id: u64,
+    ) -> Result<Option<GithubDeploymentStatus>, PullRequestApiError> {
+        let response = self
+            .request(
+                GithubHttpMethod::Get,
+                &format!(
+                    "/repos/{owner}/{repository}/deployments/{deployment_id}/statuses?per_page={PAGE_SIZE}"
+                ),
+                Vec::new(),
+            )
+            .await?;
+        Ok(
+            decode::<Vec<GithubDeploymentStatus>>(&response.body, "deployment statuses")?
+                .into_iter()
+                .max_by_key(|status| status.id),
+        )
+    }
+
+    async fn create_deployment_status(
+        &self,
+        owner: &str,
+        repository: &str,
+        deployment_id: u64,
+        environment: &str,
+        status: &DesiredDeploymentStatus,
+    ) -> Result<(), PullRequestApiError> {
+        let body = encode(
+            &DeploymentStatusRequest {
+                state: status.state.as_str(),
+                description: &status.description,
+                environment,
+                environment_url: status.environment_url.as_deref(),
+                auto_inactive: false,
+            },
+            "deployment status",
+        )?;
+        let response = self
+            .request(
+                GithubHttpMethod::Post,
+                &format!("/repos/{owner}/{repository}/deployments/{deployment_id}/statuses"),
+                body,
+            )
+            .await?;
+        let _: GithubDeploymentStatus = decode(&response.body, "created deployment status")?;
+        Ok(())
+    }
+
+    async fn ensure_deployment_status(
+        &self,
+        owner: &str,
+        repository: &str,
+        deployment: &GithubDeployment,
+        environment: &str,
+        desired: &DesiredDeploymentStatus,
+    ) -> Result<(), PullRequestApiError> {
+        let key = deployment_key(owner, repository, &deployment.sha, environment);
+        if self
+            .deployments
+            .lock()
+            .await
+            .get(&key)
+            .is_some_and(|cached| cached.id == deployment.id && cached.status == *desired)
+        {
+            return Ok(());
+        }
+        let current = self
+            .latest_deployment_status(owner, repository, deployment.id)
+            .await?;
+        if !current
+            .as_ref()
+            .is_some_and(|current| deployment_status_matches(current, desired))
+        {
+            self.create_deployment_status(owner, repository, deployment.id, environment, desired)
+                .await?;
+        }
+        self.deployments.lock().await.insert(
+            key,
+            CachedDeployment {
+                id: deployment.id,
+                status: desired.clone(),
+            },
+        );
+        Ok(())
     }
 }
 
@@ -214,71 +350,83 @@ impl PullRequestApi for GithubPullRequestClient {
         })
     }
 
-    async fn upsert_comment(
+    async fn publish_deployment(
         &self,
         owner: &str,
         repository: &str,
-        pull_request_number: u64,
-        comment_key: &str,
-        body: &str,
+        deployment: &PullRequestDeployment,
     ) -> Result<(), PullRequestApiError> {
         validate_coordinate(owner, "owner")?;
         validate_coordinate(repository, "repository")?;
-        validate_comment_key(comment_key)?;
-        let marker = format!("<!-- maestro-preview:{comment_key} -->");
-        let marked_body = format!("{marker}\n{body}");
-        let key = CommentKey {
-            owner: owner.to_ascii_lowercase(),
-            repository: repository.to_ascii_lowercase(),
-            pull_request_number,
-            comment_key: comment_key.to_string(),
+        validate_deployment(deployment)?;
+        let key = deployment_key(
+            owner,
+            repository,
+            &deployment.head_revision,
+            &deployment.environment,
+        );
+        let desired = DesiredDeploymentStatus {
+            state: deployment.state,
+            description: deployment.description.clone(),
+            environment_url: deployment.environment_url.clone(),
         };
-        let cached = self.comments.lock().await.get(&key).cloned();
-        if cached
-            .as_ref()
-            .is_some_and(|comment| comment.body == marked_body)
+        if self
+            .deployments
+            .lock()
+            .await
+            .get(&key)
+            .is_some_and(|cached| cached.status == desired)
+            && deployment.state != PullRequestDeploymentState::Success
         {
             return Ok(());
         }
-        let existing = match cached {
-            Some(comment) => Some(comment),
-            None => self
-                .find_comment(owner, repository, pull_request_number, &marker)
-                .await?
-                .map(|comment| CachedComment {
-                    id: comment.id,
-                    body: comment.body.unwrap_or_default(),
-                }),
+
+        let mut deployments = self
+            .list_deployments(owner, repository, &deployment.environment)
+            .await?;
+        let current = match deployments
+            .iter()
+            .filter(|candidate| candidate.sha == deployment.head_revision)
+            .max_by_key(|candidate| candidate.id)
+            .cloned()
+        {
+            Some(current) => current,
+            None => {
+                let created = self
+                    .create_deployment(owner, repository, deployment)
+                    .await?;
+                deployments.push(created.clone());
+                created
+            }
         };
-        let (method, path) = existing.as_ref().map_or_else(
-            || {
-                (
-                    GithubHttpMethod::Post,
-                    format!("/repos/{owner}/{repository}/issues/{pull_request_number}/comments"),
+        self.ensure_deployment_status(
+            owner,
+            repository,
+            &current,
+            &deployment.environment,
+            &desired,
+        )
+        .await?;
+
+        if deployment.state == PullRequestDeploymentState::Success {
+            for previous in deployments
+                .iter()
+                .filter(|candidate| candidate.id != current.id)
+            {
+                self.ensure_deployment_status(
+                    owner,
+                    repository,
+                    previous,
+                    &deployment.environment,
+                    &DesiredDeploymentStatus {
+                        state: PullRequestDeploymentState::Inactive,
+                        description: "Superseded by a newer Maestro preview.".to_string(),
+                        environment_url: None,
+                    },
                 )
-            },
-            |comment| {
-                (
-                    GithubHttpMethod::Patch,
-                    format!("/repos/{owner}/{repository}/issues/comments/{}", comment.id),
-                )
-            },
-        );
-        let body =
-            serde_json::to_vec(&serde_json::json!({ "body": marked_body })).map_err(|error| {
-                PullRequestApiError::Rejected {
-                    message: format!("cannot encode GitHub comment: {error}"),
-                }
-            })?;
-        let response = self.request(method, &path, body).await?;
-        let comment = decode::<IssueComment>(&response.body, "updated issue comment")?;
-        self.comments.lock().await.insert(
-            key,
-            CachedComment {
-                id: comment.id,
-                body: marked_body,
-            },
-        );
+                .await?;
+            }
+        }
         Ok(())
     }
 }
@@ -330,10 +478,20 @@ struct PullRequestRepository {
     full_name: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct IssueComment {
+#[derive(Debug, Clone, Deserialize)]
+struct GithubDeployment {
     id: u64,
-    body: Option<String>,
+    sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubDeploymentStatus {
+    id: u64,
+    state: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    environment_url: Option<String>,
 }
 
 fn classify_response(
@@ -385,6 +543,12 @@ fn decode<Value: serde::de::DeserializeOwned>(
     })
 }
 
+fn encode<Value: Serialize>(value: &Value, resource: &str) -> Result<Vec<u8>, PullRequestApiError> {
+    serde_json::to_vec(value).map_err(|error| PullRequestApiError::Rejected {
+        message: format!("cannot encode GitHub {resource}: {error}"),
+    })
+}
+
 fn validate_coordinate(value: &str, field: &str) -> Result<(), PullRequestApiError> {
     if value.is_empty()
         || matches!(value, "." | "..")
@@ -401,17 +565,75 @@ fn validate_coordinate(value: &str, field: &str) -> Result<(), PullRequestApiErr
     }
 }
 
-fn validate_comment_key(comment_key: &str) -> Result<(), PullRequestApiError> {
-    if comment_key.is_empty()
-        || comment_key.len() > 253
-        || !comment_key
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        Err(PullRequestApiError::Rejected {
-            message: "GitHub comment key contains unsupported characters".to_string(),
-        })
-    } else {
-        Ok(())
+fn deployment_key(
+    owner: &str,
+    repository: &str,
+    head_revision: &str,
+    environment: &str,
+) -> DeploymentKey {
+    DeploymentKey {
+        owner: owner.to_ascii_lowercase(),
+        repository: repository.to_ascii_lowercase(),
+        head_revision: head_revision.to_ascii_lowercase(),
+        environment: environment.to_string(),
     }
+}
+
+fn deployment_status_matches(
+    current: &GithubDeploymentStatus,
+    desired: &DesiredDeploymentStatus,
+) -> bool {
+    current.state == desired.state.as_str()
+        && current.description.as_deref() == Some(desired.description.as_str())
+        && current
+            .environment_url
+            .as_deref()
+            .filter(|url| !url.is_empty())
+            == desired.environment_url.as_deref()
+}
+
+fn validate_deployment(deployment: &PullRequestDeployment) -> Result<(), PullRequestApiError> {
+    if deployment.head_revision.is_empty()
+        || deployment.head_revision.len() > 128
+        || !deployment
+            .head_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(PullRequestApiError::Rejected {
+            message: "GitHub deployment revision must be a hexadecimal commit ID".to_string(),
+        });
+    }
+    if deployment.environment.is_empty()
+        || deployment.environment.len() > 255
+        || deployment.environment.chars().any(char::is_control)
+    {
+        return Err(PullRequestApiError::Rejected {
+            message: "GitHub deployment environment is invalid".to_string(),
+        });
+    }
+    if deployment.description.is_empty()
+        || deployment.description.len() > 140
+        || deployment.description.chars().any(char::is_control)
+    {
+        return Err(PullRequestApiError::Rejected {
+            message: "GitHub deployment description is invalid".to_string(),
+        });
+    }
+    if let Some(environment_url) = deployment.environment_url.as_deref() {
+        let parsed =
+            url::Url::parse(environment_url).map_err(|_| PullRequestApiError::Rejected {
+                message: "GitHub deployment environment URL is invalid".to_string(),
+            })?;
+        if parsed.scheme() != "https"
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(PullRequestApiError::Rejected {
+                message: "GitHub deployment environment URL must be an HTTPS origin".to_string(),
+            });
+        }
+    }
+    Ok(())
 }

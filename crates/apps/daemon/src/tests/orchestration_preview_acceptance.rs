@@ -11,7 +11,9 @@ use kernel_api::{
     ArtifactTemplate, Build, BuildSource, BuildTemplate, Deployment, IngressRoute, IngressRouteId,
     Preview, PreviewPhase, PreviewPolicy, RolloutState, Service, ServiceId, Timestamp,
 };
-use preview::{PullRequest, PullRequestApi, PullRequestApiError, PullRequestReadiness};
+use preview::{
+    PullRequest, PullRequestApi, PullRequestApiError, PullRequestDeployment, PullRequestReadiness,
+};
 
 use super::orchestration::{RolloutWorld, put};
 use super::orchestration_fixture::{route, service};
@@ -278,13 +280,11 @@ impl PullRequestApi for FakePullRequests {
         Ok(lock(&self.open).iter().cloned().collect())
     }
 
-    async fn upsert_comment(
+    async fn publish_deployment(
         &self,
         owner: &str,
         repository: &str,
-        _pull_request_number: u64,
-        _comment_key: &str,
-        _body: &str,
+        _deployment: &PullRequestDeployment,
     ) -> Result<(), PullRequestApiError> {
         if owner == "maestro-tests" && repository == "preview-api" {
             Ok(())

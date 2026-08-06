@@ -18,7 +18,10 @@ use crate::source_plan::{
 };
 use crate::source_snapshot::PreviewSourceSnapshot;
 use crate::source_writer::{PreviewSourceWriteOutcome, PreviewSourceWriter};
-use crate::{PreviewError, PullRequestApi, PullRequestApiError};
+use crate::{
+    PreviewError, PreviewSettings, PullRequestApi, PullRequestApiError, PullRequestDeployment,
+    PullRequestDeploymentState,
+};
 
 const CONFLICT_RETRY: Duration = Duration::from_millis(100);
 
@@ -62,6 +65,7 @@ struct RepositoryRetry {
 pub struct PreviewSourceReconciler {
     api: Arc<dyn PullRequestApi>,
     settings: PreviewSourceSettings,
+    preview_domain: String,
     keyspace: Keyspace,
     node_prefix: StorePrefix,
     timestamp_clock: Arc<dyn TimestampClock>,
@@ -76,6 +80,7 @@ impl PreviewSourceReconciler {
         cluster_id: kernel_api::ClusterId,
         api: Arc<dyn PullRequestApi>,
         settings: PreviewSourceSettings,
+        preview_settings: PreviewSettings,
         timestamp_clock: Arc<dyn TimestampClock>,
         monotonic_clock: Arc<dyn Clock>,
     ) -> Result<Self, PreviewSourceError> {
@@ -96,6 +101,7 @@ impl PreviewSourceReconciler {
         Ok(Self {
             api,
             settings,
+            preview_domain: preview_settings.preview_domain().to_string(),
             node_prefix: keyspace.resource_kind(&node_kind),
             writer: PreviewSourceWriter::new(&cluster_id)?,
             keyspace,
@@ -215,16 +221,10 @@ impl PreviewSourceReconciler {
                 continue;
             };
             store.verify_leadership().await?;
-            let body = feedback_body(feedback.kind, self.settings.max_concurrent_previews);
+            let deployment = github_deployment(feedback, &self.preview_domain);
             if let Err(error) = self
                 .api
-                .upsert_comment(
-                    owner,
-                    repository,
-                    feedback.pull_request_number,
-                    &feedback.comment_key,
-                    &body,
-                )
+                .publish_deployment(owner, repository, &deployment)
                 .await
             {
                 self.record_failure(&feedback.repository, now, &error).await;
@@ -300,39 +300,55 @@ fn repository_coordinates<'a>(
         .collect()
 }
 
-fn feedback_body(kind: PreviewFeedbackKind, max_concurrent_previews: usize) -> String {
-    match kind {
-        PreviewFeedbackKind::Creating => {
-            "### Maestro preview: building\n\nThe preview has been admitted and is being built."
-                .to_string()
-        }
-        PreviewFeedbackKind::Updating => {
-            "### Maestro preview: updating\n\nA new commit is being deployed to the existing preview URL."
-                .to_string()
-        }
-        PreviewFeedbackKind::Ready => {
-            "### Maestro preview: ready\n\nThe current pull-request commit is deployed."
-                .to_string()
-        }
-        PreviewFeedbackKind::Failed => {
-            "### Maestro preview: failed\n\nThe current pull-request commit did not deploy successfully."
-                .to_string()
-        }
-        PreviewFeedbackKind::Reopened => {
-            "### Maestro preview: restored\n\nScheduled removal was canceled after the pull request reopened."
-                .to_string()
-        }
-        PreviewFeedbackKind::Closing => {
-            "### Maestro preview: removal scheduled\n\nThe pull request closed; removal will begin after the configured grace period."
-                .to_string()
-        }
-        PreviewFeedbackKind::Ineligible => {
-            "### Maestro preview: skipped\n\nDraft, forked, invalid, and expired pull requests do not receive previews."
-                .to_string()
-        }
-        PreviewFeedbackKind::QuotaExceeded => format!(
-            "### Maestro preview: skipped (quota)\n\nThe cluster is already running its limit of {max_concurrent_previews} concurrent previews. This pull request will be reconsidered automatically."
+pub(crate) fn github_deployment(
+    feedback: &PreviewFeedback,
+    preview_domain: &str,
+) -> PullRequestDeployment {
+    let (state, description) = match feedback.kind {
+        PreviewFeedbackKind::Creating => (
+            PullRequestDeploymentState::InProgress,
+            "Maestro is building this preview.",
         ),
+        PreviewFeedbackKind::Updating => (
+            PullRequestDeploymentState::InProgress,
+            "Maestro is deploying the latest commit.",
+        ),
+        PreviewFeedbackKind::Ready => (
+            PullRequestDeploymentState::Success,
+            "Maestro preview is ready.",
+        ),
+        PreviewFeedbackKind::Failed => (
+            PullRequestDeploymentState::Failure,
+            "Maestro preview deployment failed.",
+        ),
+        PreviewFeedbackKind::Reopened => (
+            PullRequestDeploymentState::InProgress,
+            "Maestro is restoring this preview.",
+        ),
+        PreviewFeedbackKind::Closing | PreviewFeedbackKind::Ineligible => (
+            PullRequestDeploymentState::Inactive,
+            "Maestro preview was removed.",
+        ),
+        PreviewFeedbackKind::QuotaExceeded => (
+            PullRequestDeploymentState::Queued,
+            "Waiting for Maestro preview capacity.",
+        ),
+    };
+    PullRequestDeployment {
+        head_revision: feedback.head_revision.clone(),
+        environment: format!(
+            "maestro-preview/{}/pr-{}",
+            feedback.base_service_id, feedback.pull_request_number
+        ),
+        state,
+        description: description.to_string(),
+        environment_url: (feedback.kind == PreviewFeedbackKind::Ready).then(|| {
+            format!(
+                "https://{}.{}",
+                feedback.service_id.as_str(),
+                preview_domain
+            )
+        }),
     }
 }
 

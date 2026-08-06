@@ -10,7 +10,6 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
 pub(crate) enum GithubHttpMethod {
     Get,
     Post,
-    Patch,
 }
 
 /// This type intentionally omits `Debug` because its headers contain a token.
@@ -55,7 +54,6 @@ impl GithubHttpTransport for ReqwestGithubTransport {
         let method = match request.method {
             GithubHttpMethod::Get => reqwest::Method::GET,
             GithubHttpMethod::Post => reqwest::Method::POST,
-            GithubHttpMethod::Patch => reqwest::Method::PATCH,
         };
         let mut builder = self.client.request(method, request.url).body(request.body);
         for (name, value) in request.headers {

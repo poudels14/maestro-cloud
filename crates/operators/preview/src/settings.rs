@@ -29,4 +29,9 @@ impl PreviewSettings {
             preview_domain: normalized.to_ascii_lowercase(),
         })
     }
+
+    /// DNS suffix used to expose derived preview services.
+    pub fn preview_domain(&self) -> &str {
+        &self.preview_domain
+    }
 }

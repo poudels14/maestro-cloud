@@ -42,8 +42,17 @@ fn admits_oldest_candidates_globally_and_reports_exclusions() {
     );
     assert_eq!(
         feedback_count(&plan.feedback, PreviewFeedbackKind::Ineligible),
-        2
+        0
     );
+    let queued = plan
+        .feedback
+        .iter()
+        .find(|item| item.kind == PreviewFeedbackKind::QuotaExceeded)
+        .unwrap();
+    assert_eq!(queued.base_service_id.as_str(), "api");
+    assert_eq!(queued.service_id.as_str(), "api-pr-3");
+    assert_eq!(queued.pull_request_number, 3);
+    assert_eq!(queued.head_revision, format!("{:040x}", 3));
 }
 
 #[test]
@@ -73,6 +82,46 @@ fn updates_pushes_and_reopens_without_changing_preview_identity() {
     assert_eq!(
         plan.feedback.first().unwrap().kind,
         PreviewFeedbackKind::Reopened
+    );
+}
+
+#[test]
+fn reports_the_current_revision_as_ready_and_a_changed_revision_as_updating() {
+    let base = service("api", "https://github.com/acme/api");
+    let mut current = preview();
+    current.status.phase = PreviewPhase::Active;
+    let mut open = pull_request(42, 1_000, PullRequestReadiness::Ready, "acme/api");
+    open.head_revision.clone_from(&current.spec.head_revision);
+
+    let ready = plan_preview_sources(
+        std::slice::from_ref(&base),
+        std::slice::from_ref(&current),
+        &[repository("acme/api", vec![open.clone()])],
+        Timestamp(2_000),
+        3,
+    )
+    .unwrap();
+    let feedback = ready.feedback.first().unwrap();
+    assert_eq!(feedback.kind, PreviewFeedbackKind::Ready);
+    assert_eq!(feedback.head_revision, current.spec.head_revision);
+    assert_eq!(feedback.service_id, current.spec.service_id);
+
+    open.head_revision = "fedcba9876543210fedcba9876543210fedcba98".to_string();
+    let updating = plan_preview_sources(
+        &[base],
+        &[current],
+        &[repository("acme/api", vec![open.clone()])],
+        Timestamp(2_000),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        updating.feedback.first().unwrap().kind,
+        PreviewFeedbackKind::Updating
+    );
+    assert_eq!(
+        updating.feedback.first().unwrap().head_revision,
+        open.head_revision
     );
 }
 
@@ -194,10 +243,7 @@ fn skips_pull_requests_that_exhausted_their_lifetime_before_discovery() {
     let plan = plan_preview_sources(&[base], &[], &repositories, Timestamp(3_602_000), 1).unwrap();
 
     assert!(plan.creates.is_empty());
-    assert_eq!(
-        feedback_count(&plan.feedback, PreviewFeedbackKind::Ineligible),
-        1
-    );
+    assert!(plan.feedback.is_empty());
 }
 
 #[test]

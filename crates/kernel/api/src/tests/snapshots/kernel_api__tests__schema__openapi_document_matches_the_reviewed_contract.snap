@@ -4628,7 +4628,7 @@ expression: document
                 "$ref": "#/components/schemas/SecretValue"
               }
             ],
-            "description": "GitHub token with pull-request read and issue-comment write access."
+            "description": "GitHub token with pull-request read and deployment read/write access."
           },
           "maxConcurrentPreviews": {
             "description": "Maximum previews retained cluster-wide, including close grace periods.",

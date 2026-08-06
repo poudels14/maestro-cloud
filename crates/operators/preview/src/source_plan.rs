@@ -22,7 +22,7 @@ pub struct RepositoryPullRequests {
     pub pull_requests: Vec<PullRequest>,
 }
 
-/// Sticky feedback state to publish after preview state is persisted.
+/// Native GitHub deployment state to publish after preview state is persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewFeedbackKind {
     /// A new preview was admitted and will be derived.
@@ -37,13 +37,13 @@ pub enum PreviewFeedbackKind {
     Reopened,
     /// The pull request closed and grace-period teardown was requested.
     Closing,
-    /// A draft, fork, or already-expired pull request cannot receive a preview.
+    /// An existing preview became ineligible and is being removed.
     Ineligible,
     /// Eligible work was skipped because all global preview slots are occupied.
     QuotaExceeded,
 }
 
-/// Marker-keyed pull-request feedback emitted by the planner.
+/// GitHub deployment feedback emitted by the planner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewFeedback {
     /// Base service whose preview lifecycle owns this feedback.
@@ -52,8 +52,10 @@ pub struct PreviewFeedback {
     pub repository: String,
     /// Repository-local pull-request number.
     pub pull_request_number: u64,
-    /// Stable marker key used to replace an earlier comment.
-    pub comment_key: String,
+    /// Immutable pull-request head commit represented by this deployment.
+    pub head_revision: String,
+    /// Derived service identity used to construct the preview URL.
+    pub service_id: ServiceId,
     /// Current source lifecycle outcome.
     pub kind: PreviewFeedbackKind,
 }
@@ -74,7 +76,7 @@ pub struct PreviewSourcePlan {
     pub creates: Vec<Preview>,
     /// Existing preview resources whose source lifecycle changed.
     pub updates: Vec<Preview>,
-    /// Sticky feedback to publish only after corresponding writes succeed.
+    /// GitHub deployment feedback to publish only after corresponding writes succeed.
     pub feedback: Vec<PreviewFeedback>,
     /// Isolated service validation failures that did not stop other repositories.
     pub diagnostics: Vec<PreviewSourceDiagnostic>,
@@ -136,7 +138,7 @@ pub fn plan_preview_sources(
     };
 
     reconcile_existing(&bases, &repository_snapshots, &existing, now, &mut plan);
-    let mut candidates = new_candidates(&bases, &repository_snapshots, &existing, now, &mut plan);
+    let mut candidates = new_candidates(&bases, &repository_snapshots, &existing, now);
     candidates.sort_by(|left, right| {
         left.pull_request
             .created_at
@@ -146,22 +148,14 @@ pub fn plan_preview_sources(
     });
     let available_slots = max_concurrent_previews.saturating_sub(existing.len());
     for (index, candidate) in candidates.into_iter().enumerate() {
+        let preview = new_preview(&candidate)?;
         if index < available_slots {
-            let preview = new_preview(&candidate)?;
-            plan.feedback.push(feedback(
-                &candidate.base.service.meta.id,
-                &candidate.base.repository,
-                candidate.pull_request.number,
-                PreviewFeedbackKind::Creating,
-            ));
+            plan.feedback
+                .push(feedback(&preview, PreviewFeedbackKind::Creating));
             plan.creates.push(preview);
         } else {
-            plan.feedback.push(feedback(
-                &candidate.base.service.meta.id,
-                &candidate.base.repository,
-                candidate.pull_request.number,
-                PreviewFeedbackKind::QuotaExceeded,
-            ));
+            plan.feedback
+                .push(feedback(&preview, PreviewFeedbackKind::QuotaExceeded));
         }
     }
     Ok(plan)
@@ -180,12 +174,8 @@ fn reconcile_existing(
             if desired != **preview {
                 plan.updates.push(desired);
             }
-            plan.feedback.push(feedback(
-                &preview.spec.base_service_id,
-                &preview.spec.repository,
-                preview.spec.pull_request_number,
-                PreviewFeedbackKind::Ineligible,
-            ));
+            plan.feedback
+                .push(feedback(preview, PreviewFeedbackKind::Ineligible));
             continue;
         };
         let Some(snapshot) = snapshots.get(&base.repository) else {
@@ -200,12 +190,8 @@ fn reconcile_existing(
             if desired != **preview {
                 plan.updates.push(desired);
             }
-            plan.feedback.push(feedback(
-                &base.service.meta.id,
-                &base.repository,
-                key.1,
-                PreviewFeedbackKind::Closing,
-            ));
+            plan.feedback
+                .push(feedback(preview, PreviewFeedbackKind::Closing));
             continue;
         };
         if !eligible(pull_request, &base.repository) || expires_at(pull_request, base.policy) <= now
@@ -214,18 +200,17 @@ fn reconcile_existing(
             if desired != **preview {
                 plan.updates.push(desired);
             }
-            plan.feedback.push(feedback(
-                &base.service.meta.id,
-                &base.repository,
-                key.1,
-                PreviewFeedbackKind::Ineligible,
-            ));
+            plan.feedback
+                .push(feedback(preview, PreviewFeedbackKind::Ineligible));
             continue;
         }
         let was_closing = preview.meta.deletion_timestamp.is_some();
         let desired = update_open_preview(preview, base, pull_request);
+        let revision_changed = desired.spec.head_revision != preview.spec.head_revision;
         let kind = if was_closing {
             PreviewFeedbackKind::Reopened
+        } else if revision_changed {
+            PreviewFeedbackKind::Updating
         } else {
             match desired.status.phase {
                 PreviewPhase::Active => PreviewFeedbackKind::Ready,
@@ -236,15 +221,10 @@ fn reconcile_existing(
                 | PreviewPhase::Canceled => PreviewFeedbackKind::Updating,
             }
         };
+        plan.feedback.push(feedback(&desired, kind));
         if desired != **preview {
             plan.updates.push(desired);
         }
-        plan.feedback.push(feedback(
-            &base.service.meta.id,
-            &base.repository,
-            key.1,
-            kind,
-        ));
     }
 }
 
@@ -253,7 +233,6 @@ fn new_candidates<'a>(
     snapshots: &'a BTreeMap<String, &'a RepositoryPullRequests>,
     existing: &BTreeMap<(ServiceId, u64), &Preview>,
     now: Timestamp,
-    plan: &mut PreviewSourcePlan,
 ) -> Vec<Candidate<'a>> {
     let mut candidates = Vec::new();
     for base in bases.values() {
@@ -277,13 +256,6 @@ fn new_candidates<'a>(
                     base: base.clone(),
                     pull_request,
                 });
-            } else {
-                plan.feedback.push(feedback(
-                    &base.service.meta.id,
-                    &base.repository,
-                    pull_request.number,
-                    PreviewFeedbackKind::Ineligible,
-                ));
             }
         }
     }
@@ -416,17 +388,13 @@ fn preview_identity(base_service_id: &ServiceId, pull_request_number: u64) -> St
     format!("preview-{suffix}")
 }
 
-fn feedback(
-    base_service_id: &ServiceId,
-    repository: &str,
-    pull_request_number: u64,
-    kind: PreviewFeedbackKind,
-) -> PreviewFeedback {
+fn feedback(preview: &Preview, kind: PreviewFeedbackKind) -> PreviewFeedback {
     PreviewFeedback {
-        base_service_id: base_service_id.clone(),
-        repository: repository.to_string(),
-        pull_request_number,
-        comment_key: format!("preview-{base_service_id}"),
+        base_service_id: preview.spec.base_service_id.clone(),
+        repository: preview.spec.repository.clone(),
+        pull_request_number: preview.spec.pull_request_number,
+        head_revision: preview.spec.head_revision.clone(),
+        service_id: preview.spec.service_id.clone(),
         kind,
     }
 }

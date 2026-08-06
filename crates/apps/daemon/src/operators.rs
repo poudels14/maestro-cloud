@@ -109,6 +109,7 @@ impl OperatorSuite {
                             cluster_id.clone(),
                             pull_requests.clone(),
                             preview.source,
+                            preview.derivation.clone(),
                             timestamp_clock.clone(),
                             monotonic_clock.clone(),
                         )?)

@@ -169,6 +169,19 @@ the launch document. The cluster config API never returns secret values. When
 `nixos-upgrade` is omitted, Linux nodes upgrade through the standard init flake
 at `/etc/maestro#default`; that setting is only needed to override the default.
 
+For pull-request previews, use a fine-grained GitHub personal access token with
+access to every preview-enabled repository and these repository permissions:
+
+- **Pull requests: read** — discover open PRs and their head commits.
+- **Deployments: read and write** — create the native GitHub deployment card,
+  update its state, and attach the ready preview URL.
+- **Contents: read** — only if the same token is separately supplied to a build
+  for private-repository checkout.
+
+The preview integration token is not injected into builds. See
+[Pull-request previews](docs/pr-previews.md) for configuration and lifecycle
+details.
+
 For multi-node admission, network requirements, verification, drain, restart,
 upgrade, and removal procedures, follow
 [Multi-node operations](docs/multi-node.md). For NixOS service and

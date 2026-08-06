@@ -316,13 +316,11 @@ impl preview::PullRequestApi for EmptyPullRequests {
         Ok(Vec::new())
     }
 
-    async fn upsert_comment(
+    async fn publish_deployment(
         &self,
         _owner: &str,
         _repository: &str,
-        _pull_request_number: u64,
-        _comment_key: &str,
-        _body: &str,
+        _deployment: &preview::PullRequestDeployment,
     ) -> Result<(), preview::PullRequestApiError> {
         Ok(())
     }

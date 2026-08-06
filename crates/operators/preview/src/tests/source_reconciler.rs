@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     Generation, Node, NodeId, NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, Preview,
-    PreviewPhase, ResourceKind, ResourceName, RolloutState, Service, Timestamp,
+    PreviewPhase, ResourceKind, ResourceName, RolloutState, Service, ServiceId, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -19,11 +19,34 @@ use kernel_store::{
 };
 
 use crate::{
-    PreviewSourceReconciler, PreviewSourceSettings, PullRequest, PullRequestApi,
-    PullRequestApiError, PullRequestReadiness,
+    PreviewFeedback, PreviewFeedbackKind, PreviewSettings, PreviewSourceReconciler,
+    PreviewSourceSettings, PullRequest, PullRequestApi, PullRequestApiError, PullRequestDeployment,
+    PullRequestDeploymentState, PullRequestReadiness,
 };
 
 use super::support::{base_service, metadata};
+
+#[test]
+fn ready_feedback_exposes_the_preview_url_on_the_native_deployment() {
+    let deployment = crate::source_reconciler::github_deployment(
+        &PreviewFeedback {
+            base_service_id: ServiceId::new("api").unwrap(),
+            repository: "acme/api".to_string(),
+            pull_request_number: 42,
+            head_revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            service_id: ServiceId::new("api-pr-42").unwrap(),
+            kind: PreviewFeedbackKind::Ready,
+        },
+        "preview.example.com",
+    );
+
+    assert_eq!(deployment.state, PullRequestDeploymentState::Success);
+    assert_eq!(deployment.environment, "maestro-preview/api/pr-42");
+    assert_eq!(
+        deployment.environment_url.as_deref(),
+        Some("https://api-pr-42.preview.example.com")
+    );
+}
 
 #[tokio::test]
 async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview()
@@ -63,25 +86,24 @@ async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview(
     assert_eq!(reopened.status.phase, PreviewPhase::Pending);
     assert_eq!(reopened.spec.head_revision, "third");
 
-    let comments = api.comments();
-    assert_eq!(comments.len(), 4);
-    assert!(comments.iter().all(|comment| comment.3 == "preview-api"));
-    assert!(
-        comments
-            .iter()
-            .any(|comment| comment.4.contains("building"))
-    );
-    assert!(
-        comments
-            .iter()
-            .any(|comment| comment.4.contains("updating"))
-    );
-    assert!(comments.iter().any(|comment| comment.4.contains("removal")));
-    assert!(
-        comments
-            .iter()
-            .any(|comment| comment.4.contains("restored"))
-    );
+    let deployments = api.deployments();
+    assert_eq!(deployments.len(), 4);
+    assert!(deployments.iter().all(|item| {
+        item.2.environment == "maestro-preview/api/pr-42" && item.2.environment_url.is_none()
+    }));
+    let mut deployments = deployments.iter();
+    let first = deployments.next().unwrap();
+    let second = deployments.next().unwrap();
+    let closing = deployments.next().unwrap();
+    let reopened = deployments.next().unwrap();
+    assert!(deployments.next().is_none());
+    assert_eq!(first.2.state, PullRequestDeploymentState::InProgress);
+    assert_eq!(first.2.head_revision, "first");
+    assert_eq!(second.2.state, PullRequestDeploymentState::InProgress);
+    assert_eq!(second.2.head_revision, "second");
+    assert_eq!(closing.2.state, PullRequestDeploymentState::Inactive);
+    assert_eq!(reopened.2.state, PullRequestDeploymentState::InProgress);
+    assert_eq!(reopened.2.head_revision, "third");
     Ok(())
 }
 
@@ -115,11 +137,11 @@ async fn repository_rate_limit_suppresses_calls_until_the_injected_deadline()
 }
 
 #[tokio::test]
-async fn failed_sticky_comment_is_nonfatal_and_retried_from_level_state()
+async fn failed_deployment_feedback_is_nonfatal_and_retried_from_level_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let api = Arc::new(FakePullRequests::new(vec![pull_request("first")]));
-    api.enqueue_comment(Err(PullRequestApiError::Unavailable {
-        message: "comments unavailable".to_string(),
+    api.enqueue_deployment(Err(PullRequestApiError::Unavailable {
+        message: "deployments unavailable".to_string(),
     }));
     let world = World::new(api.clone()).await?;
     world.put("Node", &node()).await?;
@@ -129,12 +151,15 @@ async fn failed_sticky_comment_is_nonfatal_and_retried_from_level_state()
 
     world.runtime.reconcile_snapshot().await?;
     assert_eq!(world.previews().await?.len(), 1);
-    assert!(api.comments().is_empty());
+    assert!(api.deployments().is_empty());
 
     world.clock.set_millis(5_000);
     world.runtime.reconcile_snapshot().await?;
-    assert_eq!(api.comments().len(), 1);
-    assert!(api.comments().first().unwrap().4.contains("updating"));
+    assert_eq!(api.deployments().len(), 1);
+    assert_eq!(
+        api.deployments().first().unwrap().2.state,
+        PullRequestDeploymentState::InProgress
+    );
     Ok(())
 }
 
@@ -156,23 +181,23 @@ async fn concurrent_service_edit_conflicts_without_preview_or_feedback()
 
     world.runtime.reconcile_snapshot().await?;
     assert!(world.previews().await?.is_empty());
-    assert!(api.comments().is_empty());
+    assert!(api.deployments().is_empty());
 
     world.runtime.reconcile_snapshot().await?;
     assert_eq!(world.previews().await?.len(), 1);
-    assert_eq!(api.comments().len(), 1);
+    assert_eq!(api.deployments().len(), 1);
     Ok(())
 }
 
 type ListResult = Result<Vec<PullRequest>, PullRequestApiError>;
-type Comment = (String, String, u64, String, String);
+type Deployment = (String, String, PullRequestDeployment);
 
 struct FakePullRequests {
     open: Mutex<Vec<PullRequest>>,
     list_results: Mutex<VecDeque<ListResult>>,
-    comment_results: Mutex<VecDeque<Result<(), PullRequestApiError>>>,
+    deployment_results: Mutex<VecDeque<Result<(), PullRequestApiError>>>,
     list_calls: AtomicUsize,
-    comments: Mutex<Vec<Comment>>,
+    deployments: Mutex<Vec<Deployment>>,
     conflict: Mutex<Option<(Arc<InMemoryStore>, StoreKey)>>,
 }
 
@@ -181,9 +206,9 @@ impl FakePullRequests {
         Self {
             open: Mutex::new(open),
             list_results: Mutex::new(VecDeque::new()),
-            comment_results: Mutex::new(VecDeque::new()),
+            deployment_results: Mutex::new(VecDeque::new()),
             list_calls: AtomicUsize::new(0),
-            comments: Mutex::new(Vec::new()),
+            deployments: Mutex::new(Vec::new()),
             conflict: Mutex::new(None),
         }
     }
@@ -196,16 +221,16 @@ impl FakePullRequests {
         self.list_results.lock().unwrap().push_back(result);
     }
 
-    fn enqueue_comment(&self, result: Result<(), PullRequestApiError>) {
-        self.comment_results.lock().unwrap().push_back(result);
+    fn enqueue_deployment(&self, result: Result<(), PullRequestApiError>) {
+        self.deployment_results.lock().unwrap().push_back(result);
     }
 
     fn list_calls(&self) -> usize {
         self.list_calls.load(Ordering::SeqCst)
     }
 
-    fn comments(&self) -> Vec<Comment> {
-        self.comments.lock().unwrap().clone()
+    fn deployments(&self) -> Vec<Deployment> {
+        self.deployments.lock().unwrap().clone()
     }
 
     fn conflict_once(&self, store: Arc<InMemoryStore>, key: StoreKey) {
@@ -267,23 +292,19 @@ impl PullRequestApi for FakePullRequests {
         }
     }
 
-    async fn upsert_comment(
+    async fn publish_deployment(
         &self,
         owner: &str,
         repository: &str,
-        pull_request_number: u64,
-        comment_key: &str,
-        body: &str,
+        deployment: &PullRequestDeployment,
     ) -> Result<(), PullRequestApiError> {
-        if let Some(result) = self.comment_results.lock().unwrap().pop_front() {
+        if let Some(result) = self.deployment_results.lock().unwrap().pop_front() {
             result?;
         }
-        self.comments.lock().unwrap().push((
+        self.deployments.lock().unwrap().push((
             owner.to_string(),
             repository.to_string(),
-            pull_request_number,
-            comment_key.to_string(),
-            body.to_string(),
+            deployment.clone(),
         ));
         Ok(())
     }
@@ -338,6 +359,7 @@ impl World {
                 initial_backoff: Duration::from_secs(5),
                 max_backoff: Duration::from_secs(60),
             },
+            PreviewSettings::new("preview.example.com")?,
             clock.clone(),
             clock.clone(),
         )?);

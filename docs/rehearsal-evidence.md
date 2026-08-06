@@ -170,7 +170,7 @@ Evidence:
 - [ ] Exec is denied for a service whose policy disables it.
 - [ ] A pull-request preview covers open, push-to-same-URL redeploy, base edit,
       freeze propagation, close grace, reopen, and final expiry when enabled.
-- [ ] Preview quota, fork/draft policy, sticky comments, and rate-limit retry
+- [ ] Preview quota, fork/draft policy, native deployments, and rate-limit retry
       match production policy when enabled.
 - [ ] A rolling upgrade or restart transfers leadership as needed, stages,
       drains, verifies, and unfreezes each node.

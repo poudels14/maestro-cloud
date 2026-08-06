@@ -64,13 +64,53 @@ pub trait PullRequestApi: Send + Sync {
         repository: &str,
     ) -> Result<Vec<PullRequest>, PullRequestApiError>;
 
-    /// Creates or replaces one marker-keyed pull-request comment.
-    async fn upsert_comment(
+    /// Creates or updates the native GitHub deployment for one preview revision.
+    async fn publish_deployment(
         &self,
         owner: &str,
         repository: &str,
-        pull_request_number: u64,
-        comment_key: &str,
-        body: &str,
+        deployment: &PullRequestDeployment,
     ) -> Result<(), PullRequestApiError>;
+}
+
+/// Native GitHub deployment state projected from the Maestro preview lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestDeploymentState {
+    /// The preview is waiting for cluster capacity.
+    Queued,
+    /// The preview is building or rolling out.
+    InProgress,
+    /// The current pull-request revision is serving traffic.
+    Success,
+    /// The current pull-request revision failed to deploy.
+    Failure,
+    /// The transient preview environment no longer exists.
+    Inactive,
+}
+
+impl PullRequestDeploymentState {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::InProgress => "in_progress",
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Inactive => "inactive",
+        }
+    }
+}
+
+/// Desired native GitHub deployment and latest status for one preview revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestDeployment {
+    /// Immutable pull-request head revision deployed by Maestro.
+    pub head_revision: String,
+    /// Stable GitHub environment identity shared by revisions of one preview.
+    pub environment: String,
+    /// Latest deployment state reported to GitHub.
+    pub state: PullRequestDeploymentState,
+    /// Short human-readable status rendered by GitHub.
+    pub description: String,
+    /// Public preview URL once the environment is ready.
+    pub environment_url: Option<String>,
 }

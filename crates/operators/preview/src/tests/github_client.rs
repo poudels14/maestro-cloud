@@ -10,7 +10,7 @@ use crate::github_client::{
 };
 use crate::{
     GithubClientError, GithubPullRequestClient, PullRequestApi, PullRequestApiError,
-    PullRequestReadiness,
+    PullRequestDeployment, PullRequestDeploymentState, PullRequestReadiness,
 };
 
 #[test]
@@ -89,78 +89,204 @@ async fn lists_every_page_and_preserves_pull_request_eligibility_fields()
 }
 
 #[tokio::test]
-async fn finds_updates_and_caches_one_marker_keyed_comment()
+async fn creates_a_native_deployment_with_a_ready_environment_url()
 -> Result<(), Box<dyn std::error::Error>> {
-    let marker = "<!-- maestro-preview:preview-api -->";
-    let transport = Arc::new(FakeTransport::new(vec![
-        json_response(
-            200,
-            serde_json::to_vec(&serde_json::json!([
-                {"id": 7, "body": format!("{marker}\nold")}
-            ]))?,
-        ),
-        json_response(
-            200,
-            serde_json::to_vec(&serde_json::json!({"id": 7, "body": "updated"}))?,
-        ),
-        json_response(
-            200,
-            serde_json::to_vec(&serde_json::json!({"id": 7, "body": "changed"}))?,
-        ),
-    ]));
-    let client = client(transport.clone());
-
-    client
-        .upsert_comment("acme", "api", 42, "preview-api", "current")
-        .await?;
-    client
-        .upsert_comment("acme", "api", 42, "preview-api", "current")
-        .await?;
-    client
-        .upsert_comment("acme", "api", 42, "preview-api", "next")
-        .await?;
-
-    let requests = transport.requests();
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests.first().unwrap().method, GithubHttpMethod::Get);
-    assert_eq!(requests.get(1).unwrap().method, GithubHttpMethod::Patch);
-    assert_eq!(requests.last().unwrap().method, GithubHttpMethod::Patch);
-    assert!(requests.get(1).unwrap().url.ends_with("/issues/comments/7"));
-    let body: serde_json::Value = serde_json::from_slice(&requests.get(1).unwrap().body)?;
-    assert!(
-        body.get("body")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|body| body == format!("{marker}\ncurrent"))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn creates_a_comment_when_no_sticky_marker_exists() -> Result<(), Box<dyn std::error::Error>>
-{
     let transport = Arc::new(FakeTransport::new(vec![
         json_response(200, b"[]".to_vec()),
         json_response(
             201,
-            serde_json::to_vec(&serde_json::json!({"id": 9, "body": "created"}))?,
+            serde_json::to_vec(&serde_json::json!({
+                "id": 9,
+                "sha": format!("{:040x}", 42)
+            }))?,
+        ),
+        json_response(200, b"[]".to_vec()),
+        json_response(
+            201,
+            serde_json::to_vec(&serde_json::json!({
+                "id": 1,
+                "state": "success",
+                "description": "Maestro preview is ready.",
+                "environment_url": "https://api-pr-42.preview.example.com"
+            }))?,
         ),
     ]));
     let client = client(transport.clone());
 
     client
-        .upsert_comment("acme", "api", 42, "preview-api", "building")
+        .publish_deployment(
+            "acme",
+            "api",
+            &deployment(PullRequestDeploymentState::Success),
+        )
         .await?;
 
     let requests = transport.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests.last().unwrap().method, GithubHttpMethod::Post);
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.first().unwrap().method, GithubHttpMethod::Get);
+    assert!(
+        requests
+            .first()
+            .unwrap()
+            .url
+            .contains("environment=maestro-preview%2Fapi%2Fpr-42")
+    );
+    assert_eq!(requests.get(1).unwrap().method, GithubHttpMethod::Post);
+    assert!(requests.get(1).unwrap().url.ends_with("/deployments"));
+    let create: serde_json::Value = serde_json::from_slice(&requests.get(1).unwrap().body)?;
+    assert_eq!(
+        create.get("ref"),
+        Some(&serde_json::json!(format!("{:040x}", 42)))
+    );
+    assert_eq!(create.get("auto_merge"), Some(&serde_json::json!(false)));
+    assert_eq!(
+        create.get("required_contexts"),
+        Some(&serde_json::json!([]))
+    );
+    assert_eq!(
+        create.get("transient_environment"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        create.get("production_environment"),
+        Some(&serde_json::json!(false))
+    );
     assert!(
         requests
             .last()
             .unwrap()
             .url
-            .ends_with("/issues/42/comments")
+            .ends_with("/deployments/9/statuses")
     );
+    let status: serde_json::Value = serde_json::from_slice(&requests.last().unwrap().body)?;
+    assert_eq!(status.get("state"), Some(&serde_json::json!("success")));
+    assert_eq!(
+        status.get("environment_url"),
+        Some(&serde_json::json!("https://api-pr-42.preview.example.com"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reuses_an_existing_deployment_and_caches_its_matching_status()
+-> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(FakeTransport::new(vec![
+        json_response(
+            200,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 9,
+                "sha": format!("{:040x}", 42)
+            }]))?,
+        ),
+        json_response(
+            200,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 3,
+                "state": "in_progress",
+                "description": "Maestro is deploying the latest commit.",
+                "environment_url": null
+            }]))?,
+        ),
+    ]));
+    let client = client(transport.clone());
+    let deployment = deployment(PullRequestDeploymentState::InProgress);
+
+    client
+        .publish_deployment("acme", "api", &deployment)
+        .await?;
+    client
+        .publish_deployment("acme", "api", &deployment)
+        .await?;
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.method)
+            .collect::<Vec<_>>(),
+        vec![GithubHttpMethod::Get, GithubHttpMethod::Get]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_successful_new_revision_retries_inactivating_the_previous_deployment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let transport = Arc::new(FakeTransport::new(vec![
+        json_response(
+            200,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 7,
+                "sha": format!("{:040x}", 41)
+            }]))?,
+        ),
+        json_response(
+            201,
+            serde_json::to_vec(&serde_json::json!({
+                "id": 8,
+                "sha": format!("{:040x}", 42)
+            }))?,
+        ),
+        json_response(200, b"[]".to_vec()),
+        json_response(
+            201,
+            serde_json::to_vec(&serde_json::json!({"id": 2, "state": "success"}))?,
+        ),
+        json_response(
+            200,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 1,
+                "state": "success",
+                "description": "Maestro preview is ready.",
+                "environment_url": "https://api-pr-42.preview.example.com"
+            }]))?,
+        ),
+        json_response(503, Vec::new()),
+        json_response(
+            200,
+            serde_json::to_vec(&serde_json::json!([
+                {"id": 7, "sha": format!("{:040x}", 41)},
+                {"id": 8, "sha": format!("{:040x}", 42)}
+            ]))?,
+        ),
+        json_response(
+            200,
+            serde_json::to_vec(&serde_json::json!([{
+                "id": 1,
+                "state": "success",
+                "description": "Maestro preview is ready.",
+                "environment_url": "https://api-pr-42.preview.example.com"
+            }]))?,
+        ),
+        json_response(
+            201,
+            serde_json::to_vec(&serde_json::json!({"id": 3, "state": "inactive"}))?,
+        ),
+    ]));
+    let client = client(transport.clone());
+    let deployment = deployment(PullRequestDeploymentState::Success);
+
+    assert!(matches!(
+        client.publish_deployment("acme", "api", &deployment).await,
+        Err(PullRequestApiError::Unavailable { .. })
+    ));
+    client
+        .publish_deployment("acme", "api", &deployment)
+        .await?;
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 9);
+    assert!(
+        requests
+            .last()
+            .unwrap()
+            .url
+            .ends_with("/deployments/7/statuses")
+    );
+    let inactive: serde_json::Value = serde_json::from_slice(&requests.last().unwrap().body)?;
+    assert_eq!(inactive.get("state"), Some(&serde_json::json!("inactive")));
+    assert!(inactive.get("environment_url").is_none());
     Ok(())
 }
 
@@ -217,6 +343,22 @@ fn pull_request_json(number: u64, draft: bool, repository: &str) -> serde_json::
             "repo": {"full_name": repository}
         }
     })
+}
+
+fn deployment(state: PullRequestDeploymentState) -> PullRequestDeployment {
+    PullRequestDeployment {
+        head_revision: format!("{:040x}", 42),
+        environment: "maestro-preview/api/pr-42".to_string(),
+        state,
+        description: match state {
+            PullRequestDeploymentState::Success => "Maestro preview is ready.",
+            PullRequestDeploymentState::InProgress => "Maestro is deploying the latest commit.",
+            _ => "Maestro preview state changed.",
+        }
+        .to_string(),
+        environment_url: (state == PullRequestDeploymentState::Success)
+            .then(|| "https://api-pr-42.preview.example.com".to_string()),
+    }
 }
 
 fn json_response(status: u16, body: Vec<u8>) -> GithubHttpResponse {

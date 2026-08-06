@@ -114,7 +114,7 @@ pub struct LogBackupLaunchConfig {
 pub struct PreviewLaunchConfig {
     /// DNS suffix used for stable preview hostnames.
     pub domain: String,
-    /// GitHub token with pull-request read and issue-comment write access.
+    /// GitHub token with pull-request read and deployment read/write access.
     pub github_token: SecretValue,
     /// Maximum previews retained cluster-wide, including close grace periods.
     pub max_concurrent_previews: usize,

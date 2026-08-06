@@ -2854,7 +2854,7 @@ export interface components {
             clusterId: components["schemas"]["ClusterId"];
             /** @description DNS suffix used for stable preview hostnames. */
             domain: string;
-            /** @description GitHub token with pull-request read and issue-comment write access. */
+            /** @description GitHub token with pull-request read and deployment read/write access. */
             githubToken: components["schemas"]["SecretValue"];
             /**
              * Format: uint

@@ -19,7 +19,10 @@ mod source_writer;
 mod writer;
 
 pub use error::PreviewError;
-pub use github::{PullRequest, PullRequestApi, PullRequestApiError, PullRequestReadiness};
+pub use github::{
+    PullRequest, PullRequestApi, PullRequestApiError, PullRequestDeployment,
+    PullRequestDeploymentState, PullRequestReadiness,
+};
 pub use github_client::{GithubClientError, GithubPullRequestClient};
 pub use reconciler::PreviewReconciler;
 pub use settings::PreviewSettings;
