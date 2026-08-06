@@ -213,7 +213,7 @@ fn relevant_mount(mount: &MountEntry) -> bool {
 
 fn statvfs_space(path: &Path) -> std::io::Result<Option<(u64, u64)>> {
     let stats = nix::sys::statvfs::statvfs(path).map_err(std::io::Error::from)?;
-    let block_size = u64::from(stats.fragment_size()).max(1);
+    let block_size = stats.fragment_size().max(1);
     let total_bytes = u64::from(stats.blocks())
         .checked_mul(block_size)
         .ok_or_else(|| std::io::Error::other("filesystem capacity exceeds u64"))?;
