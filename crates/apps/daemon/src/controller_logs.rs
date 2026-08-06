@@ -372,7 +372,7 @@ mod tests {
 
         let entries = store.entries()?;
         assert_eq!(entries.len(), 1);
-        let entry = &entries[0];
+        let entry = entries.first().ok_or("missing captured log entry")?;
         assert_eq!(entry.severity, "error");
         assert_eq!(entry.body, LogBody::Text("secret fetch failed".to_owned()));
         assert_eq!(

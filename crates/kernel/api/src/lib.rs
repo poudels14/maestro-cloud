@@ -48,7 +48,7 @@ pub use config::{
 pub use dns::{DnsLabel, DnsName, DnsNameError, WildcardDnsName};
 pub use environment::{
     EnvironmentName, EnvironmentTemplateContext, EnvironmentTemplateError, InvalidEnvironmentName,
-    MAESTRO_PREVIEW_HOST,
+    MAESTRO_INGRESS_HOST, MAESTRO_INGRESS_PORT,
 };
 pub use exec_stream::{ExecStreamFrame, ExecStreamProtocolError};
 pub use identity::{

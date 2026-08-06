@@ -1640,6 +1640,8 @@ export interface components {
              * @default false
              */
             bypassRolloutFreeze: boolean;
+            /** @description Non-secret values used to resolve external environment templates on the workload node. */
+            environmentTemplate?: components["schemas"]["EnvironmentTemplateContext"];
             /**
              * @description User-requested lifecycle outcome reconciled by the deployment operator.
              * @default run
@@ -1765,6 +1767,16 @@ export interface components {
             leaderPublicKey: string;
             /** Format: byte */
             nonce: string;
+        };
+        /** @description Non-secret values captured with a Deployment for resolving environment templates on its node. */
+        EnvironmentTemplateContext: {
+            /** @description Canonical ingress hostname assigned to the service. */
+            ingressHost?: string | null;
+            /**
+             * Format: uint16
+             * @description Ingress target port assigned to the service.
+             */
+            ingressPort?: number | null;
         };
         /** @description Whether API-initiated interactive execution is available to a workload. */
         ExecPolicy: "allowed" | "denied";

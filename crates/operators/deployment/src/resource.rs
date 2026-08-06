@@ -45,8 +45,15 @@ pub(crate) fn new_deployment(
     if let Some(revision) = watched_revision {
         identity.push(revision);
     }
-    if let Some(host) = environment_resolution.context.preview_host.as_deref() {
+    if let Some(host) = environment_resolution.context.ingress_host.as_deref() {
         identity.push(host);
+    }
+    let ingress_port = environment_resolution
+        .context
+        .ingress_port
+        .map(|port| port.to_string());
+    if let Some(port) = ingress_port.as_deref() {
+        identity.push(port);
     }
     if let Some(fingerprint) = environment_resolution.fingerprint.as_deref() {
         identity.push(fingerprint);

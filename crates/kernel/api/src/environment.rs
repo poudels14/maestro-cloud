@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 const TEMPLATE_OPEN: &str = "${{";
 const TEMPLATE_CLOSE: &str = "}}";
 
-/// Preview hostname available to runtime environment templates.
-pub const MAESTRO_PREVIEW_HOST: &str = "MAESTRO_PREVIEW_HOST";
+/// Canonical ingress hostname available to runtime environment templates.
+pub const MAESTRO_INGRESS_HOST: &str = "MAESTRO_INGRESS_HOST";
+
+/// Ingress target port available to runtime environment templates.
+pub const MAESTRO_INGRESS_PORT: &str = "MAESTRO_INGRESS_PORT";
 
 /// A borrowed environment-variable name that has passed Maestro's portable name policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -39,15 +42,18 @@ pub struct InvalidEnvironmentName;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentTemplateContext {
-    /// Canonical ingress hostname assigned to a pull-request preview.
+    /// Canonical ingress hostname assigned to the service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_host: Option<String>,
+    pub ingress_host: Option<String>,
+    /// Ingress target port assigned to the service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_port: Option<u16>,
 }
 
 impl EnvironmentTemplateContext {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.preview_host.is_none()
+        self.ingress_host.is_none() && self.ingress_port.is_none()
     }
 
     /// Resolves every supported Maestro expression without exposing the input in errors.
@@ -81,12 +87,20 @@ impl EnvironmentTemplateContext {
 
     fn resolve_variable(&self, variable: &str) -> Result<String, EnvironmentTemplateError> {
         match variable {
-            MAESTRO_PREVIEW_HOST => {
-                self.preview_host
+            MAESTRO_INGRESS_HOST => {
+                self.ingress_host
                     .clone()
                     .ok_or_else(|| EnvironmentTemplateError::Unavailable {
                         variable: variable.to_owned(),
-                        message: "the deployment has no preview host".to_owned(),
+                        message: "the deployment has no ingress host".to_owned(),
+                    })
+            }
+            MAESTRO_INGRESS_PORT => {
+                self.ingress_port
+                    .map(|port| port.to_string())
+                    .ok_or_else(|| EnvironmentTemplateError::Unavailable {
+                        variable: variable.to_owned(),
+                        message: "the deployment has no ingress port".to_owned(),
                     })
             }
             _ => Err(EnvironmentTemplateError::Unavailable {
@@ -121,41 +135,40 @@ mod tests {
     }
 
     #[test]
-    fn resolves_preview_templates_without_exposing_input_in_errors() {
+    fn resolves_ingress_templates_without_exposing_input_in_errors() {
         let context = EnvironmentTemplateContext {
-            preview_host: Some("api-pr-42.preview.example.test".to_owned()),
+            ingress_host: Some("api.example.test".to_owned()),
+            ingress_port: Some(8080),
         };
         assert_eq!(
             context
-                .resolve("https://${{ MAESTRO_PREVIEW_HOST }}/")
-                .expect("resolve preview host"),
-            "https://api-pr-42.preview.example.test/"
+                .resolve("https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}/")
+                .as_deref(),
+            Ok("https://api.example.test:8080/")
         );
-        assert!(
+        assert_eq!(
             EnvironmentTemplateContext::default()
-                .resolve("secret-${{ MAESTRO_PREVIEW_HOST }}")
-                .expect_err("missing context must fail")
-                .to_string()
-                .contains("deployment has no preview host")
+                .resolve("secret-${{ MAESTRO_INGRESS_HOST }}")
+                .map_err(|error| error.to_string()),
+            Err("the deployment has no ingress host".to_owned())
         );
-        assert!(
+        assert_eq!(
             context
-                .resolve("secret-${{ MAESTRO_PREVIEW_HOST")
-                .expect_err("malformed template must fail")
-                .to_string()
-                .contains("missing its closing")
+                .resolve("secret-${{ MAESTRO_INGRESS_HOST")
+                .map_err(|error| error.to_string()),
+            Err("template is missing its closing `}}`".to_owned())
         );
-        let error = context
-            .resolve("secret-${{ DO-NOT-EXPOSE }}")
-            .expect_err("invalid variable must fail")
-            .to_string();
-        assert!(error.contains("not a valid Maestro variable name"));
-        assert!(!error.contains("DO-NOT-EXPOSE"));
-        let error = context
-            .resolve("secret-${{ PRIVATE_TOKEN }}")
-            .expect_err("unsupported variable must fail")
-            .to_string();
-        assert_eq!(error, "the variable is not supported");
-        assert!(!error.contains("PRIVATE_TOKEN"));
+        assert_eq!(
+            context
+                .resolve("secret-${{ DO-NOT-EXPOSE }}")
+                .map_err(|error| error.to_string()),
+            Err("template variable is not a valid Maestro variable name".to_owned())
+        );
+        assert_eq!(
+            context
+                .resolve("secret-${{ PRIVATE_TOKEN }}")
+                .map_err(|error| error.to_string()),
+            Err("the variable is not supported".to_owned())
+        );
     }
 }

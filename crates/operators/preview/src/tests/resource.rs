@@ -62,7 +62,7 @@ fn derived_service_preserves_dynamic_environment_templates_for_preview_deploymen
         .environment
         .insert(
             "PREVIEW_URL".to_owned(),
-            "https://${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+            "https://${{ MAESTRO_INGRESS_HOST }}".to_owned(),
         );
 
     let derived = desired_service(&preview, &base, None).expect("derive service");
@@ -73,12 +73,12 @@ fn derived_service_preserves_dynamic_environment_templates_for_preview_deploymen
             .environment
             .get("PREVIEW_URL")
             .map(String::as_str),
-        Some("https://${{ MAESTRO_PREVIEW_HOST }}")
+        Some("https://${{ MAESTRO_INGRESS_HOST }}")
     );
 }
 
 #[test]
-fn derived_route_keeps_shape_under_one_stable_preview_host() {
+fn derived_route_keeps_shape_under_one_stable_ingress_host() {
     let preview = preview();
     let base = base_route();
 

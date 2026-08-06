@@ -10,17 +10,17 @@ use crate::environment::resolve;
 use crate::tests::plan_support::service;
 
 #[test]
-fn resolves_preview_host_templates_inside_runtime_environment_values() {
+fn resolves_ingress_templates_inside_runtime_environment_values() {
     let service = preview_service();
     let routes = vec![route(&service, "api-pr-42.preview.example.test")];
     let mut environment = BTreeMap::from([
         (
-            "PREVIEW_URL".to_owned(),
-            "https://${{ MAESTRO_PREVIEW_HOST }}/v1".to_owned(),
+            "INGRESS_URL".to_owned(),
+            "https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}/v1".to_owned(),
         ),
         (
             "CALLBACK".to_owned(),
-            "${{MAESTRO_PREVIEW_HOST}}/callback/${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+            "${{MAESTRO_INGRESS_HOST}}/callback/${{ MAESTRO_INGRESS_HOST }}".to_owned(),
         ),
         ("LITERAL".to_owned(), "unchanged".to_owned()),
     ]);
@@ -29,12 +29,13 @@ fn resolves_preview_host_templates_inside_runtime_environment_values() {
 
     assert!(resolution.fingerprint.is_some());
     assert_eq!(
-        resolution.context.preview_host.as_deref(),
+        resolution.context.ingress_host.as_deref(),
         Some("api-pr-42.preview.example.test")
     );
+    assert_eq!(resolution.context.ingress_port, Some(8080));
     assert_eq!(
-        environment.get("PREVIEW_URL").map(String::as_str),
-        Some("https://api-pr-42.preview.example.test/v1")
+        environment.get("INGRESS_URL").map(String::as_str),
+        Some("https://api-pr-42.preview.example.test:8080/v1")
     );
     assert_eq!(
         environment.get("CALLBACK").map(String::as_str),
@@ -47,36 +48,35 @@ fn resolves_preview_host_templates_inside_runtime_environment_values() {
 }
 
 #[test]
-fn preview_host_is_available_only_to_preview_owned_services() {
+fn ingress_templates_are_available_to_preview_and_base_services() {
     let preview_service = preview_service();
     let routes = vec![route(&preview_service, "api-pr-42.preview.example.test")];
     let mut environment = BTreeMap::from([(
-        "PREVIEW_URL".to_owned(),
-        "https://${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+        "INGRESS_URL".to_owned(),
+        "https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}".to_owned(),
     )]);
 
     resolve(&preview_service, &routes, &mut environment).expect("resolve preview host");
 
     assert_eq!(
-        environment.get("PREVIEW_URL").map(String::as_str),
-        Some("https://api-pr-42.preview.example.test")
+        environment.get("INGRESS_URL").map(String::as_str),
+        Some("https://api-pr-42.preview.example.test:8080")
     );
 
     let base_service = service(Generation(1), kernel_api::RolloutState::Active);
-    let mut invalid = BTreeMap::from([(
-        "PREVIEW_URL".to_owned(),
-        "${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+    let mut base_environment = BTreeMap::from([(
+        "INGRESS_URL".to_owned(),
+        "https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}".to_owned(),
     )]);
-    let error = resolve(
+    resolve(
         &base_service,
         &[route(&base_service, "api.example.test")],
-        &mut invalid,
+        &mut base_environment,
     )
-    .expect_err("base service must not resolve preview host");
-    assert!(
-        error
-            .to_string()
-            .contains("the service is not owned by a Preview")
+    .expect("resolve base ingress endpoint");
+    assert_eq!(
+        base_environment.get("INGRESS_URL").map(String::as_str),
+        Some("https://api.example.test:8080")
     );
 }
 
@@ -86,20 +86,33 @@ fn rejects_missing_ambiguous_wildcard_unknown_and_malformed_variables() {
     let cases = [
         (
             Vec::new(),
-            "${{ MAESTRO_PREVIEW_HOST }}",
+            "${{ MAESTRO_INGRESS_HOST }}",
             "no active ingress host",
+        ),
+        (
+            Vec::new(),
+            "${{ MAESTRO_INGRESS_PORT }}",
+            "no active ingress port",
         ),
         (
             vec![
                 route(&service, "api.example.test"),
                 route_with_id(&service, "route-2", "api-alt.example.test"),
             ],
-            "${{ MAESTRO_PREVIEW_HOST }}",
+            "${{ MAESTRO_INGRESS_HOST }}",
             "multiple ingress hosts",
         ),
         (
+            vec![
+                route_with_port(&service, "route-1", "api.example.test", 8080),
+                route_with_port(&service, "route-2", "api.example.test", 9090),
+            ],
+            "${{ MAESTRO_INGRESS_PORT }}",
+            "multiple ingress ports",
+        ),
+        (
             vec![route(&service, "*.example.test")],
-            "${{ MAESTRO_PREVIEW_HOST }}",
+            "${{ MAESTRO_INGRESS_HOST }}",
             "is a wildcard",
         ),
         (
@@ -109,7 +122,7 @@ fn rejects_missing_ambiguous_wildcard_unknown_and_malformed_variables() {
         ),
         (
             vec![route(&service, "api.example.test")],
-            "${{ MAESTRO_PREVIEW_HOST",
+            "${{ MAESTRO_INGRESS_HOST",
             "missing its closing",
         ),
     ];
@@ -143,6 +156,15 @@ fn route(service: &kernel_api::Service, host: &str) -> IngressRoute {
 }
 
 fn route_with_id(service: &kernel_api::Service, id: &str, host: &str) -> IngressRoute {
+    route_with_port(service, id, host, 8080)
+}
+
+fn route_with_port(
+    service: &kernel_api::Service,
+    id: &str,
+    host: &str,
+    target_port: u16,
+) -> IngressRoute {
     Object {
         meta: ObjectMeta {
             id: IngressRouteId::new(id).unwrap(),
@@ -158,7 +180,7 @@ fn route_with_id(service: &kernel_api::Service, id: &str, host: &str) -> Ingress
             service_id: service.meta.id.clone(),
             hosts: vec![host.to_owned()],
             path_prefix: None,
-            target_port: 8080,
+            target_port,
             session_affinity: None,
         },
         status: IngressRouteStatus {

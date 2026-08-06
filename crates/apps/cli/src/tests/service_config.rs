@@ -259,7 +259,7 @@ async fn preview_environment_preserves_maestro_templates_while_expanding_local_v
                             enabled: true,
                             env: {
                                 items: {
-                                    PREVIEW_URL: "https://${{ MAESTRO_PREVIEW_HOST }}"
+                                    PREVIEW_URL: "https://${{ MAESTRO_INGRESS_HOST }}"
                                 }
                             }
                         },
@@ -296,13 +296,14 @@ async fn preview_environment_preserves_maestro_templates_while_expanding_local_v
             .as_ref()
             .and_then(|preview| preview.environment.get("PREVIEW_URL"))
             .map(String::as_str),
-        Some("https://${{ MAESTRO_PREVIEW_HOST }}")
+        Some("https://${{ MAESTRO_INGRESS_HOST }}")
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn deploy_environment_rejects_maestro_templates() -> Result<(), Box<dyn std::error::Error>> {
+async fn deploy_environment_preserves_maestro_templates() -> Result<(), Box<dyn std::error::Error>>
+{
     let source = "file:///config/maestro.services.jsonc";
     let reader = MemoryReader {
         sources: BTreeMap::from([(
@@ -312,11 +313,18 @@ async fn deploy_environment_rejects_maestro_templates() -> Result<(), Box<dyn st
                     api: {
                         name: "API",
                         image: "api:latest",
+                        ingress: { host: "api.example.test", port: 8080 },
                         deploy: {
                             replicas: 1,
                             env: {
                                 items: {
-                                    URL: "https://${{ MAESTRO_PREVIEW_HOST }}"
+                                    URL: "https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}"
+                                }
+                            },
+                            secrets: {
+                                mountPath: "/app/.env",
+                                items: {
+                                    URL: "https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}"
                                 }
                             }
                         }
@@ -327,13 +335,18 @@ async fn deploy_environment_rejects_maestro_templates() -> Result<(), Box<dyn st
         )]),
     };
 
-    let error = load_services(source, &reader)
-        .await
-        .expect_err("deploy environment must reject Maestro templates");
-    assert!(
-        error
-            .to_string()
-            .contains("Maestro templates are supported only in preview.env")
+    let loaded = load_services(source, &reader).await?;
+    let desired = loaded.services.values().next().ok_or("missing service")?;
+    assert_eq!(
+        desired.spec.environment.get("URL").map(String::as_str),
+        Some("https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}")
+    );
+    let Some(kernel_api::SecretMountSpec::Dotenv { items, .. }) = &desired.spec.secrets else {
+        return Err("expected dotenv secret mount".into());
+    };
+    assert_eq!(
+        items.get("URL").map(kernel_api::SecretValue::expose),
+        Some("https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}")
     );
     Ok(())
 }

@@ -115,7 +115,7 @@ mod tests {
 
         let dotenv = parse_key_values(
             "aws-secret://dotenv",
-            "# comment\nexport TOKEN=\"rotated value\" # current token\nMODE='production mode'\nBATON_HOST=\"https://\\${{ MAESTRO_PREVIEW_HOST }}/\"",
+            "# comment\nexport TOKEN=\"rotated value\" # current token\nMODE='production mode'\nBATON_HOST=\"https://\\${{ MAESTRO_INGRESS_HOST }}/\"",
         )?;
         assert_eq!(
             dotenv.get("TOKEN").map(SecretValue::expose),
@@ -127,16 +127,19 @@ mod tests {
         );
         assert_eq!(
             dotenv.get("BATON_HOST").map(SecretValue::expose),
-            Some("https://${{ MAESTRO_PREVIEW_HOST }}/")
+            Some("https://${{ MAESTRO_INGRESS_HOST }}/")
         );
         Ok(())
     }
 
     #[test]
-    fn dotenv_parse_errors_do_not_expose_secret_contents() {
+    fn dotenv_parse_errors_do_not_expose_secret_contents() -> Result<(), Box<dyn std::error::Error>>
+    {
         let error = parse_key_values("aws-secret://dotenv", "TOKEN='super-secret")
-            .expect_err("unterminated quote must be rejected");
+            .err()
+            .ok_or("unterminated quote was accepted")?;
         assert!(error.to_string().contains("invalid dotenv syntax"));
         assert!(!error.to_string().contains("super-secret"));
+        Ok(())
     }
 }

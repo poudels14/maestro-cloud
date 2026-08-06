@@ -23,7 +23,45 @@ fn creates_one_stable_deployment_per_service_generation() {
 }
 
 #[test]
-fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment() {
+fn base_service_captures_ingress_context_for_external_templates() {
+    let mut service = service(Generation(7), RolloutState::Active);
+    service
+        .spec
+        .environment_sources
+        .push("aws-secret://runtime-environment".to_owned());
+    let service_id = service.meta.id.clone();
+    let mut plan_input = input(service, Vec::new());
+    plan_input.ingress_routes = vec![Object {
+        meta: metadata(IngressRouteId::new("app-route").unwrap(), Generation(1)),
+        spec: IngressRouteSpec {
+            service_id,
+            hosts: vec!["app.example.test".to_owned()],
+            path_prefix: None,
+            target_port: 3000,
+            session_affinity: None,
+        },
+        status: IngressRouteStatus {
+            applied_generation: Generation::default(),
+            conditions: Vec::new(),
+        },
+    }];
+    let deployment = plan(plan_input)
+        .expect("capture base ingress endpoint")
+        .create_deployments
+        .remove(0);
+
+    assert_eq!(
+        deployment.spec.environment_template.ingress_host.as_deref(),
+        Some("app.example.test")
+    );
+    assert_eq!(
+        deployment.spec.environment_template.ingress_port,
+        Some(3000)
+    );
+}
+
+#[test]
+fn ingress_templates_are_captured_and_route_changes_create_a_new_deployment() {
     let mut service = service(Generation(7), RolloutState::Active);
     service.meta.owner_refs = vec![OwnerReference {
         resource: ResourceId::new(
@@ -33,8 +71,8 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
         ownership: Ownership::Controller,
     }];
     service.spec.environment.insert(
-        "PREVIEW_URL".to_owned(),
-        "https://${{ MAESTRO_PREVIEW_HOST }}".to_owned(),
+        "INGRESS_URL".to_owned(),
+        "https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}".to_owned(),
     );
     service
         .spec
@@ -62,16 +100,17 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
         .remove(0);
 
     assert_eq!(
-        first.spec.service.environment.get("PREVIEW_URL"),
-        Some(&"https://api-pr-42.preview.example.test".to_owned())
+        first.spec.service.environment.get("INGRESS_URL"),
+        Some(&"https://api-pr-42.preview.example.test:8080".to_owned())
     );
     assert_eq!(
-        first.spec.environment_template.preview_host.as_deref(),
+        first.spec.environment_template.ingress_host.as_deref(),
         Some("api-pr-42.preview.example.test")
     );
+    assert_eq!(first.spec.environment_template.ingress_port, Some(8080));
     assert_eq!(
-        service.spec.environment.get("PREVIEW_URL"),
-        Some(&"https://${{ MAESTRO_PREVIEW_HOST }}".to_owned())
+        service.spec.environment.get("INGRESS_URL"),
+        Some(&"https://${{ MAESTRO_INGRESS_HOST }}:${{ MAESTRO_INGRESS_PORT }}".to_owned())
     );
 
     let mut changed_input = input(service, vec![first.clone()]);
@@ -81,7 +120,7 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
             service_id: first.spec.service_id.clone(),
             hosts: vec!["api-pr-42-new.preview.example.test".to_owned()],
             path_prefix: None,
-            target_port: 8080,
+            target_port: 9090,
             session_affinity: None,
         },
         status: IngressRouteStatus {
@@ -96,13 +135,14 @@ fn preview_host_templates_are_captured_and_route_changes_create_a_new_deployment
 
     assert_ne!(changed.meta.id, first.meta.id);
     assert_eq!(
-        changed.spec.service.environment.get("PREVIEW_URL"),
-        Some(&"https://api-pr-42-new.preview.example.test".to_owned())
+        changed.spec.service.environment.get("INGRESS_URL"),
+        Some(&"https://api-pr-42-new.preview.example.test:9090".to_owned())
     );
     assert_eq!(
-        changed.spec.environment_template.preview_host.as_deref(),
+        changed.spec.environment_template.ingress_host.as_deref(),
         Some("api-pr-42-new.preview.example.test")
     );
+    assert_eq!(changed.spec.environment_template.ingress_port, Some(9090));
 }
 
 #[test]

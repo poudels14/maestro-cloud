@@ -71,7 +71,7 @@ pub(super) async fn convert_service(
         &format!("{path}.deploy.env"),
         template.deploy.env,
         reader,
-        MaestroTemplatePolicy::Reject,
+        MaestroTemplatePolicy::Preserve,
     )
     .await?;
     let secrets = match template.deploy.secrets {
@@ -89,7 +89,7 @@ pub(super) async fn convert_service(
                     items: secrets.items,
                 },
                 reader,
-                MaestroTemplatePolicy::Reject,
+                MaestroTemplatePolicy::Preserve,
             )
             .await?;
             let items = values
@@ -447,7 +447,7 @@ fn expand_local_environment(
     let mut output = String::with_capacity(value.len());
     while let Some(open) = remaining.find("${{") {
         if maestro_templates == MaestroTemplatePolicy::Reject {
-            return Err("Maestro templates are supported only in preview.env".to_owned());
+            return Err("Maestro templates are supported only in runtime values".to_owned());
         }
         output.push_str(
             shellexpand::env(&remaining[..open])

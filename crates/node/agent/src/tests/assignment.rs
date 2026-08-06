@@ -479,8 +479,9 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
     deployment.spec.service.environment.clear();
     deployment.spec.service.environment_sources =
         vec!["aws-secret://runtime-environment".to_owned()];
-    deployment.spec.environment_template.preview_host =
+    deployment.spec.environment_template.ingress_host =
         Some("api-pr-42.preview.example.test".to_owned());
+    deployment.spec.environment_template.ingress_port = Some(8080);
     deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
         mount_path: "/run/secrets/maestro.env".to_owned(),
         source: Some("aws-secret://runtime-secrets".to_owned()),
@@ -503,7 +504,11 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
                     ("MODE".to_owned(), SecretValue::new("resolved-mode")),
                     (
                         "BATON_HOST".to_owned(),
-                        SecretValue::new("https://${{ MAESTRO_PREVIEW_HOST }}/"),
+                        SecretValue::new("https://${{ MAESTRO_INGRESS_HOST }}/"),
+                    ),
+                    (
+                        "INGRESS_PORT".to_owned(),
+                        SecretValue::new("${{ MAESTRO_INGRESS_PORT }}"),
                     ),
                 ]),
             ),
@@ -512,7 +517,11 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
                 BTreeMap::from([
                     (
                         "BATON_HOST".to_owned(),
-                        SecretValue::new("https://${{ MAESTRO_PREVIEW_HOST }}/"),
+                        SecretValue::new("https://${{ MAESTRO_INGRESS_HOST }}/"),
+                    ),
+                    (
+                        "INGRESS_PORT".to_owned(),
+                        SecretValue::new("${{ MAESTRO_INGRESS_PORT }}"),
                     ),
                     ("TOKEN".to_owned(), SecretValue::new("resolved-token")),
                 ]),
@@ -527,7 +536,7 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         std::fs::read_to_string(world.secrets.path().join("assignment-1/secrets.env"))?,
-        "BATON_HOST=\"https://api-pr-42.preview.example.test/\"\nTOKEN=\"resolved-token\"\n"
+        "BATON_HOST=\"https://api-pr-42.preview.example.test/\"\nINGRESS_PORT=\"8080\"\nTOKEN=\"resolved-token\"\n"
     );
     let spec = world
         .runtime
@@ -551,6 +560,14 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
             .get("BATON_HOST")
             .map(SecretValue::expose),
         Some("https://api-pr-42.preview.example.test/")
+    );
+    assert_eq!(
+        workload
+            .configuration
+            .environment
+            .get("INGRESS_PORT")
+            .map(SecretValue::expose),
+        Some("8080")
     );
 
     let replica = world.load_replica().await?;

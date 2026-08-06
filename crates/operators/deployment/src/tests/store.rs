@@ -105,7 +105,7 @@ async fn store_backed_controller_resolves_preview_environment_from_the_same_snap
     }];
     service.spec.environment.insert(
         "PREVIEW_URL".to_owned(),
-        "https://${{ MAESTRO_PREVIEW_HOST }}/callback".to_owned(),
+        "https://${{ MAESTRO_INGRESS_HOST }}/callback".to_owned(),
     );
     let world = World::new(service.clone()).await?;
     let route: IngressRoute = Object {

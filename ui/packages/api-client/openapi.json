@@ -1318,6 +1318,14 @@
             "description": "Whether this immutable deployment may begin while its service is frozen.",
             "type": "boolean"
           },
+          "environmentTemplate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentTemplateContext"
+              }
+            ],
+            "description": "Non-secret values used to resolve external environment templates on the workload node."
+          },
           "goal": {
             "allOf": [
               {
@@ -1727,6 +1735,25 @@
           "nonce",
           "ciphertext"
         ],
+        "type": "object"
+      },
+      "EnvironmentTemplateContext": {
+        "description": "Non-secret values captured with a Deployment for resolving environment templates on its node.",
+        "properties": {
+          "ingressHost": {
+            "description": "Canonical ingress hostname assigned to the service.",
+            "nullable": true,
+            "type": "string"
+          },
+          "ingressPort": {
+            "description": "Ingress target port assigned to the service.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "ExecPolicy": {
@@ -8116,7 +8143,7 @@
   },
   "info": {
     "title": "Maestro Cloud API",
-    "version": "0.6.29"
+    "version": "0.6.34"
   },
   "openapi": "3.0.4",
   "paths": {
