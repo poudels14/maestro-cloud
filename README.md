@@ -281,8 +281,11 @@ explicit destination is supplied with `--push IMAGE`.
 Builds omit `build.registry` by default and are replicated directly between
 Maestro nodes. Set it to a registry prefix such as
 `registry.example/team` to publish a deployment-unique tag and deploy the
-registry's immutable digest; registry credentials remain a node-runtime
-responsibility.
+registry's immutable digest. Preview services inherit the base service's
+registry. Depot builds push directly from the remote builder when a registry is
+configured; registry-free Depot builds download and import an image archive.
+Registry credentials remain a node-runtime responsibility. Direct Depot pushes
+use the Docker credential provider available to the Maestro daemon.
 
 To use Depot, configure the cluster-level `depot.token`, then select the remote
 builder per service:
@@ -305,8 +308,8 @@ builder per service:
 
 The token is passed to the Depot process only through `DEPOT_TOKEN`. Build
 arguments and BuildKit-style secrets are preserved, and the single-platform
-result is imported into Maestro's artifact store before optional immutable
-registry publication.
+result is either imported into Maestro's artifact store or pushed directly to
+the configured immutable registry destination.
 
 The CLI also exposes deployment history, redeploy, in-place workload restart,
 cancel, remove, service delete, freeze/unfreeze, and replica override commands.

@@ -118,6 +118,67 @@ async fn depot_cli_keeps_credentials_out_of_argv_and_imports_output() -> TestRes
 }
 
 #[tokio::test]
+async fn depot_cli_pushes_from_the_remote_builder_without_importing_a_tarball() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let state_root = absolute_without_symlinks(temporary.path().join("state"))?;
+    let context = temporary.path().join("context");
+    std::fs::create_dir(&context)?;
+    std::fs::write(context.join("Dockerfile"), b"FROM scratch\n")?;
+    let artifacts = Arc::new(ImportingArtifacts::default());
+    let runner = Arc::new(RecordingDepotRunner::default());
+    let backend = ProcessDepotBuildBackend::with_runner(
+        DepotBuildSettings::new(SecretValue::new("depot-token"), state_root),
+        artifacts.clone(),
+        runner.clone(),
+    )?;
+    let request = ArtifactBuildRequest {
+        source: ArtifactSource::Directory {
+            root: std::fs::canonicalize(context)?,
+            definition: PathBuf::from("Dockerfile"),
+        },
+        arguments: BTreeMap::new(),
+        secrets: BTreeMap::new(),
+        tags: Vec::new(),
+    };
+    let destination = ArtifactReference::new("registry.example/team/api:deployment-1")?;
+
+    let digest = backend
+        .build_and_publish(&request, "project-123", &destination)
+        .await?;
+
+    assert_eq!(
+        digest,
+        ArtifactDigest::new(
+            "registry.example/team/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )?
+    );
+    assert!(artifacts.imports().is_empty());
+    let arguments = runner
+        .only_invocation()?
+        .arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(contains_pair(
+        &arguments,
+        "--tag",
+        "registry.example/team/api:deployment-1"
+    ));
+    assert!(arguments.iter().any(|argument| argument == "--push"));
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument == "--metadata-file")
+    );
+    assert!(
+        arguments
+            .iter()
+            .all(|argument| !argument.starts_with("type=docker,dest="))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn depot_process_streams_both_outputs_and_redacts_protected_values() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let executable = temporary.path().join("fake-depot");
@@ -299,6 +360,11 @@ impl DepotRunner for RecordingDepotRunner {
         timeout: Duration,
         _output: &dyn ArtifactBuildOutputSink,
     ) -> Result<(), ArtifactStoreError> {
+        let result_path = invocation.result_path.clone();
+        let publishes = invocation
+            .arguments
+            .iter()
+            .any(|argument| argument == "--metadata-file");
         let environment = invocation
             .environment
             .iter()
@@ -326,7 +392,13 @@ impl DepotRunner for RecordingDepotRunner {
             timeout,
             definition,
         });
-        tokio::fs::write(&invocation.output, b"fake-docker-archive")
+        let result = if publishes {
+            br#"{"containerimage.digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#
+                .as_slice()
+        } else {
+            b"fake-docker-archive".as_slice()
+        };
+        tokio::fs::write(&result_path, result)
             .await
             .map_err(|error| ArtifactStoreError::Unavailable {
                 message: format!("write fake Depot output: {error}"),

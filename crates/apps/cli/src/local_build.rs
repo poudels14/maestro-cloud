@@ -100,15 +100,18 @@ pub(crate) async fn run(options: Options, output: &mut dyn Write) -> Result<(), 
         tags: Vec::new(),
     };
     let artifacts = host_artifacts(root.join("runtime")).await?;
-    let digest = match options.builder {
+    let (digest, published_directly) = match options.builder {
         Builder::Native => {
             let (sink, receiver) = channel_output();
-            stream_build(
-                artifacts.build_with_output(&request, &sink),
-                receiver,
-                output,
+            (
+                stream_build(
+                    artifacts.build_with_output(&request, &sink),
+                    receiver,
+                    output,
+                )
+                .await?,
+                false,
             )
-            .await?
         }
         Builder::Depot => {
             let project = options
@@ -122,24 +125,52 @@ pub(crate) async fn run(options: Options, output: &mut dyn Write) -> Result<(), 
             let depot = ProcessDepotBuildBackend::new(settings, artifacts.clone())
                 .map_err(|error| build_error("Depot setup", error))?;
             let (sink, receiver) = channel_output();
-            stream_build(
-                depot.build_with_output(&request, project, &sink),
-                receiver,
-                output,
-            )
-            .await?
+            match push.as_ref() {
+                Some(destination) => {
+                    writeln!(output, "[maestro]: pushing {}", destination.as_str()).map_err(
+                        |error| CliError::io("failed to write local build output", error),
+                    )?;
+                    (
+                        stream_build(
+                            depot.build_and_publish_with_output(
+                                &request,
+                                project,
+                                destination,
+                                &sink,
+                            ),
+                            receiver,
+                            output,
+                        )
+                        .await?,
+                        true,
+                    )
+                }
+                None => (
+                    stream_build(
+                        depot.build_with_output(&request, project, &sink),
+                        receiver,
+                        output,
+                    )
+                    .await?,
+                    false,
+                ),
+            }
         }
     };
 
-    writeln!(output, "[maestro]: local build succeeded: {digest}")
+    writeln!(output, "[maestro]: build succeeded: {digest}")
         .map_err(|error| CliError::io("failed to write local build output", error))?;
     if let Some(destination) = push {
-        writeln!(output, "[maestro]: pushing {}", destination.as_str())
-            .map_err(|error| CliError::io("failed to write local build output", error))?;
-        let published = artifacts
-            .publish(&digest, &destination)
-            .await
-            .map_err(|error| build_error("publish", error))?;
+        let published = if published_directly {
+            digest
+        } else {
+            writeln!(output, "[maestro]: pushing {}", destination.as_str())
+                .map_err(|error| CliError::io("failed to write local build output", error))?;
+            artifacts
+                .publish(&digest, &destination)
+                .await
+                .map_err(|error| build_error("publish", error))?
+        };
         writeln!(output, "[maestro]: published {published}")
             .map_err(|error| CliError::io("failed to write local build output", error))?;
     }

@@ -272,7 +272,7 @@ async fn registry_build_publishes_a_deployment_unique_immutable_reference() -> T
 }
 
 #[tokio::test]
-async fn depot_build_uses_remote_backend_before_registry_publication() -> TestResult {
+async fn depot_build_publishes_directly_without_a_local_artifact_round_trip() -> TestResult {
     let world = TestWorld::new().await?;
     let mut build = queued_build("Dockerfile")?;
     build.spec.template.depot = Some(DepotBuildConfig {
@@ -294,16 +294,16 @@ async fn depot_build_uses_remote_backend_before_registry_publication() -> TestRe
     assert_eq!(depot.projects(), ["project-123".to_owned()]);
     assert_eq!(depot.requests().len(), 1);
     assert_eq!(
+        depot.destinations(),
+        [runtime::ArtifactReference::new(
+            "registry.example/team/api:deployment-1"
+        )?]
+    );
+    assert_eq!(
         world.build().await?.status.image_digest.as_deref(),
         Some("registry.example/team/api@sha256:depot")
     );
-    assert_eq!(
-        artifacts.publishes(),
-        [(
-            ArtifactDigest::new("sha256:depot")?,
-            runtime::ArtifactReference::new("registry.example/team/api:deployment-1")?,
-        )]
-    );
+    assert!(artifacts.publishes().is_empty());
     Ok(())
 }
 
@@ -527,6 +527,7 @@ struct RecordingDepot {
     digest: ArtifactDigest,
     projects: Mutex<Vec<String>>,
     requests: Mutex<Vec<ArtifactBuildRequest>>,
+    destinations: Mutex<Vec<runtime::ArtifactReference>>,
 }
 
 impl RecordingDepot {
@@ -535,6 +536,7 @@ impl RecordingDepot {
             digest: ArtifactDigest::new("sha256:depot")?,
             projects: Mutex::new(Vec::new()),
             requests: Mutex::new(Vec::new()),
+            destinations: Mutex::new(Vec::new()),
         })
     }
 
@@ -544,6 +546,10 @@ impl RecordingDepot {
 
     fn requests(&self) -> Vec<ArtifactBuildRequest> {
         lock(&self.requests).clone()
+    }
+
+    fn destinations(&self) -> Vec<runtime::ArtifactReference> {
+        lock(&self.destinations).clone()
     }
 }
 
@@ -557,6 +563,18 @@ impl DepotBuildBackend for RecordingDepot {
         lock(&self.requests).push(request.clone());
         lock(&self.projects).push(project.to_owned());
         Ok(self.digest.clone())
+    }
+
+    async fn build_and_publish(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        destination: &runtime::ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        lock(&self.requests).push(request.clone());
+        lock(&self.projects).push(project.to_owned());
+        lock(&self.destinations).push(destination.clone());
+        self.digest.for_reference(destination)
     }
 }
 

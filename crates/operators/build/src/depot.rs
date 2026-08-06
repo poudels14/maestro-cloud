@@ -9,12 +9,14 @@ use async_trait::async_trait;
 use kernel_api::SecretValue;
 use runtime::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
-    ArtifactDigest, ArtifactStore, ArtifactStoreError, DiscardArtifactBuildOutput,
+    ArtifactDigest, ArtifactReference, ArtifactStore, ArtifactStoreError,
+    DiscardArtifactBuildOutput,
     build_context::{BuildContext as DepotBuildContext, prepare_context},
     forward_artifact_build_output,
 };
 
 const FILE_CHUNK_BYTES: usize = 64 * 1_024;
+const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 
 /// Node-local limits and credentials for Depot remote builds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +98,14 @@ pub trait DepotBuildBackend: Send + Sync {
         project: &str,
     ) -> Result<ArtifactDigest, ArtifactStoreError>;
 
+    /// Builds and pushes directly from Depot to one registry destination.
+    async fn build_and_publish(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        destination: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError>;
+
     /// Builds while forwarding Depot's native progress to the caller.
     async fn build_with_output(
         &self,
@@ -105,6 +115,18 @@ pub trait DepotBuildBackend: Send + Sync {
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let _ = output;
         self.build(request, project).await
+    }
+
+    /// Builds and pushes directly while forwarding Depot's native progress.
+    async fn build_and_publish_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        destination: &ArtifactReference,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let _ = output;
+        self.build_and_publish(request, project, destination).await
     }
 }
 
@@ -169,6 +191,39 @@ impl ProcessDepotBuildBackend {
             }))
             .await
     }
+
+    async fn build_and_publish_artifact(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        destination: &ArtifactReference,
+        output_sink: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        validate_request(request, project)?;
+        let workspace = create_workspace(&self.settings.state_root).await?;
+        let context = prepare_context(
+            &request.source,
+            workspace.path(),
+            self.settings.max_context_bytes,
+            self.settings.max_context_entries,
+            "Depot",
+        )
+        .await?;
+        let metadata = workspace.path().join("metadata.json");
+        create_private_output(&metadata).await?;
+        let invocation = publish_invocation(
+            request,
+            project,
+            &self.settings,
+            &context,
+            destination,
+            &metadata,
+        )?;
+        self.runner
+            .run(invocation, self.settings.build_timeout, output_sink)
+            .await?;
+        published_digest(&metadata, destination).await
+    }
 }
 
 #[async_trait]
@@ -190,6 +245,27 @@ impl DepotBuildBackend for ProcessDepotBuildBackend {
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         self.build_artifact(request, project, output).await
     }
+
+    async fn build_and_publish(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        destination: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_and_publish_artifact(request, project, destination, &DiscardArtifactBuildOutput)
+            .await
+    }
+
+    async fn build_and_publish_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        destination: &ArtifactReference,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_and_publish_artifact(request, project, destination, output)
+            .await
+    }
 }
 
 pub(crate) struct DepotInvocation {
@@ -198,7 +274,7 @@ pub(crate) struct DepotInvocation {
     pub(crate) directory: PathBuf,
     pub(crate) environment: Vec<(OsString, SecretValue)>,
     pub(crate) redactions: Vec<SecretValue>,
-    pub(crate) output: PathBuf,
+    pub(crate) result_path: PathBuf,
 }
 
 #[async_trait]
@@ -297,8 +373,8 @@ impl DepotRunner for ProcessDepotRunner {
             Ok(())
         } else {
             Err(rejected(format!(
-                "Depot rejected image output `{}` with status {status}",
-                invocation.output.display()
+                "Depot build producing `{}` failed with status {status}",
+                invocation.result_path.display()
             )))
         }
     }
@@ -312,6 +388,29 @@ fn build_invocation(
     output: &Path,
 ) -> Result<DepotInvocation, ArtifactStoreError> {
     let output = path_text(output, "Depot output")?;
+    let mut invocation = common_invocation(
+        request,
+        project,
+        settings,
+        context,
+        "maestro.local/builds/output:latest",
+    )?;
+    invocation.arguments.extend([
+        OsString::from("--output"),
+        OsString::from(format!("type=docker,dest={output}")),
+        OsString::from("."),
+    ]);
+    invocation.result_path = PathBuf::from(output);
+    Ok(invocation)
+}
+
+fn common_invocation(
+    request: &ArtifactBuildRequest,
+    project: &str,
+    settings: &DepotBuildSettings,
+    context: &DepotBuildContext,
+    tag: &str,
+) -> Result<DepotInvocation, ArtifactStoreError> {
     let mut arguments = vec![
         OsString::from("build"),
         OsString::from("--project"),
@@ -323,7 +422,7 @@ fn build_invocation(
         OsString::from("--file"),
         OsString::from(&context.definition),
         OsString::from("--tag"),
-        OsString::from("maestro.local/builds/output:latest"),
+        OsString::from(tag),
     ];
     for (key, value) in &request.arguments {
         arguments.push(OsString::from("--build-arg"));
@@ -346,9 +445,6 @@ fn build_invocation(
         arguments.push(OsString::from(format!("id={key},env={variable}")));
         environment.push((OsString::from(variable), value.clone()));
     }
-    arguments.push(OsString::from("--output"));
-    arguments.push(OsString::from(format!("type=docker,dest={output}")));
-    arguments.push(OsString::from("."));
     Ok(DepotInvocation {
         executable: settings.executable.clone(),
         arguments,
@@ -357,8 +453,29 @@ fn build_invocation(
         redactions: std::iter::once(settings.token.clone())
             .chain(request.secrets.values().cloned())
             .collect(),
-        output: PathBuf::from(output),
+        result_path: PathBuf::new(),
     })
+}
+
+fn publish_invocation(
+    request: &ArtifactBuildRequest,
+    project: &str,
+    settings: &DepotBuildSettings,
+    context: &DepotBuildContext,
+    destination: &ArtifactReference,
+    metadata: &Path,
+) -> Result<DepotInvocation, ArtifactStoreError> {
+    let metadata = path_text(metadata, "Depot metadata output")?;
+    let mut invocation =
+        common_invocation(request, project, settings, context, destination.as_str())?;
+    invocation.arguments.extend([
+        OsString::from("--metadata-file"),
+        OsString::from(metadata),
+        OsString::from("--push"),
+        OsString::from("."),
+    ]);
+    invocation.result_path = PathBuf::from(metadata);
+    Ok(invocation)
 }
 
 fn validate_request(
@@ -468,6 +585,28 @@ async fn validate_output(path: &Path, max_bytes: u64) -> Result<(), ArtifactStor
         });
     }
     Ok(())
+}
+
+async fn published_digest(
+    metadata: &Path,
+    destination: &ArtifactReference,
+) -> Result<ArtifactDigest, ArtifactStoreError> {
+    validate_output(metadata, MAX_METADATA_BYTES).await?;
+    let encoded = tokio::fs::read(metadata)
+        .await
+        .map_err(|error| unavailable_io("read Depot metadata", metadata, error))?;
+    let document: serde_json::Value = serde_json::from_slice(&encoded)
+        .map_err(|_| rejected("Depot metadata is not valid JSON"))?;
+    let digest = document
+        .get("containerimage.digest")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| rejected("Depot metadata omitted `containerimage.digest`"))?;
+    let encoded_digest = digest
+        .strip_prefix("sha256:")
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| rejected("Depot metadata returned an invalid image digest"))?;
+    ArtifactDigest::new(format!("sha256:{}", encoded_digest.to_ascii_lowercase()))?
+        .for_reference(destination)
 }
 
 fn path_text<'a>(path: &'a Path, kind: &str) -> Result<&'a str, ArtifactStoreError> {

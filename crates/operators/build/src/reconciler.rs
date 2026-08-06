@@ -373,7 +373,21 @@ impl BuildReconciler {
         request: &ArtifactBuildRequest,
         output: &dyn ArtifactBuildOutputSink,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
-        let digest = match &build.spec.template.depot {
+        let destination = build
+            .spec
+            .template
+            .registry
+            .as_ref()
+            .map(|registry| {
+                ArtifactReference::new(format!(
+                    "{}/{service}:{deployment}",
+                    registry.trim_end_matches('/'),
+                    service = build.spec.service_id,
+                    deployment = build.spec.deployment_id,
+                ))
+            })
+            .transpose()?;
+        match &build.spec.template.depot {
             Some(depot) => {
                 let backend = self
                     .depot
@@ -382,22 +396,32 @@ impl BuildReconciler {
                         message: "build selects Depot but this cluster has no Depot token"
                             .to_owned(),
                     })?;
-                backend
-                    .build_with_output(request, &depot.project, output)
-                    .await?
+                match destination.as_ref() {
+                    Some(destination) => {
+                        backend
+                            .build_and_publish_with_output(
+                                request,
+                                &depot.project,
+                                destination,
+                                output,
+                            )
+                            .await
+                    }
+                    None => {
+                        backend
+                            .build_with_output(request, &depot.project, output)
+                            .await
+                    }
+                }
             }
-            None => self.artifacts.build_with_output(request, output).await?,
-        };
-        let Some(registry) = &build.spec.template.registry else {
-            return Ok(digest);
-        };
-        let destination = ArtifactReference::new(format!(
-            "{}/{service}:{deployment}",
-            registry.trim_end_matches('/'),
-            service = build.spec.service_id,
-            deployment = build.spec.deployment_id,
-        ))?;
-        self.artifacts.publish(&digest, &destination).await
+            None => {
+                let digest = self.artifacts.build_with_output(request, output).await?;
+                match destination.as_ref() {
+                    Some(destination) => self.artifacts.publish(&digest, destination).await,
+                    None => Ok(digest),
+                }
+            }
+        }
     }
 
     async fn fail(
