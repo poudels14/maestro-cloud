@@ -103,6 +103,13 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
         <ConfigSection title="Runtime" items={deployItems()} />
       </Show>
 
+      <Show when={!isPreview() && !isSystemService(props.service)}>
+        <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+          <ReplicasEditor api={props.api} service={props.service} />
+          <FreezeToggle api={props.api} service={props.service} />
+        </div>
+      </Show>
+
       <Show when={buildEnvItems().length > 0}>
         <ConfigSection title="Build environment variables" items={buildEnvItems()} />
       </Show>
@@ -115,13 +122,6 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
       </Show>
 
       {props.ingress}
-
-      <Show when={!isPreview() && !isSystemService(props.service)}>
-        <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          <ReplicasEditor api={props.api} service={props.service} />
-          <FreezeToggle api={props.api} service={props.service} />
-        </div>
-      </Show>
 
       <Show when={envItems().length > 0}>
         <ConfigSection title="Environment variables" items={envItems()} />

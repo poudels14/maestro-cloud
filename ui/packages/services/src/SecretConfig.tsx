@@ -11,7 +11,6 @@ function SecretConfig(props: {
 }) {
   const entries = () => secretEntries(props.secrets, props.resolvedSecrets);
   const sourcePath = () => secretSourcePath(props.secrets);
-  const hasResolutionReport = () => props.resolvedSecrets != null;
 
   return (
     <Show when={props.secrets}>
@@ -28,16 +27,9 @@ function SecretConfig(props: {
               )}
             </Show>
             <SecretRow label="Mount path" value={secrets().mountPath} />
-            <SecretRow label="Format" value={secrets().format === "dotenv" ? "dotenv" : "files"} />
             <For each={entries()}>
               {([key, maskedValue]) => <SecretRow label={key} value={maskedValue} />}
             </For>
-            <Show when={sourcePath() && entries().length === 0}>
-              <SecretRow
-                label="Resolved keys"
-                value={hasResolutionReport() ? "None" : "Not reported yet"}
-              />
-            </Show>
           </div>
         </div>
       )}
