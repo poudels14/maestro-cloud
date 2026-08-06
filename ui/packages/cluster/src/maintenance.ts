@@ -39,13 +39,23 @@ function maintenanceStageLabel(run: UpgradeRun | null | undefined) {
   )?.phase;
   const phase = activePhase ?? run.status.phase;
   if (phase === "applying") {
-    return run.spec.operation === "restart" ? "preparing restart" : "applying upgrade";
+    return run.spec.operation === "restart" ? "preparing" : "applying";
   }
+  if (phase === "restarting" && run.spec.operation === "restart") return "in progress";
   return MAINTENANCE_STAGE_LABELS[phase] ?? phase;
+}
+
+function maintenanceRunLabel(run: UpgradeRun | null | undefined) {
+  if (!run) return null;
+  if (run.spec.operation === "restart") {
+    if (run.spec.nodeIds?.length === 1) return "Node restart";
+    return run.spec.mode === "allNodes" ? "All-node cluster restart" : "Rolling cluster restart";
+  }
+  return run.spec.mode === "allNodes" ? "All-node cluster upgrade" : "Rolling cluster upgrade";
 }
 
 function isPartOfCluster(cluster: { clusterId?: string } | undefined) {
   return cluster?.clusterId != null;
 }
 
-export { activeMaintenanceNode, isPartOfCluster, maintenanceStageLabel };
+export { activeMaintenanceNode, isPartOfCluster, maintenanceRunLabel, maintenanceStageLabel };

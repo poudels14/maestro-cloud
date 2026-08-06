@@ -10,6 +10,7 @@ import { queryClient } from "../lib/queryClient";
 import {
   activeMaintenanceNode,
   clusterInfoQuery,
+  maintenanceRunLabel,
   maintenanceStageLabel,
   unschedulableQuery
 } from "@maestro/cluster";
@@ -87,7 +88,28 @@ function MaintenanceBanner() {
   const cluster = useQuery(() => clusterInfoQuery(clusterApi, { pollForMaintenance: true }));
   const activeRun = () => cluster.data?.activeUpgrade ?? null;
   const activeNode = () => activeMaintenanceNode(activeRun(), cluster.data?.nodes);
+  const runLabel = () => maintenanceRunLabel(activeRun());
   const stageLabel = () => maintenanceStageLabel(activeRun());
+  const isSingleNodeRestart = () =>
+    activeRun()?.spec.operation === "restart" && activeRun()?.spec.nodeIds?.length === 1;
+  const noticeLabel = () => {
+    const stage = stageLabel();
+    if (!isSingleNodeRestart()) return stage ? `${runLabel()}: ${stage}` : runLabel();
+    switch (stage) {
+      case "waiting to start":
+        return "Restart pending";
+      case "draining workloads":
+        return "Draining workloads";
+      case "preparing":
+        return "Preparing restart";
+      case "in progress":
+        return "Restart in progress";
+      case "verifying health":
+        return "Verifying restart";
+      default:
+        return runLabel();
+    }
+  };
   const [dismissedRunId, setDismissedRunId] = createSignal<string | null>(null);
 
   return (
@@ -95,17 +117,15 @@ function MaintenanceBanner() {
       <div class="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2.5 whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 py-2.5 pl-4 pr-2.5 shadow-lg">
         <Loader2 class="size-3.5 shrink-0 animate-spin text-amber-500" />
         <span class="text-xs font-medium text-amber-700">
-          {activeRun()?.spec.mode === "allNodes" ? "All-node" : "Rolling"} cluster upgrade
+          {noticeLabel()}
           <Show when={activeNode()}>
             {(node) => (
               <>
-                {" — "}
+                {isSingleNodeRestart() ? " - Node: " : " — "}
                 <span class="font-mono font-semibold">{node().label}</span>
-                <Show when={stageLabel()}>{(stage) => <>: {stage()}</>}</Show>
               </>
             )}
-          </Show>{" "}
-          — deploys are frozen
+          </Show>
         </span>
         <button
           type="button"

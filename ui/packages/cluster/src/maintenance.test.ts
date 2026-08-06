@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { activeMaintenanceNode, maintenanceStageLabel } from "./maintenance";
+import { activeMaintenanceNode, maintenanceRunLabel, maintenanceStageLabel } from "./maintenance";
 import type { ClusterNode, UpgradeRun } from "./types";
 
 const run = {
@@ -35,7 +35,7 @@ test("identifies the active maintenance node by hostname", () => {
     nodeId: "node-b",
     label: "worker-b"
   });
-  assert.equal(maintenanceStageLabel(run), "applying upgrade");
+  assert.equal(maintenanceStageLabel(run), "applying");
 });
 
 test("falls back to the node id and coordinator phase", () => {
@@ -65,7 +65,41 @@ test("uses the aggregate phase when there is no active node", () => {
 test("labels restart dispatch without implying an upgrade", () => {
   const restart = {
     ...run,
-    spec: { operation: "restart" as const, mode: "rolling" as const, targetVersion: "0.0.0" }
+    spec: {
+      operation: "restart" as const,
+      mode: "rolling" as const,
+      targetVersion: "0.0.0",
+      nodeIds: ["node-b"]
+    }
   } satisfies UpgradeRun;
-  assert.equal(maintenanceStageLabel(restart), "preparing restart");
+  assert.equal(maintenanceRunLabel(restart), "Node restart");
+  assert.equal(maintenanceStageLabel(restart), "preparing");
+  assert.equal(
+    maintenanceStageLabel({
+      ...restart,
+      status: {
+        phase: "restarting",
+        nodes: [{ nodeId: "node-b", attempts: 1, phase: "restarting" }]
+      }
+    }),
+    "in progress"
+  );
+});
+
+test("labels cluster-wide maintenance by operation and batching mode", () => {
+  assert.equal(maintenanceRunLabel(run), "Rolling cluster upgrade");
+  assert.equal(
+    maintenanceRunLabel({
+      ...run,
+      spec: { ...run.spec, mode: "allNodes" }
+    }),
+    "All-node cluster upgrade"
+  );
+  assert.equal(
+    maintenanceRunLabel({
+      ...run,
+      spec: { operation: "restart", mode: "rolling", targetVersion: "0.0.0" }
+    }),
+    "Rolling cluster restart"
+  );
 });

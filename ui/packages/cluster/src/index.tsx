@@ -1,6 +1,11 @@
 export { createClusterApi } from "./api";
 export type { ClusterApi, ClusterErrorMapper } from "./api";
-export { activeMaintenanceNode, isPartOfCluster, maintenanceStageLabel } from "./maintenance";
+export {
+  activeMaintenanceNode,
+  isPartOfCluster,
+  maintenanceRunLabel,
+  maintenanceStageLabel
+} from "./maintenance";
 export { projectClusterNodes } from "./nodes";
 export {
   clusterConfigQuery,
