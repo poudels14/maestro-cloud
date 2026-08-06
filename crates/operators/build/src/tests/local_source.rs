@@ -317,13 +317,20 @@ fn assert_environment(invocation: &GitInvocation) -> TestResult {
         .map(|(key, value)| (key.to_string_lossy().into_owned(), value.expose()))
         .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(values.get("GIT_TERMINAL_PROMPT").copied(), Some("0"));
-    assert_eq!(values.get("GIT_CONFIG_COUNT").copied(), Some("1"));
+    assert_eq!(values.get("GIT_ASKPASS").copied(), Some("/usr/bin/false"));
+    assert_eq!(values.get("SSH_ASKPASS").copied(), Some("/usr/bin/false"));
+    assert_eq!(values.get("GIT_CONFIG_COUNT").copied(), Some("2"));
     assert_eq!(
         values.get("GIT_CONFIG_KEY_0").copied(),
+        Some("credential.helper")
+    );
+    assert_eq!(values.get("GIT_CONFIG_VALUE_0").copied(), Some(""));
+    assert_eq!(
+        values.get("GIT_CONFIG_KEY_1").copied(),
         Some("http.https://github.com/.extraHeader")
     );
     let header = values
-        .get("GIT_CONFIG_VALUE_0")
+        .get("GIT_CONFIG_VALUE_1")
         .ok_or("Git authorization header missing")?;
     assert!(header.starts_with("Authorization: basic "));
     assert!(!header.contains("github-secret"));

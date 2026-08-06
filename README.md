@@ -258,6 +258,26 @@ maestro services up api \
   --context .
 ```
 
+Clone and build a repository locally without a Maestro config or API context:
+
+```sh
+maestro services build git@github.com:example/api.git \
+  --revision main \
+  --dockerfile Dockerfile \
+  --builder depot \
+  --depot-project your-depot-project \
+  --build-arg APP_ENV \
+  --secret NPM_TOKEN
+```
+
+The command requires `GH_TOKEN` and uses Maestro's isolated HTTPS Git source
+provider: SSH agents, credential helpers, askpass programs, and terminal prompts
+are not used. `--build-arg` and `--secret` accept environment variable names,
+not values. The native builder uses the same platform artifact backend as the
+daemon; the Depot builder additionally requires `DEPOT_TOKEN`. The command
+reports the resulting local digest and does not contact a registry unless an
+explicit destination is supplied with `--push IMAGE`.
+
 Builds omit `build.registry` by default and are replicated directly between
 Maestro nodes. Set it to a registry prefix such as
 `registry.example/team` to publish a deployment-unique tag and deploy the

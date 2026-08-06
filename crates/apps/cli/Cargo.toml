@@ -10,6 +10,7 @@ name = "maestro"
 path = "src/main.rs"
 
 [dependencies]
+async-trait.workspace = true
 aws-config = { workspace = true, features = [
   "credentials-login",
   "credentials-process",
@@ -46,7 +47,7 @@ shellexpand.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tar.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true, default-features = false, features = [
   "connect",
   "handshake",
@@ -58,6 +59,18 @@ webpki-roots.workspace = true
 time.workspace = true
 kernel-store = { version = "0.1.0", path = "../../kernel/store" }
 base64.workspace = true
+build = { version = "0.1.0", path = "../../operators/build" }
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false }
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = [
+  "containerd"
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+runtime = { version = "0.1.0", path = "../../runtime", default-features = false, features = [
+  "docker"
+] }

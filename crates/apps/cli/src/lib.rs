@@ -27,6 +27,7 @@ mod deployments;
 mod error;
 mod exec_command;
 mod launch_document;
+mod local_build;
 mod log_command;
 mod login;
 mod private_document;

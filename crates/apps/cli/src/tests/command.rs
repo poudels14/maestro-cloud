@@ -298,6 +298,29 @@ fn context_command_surface_matches_the_rewrite_contract() {
         .is_ok()
     );
     assert!(Cli::try_parse_from(["maestro", "services", "ls"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "services",
+            "build",
+            "git@github.com:acme/api.git",
+            "--revision",
+            "main",
+            "--dockerfile",
+            "infra/Dockerfile",
+            "--builder",
+            "depot",
+            "--depot-project",
+            "project-123",
+            "--build-arg",
+            "APP_ENV",
+            "--secret",
+            "NPM_TOKEN",
+            "--push",
+            "ghcr.io/acme/api:test",
+        ])
+        .is_ok()
+    );
     assert!(Cli::try_parse_from(["maestro", "services", "deployments", "api"]).is_ok());
     assert!(
         Cli::try_parse_from([

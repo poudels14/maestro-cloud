@@ -26,7 +26,7 @@ fn repository_normalization_uses_git_remote_grammar_and_rejects_credentials() {
 #[test]
 fn git_errors_redact_header_and_encoded_credentials() {
     let invocation = GitInvocation::new(["fetch"]).with_environment(vec![(
-        "GIT_CONFIG_VALUE_0".into(),
+        "GIT_CONFIG_VALUE_1".into(),
         SecretValue::new("Authorization: basic encoded-secret"),
     )]);
     let redactions = secret_fragments(&invocation);
@@ -45,10 +45,22 @@ fn github_token_is_not_sent_to_other_repository_hosts() -> Result<(), crate::Bui
         Some(&SecretValue::new("github-secret")),
     )?;
 
-    assert_eq!(environment.len(), 1);
+    assert_eq!(environment.len(), 6);
     assert_eq!(
         environment.first().and_then(|(key, _)| key.to_str()),
         Some("GIT_TERMINAL_PROMPT")
     );
+    let values = environment
+        .iter()
+        .map(|(key, value)| (key.to_string_lossy().into_owned(), value.expose()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(values.get("GIT_ASKPASS").copied(), Some("/usr/bin/false"));
+    assert_eq!(values.get("SSH_ASKPASS").copied(), Some("/usr/bin/false"));
+    assert_eq!(values.get("GIT_CONFIG_COUNT").copied(), Some("1"));
+    assert_eq!(
+        values.get("GIT_CONFIG_KEY_0").copied(),
+        Some("credential.helper")
+    );
+    assert_eq!(values.get("GIT_CONFIG_VALUE_0").copied(), Some(""));
     Ok(())
 }

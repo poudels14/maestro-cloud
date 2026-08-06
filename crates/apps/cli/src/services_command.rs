@@ -6,6 +6,7 @@ use clap::Subcommand;
 use crate::CliError;
 use crate::api_client::{ApiClient, request_id};
 use crate::contexts::ContextStore;
+use crate::local_build;
 use crate::{rollout, services, up};
 
 #[derive(Debug, Subcommand)]
@@ -32,6 +33,32 @@ pub(crate) enum ServiceCommand {
         /// Stable key for a single-service apply retry.
         #[arg(long)]
         idempotency_key: Option<String>,
+    },
+    /// Clone with GH_TOKEN and run a Maestro builder locally; pushing is opt-in.
+    Build {
+        /// HTTPS or git@host:path repository; local SSH credentials are never used.
+        repository: String,
+        /// Git revision to fetch and build.
+        #[arg(long, default_value = "HEAD")]
+        revision: String,
+        /// Dockerfile path relative to the repository root.
+        #[arg(long, default_value = "Dockerfile")]
+        dockerfile: PathBuf,
+        /// Existing Maestro build backend to use.
+        #[arg(long, value_enum, default_value_t = local_build::Builder::Native)]
+        builder: local_build::Builder,
+        /// Depot project required by --builder depot; DEPOT_TOKEN is read from the environment.
+        #[arg(long)]
+        depot_project: Option<String>,
+        /// Build argument name whose value is read from the environment.
+        #[arg(long = "build-arg", value_name = "ENV")]
+        build_arguments: Vec<String>,
+        /// Protected build secret name whose value is read from the environment.
+        #[arg(long = "secret", value_name = "ENV")]
+        secrets: Vec<String>,
+        /// Publish the successful image to this registry reference.
+        #[arg(long, value_name = "IMAGE")]
+        push: Option<String>,
     },
     /// Package a local context and deploy one configured build service.
     Up {
@@ -148,6 +175,34 @@ pub(crate) async fn run(
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
+    let command = match command {
+        ServiceCommand::Build {
+            repository,
+            revision,
+            dockerfile,
+            builder,
+            depot_project,
+            build_arguments,
+            secrets,
+            push,
+        } => {
+            return local_build::run(
+                local_build::Options {
+                    repository,
+                    revision,
+                    dockerfile,
+                    builder,
+                    depot_project,
+                    build_arguments,
+                    secrets,
+                    push,
+                },
+                output,
+            )
+            .await;
+        }
+        command => command,
+    };
     let contexts = ContextStore::from_environment()?;
     let client = ApiClient::new(contexts.active()?)?;
     match command {
@@ -206,6 +261,7 @@ pub(crate) async fn run(
             )
             .await
         }
+        ServiceCommand::Build { .. } => unreachable!("local build handled before API setup"),
         ServiceCommand::Deployments { service_id } => {
             crate::deployments::list(&client, service_id, output).await
         }

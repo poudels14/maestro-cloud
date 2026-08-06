@@ -125,7 +125,23 @@ pub(crate) fn git_environment(
     repository: &str,
     github_token: Option<&SecretValue>,
 ) -> Result<Vec<(OsString, SecretValue)>, BuildSourceError> {
-    let mut environment = vec![(OsString::from("GIT_TERMINAL_PROMPT"), SecretValue::new("0"))];
+    let mut environment = vec![
+        (OsString::from("GIT_TERMINAL_PROMPT"), SecretValue::new("0")),
+        (
+            OsString::from("GIT_ASKPASS"),
+            SecretValue::new("/usr/bin/false"),
+        ),
+        (
+            OsString::from("SSH_ASKPASS"),
+            SecretValue::new("/usr/bin/false"),
+        ),
+        (OsString::from("GIT_CONFIG_COUNT"), SecretValue::new("1")),
+        (
+            OsString::from("GIT_CONFIG_KEY_0"),
+            SecretValue::new("credential.helper"),
+        ),
+        (OsString::from("GIT_CONFIG_VALUE_0"), SecretValue::new("")),
+    ];
     let Some(token) = github_token else {
         return Ok(environment);
     };
@@ -153,13 +169,13 @@ pub(crate) fn git_environment(
     let credentials = base64::engine::general_purpose::STANDARD
         .encode(format!("x-access-token:{}", token.expose()));
     environment.extend([
-        (OsString::from("GIT_CONFIG_COUNT"), SecretValue::new("1")),
+        (OsString::from("GIT_CONFIG_COUNT"), SecretValue::new("2")),
         (
-            OsString::from("GIT_CONFIG_KEY_0"),
+            OsString::from("GIT_CONFIG_KEY_1"),
             SecretValue::new(format!("http.https://{authority}/.extraHeader")),
         ),
         (
-            OsString::from("GIT_CONFIG_VALUE_0"),
+            OsString::from("GIT_CONFIG_VALUE_1"),
             SecretValue::new(format!("Authorization: basic {credentials}")),
         ),
     ]);
@@ -251,7 +267,10 @@ pub(crate) fn secret_fragments(invocation: &GitInvocation) -> Vec<String> {
     invocation
         .environment
         .iter()
-        .filter(|(key, _)| key == "GIT_CONFIG_VALUE_0")
+        .filter(|(key, value)| {
+            key.to_string_lossy().starts_with("GIT_CONFIG_VALUE_")
+                && value.expose().starts_with("Authorization:")
+        })
         .flat_map(|(_, value)| {
             let header = value.expose().to_string();
             let credentials = header.split_whitespace().next_back().map(str::to_string);
