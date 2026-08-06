@@ -138,7 +138,7 @@ impl BuildReconciler {
             Ok(secrets) => secrets,
             Err(ValueSourceError::Unavailable { message }) => {
                 return self
-                    .retry(&build, context, "ExternalValueSourceUnavailable", message)
+                    .fail(build, context, "ExternalValueSourceUnavailable", message)
                     .await;
             }
             Err(ValueSourceError::Rejected { message }) => {
@@ -181,7 +181,7 @@ impl BuildReconciler {
                     .await
             }
             Err(BuildSourceError::Unavailable { message }) => {
-                self.retry(&build, context, "SourceUnavailable", message)
+                self.fail(build, context, "SourceUnavailable", message)
                     .await
             }
             Err(BuildSourceError::Rejected { message }) => {
@@ -209,7 +209,7 @@ impl BuildReconciler {
             Ok(secrets) => secrets,
             Err(ValueSourceError::Unavailable { message }) => {
                 return self
-                    .retry(&build, context, "ExternalValueSourceUnavailable", message)
+                    .fail(build, context, "ExternalValueSourceUnavailable", message)
                     .await;
             }
             Err(ValueSourceError::Rejected { message }) => {
@@ -231,7 +231,7 @@ impl BuildReconciler {
             Ok(prepared) => prepared,
             Err(BuildSourceError::Unavailable { message }) => {
                 return self
-                    .retry(&build, context, "SourceUnavailable", message)
+                    .fail(build, context, "SourceUnavailable", message)
                     .await;
             }
             Err(BuildSourceError::Rejected { message }) => {
@@ -255,7 +255,7 @@ impl BuildReconciler {
             Ok(environment) => environment,
             Err(ValueSourceError::Unavailable { message }) => {
                 return self
-                    .retry(&build, context, "ExternalValueSourceUnavailable", message)
+                    .fail(build, context, "ExternalValueSourceUnavailable", message)
                     .await;
             }
             Err(ValueSourceError::Rejected { message }) => {
@@ -306,8 +306,8 @@ impl BuildReconciler {
                 error
                 @ (ArtifactStoreError::Unavailable { .. } | ArtifactStoreError::Stream { .. }),
             ) => {
-                self.retry(
-                    &build,
+                self.fail(
+                    build,
                     context,
                     "ArtifactBuildUnavailable",
                     error.to_string(),
@@ -407,24 +407,13 @@ impl BuildReconciler {
         reason: &str,
         message: String,
     ) -> Result<Action, ReconcileError> {
-        self.append_error(&build, context, reason, false, &message)
-            .await?;
+        let log_result = self.append_error(&build, context, reason, &message).await;
         build.status.phase = BuildPhase::Failed;
         build.status.image_digest = None;
         self.set_condition(&mut build, ConditionState::False, reason, &message);
-        self.persist(context, &build, Action::Done).await
-    }
-
-    async fn retry(
-        &self,
-        build: &Build,
-        context: &ReconcileContext,
-        reason: &str,
-        message: String,
-    ) -> Result<Action, ReconcileError> {
-        self.append_error(build, context, reason, true, &message)
-            .await?;
-        Err(ReconcileError::Retryable { message })
+        let action = self.persist(context, &build, Action::Done).await?;
+        log_result?;
+        Ok(action)
     }
 
     async fn append_error(
@@ -432,7 +421,6 @@ impl BuildReconciler {
         build: &Build,
         context: &ReconcileContext,
         reason: &str,
-        retryable: bool,
         message: &str,
     ) -> Result<(), ReconcileError> {
         let phase = build_phase_name(build.status.phase);
@@ -446,8 +434,7 @@ impl BuildReconciler {
                 |condition| condition.last_transition_time,
             );
         let node_id = context.store().token().identity().node_id.clone();
-        let retryable_text = retryable.to_string();
-        let cursor = build_error_cursor(phase, reason, retryable, message, timestamp);
+        let cursor = build_error_cursor(phase, reason, message, timestamp);
         let entry = IngestLogEntry {
             id: LogRecordId {
                 node_id: node_id.clone(),
@@ -467,7 +454,7 @@ impl BuildReconciler {
             attributes: BTreeMap::from([
                 ("maestro.build.phase".to_owned(), phase.to_owned()),
                 ("maestro.build.reason".to_owned(), reason.to_owned()),
-                ("maestro.build.retryable".to_owned(), retryable_text),
+                ("maestro.build.retryable".to_owned(), "false".to_owned()),
             ]),
         };
         self.logs
@@ -611,17 +598,11 @@ fn build_phase_name(phase: BuildPhase) -> &'static str {
 fn build_error_cursor(
     phase: &str,
     reason: &str,
-    retryable: bool,
     message: &str,
     timestamp: kernel_api::Timestamp,
 ) -> String {
     let mut digest = Sha256::new();
-    for component in [
-        phase,
-        reason,
-        if retryable { "retryable" } else { "terminal" },
-        message,
-    ] {
+    for component in [phase, reason, "terminal", message] {
         let component_len = u64::try_from(component.len()).unwrap_or(u64::MAX);
         digest.update(component_len.to_be_bytes());
         digest.update(component.as_bytes());

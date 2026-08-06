@@ -362,7 +362,7 @@ async fn permanent_source_rejection_is_recorded_as_failed() -> TestResult {
 }
 
 #[tokio::test]
-async fn transient_source_failure_keeps_preparing_phase_for_retry() -> TestResult {
+async fn source_unavailability_fails_one_immutable_build_without_retry() -> TestResult {
     let world = TestWorld::new().await?;
     world.seed(&queued_build("Dockerfile")?).await?;
     let clone_error = concat!(
@@ -371,18 +371,16 @@ async fn transient_source_failure_keeps_preparing_phase_for_retry() -> TestResul
         "fatal: unable to access 'https://github.com/Baton-AI/baton.git/': ",
         "The requested URL returned error: 403"
     );
-    let source = Arc::new(RecordingSource::new(vec![
-        Err(BuildSourceError::unavailable(clone_error)),
-        Err(BuildSourceError::unavailable(clone_error)),
-        Ok(prepared("commit-after-retry")),
-    ]));
+    let source = Arc::new(RecordingSource::new(vec![Err(
+        BuildSourceError::unavailable(clone_error),
+    )]));
     let artifacts = Arc::new(RecordingArtifacts::successful()?);
-    let controller = world.runtime(source, artifacts)?;
+    let controller = world.runtime(source.clone(), artifacts)?;
 
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
     controller.reconcile_snapshot().await?;
-    assert_eq!(world.build().await?.status.phase, BuildPhase::Preparing);
+    assert_eq!(world.build().await?.status.phase, BuildPhase::Failed);
 
     let entries = world.logs.entries()?;
     assert_eq!(entries.len(), 1);
@@ -419,19 +417,12 @@ async fn transient_source_failure_keeps_preparing_phase_for_retry() -> TestResul
             .attributes
             .get("maestro.build.retryable")
             .map(String::as_str),
-        Some("true")
+        Some("false")
     );
 
     controller.reconcile_snapshot().await?;
     assert_eq!(world.logs.entries()?.len(), 1);
-
-    controller.reconcile_snapshot().await?;
-    let building = world.build().await?;
-    assert_eq!(building.status.phase, BuildPhase::Building);
-    assert_eq!(
-        building.status.source_revision.as_deref(),
-        Some("commit-after-retry")
-    );
+    assert_eq!(source.calls().len(), 1);
     Ok(())
 }
 

@@ -488,6 +488,40 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
 }
 
 #[test]
+fn failed_build_crashes_its_deployment() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let deployment = deployment(&service, DeploymentPhase::Building);
+    let build = Build {
+        meta: metadata(
+            deployment.spec.build_id.clone().expect("build id"),
+            Generation(1),
+        ),
+        spec: kernel_api::BuildSpec {
+            service_id: service.meta.id.clone(),
+            deployment_id: deployment.meta.id.clone(),
+            template: build_template(),
+        },
+        status: BuildStatus {
+            phase: BuildPhase::Failed,
+            image_digest: None,
+            source_revision: Some("abc".to_string()),
+            source_title: Some("Broken build".to_string()),
+            conditions: Vec::new(),
+        },
+    };
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.builds = vec![build];
+
+    let result = plan(snapshot).expect("propagate failed build");
+
+    assert_eq!(
+        result.deployment_updates[0].status.phase,
+        DeploymentPhase::Crashed
+    );
+}
+
+#[test]
 fn canceled_deployment_remains_in_history_until_service_deletion() {
     let service = service(Generation(1), RolloutState::Active);
     let canceled = deployment(&service, DeploymentPhase::Canceled);

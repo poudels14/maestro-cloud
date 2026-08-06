@@ -245,7 +245,7 @@ async fn git_source_rejects_credential_urls_and_option_revisions_before_spawn() 
 }
 
 #[tokio::test]
-async fn git_transport_failure_is_retryable_and_does_not_create_checkout() -> TestResult {
+async fn git_transport_failure_is_unavailable_and_does_not_create_checkout() -> TestResult {
     let paths = TestPaths::new()?;
     let runner = Arc::new(FakeGitRunner::new(FakeGitMode::Unavailable));
     let provider =
@@ -260,7 +260,7 @@ async fn git_transport_failure_is_retryable_and_does_not_create_checkout() -> Te
                 None,
             )
             .await,
-        "transport failure must retry",
+        "transport failure must remain distinguishable",
     )?;
 
     assert!(matches!(error, BuildSourceError::Unavailable { .. }));
