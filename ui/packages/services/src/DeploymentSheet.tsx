@@ -14,6 +14,7 @@ import {
 } from "./deploymentView";
 import { deploymentReplicasQuery } from "./queries";
 import { SecretConfig } from "./SecretConfig";
+import { buildSecretEntries } from "./secretView";
 import type { Deployment } from "./types";
 import { ReplicaRow } from "./DeploymentRow";
 
@@ -169,10 +170,7 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
     const value = artifact();
     return value.type === "build" ? Object.entries(value.environment ?? {}) : [];
   };
-  const buildSecretKeys = () => {
-    const value = artifact();
-    return value.type === "build" ? Object.keys(value.secrets ?? {}).sort() : [];
-  };
+  const buildSecrets = () => buildSecretEntries(artifact());
 
   return (
     <div class="p-4 sm:p-5 space-y-4 sm:space-y-5">
@@ -230,7 +228,7 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
       </Show>
 
       <ConfigValues title="Build environment variables" entries={buildEnvironment()} />
-      <SecretKeys title="Build secrets" keys={buildSecretKeys()} />
+      <SecretValues title="Build secrets" entries={buildSecrets()} />
       <ConfigValues title="Environment variables" entries={environment()} />
       <SecretConfig
         secrets={deployment().spec.service.secrets}
@@ -255,13 +253,15 @@ function ConfigValues(props: { title: string; entries: [string, string][] }) {
   );
 }
 
-function SecretKeys(props: { title: string; keys: string[] }) {
+function SecretValues(props: { title: string; entries: [string, string][] }) {
   return (
-    <Show when={props.keys.length > 0}>
+    <Show when={props.entries.length > 0}>
       <div>
         <h4 class="text-xs font-medium text-gray-400 mb-2">{props.title}</h4>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          <For each={props.keys}>{(key) => <DetailRow label={key} value="••••••••" />}</For>
+          <For each={props.entries}>
+            {([key, maskedValue]) => <DetailRow label={key} value={maskedValue} />}
+          </For>
         </div>
       </div>
     </Show>

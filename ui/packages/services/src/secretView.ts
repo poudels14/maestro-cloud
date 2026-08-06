@@ -5,6 +5,13 @@ type ResolvedSecrets = ApiSchemas["DeploymentStatus"]["resolvedSecrets"];
 
 export type SecretEntry = [key: string, maskedValue: string];
 
+export function buildSecretEntries(artifact: ApiSchemas["ArtifactTemplate"]): SecretEntry[] {
+  if (artifact.type !== "build") return [];
+  return Object.entries(artifact.secrets ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right)
+  );
+}
+
 export function secretNames(secrets: SecretMountSpec | null | undefined): string[] {
   if (!secrets) return [];
   const values = secrets.format === "dotenv" ? (secrets.items ?? {}) : secrets.files;

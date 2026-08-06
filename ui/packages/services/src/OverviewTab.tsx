@@ -9,6 +9,7 @@ import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { VolumesList } from "./overview/VolumesList";
 import { FreezeToggle } from "./overview/FreezeToggle";
+import { buildSecretEntries } from "./secretView";
 
 function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.Element }) {
   const deployments = useQuery(() => deploymentsQuery(props.api, props.service.meta.id));
@@ -38,10 +39,7 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
         }))
       : [];
   };
-  const buildSecretKeys = () => {
-    const value = artifact();
-    return value.type === "build" ? Object.keys(value.secrets ?? {}).sort() : [];
-  };
+  const buildSecrets = () => buildSecretEntries(artifact());
 
   const deployItems = () => {
     const spec = props.service.spec;
@@ -114,10 +112,10 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
         <ConfigSection title="Build environment variables" items={buildEnvItems()} />
       </Show>
 
-      <Show when={buildSecretKeys().length > 0}>
+      <Show when={buildSecrets().length > 0}>
         <div>
           <h4 class="text-xs font-medium text-gray-400 mb-2">Build secrets</h4>
-          <SecretsList keys={buildSecretKeys()} />
+          <SecretsList entries={buildSecrets()} />
         </div>
       </Show>
 
@@ -137,14 +135,14 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
   );
 }
 
-function SecretsList(props: { keys: string[] }) {
+function SecretsList(props: { entries: [string, string][] }) {
   return (
     <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-      <For each={props.keys}>
-        {(key) => (
+      <For each={props.entries}>
+        {([key, maskedValue]) => (
           <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
             <span class="text-xs font-medium text-gray-700 shrink-0">{key}</span>
-            <span class="text-xs text-gray-400">••••••••</span>
+            <span class="text-xs text-gray-400">{maskedValue}</span>
           </div>
         )}
       </For>

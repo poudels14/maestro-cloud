@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { secretEntries, secretNames, secretSourcePath } from "./secretView";
+import { buildSecretEntries, secretEntries, secretNames, secretSourcePath } from "./secretView";
+
+describe("buildSecretEntries", () => {
+  it("preserves API-masked suffixes and sorts secret names", () => {
+    expect(
+      buildSecretEntries({
+        type: "build",
+        dockerfile: "Dockerfile",
+        source: { type: "git", repository: "owner/repo", revision: "main" },
+        secrets: { TOKEN: "••••oken", DATABASE_URL: "••••tion" }
+      })
+    ).toEqual([
+      ["DATABASE_URL", "••••tion"],
+      ["TOKEN", "••••oken"]
+    ]);
+    expect(
+      buildSecretEntries({ type: "image", reference: "registry.example/app@sha256:abc" })
+    ).toEqual([]);
+  });
+});
 
 describe("secretNames", () => {
   it("lists dotenv keys and file names without reading their values", () => {
