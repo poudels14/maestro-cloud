@@ -112,7 +112,8 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
     listLocalDisks: (options) => get("/api/disks", options),
     listNodeDisks: (options) => get("/api/disks/nodes", options),
     listNodeMetrics: (query, options) => get(withQuery("/api/metrics/node", query), options),
-    listClusterMetrics: (query, options) => get(withQuery("/api/metrics/cluster", query), options),
+    listAllContainerMetrics: (query, options) =>
+      get(withQuery("/api/metrics/containers", query), options),
     listOperationalStatsMetrics: (query, options) =>
       get(withQuery("/api/metrics/stats", query), options),
     listNodes: (options) => get("/api/cluster/nodes", options),

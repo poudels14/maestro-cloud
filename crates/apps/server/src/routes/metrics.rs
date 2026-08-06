@@ -29,7 +29,10 @@ const MAXIMUM_WORKLOAD_BUCKET_MS: u64 = 3_600_000;
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/metrics/node", get(node_resource_metrics))
-        .route("/api/metrics/cluster", get(cluster_resource_metrics))
+        .route(
+            "/api/metrics/containers",
+            get(all_container_resource_metrics),
+        )
         .route(
             "/api/services/{service_id}/metrics",
             get(service_resource_metrics),
@@ -89,11 +92,11 @@ async fn node_resource_metrics(
         .map_err(host_error)?;
     Ok(Json(project_host_resource_metrics(
         &history,
-        ResourceMetricSource::Node,
+        ResourceMetricSource::Node(local_node(&state)?),
     )))
 }
 
-async fn cluster_resource_metrics(
+async fn all_container_resource_metrics(
     State(state): State<AppState>,
     Query(parameters): Query<RangeParameters>,
 ) -> Result<Json<Vec<ResourceMetricPoint>>, ApiError> {
@@ -101,7 +104,7 @@ async fn cluster_resource_metrics(
     let history = cluster_workload_history(&state, &parameters, None).await?;
     Ok(Json(aggregate_workload_resource_metrics_by_bucket(
         &history,
-        ResourceMetricSource::Cluster,
+        ResourceMetricSource::AllContainers,
         bucket,
     )))
 }

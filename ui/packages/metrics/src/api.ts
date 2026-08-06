@@ -8,7 +8,7 @@ type MetricsErrorMapper = (error: unknown, fallback: string) => Error;
 interface MetricsApi {
   listDisks: () => Promise<DiskInfo[]>;
   listNodeMetrics: (from: number, to: number) => Promise<MetricPoint[]>;
-  listClusterMetrics: (from: number, to: number) => Promise<MetricPoint[]>;
+  listAllContainerMetrics: (from: number, to: number) => Promise<MetricPoint[]>;
   listServiceMetrics: (serviceId: string, from: number, to: number) => Promise<MetricPoint[]>;
   listServiceTraffic: (serviceId: string, from: number, to: number) => Promise<TrafficPoint[]>;
 }
@@ -29,8 +29,11 @@ function createMetricsApi(
     listDisks: () => mapped(() => client().listLocalDisks(), "Failed to load disks"),
     listNodeMetrics: (from, to) =>
       mapped(() => client().listNodeMetrics({ from, to }), "Failed to load node metrics"),
-    listClusterMetrics: (from, to) =>
-      mapped(() => client().listClusterMetrics({ from, to }), "Failed to load cluster metrics"),
+    listAllContainerMetrics: (from, to) =>
+      mapped(
+        () => client().listAllContainerMetrics({ from, to }),
+        "Failed to load container metrics"
+      ),
     listServiceMetrics: (serviceId, from, to) =>
       mapped(
         () => client().listServiceMetrics(serviceId, { from, to }),

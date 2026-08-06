@@ -19,8 +19,8 @@ pub(crate) fn paths() -> Map<String, Value> {
             metric_operation("listNodeMetrics", &[], MetricResolution::Raw),
         ),
         (
-            "/api/metrics/cluster".to_owned(),
-            metric_operation("listClusterMetrics", &[], MetricResolution::Bucketed),
+            "/api/metrics/containers".to_owned(),
+            metric_operation("listAllContainerMetrics", &[], MetricResolution::Bucketed),
         ),
         (
             "/api/services/{serviceId}/metrics".to_owned(),

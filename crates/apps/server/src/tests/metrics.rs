@@ -60,7 +60,7 @@ async fn node_metric_routes_project_history_and_latest_disks()
     assert_eq!(points.len(), 2);
     let first = points.first().ok_or("first resource point missing")?;
     let second = points.get(1).ok_or("second resource point missing")?;
-    assert_eq!(first.source, "node");
+    assert_eq!(first.source, "node:node-1");
     assert_eq!(first.cpu_percent, 0.0);
     assert_eq!(second.cpu_percent, 90.0);
 
@@ -163,7 +163,7 @@ async fn metric_routes_reject_invalid_ranges_and_missing_composition()
 }
 
 #[tokio::test]
-async fn cluster_metric_routes_merge_nodes_by_bucket_and_preserve_sources()
+async fn all_container_metric_routes_merge_nodes_by_bucket_and_preserve_sources()
 -> Result<(), Box<dyn std::error::Error>> {
     let (store, cluster_id) = seeded_store().await?;
     let workloads = Arc::new(InMemoryMetricStore::new());
@@ -191,16 +191,16 @@ async fn cluster_metric_routes_merge_nodes_by_bucket_and_preserve_sources()
 
     let response = request(
         &server,
-        "/api/metrics/cluster?from=5000&to=6000&bucketMs=5000",
+        "/api/metrics/containers?from=5000&to=6000&bucketMs=5000",
         None,
     )
     .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let points: Vec<ResourceMetricPoint> = decode(response).await?;
-    let point = points.first().ok_or("cluster point missing")?;
+    let point = points.first().ok_or("container aggregate point missing")?;
     assert_eq!(points.len(), 1);
     assert_eq!(point.ts, 5_000);
-    assert_eq!(point.source, "cluster");
+    assert_eq!(point.source, "containers");
     assert_eq!(point.memory_bytes, 2_048);
 
     let response = request(
@@ -238,7 +238,7 @@ async fn cluster_metric_routes_merge_nodes_by_bucket_and_preserve_sources()
     assert_eq!(
         request(
             &server,
-            "/api/metrics/cluster?from=5000&to=6000&bucketMs=0",
+            "/api/metrics/containers?from=5000&to=6000&bucketMs=0",
             None,
         )
         .await?
@@ -248,7 +248,7 @@ async fn cluster_metric_routes_merge_nodes_by_bucket_and_preserve_sources()
     assert_eq!(
         request(
             &server,
-            "/api/metrics/cluster?from=5000&to=6000&limit=0",
+            "/api/metrics/containers?from=5000&to=6000&limit=0",
             None,
         )
         .await?

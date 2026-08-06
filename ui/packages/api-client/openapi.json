@@ -10003,9 +10003,9 @@
         ]
       }
     },
-    "/api/metrics/cluster": {
+    "/api/metrics/containers": {
       "get": {
-        "operationId": "listClusterMetrics",
+        "operationId": "listAllContainerMetrics",
         "parameters": [
           {
             "in": "query",

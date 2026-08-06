@@ -480,7 +480,7 @@ fn server_openapi_contains_domain_paths_and_bearer_policy() {
     assert!(document.pointer("/paths/~1api~1previews/get").is_some());
     assert!(
         document
-            .pointer("/paths/~1api~1metrics~1cluster/get")
+            .pointer("/paths/~1api~1metrics~1containers/get")
             .is_some()
     );
     assert!(

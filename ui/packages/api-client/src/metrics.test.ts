@@ -16,7 +16,7 @@ test("generated observability helpers preserve paths and query contracts", async
   await client.listLocalDisks();
   await client.listNodeDisks();
   await client.listNodeMetrics({ from: 10, to: 20, limit: 100 });
-  await client.listClusterMetrics({ from: 30, to: 40, limit: 200, bucketMs: 5_000 });
+  await client.listAllContainerMetrics({ from: 30, to: 40, limit: 200, bucketMs: 5_000 });
   await client.listOperationalStatsMetrics({ name: "sink queue", from: 50, to: 60, limit: 300 });
   await client.listServiceMetrics("service/a", { from: 70, to: 80, bucketMs: 10_000 });
   await client.getServiceTraffic("service/a", { from: 80, to: 90, limit: 500, nodeId: "node-a" });
@@ -29,7 +29,7 @@ test("generated observability helpers preserve paths and query contracts", async
     { method: "GET", path: "/api/metrics/node?from=10&to=20&limit=100" },
     {
       method: "GET",
-      path: "/api/metrics/cluster?from=30&to=40&limit=200&bucketMs=5000"
+      path: "/api/metrics/containers?from=30&to=40&limit=200&bucketMs=5000"
     },
     {
       method: "GET",

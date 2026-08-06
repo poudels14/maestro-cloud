@@ -564,14 +564,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/metrics/cluster": {
+    "/api/metrics/containers": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["listClusterMetrics"];
+        get: operations["listAllContainerMetrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5188,7 +5188,7 @@ export interface operations {
             };
         };
     };
-    listClusterMetrics: {
+    listAllContainerMetrics: {
         parameters: {
             query?: {
                 from?: number;

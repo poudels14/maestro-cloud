@@ -2,10 +2,11 @@ import { createSignal, For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
-import { clusterMetricsQuery, nodeMetricsQuery } from "./queries";
+import { allContainerMetricsQuery, nodeMetricsQuery } from "./queries";
 import { Card, ErrorBanner, formatBytes, formatPercent, SectionHeader } from "@maestro/kit";
 import { TimelineChart } from "@maestro/charts";
 import type { MetricsApi } from "./api";
+import { nodeIdFromMetricSource } from "./labels";
 
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000 },
@@ -14,31 +15,32 @@ const TIME_RANGES = [
   { label: "7d", ms: 604_800_000 }
 ];
 
-function NodeMetricsSection(props: { api: MetricsApi }) {
+function ResourceMetricsSection(props: { api: MetricsApi }) {
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
   const nodeMetrics = useQuery(() => nodeMetricsQuery(props.api, rangeMs()));
-  const clusterMetrics = useQuery(() => clusterMetricsQuery(props.api, rangeMs()));
+  const containerMetrics = useQuery(() => allContainerMetricsQuery(props.api, rangeMs()));
 
   const latestNode = () => {
     const data = nodeMetrics.data ?? [];
     return data.length > 0 ? data[data.length - 1] : null;
   };
-  const latestCluster = () => {
-    const data = clusterMetrics.data ?? [];
+  const latestContainers = () => {
+    const data = containerMetrics.data ?? [];
     return data.length > 0 ? data[data.length - 1] : null;
   };
+  const nodeId = () => nodeIdFromMetricSource(latestNode()?.source);
 
   const xMax = () => Date.now();
   const xMin = () => xMax() - rangeMs();
 
   return (
     <div class="space-y-8">
-      <Show when={nodeMetrics.isError || clusterMetrics.isError}>
+      <Show when={nodeMetrics.isError || containerMetrics.isError}>
         <ErrorBanner
           message="Failed to load metrics"
           onRetry={() => {
             nodeMetrics.refetch();
-            clusterMetrics.refetch();
+            containerMetrics.refetch();
           }}
         />
       </Show>
@@ -64,7 +66,12 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
         </div>
       </div>
       <div>
-        <SectionHeader class="mb-4">Node</SectionHeader>
+        <SectionHeader class="mb-4">
+          Node
+          <Show when={nodeId()}>
+            {(id) => <span class="ml-1.5 text-xs font-normal text-gray-400">{id()}</span>}
+          </Show>
+        </SectionHeader>
         <div class="grid grid-cols-1 gap-4">
           <MetricCard
             title="CPU"
@@ -99,14 +106,17 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
         </div>
       </div>
       <div>
-        <SectionHeader class="mb-4">Cluster</SectionHeader>
+        <SectionHeader class="mb-4">Containers</SectionHeader>
         <div class="grid grid-cols-1 gap-4">
           <MetricCard
             title="CPU"
-            value={latestCluster() ? formatPercent(latestCluster()!.cpuPercent) : null}
+            value={latestContainers() ? formatPercent(latestContainers()!.cpuPercent) : null}
           >
             <TimelineChart
-              data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
+              data={(containerMetrics.data ?? []).map((m) => ({
+                ts: m.ts,
+                value: m.cpuPercent
+              }))}
               label="CPU"
               color="#4f46e5"
               yFormat={formatPercent}
@@ -117,13 +127,16 @@ function NodeMetricsSection(props: { api: MetricsApi }) {
           <MetricCard
             title="Memory"
             value={
-              latestCluster()
-                ? `${formatBytes(latestCluster()!.memoryBytes)} / ${formatBytes(latestCluster()!.memoryLimitBytes)}`
+              latestContainers()
+                ? `${formatBytes(latestContainers()!.memoryBytes)} / ${formatBytes(latestContainers()!.memoryLimitBytes)}`
                 : null
             }
           >
             <TimelineChart
-              data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
+              data={(containerMetrics.data ?? []).map((m) => ({
+                ts: m.ts,
+                value: m.memoryBytes
+              }))}
               label="Memory"
               color="#4f46e5"
               yFormat={formatBytes}
@@ -151,4 +164,4 @@ function MetricCard(props: { title: string; value: string | null; children: JSX.
   );
 }
 
-export { NodeMetricsSection };
+export { ResourceMetricsSection };

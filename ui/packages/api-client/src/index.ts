@@ -1,6 +1,6 @@
 export type { MaestroApiClient } from "./client";
 export type {
-  ClusterMetricQuery,
+  AllContainerMetricQuery,
   ContainerMetricQuery,
   IngressTrafficQuery,
   LogHistogramQuery,

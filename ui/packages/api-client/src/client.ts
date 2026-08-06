@@ -8,8 +8,8 @@ export type IngressTrafficQuery = NonNullable<
 export type PlacementHistoryQuery = NonNullable<
   operations["listPlacementHistory"]["parameters"]["query"]
 >;
-export type ClusterMetricQuery = NonNullable<
-  operations["listClusterMetrics"]["parameters"]["query"]
+export type AllContainerMetricQuery = NonNullable<
+  operations["listAllContainerMetrics"]["parameters"]["query"]
 >;
 export type NodeMetricQuery = NonNullable<operations["listNodeMetrics"]["parameters"]["query"]>;
 export type StatsMetricQuery = NonNullable<
@@ -59,8 +59,8 @@ export interface MaestroApiClient {
     query?: NodeMetricQuery,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
-  listClusterMetrics(
-    query?: ClusterMetricQuery,
+  listAllContainerMetrics(
+    query?: AllContainerMetricQuery,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["ResourceMetricPoint"][]>;
   listOperationalStatsMetrics(

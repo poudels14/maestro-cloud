@@ -17,7 +17,7 @@ fn host_projection_preserves_wire_shape_and_uses_counter_deltas()
             point: current,
             previous: Some(previous),
         }],
-        ResourceMetricSource::Node,
+        ResourceMetricSource::Node(NodeId::new("node-1")?),
     );
     let point = projected.first().ok_or("projected host point missing")?;
     assert_eq!(point.cpu_percent, 70.0);
@@ -28,7 +28,7 @@ fn host_projection_preserves_wire_shape_and_uses_counter_deltas()
         serde_json::to_value(point)?,
         serde_json::json!({
             "ts": 2_000,
-            "source": "node",
+            "source": "node:node-1",
             "cpuPercent": 70.0,
             "memoryBytes": 600,
             "memoryLimitBytes": 1_000,
@@ -42,7 +42,7 @@ fn host_projection_preserves_wire_shape_and_uses_counter_deltas()
             point: host_point(3_000, 10, 5),
             previous: Some(host_point(2_000, 300, 100)),
         }],
-        ResourceMetricSource::Node,
+        ResourceMetricSource::Node(NodeId::new("node-1")?),
     );
     assert_eq!(reset.first().map(|point| point.cpu_percent), Some(0.0));
     Ok(())
@@ -78,7 +78,7 @@ fn workload_projection_aggregates_exact_sweeps_and_isolates_resets()
     let mut unlimited = workload_history("workload-4", 1_000, 1_000_000, 1_250_000)?;
     unlimited.point.memory_maximum_bytes = None;
     let unlimited_aggregate =
-        aggregate_workload_resource_metrics(&[unlimited], ResourceMetricSource::Cluster);
+        aggregate_workload_resource_metrics(&[unlimited], ResourceMetricSource::AllContainers);
     assert_eq!(
         unlimited_aggregate
             .first()
@@ -105,13 +105,13 @@ fn workload_bucket_projection_merges_unaligned_nodes_and_deduplicates_a_workload
 
     let points = aggregate_workload_resource_metrics_by_bucket(
         &[early, replacement, peer],
-        ResourceMetricSource::Cluster,
+        ResourceMetricSource::AllContainers,
         NonZeroU64::new(5_000).ok_or("invalid bucket")?,
     );
     let point = points.first().ok_or("bucket aggregate missing")?;
     assert_eq!(points.len(), 1);
     assert_eq!(point.ts, 5_000);
-    assert_eq!(point.source, "cluster");
+    assert_eq!(point.source, "containers");
     assert_eq!(point.cpu_percent, 75.0);
     assert_eq!(point.memory_bytes, 3_000);
     Ok(())

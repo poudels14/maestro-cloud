@@ -32,8 +32,12 @@ const disksQuery = (api: MetricsApi) => ({
 const nodeMetricsQuery = (api: MetricsApi, rangeMs: number) =>
   metricsRangeQuery(["metrics", "node", rangeMs] as const, rangeMs, api.listNodeMetrics);
 
-const clusterMetricsQuery = (api: MetricsApi, rangeMs: number) =>
-  metricsRangeQuery(["metrics", "cluster", rangeMs] as const, rangeMs, api.listClusterMetrics);
+const allContainerMetricsQuery = (api: MetricsApi, rangeMs: number) =>
+  metricsRangeQuery(
+    ["metrics", "containers", rangeMs] as const,
+    rangeMs,
+    api.listAllContainerMetrics
+  );
 
 const serviceMetricsQuery = (api: MetricsApi, serviceId: string, rangeMs: number) =>
   metricsRangeQuery(["metrics", "service", serviceId, rangeMs] as const, rangeMs, (from, to) =>
@@ -46,7 +50,7 @@ const serviceTrafficQuery = (api: MetricsApi, serviceId: string, rangeMs: number
   );
 
 export {
-  clusterMetricsQuery,
+  allContainerMetricsQuery,
   disksQuery,
   nodeMetricsQuery,
   serviceMetricsQuery,

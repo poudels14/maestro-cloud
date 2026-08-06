@@ -13,9 +13,9 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceMetricSource {
     /// One node's aggregate host resources.
-    Node,
-    /// Cluster-wide aggregate resources.
-    Cluster,
+    Node(NodeId),
+    /// Every container across all cluster nodes.
+    AllContainers,
     /// All selected workloads for one service.
     Service(ServiceId),
     /// One runtime workload.
@@ -23,23 +23,23 @@ pub enum ResourceMetricSource {
 }
 
 impl ResourceMetricSource {
-    fn legacy_name(&self) -> String {
+    fn name(&self) -> String {
         match self {
-            Self::Node => "node".to_owned(),
-            Self::Cluster => "cluster".to_owned(),
+            Self::Node(node_id) => format!("node:{node_id}"),
+            Self::AllContainers => "containers".to_owned(),
             Self::Service(service_id) => format!("service:{service_id}"),
             Self::Workload(workload_id) => format!("container:{workload_id}"),
         }
     }
 }
 
-/// API-facing resource sample preserving the established camel-case wire shape.
+/// API-facing resource sample.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceMetricPoint {
     /// Wall-clock sample time in milliseconds.
     pub ts: i64,
-    /// Stable legacy source namespace.
+    /// Stable source namespace.
     pub source: String,
     /// CPU consumed during the preceding interval, as a percentage of one core.
     pub cpu_percent: f64,
@@ -53,7 +53,7 @@ pub struct ResourceMetricPoint {
     pub net_tx_bytes: u64,
 }
 
-/// API-facing disk inventory preserving the established camel-case wire shape.
+/// API-facing disk inventory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskInfo {
@@ -74,7 +74,7 @@ pub fn project_host_resource_metrics(
     history: &[HostMetricHistoryPoint],
     source: ResourceMetricSource,
 ) -> Vec<ResourceMetricPoint> {
-    let source = source.legacy_name();
+    let source = source.name();
     history
         .iter()
         .filter_map(|history| {
@@ -233,7 +233,7 @@ fn workload_point(
     let point = &history.point;
     ResourceMetricPoint {
         ts: point.id.collected_at.0,
-        source: source.legacy_name(),
+        source: source.name(),
         cpu_percent: workload_cpu_percent(history.previous.as_ref(), point),
         memory_bytes: point.memory_current_bytes,
         memory_limit_bytes: point.memory_maximum_bytes.unwrap_or(0),
