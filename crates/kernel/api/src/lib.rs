@@ -84,7 +84,8 @@ pub use secret::{MaskedSecret, SecretValue};
 pub use service_validation::ServiceSpecError;
 pub use system_service::{
     CLOUDFLARE_SERVICE_ID, DNS_RESOLVER_SERVICE_ID, SYSTEM_RESOURCE_PREFIX,
-    TAILSCALE_GATEWAY_SERVICE_ID, TRAEFIK_SERVICE_ID, is_system_resource_id, is_system_service,
+    TAILSCALE_GATEWAY_SERVICE_ID, TRAEFIK_SERVICE_ID, desired_service_replicas,
+    is_system_resource_id, is_system_service,
 };
 pub use value_source::{ExternalValueSource, InvalidExternalValueSource};
 pub use workload::{

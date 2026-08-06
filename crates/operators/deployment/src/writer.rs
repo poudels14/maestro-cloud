@@ -8,7 +8,7 @@ use kernel_store::{
 use serde::Serialize;
 
 use crate::snapshot::{ResourceSnapshot, StoredResource};
-use crate::{DeploymentPlan, ResourceStatusUpdate};
+use crate::{DeploymentPlan, ResourceStatusUpdate, ServiceUpdate};
 
 // FencedStore adds one leader compare. Each simple deletion consumes one
 // compare and one mutation; replica deletion also proves its Assignment is
@@ -99,7 +99,7 @@ impl DeploymentWriter {
         }
         for update in &plan.service_updates {
             let current = required(&snapshot.services, &update.id, "Service")?;
-            let resource = status_replacement(current, update, "Service")?;
+            let resource = service_replacement(current, update)?;
             compares.push(exact(&current.stored));
             mutations.push(put(&current.stored, &resource, "Service", &update.id)?);
         }
@@ -311,6 +311,26 @@ where
     }
     let mut resource = current.resource.clone();
     resource.meta.revision = actual;
+    resource.status = update.status.clone();
+    Ok(resource)
+}
+
+fn service_replacement(
+    current: &StoredResource<kernel_api::Service>,
+    update: &ServiceUpdate,
+) -> Result<kernel_api::Service, DeploymentWriteError> {
+    let actual = current.stored.version.resource_revision();
+    if update.observed_revision != actual {
+        return Err(DeploymentWriteError::ObservedRevisionMismatch {
+            kind: "Service",
+            resource_id: update.id.to_string(),
+            planned: update.observed_revision,
+            actual,
+        });
+    }
+    let mut resource = current.resource.clone();
+    resource.meta.revision = actual;
+    resource.meta.generation = update.generation;
     resource.status = update.status.clone();
     Ok(resource)
 }

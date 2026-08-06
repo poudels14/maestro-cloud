@@ -4,7 +4,7 @@ use std::time::Duration;
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, ConditionState, ConditionType, Deployment,
     DeploymentPhase, NodeId, PlacementConstraint, ServiceId, Timestamp, TrafficGenerationPhase,
-    VolumeSource,
+    VolumeSource, desired_service_replicas,
 };
 
 use crate::SchedulerError;
@@ -264,10 +264,7 @@ fn schedule_services(
         let Some(groups) = deployments.get(&service.meta.id) else {
             continue;
         };
-        let replicas = service
-            .status
-            .replica_override
-            .unwrap_or(service.spec.replicas);
+        let replicas = desired_service_replicas(service);
         let deployment_groups = groups
             .iter()
             .map(|deployment| DeploymentGroup {

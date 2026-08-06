@@ -11,8 +11,8 @@ use kernel_api::{
     ExecPolicy, Generation, Node, NodeApiAccess, NodeId, NodeInstanceId, NodeNetwork,
     NodeNetworkId, NodeNetworkSpec, NodeNetworkStatus, NodeRole, NodeSpec, NodeStatus, ObjectMeta,
     PlacementConstraint, ResourceKind, ResourceName, ResourceRevision, RolloutState, Service,
-    ServiceId, ServiceSpec, ServiceStatus, Timestamp, UnschedulableReplica, VolumeAccess,
-    VolumeMountSpec, VolumeSource,
+    ServiceId, ServiceSpec, ServiceStatus, TAILSCALE_GATEWAY_SERVICE_ID, Timestamp,
+    UnschedulableReplica, VolumeAccess, VolumeMountSpec, VolumeSource,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -63,6 +63,18 @@ async fn scheduler_scales_one_service_across_three_nodes_atomically()
     let assignments = world.assignments().await?;
     assert_eq!(assignments.len(), 2);
     assert_eq!(assignment_for_slot(&assignments, 0)?.meta.id, original_zero);
+    Ok(())
+}
+
+#[tokio::test]
+async fn scheduler_keeps_one_system_replica_when_configured_for_zero()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new_for_service(0, ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)?).await?;
+
+    let scheduled = world.reconcile(Timestamp(1_000)).await?;
+
+    assert_eq!((scheduled.desired, scheduled.created), (1, 1));
+    assert_eq!(world.assignments().await?.len(), 1);
     Ok(())
 }
 
@@ -144,11 +156,19 @@ pub(super) struct World {
     pub(super) keys: Keyspace,
     scheduler: Scheduler,
     pub(super) fenced: FencedStore,
+    service_id: ServiceId,
     _leader_session: Box<dyn Session>,
 }
 
 impl World {
     pub(super) async fn new(replicas: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_for_service(replicas, service_id()).await
+    }
+
+    async fn new_for_service(
+        replicas: u32,
+        service_id: ServiceId,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let cluster_id = ClusterId::new("cluster-1")?;
         let keys = Keyspace::new(&cluster_id);
         let store = Arc::new(InMemoryStore::new(Arc::new(NoopClock)));
@@ -187,6 +207,7 @@ impl World {
             keys,
             scheduler,
             fenced,
+            service_id,
             _leader_session: leader_session,
         };
         world.seed(replicas).await?;
@@ -212,8 +233,10 @@ impl World {
                 })
                 .await?;
         }
-        self.put("Service", "api", &service(replicas)).await?;
-        self.put("Deployment", "deployment-1", &deployment())
+        let service = service(self.service_id.clone(), replicas);
+        self.put("Service", self.service_id.as_str(), &service)
+            .await?;
+        self.put("Deployment", "deployment-1", &deployment(&service))
             .await?;
         Ok(())
     }
@@ -268,9 +291,10 @@ impl World {
         &self,
         replicas: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let key = self
-            .keys
-            .resource(&ResourceKind::new("Service")?, &ResourceName::new("api")?);
+        let key = self.keys.resource(
+            &ResourceKind::new("Service")?,
+            &ResourceName::from(self.service_id.clone()),
+        );
         let stored = self.store.get(&key).await?.ok_or("service missing")?;
         let mut service: Service = serde_json::from_slice(&stored.value)?;
         service.status.replica_override = Some(replicas);
@@ -312,9 +336,10 @@ impl World {
         &self,
         node_ids: &[&str],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let key = self
-            .keys
-            .resource(&ResourceKind::new("Service")?, &ResourceName::new("api")?);
+        let key = self.keys.resource(
+            &ResourceKind::new("Service")?,
+            &ResourceName::from(self.service_id.clone()),
+        );
         let stored = self.store.get(&key).await?.ok_or("service missing")?;
         let mut service: Service = serde_json::from_slice(&stored.value)?;
         service.meta.generation = Generation(service.meta.generation.0.saturating_add(1));
@@ -409,9 +434,9 @@ fn network(node_id: NodeId, index: u8) -> NodeNetwork {
     }
 }
 
-fn service(replicas: u32) -> Service {
+fn service(service_id: ServiceId, replicas: u32) -> Service {
     kernel_api::Object {
-        meta: metadata(service_id()),
+        meta: metadata(service_id),
         spec: ServiceSpec {
             name: "API".to_owned(),
             version: "1.0.0".to_owned(),
@@ -443,15 +468,15 @@ fn service(replicas: u32) -> Service {
     }
 }
 
-fn deployment() -> Deployment {
+fn deployment(service: &Service) -> Deployment {
     kernel_api::Object {
         meta: metadata(deployment_id()),
         spec: DeploymentSpec {
-            service_id: service_id(),
+            service_id: service.meta.id.clone(),
             service_generation: Generation(1),
             restart_generation: Generation(1),
             bypass_rollout_freeze: false,
-            service: service(1).spec,
+            service: service.spec.clone(),
             environment_template: Default::default(),
             goal: kernel_api::DeploymentGoal::Run,
             build_id: None,

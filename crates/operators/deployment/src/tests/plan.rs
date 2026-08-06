@@ -4,7 +4,8 @@ use kernel_api::{
     ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, Condition, ConditionReason,
     ConditionState, ConditionType, DeploymentId, DeploymentPhase, Generation, IngressRouteId,
     IngressRouteSpec, IngressRouteStatus, Object, OwnerReference, Ownership, ResourceId,
-    ResourceKind, ResourceName, RolloutState, SecretValue, Timestamp,
+    ResourceKind, ResourceName, RolloutState, SecretValue, ServiceId, TAILSCALE_GATEWAY_SERVICE_ID,
+    Timestamp, desired_service_replicas,
 };
 
 use super::plan_support::*;
@@ -20,6 +21,63 @@ fn creates_one_stable_deployment_per_service_generation() {
     assert_eq!(deployment.spec.service_generation, Generation(7));
     assert_eq!(deployment.status.phase, DeploymentPhase::Queued);
     assert!(deployment.spec.build_id.is_none());
+}
+
+#[test]
+fn terminal_system_deployment_starts_a_new_rollout() {
+    let mut system = service(Generation(7), RolloutState::Active);
+    system.meta.id = ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID).expect("system service id");
+    system.spec.replicas = 0;
+    let crashed = deployment(&system, DeploymentPhase::Crashed);
+
+    let recovered = plan(input(system.clone(), vec![crashed.clone()]))
+        .expect("recover terminal system deployment");
+    assert_eq!(recovered.create_deployments.len(), 1);
+    let replacement = &recovered.create_deployments[0];
+    assert_eq!(replacement.spec.service_generation, Generation(8));
+    assert_eq!(replacement.status.phase, DeploymentPhase::Queued);
+    assert_ne!(replacement.meta.id, crashed.meta.id);
+    assert_eq!(recovered.service_updates.len(), 1);
+    assert_eq!(recovered.service_updates[0].generation, Generation(8));
+    assert_eq!(desired_service_replicas(&system), 1);
+
+    system.meta.generation = recovered.service_updates[0].generation;
+    system.status = recovered.service_updates[0].status.clone();
+    let stable = plan(input(system, vec![crashed, replacement.clone()]))
+        .expect("do not create another recovery rollout");
+    assert!(stable.create_deployments.is_empty());
+    assert!(stable.service_updates.is_empty());
+}
+
+#[test]
+fn terminal_user_deployment_remains_terminal() {
+    let service = service(Generation(7), RolloutState::Active);
+    let crashed = deployment(&service, DeploymentPhase::Crashed);
+
+    let unchanged = plan(input(service, vec![crashed])).expect("retain user terminal state");
+
+    assert!(unchanged.create_deployments.is_empty());
+    assert!(unchanged.service_updates.is_empty());
+}
+
+#[test]
+fn system_readiness_uses_one_replica_when_configured_for_zero() {
+    let mut system = service(Generation(1), RolloutState::Active);
+    system.meta.id = ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID).expect("system service id");
+    system.spec.replicas = 0;
+    let deployment = deployment(&system, DeploymentPhase::Building);
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
+    let mut snapshot = input(system, vec![deployment]);
+    snapshot.assignments = vec![assignment];
+    snapshot.replicas = vec![replica];
+
+    let ready = plan(snapshot).expect("apply system replica floor");
+
+    assert_eq!(
+        ready.deployment_updates[0].status.phase,
+        DeploymentPhase::Ready
+    );
 }
 
 #[test]

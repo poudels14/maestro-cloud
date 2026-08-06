@@ -19,3 +19,16 @@ pub fn is_system_resource_id(resource_id: &str) -> bool {
 pub fn is_system_service(service_id: &crate::ServiceId) -> bool {
     is_system_resource_id(service_id.as_str())
 }
+
+/// Desired replica count after applying the temporary override and the system-service floor.
+pub fn desired_service_replicas(service: &crate::Service) -> u32 {
+    let configured = service
+        .status
+        .replica_override
+        .unwrap_or(service.spec.replicas);
+    if is_system_service(&service.meta.id) {
+        configured.max(1)
+    } else {
+        configured
+    }
+}

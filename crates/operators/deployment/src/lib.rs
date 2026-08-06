@@ -16,7 +16,9 @@ mod snapshot;
 mod writer;
 
 pub use controller::{DeploymentController, DeploymentError, DeploymentReport};
-pub use model::{DeploymentInput, DeploymentPlan, LifecycleSettings, ResourceStatusUpdate};
+pub use model::{
+    DeploymentInput, DeploymentPlan, LifecycleSettings, ResourceStatusUpdate, ServiceUpdate,
+};
 pub use plan::{DeploymentPlanError, plan};
 pub use reconciler::DeploymentReconciler;
 

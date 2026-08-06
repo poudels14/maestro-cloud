@@ -9,7 +9,8 @@ use kernel_api::{
     IngressRouteId, IngressRouteSpec, IngressRouteStatus, NodeApiAccess, NodeId, NodeInstanceId,
     Object, ObjectMeta, OwnerReference, Ownership, PlacementConstraint, ReplicaState,
     ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceId, ResourceKind, ResourceName,
-    ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus, Timestamp,
+    ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus,
+    TAILSCALE_GATEWAY_SERVICE_ID, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
@@ -84,6 +85,38 @@ async fn store_backed_controller_replaces_a_stale_queued_generation()
     assert!(deployments.iter().any(|deployment| {
         deployment.spec.service_generation == Generation(1)
             && deployment.status.phase == DeploymentPhase::Canceled
+    }));
+    assert!(deployments.iter().any(|deployment| {
+        deployment.spec.service_generation == Generation(2)
+            && deployment.status.phase == DeploymentPhase::Queued
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn store_backed_controller_redeploys_a_terminal_system_service()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut service = image_service();
+    service.meta.id = ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)?;
+    let world = World::new(service).await?;
+    world.reconcile(Timestamp(1_000)).await?;
+    let crashed = world.one::<Deployment>("Deployment").await?;
+    world
+        .update::<Deployment>("Deployment", crashed.meta.id.as_str(), |deployment| {
+            deployment.status.phase = DeploymentPhase::Crashed;
+        })
+        .await?;
+
+    let recovered = world.reconcile(Timestamp(2_000)).await?;
+
+    assert_eq!(recovered.created_deployments, 1);
+    assert_eq!(recovered.updated_services, 1);
+    let service = world.one::<Service>("Service").await?;
+    assert_eq!(service.meta.generation, Generation(2));
+    let deployments = world.list::<Deployment>("Deployment").await?;
+    assert!(deployments.iter().any(|deployment| {
+        deployment.spec.service_generation == Generation(1)
+            && deployment.status.phase == DeploymentPhase::Crashed
     }));
     assert!(deployments.iter().any(|deployment| {
         deployment.spec.service_generation == Generation(2)
@@ -421,6 +454,7 @@ async fn runtime_releases_finalizer_only_after_child_collection()
 
 struct World {
     cluster_id: ClusterId,
+    service_id: ServiceId,
     keys: Keyspace,
     store: Arc<InMemoryStore>,
     fenced: FencedStore,
@@ -430,6 +464,7 @@ struct World {
 
 impl World {
     async fn new(service: Service) -> Result<Self, Box<dyn std::error::Error>> {
+        let service_id = service.meta.id.clone();
         let cluster_id = ClusterId::new("cluster-1")?;
         let keys = Keyspace::new(&cluster_id);
         let store = Arc::new(InMemoryStore::new(Arc::new(NoopClock)));
@@ -459,6 +494,7 @@ impl World {
         let controller = DeploymentController::new(cluster_id.clone(), settings())?;
         let world = Self {
             cluster_id,
+            service_id,
             keys,
             store,
             fenced,
@@ -474,11 +510,7 @@ impl World {
         now: Timestamp,
     ) -> Result<crate::DeploymentReport, crate::DeploymentError> {
         self.controller
-            .reconcile_service(
-                &self.fenced,
-                &ServiceId::new("api").expect("fixture service id"),
-                now,
-            )
+            .reconcile_service(&self.fenced, &self.service_id, now)
             .await
     }
 

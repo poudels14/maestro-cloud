@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use kernel_api::{
-    Assignment, Build, BuildId, Deployment, DeploymentId, DeploymentStatus, IngressRoute,
-    ReplicaStateId, ResourceRevision, Service, ServiceId, ServiceStatus, Timestamp,
+    Assignment, Build, BuildId, Deployment, DeploymentId, DeploymentStatus, Generation,
+    IngressRoute, ReplicaStateId, ResourceRevision, Service, ServiceId, ServiceStatus, Timestamp,
     TrafficGeneration,
 };
 
@@ -49,6 +49,19 @@ pub struct ResourceStatusUpdate<Id, Status> {
     pub status: Status,
 }
 
+/// Optimistic Service metadata and status replacement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceUpdate {
+    /// Stable Service identity.
+    pub id: ServiceId,
+    /// Store revision from which this update was planned.
+    pub observed_revision: ResourceRevision,
+    /// Desired rollout generation. System-service recovery may advance it without changing spec.
+    pub generation: Generation,
+    /// Complete desired status preserving unrelated status fields.
+    pub status: ServiceStatus,
+}
+
 /// Desired resource mutations from one lifecycle pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeploymentPlan {
@@ -65,5 +78,5 @@ pub struct DeploymentPlan {
     /// Existing deployment status replacements.
     pub deployment_updates: Vec<ResourceStatusUpdate<DeploymentId, DeploymentStatus>>,
     /// Existing service status replacements.
-    pub service_updates: Vec<ResourceStatusUpdate<ServiceId, ServiceStatus>>,
+    pub service_updates: Vec<ServiceUpdate>,
 }

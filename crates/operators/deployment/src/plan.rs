@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentPhase, Build, BuildId, BuildPhase, BuildSource,
     Condition, ConditionReason, ConditionState, ConditionType, Deployment, DeploymentId,
-    DeploymentPhase, DeploymentStatus, GitCommit, InvalidIdentifier, MaskedSecret, ReplicaState,
-    Service, ServiceId, Timestamp,
+    DeploymentPhase, DeploymentStatus, Generation, GitCommit, InvalidIdentifier, MaskedSecret,
+    ReplicaState, Service, ServiceId, Timestamp, desired_service_replicas, is_system_service,
 };
 
 use crate::readiness::{
     all_ready, all_started, current_slots, drain_elapsed, has_assignments, has_unstarted,
 };
 use crate::resource::{index, new_build, new_deployment, validate_ownership};
-use crate::{DeploymentInput, DeploymentPlan, ResourceStatusUpdate};
+use crate::{DeploymentInput, DeploymentPlan, ResourceStatusUpdate, ServiceUpdate};
 
 use self::cutover::coordinate_active_deployment;
 
@@ -56,8 +56,10 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
             .filter(|deployment| deployment.spec.service_id == service.meta.id)
             .collect::<Vec<_>>();
         let mut desired_service_status = service.status.clone();
+        let mut desired_service_generation = service.meta.generation;
         let desired_deployment_id = if service.meta.deletion_timestamp.is_none() {
-            let desired = new_deployment(&input.cluster_id, service, &service_routes, input.now)?;
+            let mut desired =
+                new_deployment(&input.cluster_id, service, &service_routes, input.now)?;
             let captured_service_changed = desired.spec.service != service.spec;
             let existing = if captured_service_changed {
                 deployments.get(&desired.meta.id).or_else(|| {
@@ -71,14 +73,24 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                     deployment.spec.service_generation == service.meta.generation
                 })
             };
-            let desired_id = existing.map_or_else(
-                || {
-                    let desired_id = desired.meta.id.clone();
-                    output.create_deployments.push(desired);
-                    desired_id
-                },
-                |deployment| deployment.meta.id.clone(),
-            );
+            if is_system_service(&service.meta.id)
+                && existing
+                    .is_some_and(|deployment| terminal_system_deployment(deployment.status.phase))
+            {
+                desired_service_generation = next_generation(service)?;
+                let mut retry = service.clone();
+                retry.meta.generation = desired_service_generation;
+                desired = new_deployment(&input.cluster_id, &retry, &service_routes, input.now)?;
+            }
+            let desired_id = if let Some(existing) = existing
+                && desired_service_generation == service.meta.generation
+            {
+                existing.meta.id.clone()
+            } else {
+                let desired_id = desired.meta.id.clone();
+                output.create_deployments.push(desired);
+                desired_id
+            };
             Some(desired_id)
         } else {
             None
@@ -123,10 +135,13 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 &mut desired_statuses,
                 &mut desired_service_status,
             );
-            if desired_service_status != service.status {
-                output.service_updates.push(ResourceStatusUpdate {
+            if desired_service_generation != service.meta.generation
+                || desired_service_status != service.status
+            {
+                output.service_updates.push(ServiceUpdate {
                     id: service.meta.id.clone(),
                     observed_revision: service.meta.revision,
+                    generation: desired_service_generation,
                     status: desired_service_status,
                 });
             }
@@ -190,6 +205,28 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         .service_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
     Ok(output)
+}
+
+fn terminal_system_deployment(phase: DeploymentPhase) -> bool {
+    matches!(
+        phase,
+        DeploymentPhase::Crashed
+            | DeploymentPhase::Terminated
+            | DeploymentPhase::Removed
+            | DeploymentPhase::Canceled
+    )
+}
+
+fn next_generation(service: &Service) -> Result<Generation, DeploymentPlanError> {
+    service
+        .meta
+        .generation
+        .0
+        .checked_add(1)
+        .map(Generation)
+        .ok_or_else(|| DeploymentPlanError::ServiceGenerationExhausted {
+            service_id: service.meta.id.clone(),
+        })
 }
 
 fn collect_orphan_replicas(
@@ -378,10 +415,7 @@ fn advance_readiness(
     now: Timestamp,
     desired: &mut DeploymentStatus,
 ) {
-    let count = service
-        .status
-        .replica_override
-        .unwrap_or(service.spec.replicas);
+    let count = desired_service_replicas(service);
     let slots = current_slots(&deployment.meta.id, assignments, count);
     if let Some(failed) = slots
         .values()
@@ -498,6 +532,9 @@ pub enum DeploymentPlanError {
     /// A zero grace period could remove serving workloads before cutover settles.
     #[error("deployment drain grace must be greater than zero")]
     ZeroDrainGrace,
+    /// A system Service cannot advance to another recovery rollout.
+    #[error("Service `{service_id}` generation is exhausted")]
+    ServiceGenerationExhausted { service_id: ServiceId },
     /// A generated built-in identity was invalid.
     #[error(transparent)]
     InvalidIdentifier(#[from] InvalidIdentifier),
