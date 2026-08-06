@@ -196,7 +196,7 @@ fn is_timestamp(name: &str) -> bool {
     name.ends_with("At")
         || matches!(
             name,
-            "deletionTimestamp" | "lastSeen" | "lastTransitionTime" | "restartNotBefore"
+            "deletionTimestamp" | "lastSeen" | "lastTransitionTime"
         )
 }
 

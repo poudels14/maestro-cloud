@@ -1595,7 +1595,7 @@ export interface components {
         /** @description Three-valued state of a status condition. */
         ConditionState: "true" | "false" | "unknown";
         /** @description Stable machine-readable name of a status condition. */
-        ConditionType: "READY" | "SCHEDULABLE" | "DRAINING" | "MAINTENANCE" | "ARTIFACT_REPLICATION_READY" | "MESH_READY" | "HEALTH_READY" | "RUNTIME_READY" | "RUNTIME_RESTART" | "FIREWALL_READY" | "LEGACY_DATA_PLANE_READY";
+        ConditionType: "READY" | "SCHEDULABLE" | "DRAINING" | "MAINTENANCE" | "ARTIFACT_REPLICATION_READY" | "MESH_READY" | "HEALTH_READY" | "RUNTIME_READY" | "FIREWALL_READY" | "LEGACY_DATA_PLANE_READY";
         ControllerStatsSnapshot: {
             deadLetters: components["schemas"]["DeadLetterStatsSnapshot"];
             /** Format: int64 */
@@ -2982,18 +2982,6 @@ export interface components {
             resolvedSecrets?: {
                 [key: string]: components["schemas"]["MaskedSecret"];
             } | null;
-            /**
-             * Format: uint32
-             * @description Restart attempts consumed by this assignment.
-             */
-            restartAttempts: number;
-            /** @description Earliest UTC time at which the pending restart may be attempted. */
-            restartNotBefore?: components["schemas"]["Timestamp"] | (null);
-            /**
-             * Format: uint32
-             * @description Attempt durably reserved before a runtime restart and cleared after it is observed running.
-             */
-            restartPendingAttempt?: number | null;
             /** @description Current runtime workload identity. */
             workloadId?: components["schemas"]["WorkloadId"] | (null);
         };
@@ -3183,9 +3171,11 @@ export interface components {
             healthCheck?: components["schemas"]["HealthCheckSpec"] | (null);
             /**
              * Format: uint32
-             * @description Maximum restarts per assignment, or unlimited when absent.
+             * @description Maximum retry attempts after a user workload fails. Defaults to 10.
+             *     System workloads retry indefinitely regardless of this value.
+             * @default 10
              */
-            maxRestarts?: number | null;
+            maxRestartAttempts: number;
             /** @description Operator-facing service name. */
             name: string;
             /**

@@ -176,7 +176,7 @@ pub(super) async fn convert_service(
         replicas: template.deploy.replicas,
         exposed_ports,
         health_check,
-        max_restarts: template.deploy.max_restarts,
+        max_restart_attempts: template.deploy.max_restart_attempts,
         environment: environment.items,
         environment_sources: environment.source.into_iter().collect(),
         user: None,

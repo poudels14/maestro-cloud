@@ -362,16 +362,6 @@ where
             "deployment {deployment_id:?} is absent after replica recovery"
         ))
     })?;
-    let restarted = deployment
-        .replicas
-        .iter()
-        .find(|replica| replica.index == 0)
-        .ok_or_else(|| {
-            ScenarioError::Assertion(format!(
-                "deployment {deployment_id:?} has no replica at index 0"
-            ))
-        })?;
-
     if deployment.phase != DeploymentPhase::Ready {
         Err(ScenarioError::Assertion(format!(
             "deployment {deployment_id:?} converged to {:?} after one crash, expected Ready",
@@ -379,12 +369,8 @@ where
         )))
     } else if ready_replica_count(deployment) != 3 {
         Err(ScenarioError::Assertion(format!(
-            "deployment {deployment_id:?} has {} ready replicas after recovery, expected 3",
+            "deployment {deployment_id:?} recovered with {} ready replicas, expected 3",
             ready_replica_count(deployment)
-        )))
-    } else if restarted.restart_attempts == 0 {
-        Err(ScenarioError::Assertion(format!(
-            "deployment {deployment_id:?} replica 0 recovered without recording a restart"
         )))
     } else {
         Ok(())

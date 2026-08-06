@@ -423,7 +423,7 @@ fn service(service_id: &str) -> TestResult<Service> {
             replicas: 1,
             exposed_ports: vec![8080],
             health_check: None,
-            max_restarts: None,
+            max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
             environment: BTreeMap::new(),
             environment_sources: Vec::new(),
             user: None,

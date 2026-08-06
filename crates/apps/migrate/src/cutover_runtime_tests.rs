@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use kernel_api::{BuiltinKind, NodeId, ReplicaState, ResourceKind, ResourceName};
+use kernel_api::{NodeId, ResourceKind};
 use kernel_store::{ExpectedVersion, InMemoryStore, Keyspace, PutRequest, Store, TokioClock};
 use node_agent::{AssignmentAgent, AssignmentAgentSettings, SystemStatusClock, WorkloadDns};
 use runtime::{
@@ -85,15 +85,6 @@ async fn migrated_running_assignment_is_recreated_without_restart_accounting() -
         Some(WorkloadState::Running)
     );
 
-    let replica: ReplicaState = load_resource(
-        store.as_ref(),
-        &keyspace,
-        BuiltinKind::ReplicaState,
-        "assignment-1",
-    )
-    .await?;
-    assert_eq!(replica.status.restart_attempts, 4);
-    assert_eq!(replica.status.restart_pending_attempt, None);
     Ok(())
 }
 
@@ -102,15 +93,4 @@ fn operation_count(calls: &[runtime::FakeRuntimeCall], operation: FakeRuntimeOpe
         .iter()
         .filter(|call| call.operation == operation)
         .count()
-}
-
-async fn load_resource<Value: serde::de::DeserializeOwned>(
-    store: &dyn Store,
-    keyspace: &Keyspace,
-    kind: BuiltinKind,
-    id: &str,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let key = keyspace.resource(&ResourceKind::new(kind.as_str())?, &ResourceName::new(id)?);
-    let stored = store.get(&key).await?.ok_or("resource missing")?;
-    Ok(serde_json::from_slice(&stored.value)?)
 }

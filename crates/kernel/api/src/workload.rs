@@ -376,9 +376,10 @@ pub struct ServiceSpec {
     /// Optional workload health policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_check: Option<HealthCheckSpec>,
-    /// Maximum restarts per assignment, or unlimited when absent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_restarts: Option<u32>,
+    /// Maximum retry attempts after a user workload fails. Defaults to 10.
+    /// System workloads retry indefinitely regardless of this value.
+    #[serde(default = "default_max_restart_attempts")]
+    pub max_restart_attempts: u32,
     /// Non-secret runtime environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
@@ -403,6 +404,13 @@ pub struct ServiceSpec {
     pub placement: PlacementConstraint,
     /// Interactive exec policy.
     pub exec: ExecPolicy,
+}
+
+/// Default retry budget for user workloads without a ready fallback deployment.
+pub const DEFAULT_MAX_RESTART_ATTEMPTS: u32 = 10;
+
+fn default_max_restart_attempts() -> u32 {
+    DEFAULT_MAX_RESTART_ATTEMPTS
 }
 
 /// Whether new service deployments may begin.

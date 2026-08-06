@@ -25,8 +25,6 @@ pub enum ConditionType {
     HealthReady,
     /// An assignment runtime is ready.
     RuntimeReady,
-    /// An assignment runtime restart has completed.
-    RuntimeRestart,
     /// The node firewall generation is applied.
     FirewallReady,
     /// Legacy data-plane readiness retained during migration.

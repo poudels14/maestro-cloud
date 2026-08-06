@@ -44,7 +44,6 @@ function replica(workloadId?: string): ReplicaState {
     status: {
       healthcheckFailures: 0,
       phase: "READY",
-      restartAttempts: 0,
       ...(workloadId ? { workloadId } : {})
     }
   };

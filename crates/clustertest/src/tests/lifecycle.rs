@@ -222,7 +222,6 @@ impl LifecycleWorld {
                     active.replicas.push(ReplicaSnapshot {
                         index,
                         phase: DeploymentPhase::PendingReady,
-                        restart_attempts: 0,
                         healthcheck_failures: 0,
                         workload: ResourceAvailability::Available,
                         node: None,
@@ -254,11 +253,10 @@ impl LifecycleWorld {
             for replica in &mut active.replicas {
                 if exhausted.contains(&(active.id, replica.index)) {
                     replica.phase = DeploymentPhase::Crashed;
-                    replica.restart_attempts = u32::MAX;
                     replica.workload = ResourceAvailability::Unavailable;
                 } else {
                     if replica.phase == DeploymentPhase::Crashed {
-                        replica.restart_attempts = replica.restart_attempts.saturating_add(1);
+                        replica.healthcheck_failures = 0;
                     }
                     replica.phase = settled_phase;
                     replica.workload = ResourceAvailability::Available;
@@ -267,7 +265,7 @@ impl LifecycleWorld {
             if active
                 .replicas
                 .iter()
-                .all(|replica| exhausted.contains(&(active.id, replica.index)))
+                .any(|replica| replica.phase == DeploymentPhase::Crashed)
             {
                 active.phase = DeploymentPhase::Crashed;
             } else {

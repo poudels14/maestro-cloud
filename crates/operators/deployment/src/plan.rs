@@ -10,8 +10,7 @@ use kernel_api::{
 };
 
 use crate::readiness::{
-    all_exhausted, all_ready, all_started, current_slots, drain_elapsed, has_assignments,
-    has_unstarted,
+    all_ready, all_started, current_slots, drain_elapsed, has_assignments, has_unstarted,
 };
 use crate::resource::{index, new_build, new_deployment, validate_ownership};
 use crate::{DeploymentInput, DeploymentPlan, ResourceStatusUpdate};
@@ -390,8 +389,6 @@ fn advance_readiness(
     {
         desired.phase = DeploymentPhase::Crashed;
         set_assignment_failure_condition(deployment, failed, now, desired);
-    } else if all_exhausted(deployment, &slots, replicas, count) {
-        desired.phase = DeploymentPhase::Crashed;
     } else if all_ready(deployment, &slots, replicas, count) {
         desired.phase = DeploymentPhase::Ready;
         desired.ready_at.get_or_insert(now);

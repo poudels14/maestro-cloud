@@ -66,9 +66,10 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
         value: `${spec.healthCheck.intervalSecs}s · ${spec.healthCheck.unhealthyThreshold} failures`
       });
     }
-    if (spec.maxRestarts != null) {
-      items.push({ label: "Maximum restarts", value: String(spec.maxRestarts) });
-    }
+    items.push({
+      label: "Maximum restart attempts",
+      value: isSystemService(props.service) ? "Unlimited" : String(spec.maxRestartAttempts)
+    });
     items.push({ label: "Interactive exec", value: spec.exec });
     items.push({ label: "Node API", value: spec.nodeApi });
     if (spec.placement.nodeId) {

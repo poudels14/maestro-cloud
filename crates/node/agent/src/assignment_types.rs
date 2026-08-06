@@ -56,7 +56,7 @@ pub struct AssignmentReconcileReport {
     pub desired: usize,
     /// Assignments confirmed running after reconciliation.
     pub running: usize,
-    /// Exited workloads restored using a durably accounted restart attempt.
+    /// Exited workloads restored during this reconciliation pass.
     pub restarted: usize,
     /// Missing ReplicaState resources created for scheduler-owned assignments.
     pub replica_states_created: usize,

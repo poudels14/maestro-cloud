@@ -16,7 +16,10 @@ async fn basic_lifecycle_scenarios_pass_fast_fake() -> Result<(), ScenarioError>
 
 #[tokio::test]
 async fn lifecycle_fault_scenarios_pass_fast_fake() -> Result<(), ScenarioError> {
-    scenarios::exhausted_replica_stays_down_while_peers_run(&mut LifecycleWorld::new()).await?;
+    scenarios::exhausted_replica_crashes_deployment_while_peers_stay_running(
+        &mut LifecycleWorld::new(),
+    )
+    .await?;
     scenarios::all_exhausted_replicas_crash_deployment(&mut LifecycleWorld::new()).await?;
     scenarios::initial_replica_crash_preserves_pending_peers(&mut LifecycleWorld::new()).await?;
     scenarios::missing_workload_record_is_recovered(&mut LifecycleWorld::new()).await?;

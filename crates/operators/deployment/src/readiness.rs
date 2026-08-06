@@ -70,26 +70,6 @@ pub(crate) fn has_unstarted(
     })
 }
 
-pub(crate) fn all_exhausted(
-    deployment: &Deployment,
-    slots: &BTreeMap<u32, &Assignment>,
-    replicas: &[ReplicaState],
-    count: u32,
-) -> bool {
-    let Some(limit) = deployment.spec.service.max_restarts else {
-        return false;
-    };
-    count > 0
-        && (0..count).all(|index| {
-            slots.get(&index).is_some_and(|assignment| {
-                exact_replica(deployment, assignment, replicas).is_some_and(|replica| {
-                    replica.status.phase == DeploymentPhase::Crashed
-                        && replica.status.restart_attempts >= limit
-                })
-            })
-        })
-}
-
 fn exact_replica<'a>(
     deployment: &Deployment,
     assignment: &Assignment,

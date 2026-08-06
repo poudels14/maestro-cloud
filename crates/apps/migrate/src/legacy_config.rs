@@ -89,7 +89,7 @@ pub(crate) fn convert_service_config(
         replicas: config.deploy.replicas,
         exposed_ports,
         health_check,
-        max_restarts: config.deploy.max_restarts,
+        max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
         environment,
         environment_sources: environment_source.into_iter().collect(),
         user: None,

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentPhase, ConditionType, Deployment, EnvironmentName,
-    ReplicaState, ResourceKind, ResourceName, SecretMountSpec, SecretValue,
+    ArtifactTemplate, Assignment, AssignmentPhase, ConditionType, Deployment, DeploymentPhase,
+    EnvironmentName, ReplicaState, ResourceKind, ResourceName, SecretMountSpec, SecretValue,
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
@@ -27,9 +27,7 @@ use crate::assignment_plan::{
     WorkloadRuntimeInputs, workload_id, workload_spec_with_environment, workload_user,
 };
 use crate::assignment_resource::decode_assignment;
-use crate::assignment_restart::{
-    RestartReservation, finish_pending_restart, reserve_restart, restart_failure,
-};
+use crate::assignment_restart::RetryTracker;
 use crate::assignment_status::{
     AssignmentOutcome, ConvergeFailure, desired_status, runtime_status_message,
 };
@@ -89,6 +87,7 @@ pub struct AssignmentAgent {
     value_sources: Option<Arc<dyn ValueSourceResolver>>,
     resolved_deployments:
         Mutex<std::collections::BTreeMap<kernel_api::DeploymentId, ResolvedDeployment>>,
+    retries: Mutex<RetryTracker>,
     secrets: SecretMountManager,
     #[cfg(unix)]
     node_api: NodeApiMountManager,
@@ -121,6 +120,8 @@ impl AssignmentAgent {
         let secrets = SecretMountManager::new(settings.secrets_root.clone())?;
         #[cfg(unix)]
         let node_api = NodeApiMountManager::new(settings.node_api_root.clone(), node_api_services)?;
+        let retries =
+            RetryTracker::new(settings.restart_backoff_base, settings.restart_backoff_max);
         Ok(Self {
             keyspace: Keyspace::new(&settings.cluster_id),
             assignment_kind: ResourceKind::new(ASSIGNMENT_KIND)?,
@@ -135,6 +136,7 @@ impl AssignmentAgent {
             artifact_replication: None,
             value_sources: None,
             resolved_deployments: Mutex::new(std::collections::BTreeMap::new()),
+            retries: Mutex::new(retries),
             secrets,
             #[cfg(unix)]
             node_api,
@@ -166,6 +168,7 @@ impl AssignmentAgent {
         replica: Option<&ReplicaState>,
         network: &NetworkHandle,
         dns_server: Option<std::net::IpAddr>,
+        retrying: bool,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
         if matches!(
             &deployment.spec.service.artifact,
@@ -252,51 +255,40 @@ impl AssignmentAgent {
                 ),
             },
         )?;
-        let handle = self.runtime.create(&spec).await?;
-        let before = self.runtime.status(&handle).await?;
+        let mut handle = self.runtime.create(&spec).await?;
+        let mut before = self.runtime.status(&handle).await?;
+        if before.state == WorkloadState::Failed && retrying {
+            self.runtime.remove(&handle).await?;
+            handle = self.runtime.create(&spec).await?;
+            before = self.runtime.status(&handle).await?;
+        }
+        let restart_unhealthy = retrying
+            && replica.is_some_and(|replica| replica.status.phase == DeploymentPhase::Crashed);
+        if restart_unhealthy && before.state == WorkloadState::Running {
+            let stop = self
+                .runtime
+                .stop(
+                    &handle,
+                    ShutdownRequest {
+                        timeout: self.settings.stop_timeout,
+                    },
+                )
+                .await;
+            if matches!(stop, Err(RuntimeError::Timeout { .. })) {
+                self.runtime.kill(&handle).await?;
+            } else {
+                stop?;
+            }
+            before = self.runtime.status(&handle).await?;
+        }
         match before.state {
             WorkloadState::Created | WorkloadState::Running => {}
             WorkloadState::Stopped => {
-                let replica = replica.ok_or_else(|| {
-                    ConvergeFailure::pending(
-                        "ReplicaStateMissing",
-                        "an exited workload cannot restart until its ReplicaState is available"
-                            .to_owned(),
-                    )
-                })?;
-                match reserve_restart(
-                    self.store.as_ref(),
-                    &self.keyspace,
-                    &self.replica_kind,
-                    replica,
-                    &assignment.meta.id,
-                    deployment.spec.service.max_restarts,
-                    self.settings.restart_backoff_base,
-                    self.settings.restart_backoff_max,
-                    self.status_clock.now(),
-                )
-                .await
-                .map_err(restart_failure)?
-                {
-                    RestartReservation::Reserved { not_before }
-                        if self.status_clock.now() < not_before =>
-                    {
-                        return Err(ConvergeFailure::pending_at(
-                            "RestartBackoff",
-                            format!("runtime restart is delayed until {}", not_before.0),
-                            not_before,
-                        ));
-                    }
-                    RestartReservation::Reserved { .. } => {}
-                    RestartReservation::Exhausted { maximum } => {
-                        return Err(ConvergeFailure::failed(
-                            "RestartLimitReached",
-                            format!(
-                                "workload exhausted its restart limit of {} attempts",
-                                maximum
-                            ),
-                        ));
-                    }
+                if !retrying {
+                    return Err(ConvergeFailure::failed(
+                        "WorkloadExited",
+                        runtime_status_message(&before),
+                    ));
                 }
             }
             WorkloadState::Paused => {
@@ -330,23 +322,10 @@ impl AssignmentAgent {
         }
         let status = self.runtime.status(&handle).await?;
         if status.state == WorkloadState::Running {
-            let restarted = match replica {
-                Some(replica) => finish_pending_restart(
-                    self.store.as_ref(),
-                    &self.keyspace,
-                    &self.replica_kind,
-                    replica,
-                    &assignment.meta.id,
-                    self.status_clock.now(),
-                )
-                .await
-                .map_err(restart_failure)?,
-                None => false,
-            };
             Ok(ConvergedAssignment {
                 handle,
                 workload_address: attachment.address,
-                restarted,
+                restarted: retrying,
                 replica_id: replica.map(|replica| replica.meta.id.clone()),
                 resolved_secrets,
             })
@@ -439,7 +418,7 @@ impl AssignmentAgent {
         })?;
         resolver.resolve(source).await.map_err(|error| match error {
             ValueSourceError::Unavailable { message } => {
-                ConvergeFailure::pending("ExternalValueSourceUnavailable", message)
+                ConvergeFailure::failed("ExternalValueSourceUnavailable", message)
             }
             ValueSourceError::Rejected { message } => {
                 ConvergeFailure::failed("ExternalValueSourceRejected", message)

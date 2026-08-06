@@ -3,14 +3,14 @@ use std::time::Duration;
 
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, ConditionState, ConditionType, Deployment,
-    DeploymentId, DeploymentPhase, NodeId, PlacementConstraint, ReplicaState, ServiceId, Timestamp,
-    TrafficGenerationPhase, VolumeSource,
+    DeploymentPhase, NodeId, PlacementConstraint, ServiceId, Timestamp, TrafficGenerationPhase,
+    VolumeSource,
 };
 
 use crate::SchedulerError;
 use crate::model::{
     DeploymentGroup, NodeSchedulingState, ScheduleInput, ScheduleNode, ServiceSchedule,
-    UnhealthySlot, UnschedulableReason, UnschedulableReplica,
+    UnschedulableReason, UnschedulableReplica,
 };
 use crate::resource::ResourceSnapshot;
 
@@ -297,16 +297,10 @@ fn schedule_services(
                 continue;
             }
         };
-        let deployment_ids = groups
-            .iter()
-            .map(|deployment| deployment.meta.id.clone())
-            .collect::<BTreeSet<_>>();
         services.push(ServiceSchedule {
             service_id: service.meta.id.clone(),
             groups: deployment_groups,
             placement,
-            unhealthy_slots: unhealthy_slots(snapshot, &deployment_ids),
-            exhausted_slots: exhausted_slots(snapshot, groups),
         });
     }
     (services, validation_errors, retained_on_error)
@@ -377,65 +371,4 @@ fn effective_placement(
     let mut placement = service.spec.placement.clone();
     placement.node_id = placement.node_id.or(volume_node);
     Ok(placement)
-}
-
-fn unhealthy_slots(
-    snapshot: &ResourceSnapshot,
-    deployment_ids: &BTreeSet<DeploymentId>,
-) -> BTreeSet<UnhealthySlot> {
-    snapshot
-        .replicas
-        .values()
-        .filter(|replica| replica.status.phase == DeploymentPhase::Crashed)
-        .filter(|replica| deployment_ids.contains(&replica.spec.deployment_id))
-        .filter_map(|replica| unhealthy_slot(replica, &snapshot.assignments))
-        .collect()
-}
-
-fn unhealthy_slot(
-    replica: &ReplicaState,
-    assignments: &BTreeMap<AssignmentId, Assignment>,
-) -> Option<UnhealthySlot> {
-    let assignment = assignments.get(&replica.spec.assignment_id)?;
-    (assignment.spec.service_id == replica.spec.service_id
-        && assignment.spec.deployment_id == replica.spec.deployment_id
-        && assignment.spec.replica_index == replica.spec.replica_index)
-        .then(|| UnhealthySlot {
-            deployment_id: replica.spec.deployment_id.clone(),
-            node_id: assignment.spec.node_id.clone(),
-            replica_index: replica.spec.replica_index,
-            assignment_id: assignment.meta.id.clone(),
-        })
-}
-
-fn exhausted_slots(
-    snapshot: &ResourceSnapshot,
-    deployments: &[&Deployment],
-) -> BTreeSet<(DeploymentId, u32)> {
-    let limits = deployments
-        .iter()
-        .filter_map(|deployment| {
-            deployment
-                .spec
-                .service
-                .max_restarts
-                .map(|limit| (deployment.meta.id.clone(), limit))
-        })
-        .collect::<BTreeMap<_, _>>();
-    snapshot
-        .replicas
-        .values()
-        .filter(|replica| replica.status.phase == DeploymentPhase::Crashed)
-        .filter(|replica| {
-            limits
-                .get(&replica.spec.deployment_id)
-                .is_some_and(|limit| replica.status.restart_attempts >= *limit)
-        })
-        .map(|replica| {
-            (
-                replica.spec.deployment_id.clone(),
-                replica.spec.replica_index,
-            )
-        })
-        .collect()
 }

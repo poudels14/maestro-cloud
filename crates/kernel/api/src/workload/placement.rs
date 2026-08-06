@@ -142,14 +142,6 @@ pub struct ReplicaStateStatus {
     pub workload_id: Option<WorkloadId>,
     /// Consecutive failed health probes.
     pub healthcheck_failures: u32,
-    /// Restart attempts consumed by this assignment.
-    pub restart_attempts: u32,
-    /// Attempt durably reserved before a runtime restart and cleared after it is observed running.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub restart_pending_attempt: Option<u32>,
-    /// Earliest UTC time at which the pending restart may be attempted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub restart_not_before: Option<Timestamp>,
     /// API-safe secret observations resolved and mounted for this replica.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_secrets: Option<BTreeMap<String, MaskedSecret>>,

@@ -16,7 +16,7 @@ pub use assignment::AssignmentWriteError;
 pub use kernel_controller::{SystemTimestampClock, TimestampClock};
 pub use model::{
     DeploymentGroup, NodeSchedulingState, ScheduleInput, ScheduleNode, SchedulePlan,
-    ServiceSchedule, UnhealthySlot, UnschedulableReason, UnschedulableReplica,
+    ServiceSchedule, UnschedulableReason, UnschedulableReplica,
 };
 pub use plan::plan;
 pub use reconciler::SchedulerReconciler;

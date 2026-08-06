@@ -364,7 +364,6 @@ fn project_deployment(
             ReplicaSnapshot {
                 index: replica.spec.replica_index,
                 phase: project_phase(replica.status.phase),
-                restart_attempts: replica.status.restart_attempts,
                 healthcheck_failures: replica.status.healthcheck_failures,
                 workload,
                 node: replica

@@ -419,7 +419,7 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
     );
     snapshot.services[0].spec.artifact = build_artifact();
     snapshot.assignments = vec![assigned.clone()];
-    snapshot.replicas = vec![replica(&deployment, &assigned, DeploymentPhase::Ready, 0)];
+    snapshot.replicas = vec![replica(&deployment, &assigned, DeploymentPhase::Ready)];
     snapshot.builds = vec![build];
     assert_eq!(
         plan(snapshot).expect("ready build plan").deployment_updates[0]
@@ -449,7 +449,7 @@ fn readiness_requires_the_exact_current_assignment() {
     let stale = assignment(&deployment, "assignment-stale", 1);
     let mut snapshot = input(service.clone(), vec![deployment.clone()]);
     snapshot.assignments = vec![stale.clone(), current.clone()];
-    snapshot.replicas = vec![replica(&deployment, &stale, DeploymentPhase::Ready, 0)];
+    snapshot.replicas = vec![replica(&deployment, &stale, DeploymentPhase::Ready)];
     let publishing = plan(snapshot).expect("publishing plan");
     assert_eq!(
         publishing.deployment_updates[0].status.phase,
@@ -463,7 +463,6 @@ fn readiness_requires_the_exact_current_assignment() {
         &deployment,
         &current,
         DeploymentPhase::PendingReady,
-        0,
     )];
     let pending = plan(snapshot).expect("pending-ready plan");
     assert_eq!(
@@ -474,7 +473,7 @@ fn readiness_requires_the_exact_current_assignment() {
     deployment.status.phase = DeploymentPhase::PendingReady;
     let mut snapshot = input(service, vec![deployment.clone()]);
     snapshot.assignments = vec![stale, current.clone()];
-    snapshot.replicas = vec![replica(&deployment, &current, DeploymentPhase::Ready, 0)];
+    snapshot.replicas = vec![replica(&deployment, &current, DeploymentPhase::Ready)];
     let ready = plan(snapshot).expect("ready plan");
     assert_eq!(
         ready.deployment_updates[0].status.phase,
@@ -528,7 +527,7 @@ fn deployment_collects_only_masked_secret_observations() {
     service.status.active_deployment_id = Some(deployment.meta.id.clone());
     let first = assignment_slot(&deployment, "assignment-0", 0, 1);
     let second = assignment_slot(&deployment, "assignment-1", 1, 1);
-    let mut first_replica = replica(&deployment, &first, DeploymentPhase::Ready, 0);
+    let mut first_replica = replica(&deployment, &first, DeploymentPhase::Ready);
     first_replica.status.resolved_secrets = Some(BTreeMap::from([
         (
             "DATABASE_URL".to_owned(),
@@ -536,7 +535,7 @@ fn deployment_collects_only_masked_secret_observations() {
         ),
         ("TOKEN".to_owned(), SecretValue::new("first-token").masked()),
     ]));
-    let mut second_replica = replica(&deployment, &second, DeploymentPhase::Ready, 0);
+    let mut second_replica = replica(&deployment, &second, DeploymentPhase::Ready);
     second_replica.status.resolved_secrets = Some(BTreeMap::from([
         (
             "DATABASE_URL".to_owned(),
@@ -576,7 +575,7 @@ fn replica_observation_is_collected_after_its_assignment_disappears() {
     let service = service(Generation(1), RolloutState::Active);
     let deployment = deployment(&service, DeploymentPhase::Removed);
     let assignment = assignment(&deployment, "assignment-removed", 1);
-    let replica = replica(&deployment, &assignment, DeploymentPhase::Removed, 0);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Removed);
     let mut snapshot = input(service, vec![deployment]);
     snapshot.replicas = vec![replica.clone()];
 
@@ -584,41 +583,6 @@ fn replica_observation_is_collected_after_its_assignment_disappears() {
 
     assert_eq!(collected.delete_replicas, vec![replica.meta.id]);
     assert!(collected.delete_deployments.is_empty());
-}
-
-#[test]
-fn every_current_slot_must_exhaust_its_configured_restart_budget() {
-    let mut service = service(Generation(1), RolloutState::Active);
-    service.spec.replicas = 2;
-    service.spec.max_restarts = Some(3);
-    let deployment = deployment(&service, DeploymentPhase::PendingReady);
-    let first = assignment_slot(&deployment, "assignment-0", 0, 1);
-    let second = assignment_slot(&deployment, "assignment-1", 1, 1);
-    let mut snapshot = input(service.clone(), vec![deployment.clone()]);
-    snapshot.assignments = vec![first.clone(), second.clone()];
-    snapshot.replicas = vec![
-        replica(&deployment, &first, DeploymentPhase::Crashed, 3),
-        replica(&deployment, &second, DeploymentPhase::Crashed, 2),
-    ];
-    assert!(
-        plan(snapshot)
-            .expect("not exhausted")
-            .deployment_updates
-            .is_empty()
-    );
-
-    let mut snapshot = input(service, vec![deployment.clone()]);
-    snapshot.assignments = vec![first.clone(), second.clone()];
-    snapshot.replicas = vec![
-        replica(&deployment, &first, DeploymentPhase::Crashed, 3),
-        replica(&deployment, &second, DeploymentPhase::Crashed, 3),
-    ];
-    assert_eq!(
-        plan(snapshot).expect("exhausted").deployment_updates[0]
-            .status
-            .phase,
-        DeploymentPhase::Crashed
-    );
 }
 
 #[test]
@@ -886,7 +850,7 @@ fn removed_children_are_collected_before_service_finalization() {
     deployment.status.phase = DeploymentPhase::Removed;
     service.meta.deletion_timestamp = Some(Timestamp(40_000));
     let assignment = assignment(&deployment, "assignment-old", 1);
-    let replica = replica(&deployment, &assignment, DeploymentPhase::Ready, 0);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
     let mut snapshot = input(service, vec![deployment.clone()]);
     snapshot.builds = vec![build.clone()];
     snapshot.replicas = vec![replica.clone()];

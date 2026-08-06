@@ -163,7 +163,6 @@ async fn temporarily_unready_active_replica_does_not_block_redeploy()
     world
         .update::<ReplicaState>("ReplicaState", replica.meta.id.as_str(), |replica| {
             replica.status.phase = DeploymentPhase::PendingReady;
-            replica.status.restart_attempts = 1;
         })
         .await?;
     world
@@ -604,7 +603,7 @@ fn service(artifact: ArtifactTemplate) -> Service {
             replicas: 1,
             exposed_ports: vec![8080],
             health_check: None,
-            max_restarts: Some(3),
+            max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
             environment: BTreeMap::new(),
             environment_sources: Vec::new(),
             user: None,
@@ -640,9 +639,6 @@ fn ready_replica(deployment: &Deployment, assignment_id: &AssignmentId) -> Repli
             node_id: Some(NodeId::new("node-1").expect("node id")),
             workload_id: None,
             healthcheck_failures: 0,
-            restart_attempts: 0,
-            restart_pending_attempt: None,
-            restart_not_before: None,
             resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },

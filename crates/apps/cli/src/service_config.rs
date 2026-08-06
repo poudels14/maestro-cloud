@@ -279,7 +279,8 @@ pub(super) struct DeployConfig {
     pub(super) replica_spread: ReplicaSpread,
     #[serde(default = "default_true")]
     pub(super) exec: bool,
-    pub(super) max_restarts: Option<u32>,
+    #[serde(default = "default_max_restart_attempts")]
+    pub(super) max_restart_attempts: u32,
     #[serde(default)]
     pub(super) env: ValueSource,
     pub(super) secrets: Option<SecretConfig>,
@@ -289,6 +290,10 @@ pub(super) struct DeployConfig {
     pub(super) node_affinity: PlacementConfig,
     #[serde(default)]
     pub(super) egress: EgressConfig,
+}
+
+fn default_max_restart_attempts() -> u32 {
+    kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS
 }
 
 #[derive(Debug, Clone, Deserialize)]

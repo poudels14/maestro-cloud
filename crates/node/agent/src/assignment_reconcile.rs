@@ -14,6 +14,7 @@ use crate::assignment_node_api::active_node_api_workloads;
 use crate::assignment_replica::ensure_replica;
 use crate::assignment_replica::record_started;
 use crate::assignment_resource::{decode_assignments, decode_deployments, decode_replicas};
+use crate::assignment_restart::RetrySchedule;
 use crate::assignment_status::{AssignmentOutcome, ConvergeFailure};
 use crate::assignment_types::{
     AssignmentReconcileReport, ConvergedAssignment, WorkloadDns, earliest,
@@ -96,6 +97,10 @@ impl AssignmentAgent {
                 .iter()
                 .map(|assignment| assignment.meta.id.clone())
                 .collect::<BTreeSet<_>>();
+            self.retries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(&active_ids);
             let observed = self
                 .runtime
                 .list(&self.settings.cluster_id, &self.settings.node_id)
@@ -246,14 +251,94 @@ impl AssignmentAgent {
                     }
                     None => None,
                 };
-                self.converge_assignment(
-                    assignment,
-                    deployment,
-                    replica.as_ref(),
-                    resources.network,
-                    dns_server,
-                )
-                .await
+                let replica = replica.as_ref();
+                let system_service = kernel_api::is_system_service(&assignment.spec.service_id);
+                let now = self.status_clock.now();
+                let retry_at = self
+                    .retries
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .retry_at(&assignment.meta.id);
+                if let Some(retry_at) = retry_at.filter(|retry_at| *retry_at > now) {
+                    Err(ConvergeFailure::pending_at(
+                        "RetryBackoff",
+                        format!("workload retry is delayed until {}", retry_at.0),
+                        retry_at,
+                    ))
+                } else {
+                    let retrying = retry_at.is_some();
+                    let unhealthy = replica
+                        .is_some_and(|replica| replica.status.phase == DeploymentPhase::Crashed);
+                    let outcome = if unhealthy && !retrying {
+                        Err(replica_crash(replica))
+                    } else {
+                        self.converge_assignment(
+                            assignment,
+                            deployment,
+                            replica,
+                            resources.network,
+                            dns_server,
+                            retrying,
+                        )
+                        .await
+                    };
+                    let outcome = match outcome {
+                        Err(failure) if !failure.is_waiting() => {
+                            let fallback = !system_service
+                                && has_ready_fallback(deployment, resources.deployments);
+                            if system_service || !fallback {
+                                let maximum = (!system_service)
+                                    .then_some(deployment.spec.service.max_restart_attempts);
+                                if maximum == Some(0) {
+                                    self.retries
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .clear(&assignment.meta.id);
+                                    Err(failure)
+                                } else {
+                                    let schedule = self
+                                        .retries
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .schedule(assignment.meta.id.clone(), maximum, now);
+                                    match schedule {
+                                        RetrySchedule::Scheduled { attempt, retry_at } => {
+                                            Err(failure.with_retry(attempt, retry_at))
+                                        }
+                                        RetrySchedule::Exhausted { maximum } => {
+                                            self.retries
+                                                .lock()
+                                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                                .clear(&assignment.meta.id);
+                                            Err(failure.exhausted(maximum))
+                                        }
+                                    }
+                                }
+                            } else {
+                                self.retries
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .clear(&assignment.meta.id);
+                                Err(failure)
+                            }
+                        }
+                        outcome => outcome,
+                    };
+                    if outcome.is_ok() {
+                        let mut retries = self
+                            .retries
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if retrying {
+                            retries.mark_started(&assignment.meta.id);
+                        } else if replica
+                            .is_some_and(|replica| replica.status.phase == DeploymentPhase::Ready)
+                        {
+                            retries.clear(&assignment.meta.id);
+                        }
+                    }
+                    outcome
+                }
             }
             None => Err(ConvergeFailure::pending(
                 "DeploymentMissing",
@@ -277,12 +362,15 @@ impl AssignmentAgent {
                 if let Some(replica_id) = converged.replica_id.as_ref() {
                     record_started(
                         self.store.as_ref(),
-                        &self.keyspace,
-                        &self.replica_kind,
+                        self.keyspace.resource(
+                            &self.replica_kind,
+                            &kernel_api::ResourceName::from(replica_id.clone()),
+                        ),
                         assignment,
                         replica_id,
                         converged.handle.workload_id(),
                         &converged.resolved_secrets,
+                        converged.restarted,
                     )
                     .await?;
                 }
@@ -309,4 +397,31 @@ impl AssignmentAgent {
             }
         }
     }
+}
+
+fn has_ready_fallback(
+    deployment: &Deployment,
+    deployments: &BTreeMap<DeploymentId, Deployment>,
+) -> bool {
+    deployment.status.phase != DeploymentPhase::Ready
+        && deployments.values().any(|candidate| {
+            candidate.meta.id != deployment.meta.id
+                && candidate.spec.service_id == deployment.spec.service_id
+                && candidate.status.phase == DeploymentPhase::Ready
+                && candidate.spec.service_generation <= deployment.spec.service_generation
+        })
+}
+
+fn replica_crash(replica: Option<&ReplicaState>) -> ConvergeFailure {
+    let message = replica
+        .and_then(|replica| {
+            replica.status.conditions.iter().find(|condition| {
+                condition.condition_type == kernel_api::ConditionType::HealthReady
+            })
+        })
+        .map_or_else(
+            || "workload health checks reached the unhealthy threshold".to_owned(),
+            |condition| condition.message.clone(),
+        );
+    ConvergeFailure::failed("WorkloadUnhealthy", message)
 }

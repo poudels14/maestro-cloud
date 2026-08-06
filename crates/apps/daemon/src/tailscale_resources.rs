@@ -193,7 +193,7 @@ impl TailscaleSystemResources {
                     interval_secs: 10,
                     unhealthy_threshold: 3,
                 }),
-                max_restarts: None,
+                max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
                 environment,
                 environment_sources: Vec::new(),
                 user: Some(WorkloadUserSpec::UNPRIVILEGED),

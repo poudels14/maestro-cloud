@@ -44,7 +44,7 @@ pub(super) fn service(generation: Generation, rollout: RolloutState) -> Service 
             replicas: 1,
             exposed_ports: vec![8080],
             health_check: None,
-            max_restarts: Some(3),
+            max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
             environment: BTreeMap::new(),
             environment_sources: Vec::new(),
             user: None,
@@ -158,7 +158,6 @@ pub(super) fn replica(
     deployment: &Deployment,
     assignment: &Assignment,
     phase: DeploymentPhase,
-    restart_attempts: u32,
 ) -> ReplicaState {
     Object {
         meta: metadata(
@@ -176,9 +175,6 @@ pub(super) fn replica(
             node_id: Some(assignment.spec.node_id.clone()),
             workload_id: None,
             healthcheck_failures: 0,
-            restart_attempts,
-            restart_pending_attempt: None,
-            restart_not_before: None,
             resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },

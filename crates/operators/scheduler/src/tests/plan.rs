@@ -9,7 +9,7 @@ use kernel_api::{
 
 use crate::{
     DeploymentGroup, NodeSchedulingState, ScheduleInput, ScheduleNode, ServiceSchedule,
-    UnhealthySlot, UnschedulableReason, plan,
+    UnschedulableReason, plan,
 };
 
 #[test]
@@ -183,47 +183,6 @@ fn restart_generation_replaces_the_assignment_in_place() {
 }
 
 #[test]
-fn unhealthy_assignment_moves_and_stale_health_does_not_move_successor() {
-    let old = plan(input(1)).assignments.remove(0);
-    let unhealthy = UnhealthySlot {
-        deployment_id: old.spec.deployment_id.clone(),
-        node_id: old.spec.node_id.clone(),
-        replica_index: old.spec.replica_index,
-        assignment_id: old.meta.id.clone(),
-    };
-    let mut replacement_input = input(1);
-    replacement_input.current = vec![old.clone()];
-    replacement_input.services[0]
-        .unhealthy_slots
-        .insert(unhealthy.clone());
-    let replacement = plan(replacement_input).assignments.remove(0);
-    assert_ne!(replacement.spec.node_id, old.spec.node_id);
-    assert_eq!(replacement.spec.placement_epoch, 2);
-    assert_eq!(
-        replacement.spec.replaces_assignment_id.as_ref(),
-        Some(&old.meta.id)
-    );
-
-    let mut stale_input = input(1);
-    stale_input.current = vec![replacement.clone()];
-    stale_input.services[0].unhealthy_slots.insert(unhealthy);
-    assert_eq!(plan(stale_input).assignments, vec![replacement]);
-}
-
-#[test]
-fn exhausted_slot_keeps_terminal_assignment() {
-    let failed = plan(input(1)).assignments.remove(0);
-    let mut next = input(1);
-    next.current = vec![failed.clone()];
-    next.services[0]
-        .exhausted_slots
-        .insert((failed.spec.deployment_id.clone(), failed.spec.replica_index));
-    let output = plan(next);
-    assert_eq!(output.assignments, vec![failed]);
-    assert!(output.unschedulable.is_empty());
-}
-
-#[test]
 fn held_assignment_survives_node_loss_without_attracting_new_work() {
     let held = plan(input(1)).assignments.remove(0);
     let mut next = input(2);
@@ -266,31 +225,12 @@ fn plan_honors_affinity_and_prefers_workers_after_spreading() {
 }
 
 #[test]
-fn plan_reports_affinity_and_alternate_node_failures() {
+fn plan_reports_affinity_failures() {
     let mut affinity = input(1);
     affinity.services[0].placement.node_id = Some(node_id("missing"));
     assert_eq!(
         plan(affinity).unschedulable[0].reason,
         UnschedulableReason::AffinityMatchesNoNode
-    );
-
-    let old = plan(input(1)).assignments.remove(0);
-    let mut no_alternate = input(1);
-    no_alternate
-        .nodes
-        .retain(|node| node.node_id == old.spec.node_id);
-    no_alternate.current = vec![old.clone()];
-    no_alternate.services[0]
-        .unhealthy_slots
-        .insert(UnhealthySlot {
-            deployment_id: old.spec.deployment_id.clone(),
-            node_id: old.spec.node_id.clone(),
-            replica_index: 0,
-            assignment_id: old.meta.id,
-        });
-    assert_eq!(
-        plan(no_alternate).unschedulable[0].reason,
-        UnschedulableReason::NoAlternateNode
     );
 }
 
@@ -365,8 +305,6 @@ fn input(replicas: u32) -> ScheduleInput {
                 replicas,
             }],
             placement: PlacementConstraint::default(),
-            unhealthy_slots: BTreeSet::new(),
-            exhausted_slots: BTreeSet::new(),
         }],
         nodes: vec![
             node("node-b", "10.42.2.0/24"),

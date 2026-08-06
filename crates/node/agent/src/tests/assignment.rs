@@ -113,6 +113,7 @@ async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_sta
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
     world.seed(&deployment(), &assignment()).await?;
+    let agent = world.agent();
     world.runtime.fail_next(
         FakeRuntimeOperation::Start,
         RuntimeError::Unavailable {
@@ -120,7 +121,7 @@ async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_sta
         },
     )?;
 
-    let first = world.agent().reconcile_once().await?;
+    let first = agent.reconcile_once().await?;
     assert_eq!(first.unresolved, 1);
     let pending = world.load_assignment().await?;
     assert_eq!(pending.status.phase, AssignmentPhase::Pending);
@@ -134,91 +135,105 @@ async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_sta
             .conditions
             .first()
             .map(|condition| condition.reason.0.as_str()),
-        Some("RuntimeRetry")
+        Some("RetryBackoff")
     );
 
-    let second = world.agent().reconcile_once().await?;
+    world.status_clock.advance(Duration::from_secs(5));
+    let second = agent.reconcile_once().await?;
     assert_eq!(second.running, 1);
     assert_running(&world).await?;
     Ok(())
 }
 
 #[tokio::test]
-async fn assignment_reconcile_reuses_one_durable_restart_reservation_after_failure()
+async fn new_user_deployment_fails_fast_while_an_older_deployment_is_ready()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
     world.seed(&deployment(), &assignment()).await?;
-    world.agent().reconcile_once().await?;
-    let handle = world
-        .runtime
-        .list(&cluster_id(), &node_id("node-1"))
-        .await?
-        .into_iter()
-        .next()
-        .ok_or("workload missing")?
-        .handle;
-    world
-        .runtime
-        .stop(
-            &handle,
-            ShutdownRequest {
-                timeout: Duration::from_secs(5),
-            },
-        )
-        .await?;
+    let mut previous = deployment();
+    previous.meta.id = DeploymentId::new("deployment-previous")?;
+    previous.spec.service_generation = Generation(0);
+    previous.status.phase = DeploymentPhase::Ready;
+    put_resource(
+        world.store.as_ref(),
+        Keyspace::new(&cluster_id()).resource(
+            &ResourceKind::new("Deployment")?,
+            &ResourceName::new(previous.meta.id.as_str())?,
+        ),
+        serde_json::to_vec(&previous)?,
+    )
+    .await?;
     world.runtime.fail_next(
         FakeRuntimeOperation::Start,
         RuntimeError::Unavailable {
-            message: "injected restart outage".to_owned(),
+            message: "injected rollout failure".to_owned(),
         },
     )?;
 
-    let interrupted = world.agent().reconcile_once().await?;
-    assert_eq!(interrupted.unresolved, 1);
-    assert_eq!(interrupted.requeue_at, Some(Timestamp(1_750_000_005_000)));
-    let reserved = world.load_replica().await?;
-    assert_eq!(reserved.status.phase, DeploymentPhase::Publishing);
-    assert_eq!(reserved.status.restart_attempts, 1);
-    assert_eq!(reserved.status.restart_pending_attempt, Some(1));
-    assert_eq!(
-        reserved.status.restart_not_before,
-        Some(Timestamp(1_750_000_005_000))
-    );
+    let report = world.agent().reconcile_once().await?;
 
-    world.status_clock.advance(Duration::from_secs(5));
-    let failed_start = world.agent().reconcile_once().await?;
-    assert_eq!(failed_start.unresolved, 1);
-    let still_reserved = world.load_replica().await?;
-    assert_eq!(still_reserved.status.phase, DeploymentPhase::Publishing);
-    assert_eq!(still_reserved.status.restart_attempts, 1);
-    assert_eq!(still_reserved.status.restart_pending_attempt, Some(1));
-
-    let recovered = world.agent().reconcile_once().await?;
-    assert_eq!(recovered.running, 1);
-    assert_eq!(recovered.restarted, 1);
-    let finished = world.load_replica().await?;
-    assert_eq!(finished.status.phase, DeploymentPhase::PendingReady);
-    assert_eq!(finished.status.restart_attempts, 1);
-    assert_eq!(finished.status.restart_pending_attempt, None);
-    assert_eq!(finished.status.restart_not_before, None);
+    assert_eq!(report.requeue_at, None);
     assert_eq!(
-        finished
-            .status
-            .conditions
-            .iter()
-            .find(|condition| condition.condition_type == ConditionType::RuntimeRestart)
-            .map(|condition| condition.reason.0.as_str()),
-        Some("RestartSucceeded")
+        world.load_assignment().await?.status.phase,
+        AssignmentPhase::Failed
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn assignment_reconcile_stops_after_restart_budget_is_exhausted()
+async fn user_convergence_failure_stops_after_ten_retries_without_a_fallback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    let agent = world.agent();
+
+    for expected_attempt in 1..=10 {
+        world.runtime.fail_next(
+            FakeRuntimeOperation::Start,
+            RuntimeError::Unavailable {
+                message: format!("injected convergence failure {expected_attempt}"),
+            },
+        )?;
+        let report = agent.reconcile_once().await?;
+        let retry_at = report.requeue_at.ok_or("retry deadline missing")?;
+        assert_eq!(
+            world.load_assignment().await?.status.phase,
+            AssignmentPhase::Pending
+        );
+        let delay = retry_at.0.saturating_sub(world.status_clock.now().0);
+        world
+            .status_clock
+            .advance(Duration::from_millis(u64::try_from(delay)?));
+    }
+
+    world.runtime.fail_next(
+        FakeRuntimeOperation::Start,
+        RuntimeError::Unavailable {
+            message: "final convergence failure".to_owned(),
+        },
+    )?;
+    let exhausted = agent.reconcile_once().await?;
+
+    assert_eq!(exhausted.requeue_at, None);
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Failed);
+    assert_eq!(
+        assignment
+            .status
+            .conditions
+            .first()
+            .map(|condition| condition.reason.0.as_str()),
+        Some("RetryLimitReached")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn zero_restart_attempts_makes_a_user_process_exit_terminal()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
     let mut deployment = deployment();
-    deployment.spec.service.max_restarts = Some(1);
+    deployment.spec.service.max_restart_attempts = 0;
     world.seed(&deployment, &assignment()).await?;
     world.agent().reconcile_once().await?;
     let handle = world
@@ -229,71 +244,6 @@ async fn assignment_reconcile_stops_after_restart_budget_is_exhausted()
         .next()
         .ok_or("workload missing")?
         .handle;
-    let stop = ShutdownRequest {
-        timeout: Duration::from_secs(5),
-    };
-    world.runtime.stop(&handle, stop).await?;
-    let delayed = world.agent().reconcile_once().await?;
-    assert_eq!(delayed.unresolved, 1);
-    world.status_clock.advance(Duration::from_secs(5));
-    assert_eq!(world.agent().reconcile_once().await?.restarted, 1);
-    world.runtime.stop(&handle, stop).await?;
-
-    let exhausted = world.agent().reconcile_once().await?;
-    assert_eq!(exhausted.unresolved, 1);
-    assert_eq!(
-        world.load_assignment().await?.status.phase,
-        AssignmentPhase::Failed
-    );
-    let replica = world.load_replica().await?;
-    assert_eq!(replica.status.restart_attempts, 1);
-    assert_eq!(replica.status.phase, DeploymentPhase::Crashed);
-    assert_eq!(
-        replica
-            .status
-            .conditions
-            .iter()
-            .find(|condition| condition.condition_type == ConditionType::RuntimeRestart)
-            .map(|condition| condition.reason.0.as_str()),
-        Some("RestartLimitReached")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn assignment_run_restarts_an_exit_with_one_persistent_event_subscription()
--> Result<(), Box<dyn std::error::Error>> {
-    let world = World::new();
-    world.seed(&deployment(), &assignment()).await?;
-    world.agent().reconcile_once().await?;
-    let handle = world
-        .runtime
-        .list(&cluster_id(), &node_id("node-1"))
-        .await?
-        .into_iter()
-        .next()
-        .ok_or("workload missing")?
-        .handle;
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let agent = world.agent();
-    let task = tokio::spawn(async move { agent.run(shutdown_rx).await });
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let subscriptions = world
-                .runtime
-                .calls()
-                .unwrap()
-                .into_iter()
-                .filter(|call| call.operation == FakeRuntimeOperation::Events)
-                .count();
-            if subscriptions == 1 {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-
     world
         .runtime
         .stop(
@@ -303,47 +253,254 @@ async fn assignment_run_restarts_an_exit_with_one_persistent_event_subscription(
             },
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let replica = world.load_replica().await.unwrap();
-            if replica.status.restart_pending_attempt == Some(1) {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    world.status_clock.advance(Duration::from_secs(5));
-    world.monotonic_clock.advance(Duration::from_secs(5));
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let replica = world.load_replica().await.unwrap();
-            if replica.status.restart_attempts == 1
-                && replica.status.restart_pending_attempt.is_none()
-            {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
 
-    shutdown_tx.send(true)?;
-    tokio::time::timeout(Duration::from_secs(1), task).await???;
-    let starts = world
+    let report = world.agent().reconcile_once().await?;
+
+    assert_eq!(report.unresolved, 1);
+    assert_eq!(report.requeue_at, None);
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Failed);
+    assert_eq!(
+        assignment
+            .status
+            .conditions
+            .first()
+            .map(|condition| condition.reason.0.as_str()),
+        Some("WorkloadExited")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_process_exit_retries_with_the_default_budget()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    let agent = world.agent();
+    agent.reconcile_once().await?;
+    let handle = world
         .runtime
-        .calls()?
+        .list(&cluster_id(), &node_id("node-1"))
+        .await?
         .into_iter()
-        .filter(|call| call.operation == FakeRuntimeOperation::Start)
-        .count();
-    assert_eq!(starts, 2);
-    let subscriptions = world
+        .next()
+        .ok_or("workload missing")?
+        .handle;
+    world
         .runtime
-        .calls()?
+        .stop(
+            &handle,
+            ShutdownRequest {
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await?;
+
+    let delayed = agent.reconcile_once().await?;
+    assert_eq!(delayed.requeue_at, Some(Timestamp(1_750_000_005_000)));
+    assert_eq!(
+        world.load_assignment().await?.status.phase,
+        AssignmentPhase::Pending
+    );
+
+    world.status_clock.advance(Duration::from_secs(5));
+    let recovered = agent.reconcile_once().await?;
+    assert_eq!(recovered.running, 1);
+    assert_eq!(recovered.restarted, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_process_exit_exhausts_the_configured_restart_budget()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut deployment = deployment();
+    deployment.spec.service.max_restart_attempts = 2;
+    world.seed(&deployment, &assignment()).await?;
+    let agent = world.agent();
+    agent.reconcile_once().await?;
+
+    for _attempt in 1..=2 {
+        let handle = world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .into_iter()
+            .next()
+            .ok_or("workload missing")?
+            .handle;
+        world
+            .runtime
+            .stop(
+                &handle,
+                ShutdownRequest {
+                    timeout: Duration::from_secs(5),
+                },
+            )
+            .await?;
+        let delayed = agent.reconcile_once().await?;
+        let retry_at = delayed.requeue_at.ok_or("retry deadline missing")?;
+        let delay = retry_at.0.saturating_sub(world.status_clock.now().0);
+        world
+            .status_clock
+            .advance(Duration::from_millis(u64::try_from(delay)?));
+        assert_eq!(agent.reconcile_once().await?.restarted, 1);
+    }
+
+    let handle = world
+        .runtime
+        .list(&cluster_id(), &node_id("node-1"))
+        .await?
         .into_iter()
-        .filter(|call| call.operation == FakeRuntimeOperation::Events)
-        .count();
-    assert_eq!(subscriptions, 1);
+        .next()
+        .ok_or("workload missing")?
+        .handle;
+    world
+        .runtime
+        .stop(
+            &handle,
+            ShutdownRequest {
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await?;
+    let exhausted = agent.reconcile_once().await?;
+
+    assert_eq!(exhausted.requeue_at, None);
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Failed);
+    assert_eq!(
+        assignment
+            .status
+            .conditions
+            .first()
+            .map(|condition| condition.reason.0.as_str()),
+        Some("RetryLimitReached")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn daemon_restart_resets_the_volatile_user_restart_budget()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut deployment = deployment();
+    deployment.spec.service.max_restart_attempts = 1;
+    world.seed(&deployment, &assignment()).await?;
+    let first_agent = world.agent();
+    first_agent.reconcile_once().await?;
+    let handle = world
+        .runtime
+        .list(&cluster_id(), &node_id("node-1"))
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("workload missing")?
+        .handle;
+    world
+        .runtime
+        .stop(
+            &handle,
+            ShutdownRequest {
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await?;
+
+    assert_eq!(
+        first_agent.reconcile_once().await?.requeue_at,
+        Some(Timestamp(1_750_000_005_000))
+    );
+    drop(first_agent);
+
+    let restarted_agent = world.agent();
+    assert_eq!(
+        restarted_agent.reconcile_once().await?.requeue_at,
+        Some(Timestamp(1_750_000_005_000))
+    );
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Pending);
+    assert!(
+        assignment
+            .status
+            .conditions
+            .first()
+            .is_some_and(|condition| condition.message.contains("retry attempt 1"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_process_exit_retries_with_volatile_backoff()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let (deployment, assignment) = system_workload();
+    world.seed(&deployment, &assignment).await?;
+    let agent = world.agent();
+    agent.reconcile_once().await?;
+    let handle = world
+        .runtime
+        .list(&cluster_id(), &node_id("node-1"))
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("workload missing")?
+        .handle;
+    world
+        .runtime
+        .stop(
+            &handle,
+            ShutdownRequest {
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await?;
+
+    let delayed = agent.reconcile_once().await?;
+    assert_eq!(delayed.requeue_at, Some(Timestamp(1_750_000_005_000)));
+    assert_eq!(
+        world.load_assignment().await?.status.phase,
+        AssignmentPhase::Pending
+    );
+
+    world.status_clock.advance(Duration::from_secs(5));
+    let recovered = agent.reconcile_once().await?;
+    assert_eq!(
+        recovered.running,
+        1,
+        "assignment={:?}",
+        world.load_assignment().await?
+    );
+    assert_eq!(recovered.restarted, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_health_crash_restarts_and_resets_replica_health()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let (deployment, assignment) = system_workload();
+    world.seed_without_replica(&deployment, &assignment).await?;
+    let mut replica = replica(&assignment);
+    replica.status.phase = DeploymentPhase::Crashed;
+    replica.status.healthcheck_failures = 3;
+    put_resource(
+        world.store.as_ref(),
+        world.replica_key(),
+        serde_json::to_vec(&replica)?,
+    )
+    .await?;
+    let agent = world.agent();
+
+    let delayed = agent.reconcile_once().await?;
+    assert_eq!(delayed.requeue_at, Some(Timestamp(1_750_000_005_000)));
+
+    world.status_clock.advance(Duration::from_secs(5));
+    let recovered = agent.reconcile_once().await?;
+    assert_eq!(recovered.restarted, 1);
+    let replica = world.load_replica().await?;
+    assert_eq!(replica.status.phase, DeploymentPhase::PendingReady);
+    assert_eq!(replica.status.healthcheck_failures, 0);
     Ok(())
 }
 
@@ -593,7 +750,7 @@ async fn assignment_resolves_external_values_only_at_workload_creation()
 }
 
 #[tokio::test]
-async fn rejected_external_secret_marks_the_assignment_failed()
+async fn rejected_external_secret_enters_bounded_convergence_retry()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
     let mut deployment = deployment();
@@ -615,16 +772,65 @@ async fn rejected_external_secret_marks_the_assignment_failed()
         .await?;
 
     let assignment = world.load_assignment().await?;
-    assert_eq!(assignment.status.phase, AssignmentPhase::Failed);
+    assert_eq!(assignment.status.phase, AssignmentPhase::Pending);
     let failure = assignment
         .status
         .conditions
         .iter()
         .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
         .ok_or("runtime failure condition missing")?;
-    assert_eq!(failure.reason.0, "ExternalValueSourceRejected");
+    assert_eq!(failure.reason.0, "RetryBackoff");
     assert!(failure.message.contains("aws-secret://missing"));
     Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_external_secret_enters_bounded_convergence_retry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    let mut deployment = deployment();
+    deployment.spec.service.secrets = Some(SecretMountSpec::Dotenv {
+        mount_path: "/run/secrets/maestro.env".to_owned(),
+        source: Some("aws-secret://unavailable".to_owned()),
+        items: BTreeMap::new(),
+    });
+    world.seed(&deployment, &assignment()).await?;
+
+    world
+        .agent()
+        .with_value_source_resolver(Arc::new(UnavailableValueSource))
+        .reconcile_once()
+        .await?;
+
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Pending);
+    let failure = assignment
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .ok_or("runtime failure condition missing")?;
+    assert_eq!(failure.reason.0, "RetryBackoff");
+    assert!(
+        failure
+            .message
+            .contains("AWS Secrets Manager is unavailable")
+    );
+    Ok(())
+}
+
+struct UnavailableValueSource;
+
+#[async_trait]
+impl ValueSourceResolver for UnavailableValueSource {
+    async fn resolve(
+        &self,
+        _source: &str,
+    ) -> Result<BTreeMap<String, SecretValue>, ValueSourceError> {
+        Err(ValueSourceError::Unavailable {
+            message: "AWS Secrets Manager is unavailable".to_owned(),
+        })
+    }
 }
 
 struct FakeValueSources {
@@ -716,7 +922,7 @@ pub(crate) fn deployment() -> Deployment {
                 replicas: 1,
                 exposed_ports: vec![8080],
                 health_check: None,
-                max_restarts: Some(3),
+                max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
                 environment: BTreeMap::from([("MODE".to_owned(), "production".to_owned())]),
                 environment_sources: Vec::new(),
                 user: None,
@@ -750,6 +956,15 @@ pub(crate) fn deployment() -> Deployment {
             conditions: Vec::new(),
         },
     }
+}
+
+fn system_workload() -> (Deployment, Assignment) {
+    let service_id = ServiceId::new(kernel_api::TAILSCALE_GATEWAY_SERVICE_ID).unwrap();
+    let mut deployment = deployment();
+    deployment.spec.service_id = service_id.clone();
+    let mut assignment = assignment();
+    assignment.spec.service_id = service_id;
+    (deployment, assignment)
 }
 
 async fn assert_running(world: &World) -> Result<(), Box<dyn std::error::Error>> {
@@ -964,9 +1179,6 @@ fn replica(assignment: &Assignment) -> ReplicaState {
             node_id: Some(assignment.spec.node_id.clone()),
             workload_id: None,
             healthcheck_failures: 0,
-            restart_attempts: 0,
-            restart_pending_attempt: None,
-            restart_not_before: None,
             resolved_secrets: Default::default(),
             conditions: Vec::new(),
         },

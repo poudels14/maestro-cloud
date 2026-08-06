@@ -1063,13 +1063,6 @@
             "type": "string"
           },
           {
-            "description": "An assignment runtime restart has completed.",
-            "enum": [
-              "RUNTIME_RESTART"
-            ],
-            "type": "string"
-          },
-          {
             "description": "The node firewall generation is applied.",
             "enum": [
               "FIREWALL_READY"
@@ -5748,33 +5741,6 @@
             "nullable": true,
             "type": "object"
           },
-          "restartAttempts": {
-            "description": "Restart attempts consumed by this assignment.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "restartNotBefore": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Timestamp"
-              },
-              {
-                "enum": [
-                  null
-                ],
-                "nullable": true
-              }
-            ],
-            "description": "Earliest UTC time at which the pending restart may be attempted."
-          },
-          "restartPendingAttempt": {
-            "description": "Attempt durably reserved before a runtime restart and cleared after it is observed running.",
-            "format": "uint32",
-            "minimum": 0,
-            "nullable": true,
-            "type": "integer"
-          },
           "workloadId": {
             "anyOf": [
               {
@@ -5792,8 +5758,7 @@
         },
         "required": [
           "phase",
-          "healthcheckFailures",
-          "restartAttempts"
+          "healthcheckFailures"
         ],
         "type": "object"
       },
@@ -6471,11 +6436,11 @@
             ],
             "description": "Optional workload health policy."
           },
-          "maxRestarts": {
-            "description": "Maximum restarts per assignment, or unlimited when absent.",
+          "maxRestartAttempts": {
+            "default": 10,
+            "description": "Maximum retry attempts after a user workload fails. Defaults to 10.\nSystem workloads retry indefinitely regardless of this value.",
             "format": "uint32",
             "minimum": 0,
-            "nullable": true,
             "type": "integer"
           },
           "name": {

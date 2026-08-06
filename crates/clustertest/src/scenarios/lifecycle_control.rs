@@ -110,15 +110,15 @@ where
         .map_err(|error| driver_error("await health-triggered restart", error))?;
     let observed = require_deployment(&snapshot, &name, &deployment)?;
     let replica = require_replica(observed, 0)?;
-    if observed.phase != DeploymentPhase::Crashed
-        && replica.phase != DeploymentPhase::Crashed
-        && replica.restart_attempts > 0
-        && replica.workload == ResourceAvailability::Available
+    if observed.phase == DeploymentPhase::PendingReady
+        && replica.phase == DeploymentPhase::PendingReady
+        && replica.healthcheck_failures == 0
+        && replica.workload == crate::ResourceAvailability::Available
     {
         Ok(())
     } else {
         Err(ScenarioError::Assertion(format!(
-            "unhealthy threshold did not recover replica: {observed:?}"
+            "unhealthy threshold did not restart replica: {observed:?}"
         )))
     }
 }

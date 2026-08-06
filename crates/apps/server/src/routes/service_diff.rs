@@ -68,9 +68,9 @@ pub(super) fn changes(
     )?;
     push_json(
         &mut changes,
-        "maxRestarts",
-        &current.max_restarts,
-        &desired.max_restarts,
+        "maxRestartAttempts",
+        &current.max_restart_attempts,
+        &desired.max_restart_attempts,
     )?;
     push_masked_map(
         &mut changes,

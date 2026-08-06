@@ -44,7 +44,8 @@ pub use lifecycle_control::{
     unhealthy_threshold_restarts_replica,
 };
 pub use lifecycle_faults::{
-    all_exhausted_replicas_crash_deployment, exhausted_replica_stays_down_while_peers_run,
+    all_exhausted_replicas_crash_deployment,
+    exhausted_replica_crashes_deployment_while_peers_stay_running,
     initial_replica_crash_preserves_pending_peers, missing_workload_record_is_recovered,
     old_workload_crash_does_not_break_redeployment, rollout_failure_is_isolated_between_services,
 };

@@ -47,7 +47,6 @@ fn cutover_plan_converts_scheduled_assignment_and_replica_state() -> TestResult 
     );
     assert_eq!(replica.status.phase, DeploymentPhase::Ready);
     assert_eq!(replica.status.healthcheck_failures, 2);
-    assert_eq!(replica.status.restart_attempts, 4);
     assert!(replica.meta.annotations.contains_key(&AnnotationKey(
         "migration.maestro.dev/legacy-endpoint".to_owned()
     )));
@@ -111,7 +110,6 @@ fn cutover_plan_archives_a_superseded_crashed_replica_on_its_deployment() -> Tes
                 "replicaIndex": 0,
                 "status": "CRASHED",
                 "healthcheckFailures": 0,
-                "restartAttempts": 0,
                 "nodeId": "node-a",
                 "assignmentId": "assignment-old",
                 "error": "restart budget exhausted"
@@ -177,7 +175,6 @@ fn cutover_plan_archives_a_crash_for_a_pruned_deployment_on_its_service() -> Tes
                 "replicaIndex": 0,
                 "status": "CRASHED",
                 "healthcheckFailures": 0,
-                "restartAttempts": 3,
                 "nodeId": "node-a",
                 "assignmentId": "assignment-pruned",
                 "error": "historical placement failed"
@@ -202,10 +199,6 @@ fn cutover_plan_archives_a_crash_for_a_pruned_deployment_on_its_service() -> Tes
     assert_eq!(
         archived.pointer("/0/state/deploymentId"),
         Some(&json!("deploy-pruned"))
-    );
-    assert_eq!(
-        archived.pointer("/0/state/restartAttempts"),
-        Some(&json!(3))
     );
     Ok(())
 }
@@ -426,7 +419,6 @@ pub(crate) fn running_assignment_snapshot() -> Result<LegacySnapshot, crate::Sna
                 "replicaIndex": 0,
                 "status": "READY",
                 "healthcheckFailures": 2,
-                "restartAttempts": 4,
                 "nodeId": "node-a",
                 "assignmentId": "assignment-1",
                 "endpoint": {

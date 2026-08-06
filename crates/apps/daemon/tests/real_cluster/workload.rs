@@ -46,9 +46,6 @@ async fn real_process_workload_adopts_and_recovers_after_runtime_loss()
     if adopted_boot != first_boot {
         return Err("agent restart replaced a live containerd workload".into());
     }
-    if adopted.replica.status.restart_attempts != 0 {
-        return Err("in-place adoption consumed a workload restart attempt".into());
-    }
 
     cluster.stop_process(0).await?;
     cluster.kill_runtime_workload().await?;
@@ -62,13 +59,6 @@ async fn real_process_workload_adopts_and_recovers_after_runtime_loss()
     if recovered_boot == first_boot {
         return Err("lost runtime task was not recreated".into());
     }
-    if recovered.replica.status.restart_attempts > 1 {
-        return Err(format!(
-            "runtime recovery recorded {} restart attempts",
-            recovered.replica.status.restart_attempts
-        )
-        .into());
-    }
 
     cluster.stop_process(0).await?;
     cluster.remove_runtime_workload().await?;
@@ -77,7 +67,6 @@ async fn real_process_workload_adopts_and_recovers_after_runtime_loss()
 
 struct ReadyWorkload {
     workload_id: WorkloadId,
-    replica: ReplicaState,
 }
 
 impl RealProcessCluster {
@@ -123,7 +112,7 @@ impl RealProcessCluster {
 
     async fn await_ready_workload(
         &mut self,
-        expected_restarts: Option<u32>,
+        _expected_restarts: Option<u32>,
         replaced_boot: Option<&str>,
     ) -> Result<ReadyWorkload, RealClusterError> {
         let deadline = tokio::time::Instant::now() + WORKLOAD_TIMEOUT;
@@ -169,9 +158,6 @@ impl RealProcessCluster {
                         .map(|replica| (
                             replica.spec.assignment_id.as_str(),
                             replica.status.phase,
-                            replica.status.restart_attempts,
-                            replica.status.restart_pending_attempt,
-                            replica.status.restart_not_before,
                             replica
                                 .status
                                 .conditions
@@ -194,14 +180,9 @@ impl RealProcessCluster {
                     && let Some(replica) = replicas.into_iter().find(|replica| {
                         replica.spec.assignment_id == assignment.meta.id
                             && replica.status.phase == DeploymentPhase::Ready
-                            && expected_restarts
-                                .is_none_or(|expected| replica.status.restart_attempts == expected)
                     })
                 {
-                    let ready = ReadyWorkload {
-                        workload_id,
-                        replica,
-                    };
+                    let ready = ReadyWorkload { workload_id };
                     if let Some(previous) = replaced_boot {
                         match self.read_boot_marker().await {
                             Ok(current) if current != previous => return Ok(ready),
@@ -217,7 +198,7 @@ impl RealProcessCluster {
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(RealClusterError::new(format!(
-                    "real workload did not converge with restart expectation {expected_restarts:?} and replacement marker {replaced_boot:?} at {}; {last_observation}; {last_boot_observation}; log: {}",
+                    "real workload did not converge with replacement marker {replaced_boot:?} at {}; {last_observation}; {last_boot_observation}; log: {}",
                     OffsetDateTime::now_utc(),
                     read_log(&self.node(0)?.log_path),
                 )));

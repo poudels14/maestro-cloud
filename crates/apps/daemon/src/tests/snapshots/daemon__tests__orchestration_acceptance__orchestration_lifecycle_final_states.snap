@@ -32,7 +32,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -75,7 +74,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -96,14 +94,12 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
               workload_instance: "[workload-instance]"
             - index: 1
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -124,7 +120,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -138,7 +133,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -159,7 +153,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -173,7 +166,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -194,7 +186,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -208,7 +199,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -242,7 +232,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -263,7 +252,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -284,14 +272,12 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
               workload_instance: "[workload-instance]"
             - index: 1
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
@@ -326,7 +312,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -369,7 +354,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -390,28 +374,24 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
               workload_instance: "[workload-instance]"
             - index: 1
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
               workload_instance: "[workload-instance]"
             - index: 2
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-1
               workload_instance: "[workload-instance]"
             - index: 3
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
@@ -432,7 +412,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -446,7 +425,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -467,21 +445,18 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
               workload_instance: "[workload-instance]"
             - index: 1
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
               workload_instance: "[workload-instance]"
             - index: 2
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
@@ -495,21 +470,18 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
               workload_instance: "[workload-instance]"
             - index: 1
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
               workload_instance: "[workload-instance]"
             - index: 2
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3
@@ -530,7 +502,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -544,7 +515,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -578,7 +548,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -599,7 +568,6 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
@@ -620,14 +588,12 @@ expression: final_states
           replicas:
             - index: 0
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-2
               workload_instance: "[workload-instance]"
             - index: 1
               phase: Ready
-              restart_attempts: 0
               healthcheck_failures: 0
               workload: Available
               node: node-3

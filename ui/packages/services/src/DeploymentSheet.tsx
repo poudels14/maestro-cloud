@@ -222,12 +222,6 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
                       <p class="mt-1 pl-4 text-[11px] text-red-500 break-words">{error()}</p>
                     )}
                   </Show>
-                  <Show when={replica.status.restartAttempts > 0}>
-                    <p class="mt-1 pl-4 text-[11px] text-amber-600">
-                      {replica.status.restartAttempts} restart attempt
-                      {replica.status.restartAttempts === 1 ? "" : "s"}
-                    </p>
-                  </Show>
                 </div>
               )}
             </For>

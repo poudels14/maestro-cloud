@@ -374,8 +374,6 @@ pub struct ReplicaSnapshot {
     pub index: u32,
     /// The replica's observed lifecycle phase.
     pub phase: DeploymentPhase,
-    /// The restart attempts recorded for this replica.
-    pub restart_attempts: u32,
     /// Consecutive healthcheck failures recorded for this replica.
     pub healthcheck_failures: u32,
     /// Whether the runtime workload currently exists.

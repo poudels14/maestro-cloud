@@ -155,23 +155,6 @@ fn plan_service<'a>(
                 .get(&slot)
                 .and_then(|assignments| assignments.first())
                 .copied();
-            if service
-                .exhausted_slots
-                .contains(&(group.deployment_id.clone(), replica_index))
-            {
-                if let Some(existing) = existing {
-                    retain(existing, planned, deployment_load, node_load);
-                }
-                continue;
-            }
-            let unhealthy = existing.is_some_and(|assignment| {
-                service.unhealthy_slots.iter().any(|unhealthy| {
-                    unhealthy.deployment_id == group.deployment_id
-                        && unhealthy.node_id == assignment.spec.node_id
-                        && unhealthy.replica_index == replica_index
-                        && unhealthy.assignment_id == assignment.meta.id
-                })
-            });
             let existing_is_eligible = existing.is_some_and(|assignment| {
                 assignment.spec.restart_generation == group.restart_generation
                     && (input.held.contains(&assignment.meta.id)
@@ -181,7 +164,6 @@ fn plan_service<'a>(
             });
             if let Some(existing) = existing
                 && existing_is_eligible
-                && !unhealthy
                 && spread_allows_retention(
                     service,
                     &group.deployment_id,
@@ -204,32 +186,26 @@ fn plan_service<'a>(
             let preferred_node = (group_index > 0)
                 .then(|| rollout_preference.get(&(service.service_id.clone(), replica_index)))
                 .flatten();
-            let selected = candidates
-                .iter()
-                .filter(|node| {
-                    !unhealthy
-                        || existing.is_none_or(|existing| node.node_id != existing.spec.node_id)
-                })
-                .min_by_key(|node| {
-                    let deployment_node_load = deployment_load
-                        .get(&(
-                            service.service_id.clone(),
-                            group.deployment_id.clone(),
-                            node.node_id.clone(),
-                        ))
-                        .copied()
-                        .unwrap_or_default();
-                    let spreads_replicas =
-                        service.placement.replica_spread == ReplicaSpread::BestEffort;
-                    (
-                        spreads_replicas.then_some(deployment_node_load),
-                        preferred_node != Some(&node.node_id),
-                        deployment_node_load,
-                        node_load.get(&node.node_id).copied().unwrap_or_default(),
-                        node.role != NodeRole::Worker,
-                        &node.node_id,
-                    )
-                });
+            let selected = candidates.iter().min_by_key(|node| {
+                let deployment_node_load = deployment_load
+                    .get(&(
+                        service.service_id.clone(),
+                        group.deployment_id.clone(),
+                        node.node_id.clone(),
+                    ))
+                    .copied()
+                    .unwrap_or_default();
+                let spreads_replicas =
+                    service.placement.replica_spread == ReplicaSpread::BestEffort;
+                (
+                    spreads_replicas.then_some(deployment_node_load),
+                    preferred_node != Some(&node.node_id),
+                    deployment_node_load,
+                    node_load.get(&node.node_id).copied().unwrap_or_default(),
+                    node.role != NodeRole::Worker,
+                    &node.node_id,
+                )
+            });
             if let Some(node) = selected {
                 let placement_epoch = existing
                     .map(|assignment| assignment.spec.placement_epoch.saturating_add(1))

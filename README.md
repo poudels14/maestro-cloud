@@ -298,6 +298,13 @@ across every eligible node after topology changes. The default `"stable"`
 preserves healthy assignments; hard `nodeAffinity` constraints still limit the
 nodes available to either policy.
 
+User workloads retry crashes and convergence failures up to
+`deploy.maxRestartAttempts`, which defaults to `10`; set it to `0` to disable
+those retries. The counter is node-local and resets when the daemon restarts or
+the replica becomes healthy. A failed rollout candidate is not retried while a
+ready previous deployment can continue serving traffic. System workloads ignore
+this limit and retry indefinitely with capped exponential backoff.
+
 ## Exec
 
 Exec selects one running service replica, relays across nodes when necessary,

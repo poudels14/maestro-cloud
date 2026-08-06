@@ -4,8 +4,8 @@ use crate::{
     ResourceAvailability, RolloutFailure, ScenarioError, ServiceFixture,
 };
 
-/// Proves one exhausted replica stays down without failing healthy peers.
-pub async fn exhausted_replica_stays_down_while_peers_run<Cluster>(
+/// Proves one exhausted replica fails its deployment without stopping healthy peers.
+pub async fn exhausted_replica_crashes_deployment_while_peers_stay_running<Cluster>(
     cluster: &mut Cluster,
 ) -> Result<(), ScenarioError>
 where
@@ -22,9 +22,9 @@ where
         .await
         .map_err(|error| driver_error("settle exhausted replica", error))?;
     let observed = require_deployment(&snapshot, &name, &deployment)?;
-    if observed.phase != DeploymentPhase::Ready {
+    if observed.phase != DeploymentPhase::Crashed {
         return Err(ScenarioError::Assertion(format!(
-            "one exhausted replica changed deployment to {:?}",
+            "one exhausted replica left deployment in {:?}, expected Crashed",
             observed.phase
         )));
     }

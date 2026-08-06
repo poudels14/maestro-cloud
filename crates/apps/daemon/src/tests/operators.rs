@@ -359,7 +359,7 @@ fn service() -> Result<Service, kernel_api::InvalidIdentifier> {
             replicas: 1,
             exposed_ports: vec![8080],
             health_check: None,
-            max_restarts: Some(3),
+            max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
             environment: BTreeMap::new(),
             environment_sources: Vec::new(),
             user: None,

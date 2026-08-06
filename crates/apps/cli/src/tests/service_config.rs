@@ -43,6 +43,7 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
                             replicas: 2,
                             replicaSpread: "bestEffort",
                             exec: false,
+                            maxRestartAttempts: 4,
                             healthcheckPath: "/health",
                             env: { items: { MODE: "production" } },
                             secrets: {
@@ -86,6 +87,7 @@ async fn familiar_jsonc_shape_maps_to_typed_service_and_reports_ignored_fields()
         ReplicaSpread::BestEffort
     );
     assert_eq!(desired.spec.exec, ExecPolicy::Denied);
+    assert_eq!(desired.spec.max_restart_attempts, 4);
     assert_eq!(
         desired.spec.environment.get("MODE").map(String::as_str),
         Some("production")
@@ -284,6 +286,11 @@ async fn preview_environment_preserves_maestro_templates_while_expanding_local_v
 
     let loaded = load_services(source, &reader).await?;
     let desired = loaded.services.values().next().ok_or("missing service")?;
+
+    assert_eq!(
+        desired.spec.max_restart_attempts,
+        kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS
+    );
 
     assert_eq!(
         desired.spec.environment.get("MODE").map(String::as_str),

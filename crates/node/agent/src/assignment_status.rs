@@ -25,15 +25,23 @@ pub(crate) enum AssignmentOutcome<'a> {
 
 pub(crate) struct ConvergeFailure {
     phase: AssignmentPhase,
+    class: FailureClass,
     reason: &'static str,
     message: String,
     retry_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FailureClass {
+    Waiting,
+    Retryable,
 }
 
 impl ConvergeFailure {
     pub(crate) fn pending(reason: &'static str, message: String) -> Self {
         Self {
             phase: AssignmentPhase::Pending,
+            class: FailureClass::Waiting,
             reason,
             message,
             retry_at: None,
@@ -43,6 +51,7 @@ impl ConvergeFailure {
     pub(crate) fn pending_at(reason: &'static str, message: String, retry_at: Timestamp) -> Self {
         Self {
             phase: AssignmentPhase::Pending,
+            class: FailureClass::Waiting,
             reason,
             message,
             retry_at: Some(retry_at),
@@ -52,8 +61,39 @@ impl ConvergeFailure {
     pub(crate) fn failed(reason: &'static str, message: String) -> Self {
         Self {
             phase: AssignmentPhase::Failed,
+            class: FailureClass::Retryable,
             reason,
             message,
+            retry_at: None,
+        }
+    }
+
+    pub(crate) fn is_waiting(&self) -> bool {
+        self.class == FailureClass::Waiting
+    }
+
+    pub(crate) fn with_retry(self, attempt: u32, retry_at: Timestamp) -> Self {
+        Self {
+            phase: AssignmentPhase::Pending,
+            class: FailureClass::Waiting,
+            reason: "RetryBackoff",
+            message: format!(
+                "{}; retry attempt {attempt} is scheduled for {}",
+                self.message, retry_at.0
+            ),
+            retry_at: Some(retry_at),
+        }
+    }
+
+    pub(crate) fn exhausted(self, maximum: u32) -> Self {
+        Self {
+            phase: AssignmentPhase::Failed,
+            class: self.class,
+            reason: "RetryLimitReached",
+            message: format!(
+                "{}; exhausted the retry limit of {maximum} attempts",
+                self.message
+            ),
             retry_at: None,
         }
     }
@@ -87,9 +127,7 @@ impl From<RuntimeError> for ConvergeFailure {
             RuntimeError::NotFound { .. }
             | RuntimeError::Unavailable { .. }
             | RuntimeError::Stream { .. }
-            | RuntimeError::Timeout { .. } => {
-                Self::pending(RUNTIME_RETRY_REASON, error.to_string())
-            }
+            | RuntimeError::Timeout { .. } => Self::failed(RUNTIME_RETRY_REASON, error.to_string()),
         }
     }
 }
@@ -103,7 +141,7 @@ impl From<NetworkProviderError> for ConvergeFailure {
             NetworkProviderError::NetworkNotFound { .. }
             | NetworkProviderError::AddressConflict { .. }
             | NetworkProviderError::Unavailable { .. } => {
-                Self::pending(RUNTIME_RETRY_REASON, error.to_string())
+                Self::failed(RUNTIME_RETRY_REASON, error.to_string())
             }
         }
     }
@@ -122,7 +160,7 @@ impl From<SecretMountError> for ConvergeFailure {
                 Self::failed("SecretMountRejected", error.to_string())
             }
             SecretMountError::Task { .. } | SecretMountError::Io { .. } => {
-                Self::pending("SecretMountUnavailable", error.to_string())
+                Self::failed("SecretMountUnavailable", error.to_string())
             }
         }
     }
@@ -145,7 +183,7 @@ impl From<NodeApiMountError> for ConvergeFailure {
             | NodeApiMountError::Task { .. }
             | NodeApiMountError::Server(_)
             | NodeApiMountError::Io { .. } => {
-                Self::pending("NodeApiMountUnavailable", error.to_string())
+                Self::failed("NodeApiMountUnavailable", error.to_string())
             }
         }
     }

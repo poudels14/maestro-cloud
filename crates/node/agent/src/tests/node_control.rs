@@ -178,7 +178,7 @@ fn service() -> Result<Service, Box<dyn std::error::Error>> {
             replicas: 1,
             exposed_ports: Vec::new(),
             health_check: None,
-            max_restarts: None,
+            max_restart_attempts: kernel_api::DEFAULT_MAX_RESTART_ATTEMPTS,
             environment: BTreeMap::new(),
             environment_sources: Vec::new(),
             user: None,

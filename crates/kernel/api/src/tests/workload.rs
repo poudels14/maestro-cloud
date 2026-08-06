@@ -84,6 +84,28 @@ fn replica_spread_defaults_to_stable_and_uses_an_explicit_wire_value() {
 }
 
 #[test]
+fn service_restart_attempts_default_to_ten_and_preserve_zero() {
+    let mut encoded = serde_json::to_value(valid_service_spec()).expect("serialize service spec");
+    encoded
+        .as_object_mut()
+        .expect("service object")
+        .remove("maxRestartAttempts");
+    let defaulted: ServiceSpec = serde_json::from_value(encoded).expect("default retry limit");
+    assert_eq!(
+        defaulted.max_restart_attempts,
+        crate::DEFAULT_MAX_RESTART_ATTEMPTS
+    );
+
+    let mut encoded = serde_json::to_value(valid_service_spec()).expect("serialize service spec");
+    encoded
+        .as_object_mut()
+        .expect("service object")
+        .insert("maxRestartAttempts".to_owned(), serde_json::json!(0));
+    let disabled: ServiceSpec = serde_json::from_value(encoded).expect("zero retry limit");
+    assert_eq!(disabled.max_restart_attempts, 0);
+}
+
+#[test]
 fn workload_hostname_preserves_the_replica_slot_within_one_dns_label() {
     let service_id = ServiceId::new(format!("api.{}", "a".repeat(70))).expect("service id");
     let hostname = workload_hostname(&service_id, 42);
@@ -304,7 +326,7 @@ fn valid_service_spec() -> ServiceSpec {
         replicas: 1,
         exposed_ports: vec![8080],
         health_check: None,
-        max_restarts: Some(3),
+        max_restart_attempts: crate::DEFAULT_MAX_RESTART_ATTEMPTS,
         environment: BTreeMap::new(),
         environment_sources: Vec::new(),
         user: None,

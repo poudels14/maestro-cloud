@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use kernel_api::ServiceId;
+use kernel_api::{SYSTEM_RESOURCE_PREFIX, ServiceId, is_system_service};
 use runtime::{
     HostPortPublication, NetworkAddressing, RuntimeCapability, RuntimeError, WorkloadRuntime,
 };
-
-const SYSTEM_RESOURCE_PREFIX: &str = "maestro-system-";
 
 pub(crate) fn validate_system_host_ports(
     runtime: &dyn WorkloadRuntime,
@@ -26,7 +24,7 @@ pub(crate) fn validate_system_host_ports(
     }
     let mut host_endpoints = BTreeSet::new();
     for (service_id, publications) in grants {
-        if !service_id.as_str().starts_with(SYSTEM_RESOURCE_PREFIX) {
+        if !is_system_service(service_id) {
             return Err(RuntimeError::InvalidSpec {
                 message: format!(
                     "host ports may be granted only to `{SYSTEM_RESOURCE_PREFIX}` services"

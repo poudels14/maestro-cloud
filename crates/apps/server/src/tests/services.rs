@@ -147,6 +147,7 @@ async fn service_diff_returns_exact_revision_and_masks_changed_values()
         "environment".to_string(),
         json!({"DATABASE_URL": "postgres://replacement"}),
     );
+    spec_object.insert("maxRestartAttempts".to_string(), json!(3));
     spec_object.insert(
         "secrets".to_string(),
         json!({
@@ -159,6 +160,7 @@ async fn service_diff_returns_exact_revision_and_masks_changed_values()
     assert_eq!(required(&changed, "status")?, "changed");
     let encoded = changed.to_string();
     assert!(encoded.contains("environment.DATABASE_URL"));
+    assert!(encoded.contains("maxRestartAttempts"));
     assert!(encoded.contains("secrets.items.DATABASE_PASSWORD"));
     assert!(encoded.contains("••••ment"));
     assert!(encoded.contains("••••word"));

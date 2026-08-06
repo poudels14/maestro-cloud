@@ -17,19 +17,6 @@ pub struct DeploymentGroup {
     pub replicas: u32,
 }
 
-/// Exact unhealthy observation that may trigger replacement of one assignment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct UnhealthySlot {
-    /// Deployment whose replica was observed.
-    pub deployment_id: DeploymentId,
-    /// Node on which the observation was made.
-    pub node_id: NodeId,
-    /// Stable replica slot within the deployment.
-    pub replica_index: u32,
-    /// Assignment identity that produced the observation.
-    pub assignment_id: AssignmentId,
-}
-
 /// Desired scheduling view for one service and all retained rollout groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceSchedule {
@@ -39,10 +26,6 @@ pub struct ServiceSchedule {
     pub groups: Vec<DeploymentGroup>,
     /// Hard node and label selection constraints.
     pub placement: PlacementConstraint,
-    /// Assignment-specific failed health observations.
-    pub unhealthy_slots: BTreeSet<UnhealthySlot>,
-    /// Slots whose restart budget is exhausted and may not be replaced automatically.
-    pub exhausted_slots: BTreeSet<(DeploymentId, u32)>,
 }
 
 /// Whether a node may receive new assignments in this planning pass.

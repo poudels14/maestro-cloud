@@ -14,9 +14,13 @@ async fn assignment_reconcile_mounts_and_cleans_private_node_api_credentials()
     deployment.spec.service.node_api = NodeApiAccess::IdentityAndTelemetry;
     world.seed(&deployment, &assignment()).await?;
     let agent = world.agent_with_node_api(Some(node_api_services()));
-    agent.reconcile_once().await?;
+    let report = agent.reconcile_once().await?;
     let credential_directory = world.node_api.path().join("mounts/assignment-1");
-    assert!(credential_directory.join("node.sock").exists());
+    assert!(
+        credential_directory.join("node.sock").exists(),
+        "report={report:?}; assignment={:?}",
+        world.load_assignment().await?
+    );
     assert!(credential_directory.join("node.token").exists());
 
     let key = world.assignment_key();
@@ -43,7 +47,7 @@ async fn assignment_reconcile_rejects_node_api_without_an_explicit_user_or_servi
     let report = world.agent().reconcile_once().await?;
     assert_eq!(report.unresolved, 1);
     let rejected = world.load_assignment().await?;
-    assert_eq!(rejected.status.phase, AssignmentPhase::Failed);
+    assert_eq!(rejected.status.phase, AssignmentPhase::Pending);
     assert!(
         rejected
             .status
@@ -63,7 +67,7 @@ async fn assignment_reconcile_rejects_node_api_without_an_explicit_user_or_servi
     world.seed(&deployment, &assignment()).await?;
     world.agent().reconcile_once().await?;
     let rejected = world.load_assignment().await?;
-    assert_eq!(rejected.status.phase, AssignmentPhase::Failed);
+    assert_eq!(rejected.status.phase, AssignmentPhase::Pending);
     assert!(
         rejected
             .status

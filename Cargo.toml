@@ -45,6 +45,7 @@ aws-sdk-secretsmanager = { version = "=1.109.0", default-features = false, featu
 ] }
 axum = "=0.8.9"
 axum-server = "=0.8.0"
+backon = { version = "=1.6.0", default-features = false }
 base64 = "=0.22.1"
 bytes = "=1.12.1"
 chacha20poly1305 = "=0.11.0"

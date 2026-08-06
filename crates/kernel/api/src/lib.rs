@@ -83,20 +83,20 @@ pub use schema::{
 pub use secret::{MaskedSecret, SecretValue};
 pub use service_validation::ServiceSpecError;
 pub use system_service::{
-    CLOUDFLARE_SERVICE_ID, DNS_RESOLVER_SERVICE_ID, TAILSCALE_GATEWAY_SERVICE_ID,
-    TRAEFIK_SERVICE_ID,
+    CLOUDFLARE_SERVICE_ID, DNS_RESOLVER_SERVICE_ID, SYSTEM_RESOURCE_PREFIX,
+    TAILSCALE_GATEWAY_SERVICE_ID, TRAEFIK_SERVICE_ID, is_system_resource_id, is_system_service,
 };
 pub use value_source::{ExternalValueSource, InvalidExternalValueSource};
 pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus,
     BUILD_WATCH_REVISION_ANNOTATION, Build, BuildPhase, BuildSource, BuildSpec, BuildStatus,
-    BuildTemplate, CommandSpec, Deployment, DeploymentGoal, DeploymentPhase, DeploymentSpec,
-    DeploymentStatus, DepotBuildConfig, ExecPolicy, GitCommit, HealthCheckSpec, HealthProbe,
-    NodeApiAccess, PlacementConstraint, PlacementHistory, PlacementHistorySpec,
-    PlacementHistoryStatus, PreviewPolicy, ReplicaSpread, ReplicaState, ReplicaStateSpec,
-    ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec, ServiceStatus,
-    VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec, assignment_workload_address,
-    workload_hostname,
+    BuildTemplate, CommandSpec, DEFAULT_MAX_RESTART_ATTEMPTS, Deployment, DeploymentGoal,
+    DeploymentPhase, DeploymentSpec, DeploymentStatus, DepotBuildConfig, ExecPolicy, GitCommit,
+    HealthCheckSpec, HealthProbe, NodeApiAccess, PlacementConstraint, PlacementHistory,
+    PlacementHistorySpec, PlacementHistoryStatus, PreviewPolicy, ReplicaSpread, ReplicaState,
+    ReplicaStateSpec, ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec,
+    ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
+    assignment_workload_address, workload_hostname,
 };
 
 mod version;

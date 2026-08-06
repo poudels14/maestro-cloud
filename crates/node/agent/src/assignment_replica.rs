@@ -110,9 +110,6 @@ fn initial_replica(
             node_id: Some(assignment.spec.node_id.clone()),
             workload_id: None,
             healthcheck_failures: 0,
-            restart_attempts: 0,
-            restart_pending_attempt: None,
-            restart_not_before: None,
             resolved_secrets: None,
             conditions: Vec::new(),
         },
@@ -121,14 +118,13 @@ fn initial_replica(
 
 pub(crate) async fn record_started(
     store: &dyn Store,
-    keyspace: &Keyspace,
-    replica_kind: &ResourceKind,
+    key: kernel_store::StoreKey,
     assignment: &Assignment,
     replica_id: &ReplicaStateId,
     workload_id: &WorkloadId,
     resolved_secrets: &BTreeMap<String, MaskedSecret>,
+    restarted: bool,
 ) -> Result<(), AssignmentAgentError> {
-    let key = keyspace.resource(replica_kind, &ResourceName::from(replica_id.clone()));
     for _attempt in 0..MAX_CAS_ATTEMPTS {
         let stored = store.get(&key).await?.ok_or_else(|| {
             AssignmentAgentError::ReplicaObservationDisappeared {
@@ -147,19 +143,27 @@ pub(crate) async fn record_started(
                 assignment_id: assignment.meta.id.to_string(),
             });
         }
-        let phase = if current.status.phase == DeploymentPhase::Publishing {
+        let phase = if restarted
+            || matches!(
+                current.status.phase,
+                DeploymentPhase::Publishing | DeploymentPhase::Crashed
+            ) {
             DeploymentPhase::PendingReady
         } else {
             current.status.phase
         };
         if current.status.phase == phase
             && current.status.workload_id.as_ref() == Some(workload_id)
+            && (!restarted || current.status.healthcheck_failures == 0)
             && current.status.resolved_secrets.as_ref() == Some(resolved_secrets)
         {
             return Ok(());
         }
         current.status.phase = phase;
         current.status.workload_id = Some(workload_id.clone());
+        if restarted {
+            current.status.healthcheck_failures = 0;
+        }
         current.status.resolved_secrets = Some(resolved_secrets.clone());
         current.meta.revision = stored.version.resource_revision();
         let value = serde_json::to_vec(&current).map_err(|error| {

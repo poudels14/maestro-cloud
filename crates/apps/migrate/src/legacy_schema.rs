@@ -76,8 +76,6 @@ pub(crate) struct LegacyDeployConfig {
     #[serde(default = "default_true")]
     pub(crate) exec: bool,
     #[serde(default)]
-    pub(crate) max_restarts: Option<u32>,
-    #[serde(default)]
     pub(crate) env: LegacyEnvConfig,
     #[serde(default)]
     pub(crate) secrets: Option<LegacySecretsConfig>,
@@ -316,8 +314,6 @@ pub(crate) struct LegacyReplicaState {
     pub(crate) status: LegacyDeploymentStatus,
     #[serde(default)]
     pub(crate) healthcheck_failures: u32,
-    #[serde(default)]
-    pub(crate) restart_attempts: u32,
     #[serde(default)]
     pub(crate) node_id: Option<String>,
     #[serde(default)]
