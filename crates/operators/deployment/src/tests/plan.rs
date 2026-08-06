@@ -906,6 +906,7 @@ fn removed_children_are_collected_before_service_finalization() {
     let building = plan(input(service.clone(), vec![deployment.clone()])).expect("build creation");
     let build = building.create_builds[0].clone();
     deployment.status.phase = DeploymentPhase::Removed;
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
     service.meta.deletion_timestamp = Some(Timestamp(40_000));
     let assignment = assignment(&deployment, "assignment-old", 1);
     let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
@@ -918,4 +919,9 @@ fn removed_children_are_collected_before_service_finalization() {
     assert_eq!(collected.delete_builds, vec![build.meta.id]);
     assert_eq!(collected.delete_replicas, vec![replica.meta.id]);
     assert!(collected.deployment_updates.is_empty());
+    assert_eq!(collected.service_updates.len(), 1);
+    assert_eq!(
+        collected.service_updates[0].status.active_deployment_id,
+        None
+    );
 }

@@ -4678,10 +4678,10 @@ expression: document
         "type": "object"
       },
       "PreviewPhase": {
-        "description": "Persisted lifecycle of a pull-request preview.",
+        "description": "Persisted lifecycle of a pull-request preview deployment.",
         "oneOf": [
           {
-            "description": "Waiting for source inspection or derived resource creation.",
+            "description": "Waiting for the derived service to become ready.",
             "enum": [
               "pending"
             ],
@@ -4847,6 +4847,15 @@ expression: document
             ],
             "description": "Current preview phase."
           },
+          "pullRequestState": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PullRequestState"
+              }
+            ],
+            "default": "open",
+            "description": "Last pull-request state observed from the source repository."
+          },
           "teardownAt": {
             "anyOf": [
               {
@@ -4866,6 +4875,25 @@ expression: document
           "phase"
         ],
         "type": "object"
+      },
+      "PullRequestState": {
+        "description": "Last observed source-control state of a pull request.",
+        "oneOf": [
+          {
+            "description": "The pull request is open in its source repository.",
+            "enum": [
+              "open"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The pull request was closed or merged in its source repository.",
+            "enum": [
+              "closed"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ReplicaSpread": {
         "description": "How the scheduler treats healthy placements when more eligible nodes exist.",

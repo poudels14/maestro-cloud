@@ -391,6 +391,7 @@ async fn finalization_collects_deployment_build_and_replica_before_release()
         .await?;
     world
         .update::<Service>("Service", "api", |service| {
+            service.status.active_deployment_id = Some(deployment.meta.id.clone());
             service.meta.deletion_timestamp = Some(Timestamp(3_000));
         })
         .await?;
@@ -407,6 +408,14 @@ async fn finalization_collects_deployment_build_and_replica_before_release()
     assert!(world.list::<Deployment>("Deployment").await?.is_empty());
     assert!(world.list::<Build>("Build").await?.is_empty());
     assert!(world.list::<ReplicaState>("ReplicaState").await?.is_empty());
+    assert_eq!(
+        world
+            .one::<Service>("Service")
+            .await?
+            .status
+            .active_deployment_id,
+        None
+    );
     assert_eq!(build.spec.deployment_id, deployment.meta.id);
     Ok(())
 }

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{
     Generation, Object, ObjectMeta, OwnerReference, Ownership, Preview, PreviewId, PreviewPhase,
-    PreviewPolicy, PreviewSpec, PreviewStatus, ResourceId, ResourceKind, ResourceName, Service,
-    ServiceId, Timestamp,
+    PreviewPolicy, PreviewSpec, PreviewStatus, PullRequestState, ResourceId, ResourceKind,
+    ResourceName, Service, ServiceId, Timestamp,
 };
 use sha2::{Digest, Sha256};
 
@@ -299,6 +299,7 @@ fn new_preview(candidate: &Candidate<'_>) -> Result<Preview, PreviewSourcePlanEr
             expires_at: expires_at(candidate.pull_request, candidate.base.policy),
         },
         status: PreviewStatus {
+            pull_request_state: PullRequestState::Open,
             phase: PreviewPhase::Pending,
             teardown_at: None,
             conditions: Vec::new(),
@@ -314,6 +315,7 @@ fn update_open_preview(
     let policy = base.policy;
     let mut desired = current.clone();
     desired.meta.deletion_timestamp = None;
+    desired.status.pull_request_state = PullRequestState::Open;
     desired.spec.repository.clone_from(&base.repository);
     desired.spec.title.clone_from(&pull_request.title);
     desired
@@ -334,6 +336,7 @@ fn update_open_preview(
 
 fn close_preview(current: &Preview, now: Timestamp) -> Preview {
     let mut desired = current.clone();
+    desired.status.pull_request_state = PullRequestState::Closed;
     desired.meta.deletion_timestamp.get_or_insert(now);
     desired
 }

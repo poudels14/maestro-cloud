@@ -136,6 +136,11 @@ pub(crate) fn convert_preview(
             expires_at,
         },
         status: PreviewStatus {
+            pull_request_state: if closed_at.is_some() {
+                kernel_api::PullRequestState::Closed
+            } else {
+                kernel_api::PullRequestState::Open
+            },
             phase: if closed_at.is_some() {
                 PreviewPhase::Closing
             } else {

@@ -29,11 +29,22 @@ pub struct PreviewSpec {
     pub expires_at: Timestamp,
 }
 
-/// Persisted lifecycle of a pull-request preview.
+/// Last observed source-control state of a pull request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PullRequestState {
+    /// The pull request is open in its source repository.
+    #[default]
+    Open,
+    /// The pull request was closed or merged in its source repository.
+    Closed,
+}
+
+/// Persisted lifecycle of a pull-request preview deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum PreviewPhase {
-    /// Waiting for source inspection or derived resource creation.
+    /// Waiting for the derived service to become ready.
     Pending,
     /// Derived resources exist and the preview can receive traffic.
     Active,
@@ -56,12 +67,13 @@ impl PreviewPhase {
                 (
                     Self::Pending,
                     Self::Active | Self::Closing | Self::Expired | Self::Failed | Self::Canceled
-                ) | (Self::Active, Self::Closing | Self::Expired | Self::Failed)
-                    | (
-                        Self::Closing,
-                        Self::Pending | Self::Active | Self::Expired | Self::Failed
-                    )
-                    | (Self::Failed, Self::Pending)
+                ) | (
+                    Self::Active,
+                    Self::Pending | Self::Closing | Self::Expired | Self::Failed
+                ) | (
+                    Self::Closing,
+                    Self::Pending | Self::Active | Self::Expired | Self::Failed
+                ) | (Self::Failed, Self::Pending)
             )
     }
 }
@@ -70,6 +82,9 @@ impl PreviewPhase {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewStatus {
+    /// Last pull-request state observed from the source repository.
+    #[serde(default)]
+    pub pull_request_state: PullRequestState,
     /// Current preview phase.
     pub phase: PreviewPhase,
     /// Time teardown may proceed after a close event.

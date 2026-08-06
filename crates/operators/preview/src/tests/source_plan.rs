@@ -1,4 +1,6 @@
-use kernel_api::{ArtifactTemplate, BuildSource, Generation, PreviewPhase, ServiceId, Timestamp};
+use kernel_api::{
+    ArtifactTemplate, BuildSource, Generation, PreviewPhase, PullRequestState, ServiceId, Timestamp,
+};
 
 use crate::{
     PreviewFeedbackKind, PreviewSourcePlanError, PullRequest, PullRequestReadiness,
@@ -61,6 +63,7 @@ fn updates_pushes_and_reopens_without_changing_preview_identity() {
     let mut current = preview();
     current.meta.generation = Generation(7);
     current.meta.deletion_timestamp = Some(Timestamp(10_000));
+    current.status.pull_request_state = PullRequestState::Closed;
     current.status.phase = PreviewPhase::Closing;
     current.status.teardown_at = Some(Timestamp(20_000));
     let open = pull_request(42, 1_000, PullRequestReadiness::Ready, "ACME/API");
@@ -77,6 +80,7 @@ fn updates_pushes_and_reopens_without_changing_preview_identity() {
     assert_eq!(desired.spec.head_revision, open.head_revision);
     assert_eq!(desired.meta.generation, Generation(8));
     assert_eq!(desired.meta.deletion_timestamp, None);
+    assert_eq!(desired.status.pull_request_state, PullRequestState::Open);
     assert_eq!(desired.status.phase, PreviewPhase::Pending);
     assert_eq!(desired.status.teardown_at, None);
     assert_eq!(
@@ -149,6 +153,10 @@ fn closes_only_after_a_successful_repository_snapshot() {
     )
     .unwrap();
     assert_eq!(fetched.updates.len(), 1);
+    assert_eq!(
+        fetched.updates.first().unwrap().status.pull_request_state,
+        PullRequestState::Closed
+    );
     assert_eq!(
         fetched.updates.first().unwrap().meta.deletion_timestamp,
         Some(Timestamp(50_000))

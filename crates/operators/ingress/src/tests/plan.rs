@@ -158,6 +158,53 @@ fn service_without_active_deployment_retires_serving_generation() {
 }
 
 #[test]
+fn missing_active_deployment_retires_orphaned_traffic_generation() {
+    let mut world = World::ready();
+    let mut active = plan(world.input()).expect("stage").create_generations[0].clone();
+    active.status.phase = TrafficGenerationPhase::Active;
+    active.status.activated_at = Some(Timestamp(1_000));
+    world.generations.push(active.clone());
+    let mut input = world.input();
+    input.deployments.clear();
+
+    let retiring = plan(input).expect("retire orphaned generation");
+    assert!(retiring.backend_changes[0].active.is_none());
+    assert_eq!(
+        update_phase(&retiring, &active.meta.id),
+        TrafficGenerationPhase::Retired
+    );
+    assert_eq!(
+        retiring.generation_updates[0].status.retired_at,
+        Some(Timestamp(40_000))
+    );
+}
+
+#[test]
+fn missing_historical_deployment_does_not_block_replacement_traffic() {
+    let mut world = World::ready();
+    let mut active = plan(world.input()).expect("stage").create_generations[0].clone();
+    active.spec.deployment_id = DeploymentId::new("deployment-deleted").unwrap();
+    active.status.phase = TrafficGenerationPhase::Active;
+    active.status.activated_at = Some(Timestamp(1_000));
+    world.generations.push(active.clone());
+
+    let replacing = plan(world.input()).expect("replace orphaned generation");
+    assert_eq!(replacing.create_generations.len(), 1);
+    assert_eq!(
+        replacing.create_generations[0].spec.deployment_id,
+        world.deployment.meta.id
+    );
+    assert_eq!(
+        replacing.backend_changes[0]
+            .active
+            .as_ref()
+            .expect("existing traffic remains until cutover")
+            .generation_id,
+        active.meta.id
+    );
+}
+
+#[test]
 fn no_external_routes_still_acknowledges_the_active_deployment() {
     let mut world = World::ready();
     world.routes.clear();

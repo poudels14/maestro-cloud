@@ -27,6 +27,10 @@ function serviceHasBuild(service: Service): boolean {
   return service.spec.artifact.type === "build";
 }
 
+function previewPullRequestState(service: Service): ApiSchemas["PullRequestState"] {
+  return service.previewResource?.status.pullRequestState ?? "open";
+}
+
 function isSystemService(service: Service): boolean {
   return service.meta.id.startsWith("maestro-system-");
 }
@@ -81,6 +85,7 @@ export {
   isSystemService,
   nonPreviewServices,
   previewEnabledServices,
+  previewPullRequestState,
   previewServices,
   serviceDisplayStatus,
   serviceHasBuild,

@@ -44,6 +44,22 @@ async fn preview_derives_updates_reopens_and_expires_owned_resources()
     assert_eq!(world.preview().await?.status.phase, PreviewPhase::Active);
 
     world
+        .update::<Service>("Service", "api-pr-42", |service| {
+            service.status.active_deployment_id = None;
+        })
+        .await?;
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Pending);
+
+    world
+        .update::<Service>("Service", "api-pr-42", |service| {
+            service.status.active_deployment_id = Some(DeploymentId::new("ready-preview").unwrap());
+        })
+        .await?;
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Active);
+
+    world
         .update::<Service>("Service", "api", |service| {
             service.spec.version = "base-v2".to_string();
             service.status.rollout = RolloutState::Active;

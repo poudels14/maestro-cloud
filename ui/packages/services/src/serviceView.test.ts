@@ -5,6 +5,7 @@ import {
   attachPreviewResources,
   isSystemService,
   previewEnabledServices,
+  previewPullRequestState,
   previewServices,
   serviceDisplayStatus,
   serviceHasBuild,
@@ -20,6 +21,7 @@ function serviceResource(id: string): ApiSchemas["Service"] {
       version: "test",
       artifact: { type: "image", reference: "registry.example/test@sha256:abc" },
       exec: "denied",
+      maxRestartAttempts: 10,
       nodeApi: "disabled",
       placement: {},
       replicas: 1
@@ -32,7 +34,8 @@ function previewResource(
   id: string,
   serviceId: string,
   baseServiceId: string,
-  pullRequestNumber: number
+  pullRequestNumber: number,
+  pullRequestState: ApiSchemas["PullRequestState"] = "open"
 ): ApiSchemas["Preview"] {
   return {
     meta: { id, generation: 1, revision: 3 },
@@ -46,7 +49,7 @@ function previewResource(
       serviceId,
       title: `Preview ${pullRequestNumber}`
     },
-    status: { phase: "active" }
+    status: { phase: "active", pullRequestState }
   };
 }
 
@@ -74,6 +77,22 @@ test("groups previews under their base service in pull request order", () => {
     "api-pr-3",
     "api-pr-20"
   ]);
+});
+
+test("classifies pull requests by source state rather than preview deployment phase", () => {
+  const open = {
+    ...serviceResource("api-pr-3"),
+    previewResource: previewResource("preview-3", "api-pr-3", "api", 3, "open")
+  } satisfies Service;
+  open.previewResource.status.phase = "failed";
+  const closed = {
+    ...serviceResource("api-pr-4"),
+    previewResource: previewResource("preview-4", "api-pr-4", "api", 4, "closed")
+  } satisfies Service;
+  closed.previewResource.status.phase = "active";
+
+  expect(previewPullRequestState(open)).toBe("open");
+  expect(previewPullRequestState(closed)).toBe("closed");
 });
 
 test("lists previews globally and identifies preview-enabled base services", () => {

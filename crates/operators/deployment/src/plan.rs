@@ -155,6 +155,24 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 &mut output.delete_builds,
                 &mut output.delete_replicas,
             );
+            if desired_service_status
+                .active_deployment_id
+                .as_ref()
+                .is_some_and(|deployment_id| {
+                    !deployments.contains_key(deployment_id)
+                        || output.delete_deployments.contains(deployment_id)
+                })
+            {
+                desired_service_status.active_deployment_id = None;
+            }
+            if desired_service_status != service.status {
+                output.service_updates.push(ServiceUpdate {
+                    id: service.meta.id.clone(),
+                    observed_revision: service.meta.revision,
+                    generation: service.meta.generation,
+                    status: desired_service_status,
+                });
+            }
         }
     }
 

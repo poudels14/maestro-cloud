@@ -1,26 +1,49 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { ArrowUpRight, GitPullRequest } from "lucide-solid";
-import { formatDateTime, StatusBadge } from "@maestro/kit";
+import { formatDateTime, StatusBadge, TabButton } from "@maestro/kit";
+import type { ApiSchemas } from "@maestro/api-client";
 import type { Service } from "./types";
-import { serviceDisplayStatus, servicePreviews } from "./serviceView";
+import { previewPullRequestState, serviceDisplayStatus, servicePreviews } from "./serviceView";
 
 function PullRequestsTab(props: {
   service: Service;
   services: Service[];
   previewUrl: (serviceId: string) => string | null;
 }) {
-  const previews = () => servicePreviews(props.services, props.service.meta.id);
+  const [state, setState] = createSignal<ApiSchemas["PullRequestState"]>("open");
+  const allPreviews = () => servicePreviews(props.services, props.service.meta.id);
+  const openPreviews = () =>
+    allPreviews().filter((preview) => previewPullRequestState(preview) === "open");
+  const closedPreviews = () =>
+    allPreviews().filter((preview) => previewPullRequestState(preview) === "closed");
+  const previews = () => (state() === "open" ? openPreviews() : closedPreviews());
 
   return (
     <div class="space-y-4">
+      <div class="flex gap-4 border-b border-gray-200">
+        <TabButton
+          label="Open"
+          count={openPreviews().length}
+          active={state() === "open"}
+          onClick={() => setState("open")}
+        />
+        <TabButton
+          label="Closed"
+          count={closedPreviews().length}
+          active={state() === "closed"}
+          onClick={() => setState("closed")}
+        />
+      </div>
       <Show
         when={previews().length > 0}
         fallback={
           <div class="rounded-xl border border-dashed border-gray-200 bg-white py-16 text-center">
             <GitPullRequest class="mx-auto mb-3 size-9 text-gray-300" />
-            <p class="text-sm font-medium text-gray-500">No open pull requests</p>
+            <p class="text-sm font-medium text-gray-500">No {state()} pull requests</p>
             <p class="mt-1 text-xs text-gray-400">
-              A preview deployment is created for every open, non-draft pull request.
+              {state() === "open"
+                ? "A preview deployment is created for every open, non-draft pull request."
+                : "Closed and merged pull requests with retained previews appear here."}
             </p>
           </div>
         }
@@ -70,7 +93,14 @@ function PullRequestRow(props: { preview: Service; url: string | null }) {
         </span>
       </a>
       <div class="flex items-center gap-2 pl-10 sm:pl-0">
-        <StatusBadge status={serviceDisplayStatus(props.preview)} />
+        <Show
+          when={
+            previewPullRequestState(props.preview) === "open" ||
+            props.preview.status.activeDeploymentId != null
+          }
+        >
+          <StatusBadge status={serviceDisplayStatus(props.preview)} />
+        </Show>
         <a
           href={pullRequestUrl()}
           target="_blank"

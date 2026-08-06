@@ -21,6 +21,7 @@ function deployment(id: string, createdAt: number): Deployment {
         version: "v1",
         artifact: { type: "image", reference: "registry.example/api@sha256:abc" },
         exec: "denied",
+        maxRestartAttempts: 10,
         nodeApi: "disabled",
         placement: {},
         replicas: 1

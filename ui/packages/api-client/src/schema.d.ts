@@ -2883,7 +2883,7 @@ export interface components {
             /** @description Node whose protected launch document was inspected. */
             nodeId: components["schemas"]["NodeId"];
         };
-        /** @description Persisted lifecycle of a pull-request preview. */
+        /** @description Persisted lifecycle of a pull-request preview deployment. */
         PreviewPhase: "pending" | "active" | "closing" | "expired" | "failed" | "canceled";
         /** @description Declarative pull-request preview policy for a base service. */
         PreviewPolicy: {
@@ -2943,9 +2943,16 @@ export interface components {
             conditions?: components["schemas"]["Condition"][];
             /** @description Current preview phase. */
             phase: components["schemas"]["PreviewPhase"];
+            /**
+             * @description Last pull-request state observed from the source repository.
+             * @default open
+             */
+            pullRequestState: components["schemas"]["PullRequestState"];
             /** @description Time teardown may proceed after a close event. */
             teardownAt?: components["schemas"]["Timestamp"] | (null);
         };
+        /** @description Last observed source-control state of a pull request. */
+        PullRequestState: "open" | "closed";
         /** @description How the scheduler treats healthy placements when more eligible nodes exist. */
         ReplicaSpread: "stable" | "bestEffort";
         ReplicaState: components["schemas"]["Object8"];

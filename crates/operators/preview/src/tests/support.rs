@@ -98,6 +98,7 @@ pub(super) fn preview() -> Preview {
             expires_at: Timestamp(3_600_000),
         },
         status: PreviewStatus {
+            pull_request_state: kernel_api::PullRequestState::Open,
             phase: PreviewPhase::Pending,
             teardown_at: None,
             conditions: Vec::new(),

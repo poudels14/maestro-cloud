@@ -36,6 +36,7 @@ async fn preview_routes_expose_revisioned_source_status() -> Result<(), Box<dyn 
             expires_at: Timestamp(10_000),
         },
         status: PreviewStatus {
+            pull_request_state: kernel_api::PullRequestState::Open,
             phase: PreviewPhase::Active,
             teardown_at: None,
             conditions: Vec::new(),

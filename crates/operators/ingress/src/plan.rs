@@ -75,8 +75,14 @@ pub fn plan(input: IngressInput) -> Result<IngressPlan, IngressPlanError> {
             input.settings.retirement_grace,
         );
 
+        let active_deployment_missing = service
+            .status
+            .active_deployment_id
+            .as_ref()
+            .is_some_and(|deployment_id| !deployments.contains_key(deployment_id));
         let active = if service.meta.deletion_timestamp.is_some()
             || service.status.active_deployment_id.is_none()
+            || active_deployment_missing
         {
             retire_all(
                 &related,
@@ -210,8 +216,10 @@ fn validate_generation_ownership(
                 service_id: generation.spec.service_id.clone(),
             });
         }
-        if !deployments.contains_key(&generation.spec.deployment_id) {
-            return Err(IngressPlanError::MissingGenerationDeployment {
+        if let Some(deployment) = deployments.get(&generation.spec.deployment_id)
+            && deployment.spec.service_id != generation.spec.service_id
+        {
+            return Err(IngressPlanError::GenerationDeploymentOwnershipMismatch {
                 generation_id: generation.meta.id.clone(),
                 deployment_id: generation.spec.deployment_id.clone(),
             });
@@ -420,9 +428,9 @@ pub enum IngressPlanError {
         generation_id: TrafficGenerationId,
         service_id: ServiceId,
     },
-    /// A generation referenced a Deployment absent from the complete snapshot.
-    #[error("TrafficGeneration `{generation_id}` references missing Deployment `{deployment_id}`")]
-    MissingGenerationDeployment {
+    /// A generation referenced a Deployment owned by another Service.
+    #[error("TrafficGeneration `{generation_id}` references foreign Deployment `{deployment_id}`")]
+    GenerationDeploymentOwnershipMismatch {
         generation_id: TrafficGenerationId,
         deployment_id: DeploymentId,
     },

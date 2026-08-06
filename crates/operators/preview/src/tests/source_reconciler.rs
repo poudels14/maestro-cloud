@@ -74,15 +74,21 @@ async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview(
     api.set_open(Vec::new());
     world.clock.set_millis(20_000);
     world.runtime.reconcile_snapshot().await?;
+    let closed = world.preview().await?;
+    assert_eq!(closed.meta.deletion_timestamp, Some(Timestamp(20_000)));
     assert_eq!(
-        world.preview().await?.meta.deletion_timestamp,
-        Some(Timestamp(20_000))
+        closed.status.pull_request_state,
+        kernel_api::PullRequestState::Closed
     );
 
     api.set_open(vec![pull_request("third")]);
     world.runtime.reconcile_snapshot().await?;
     let reopened = world.preview().await?;
     assert_eq!(reopened.meta.deletion_timestamp, None);
+    assert_eq!(
+        reopened.status.pull_request_state,
+        kernel_api::PullRequestState::Open
+    );
     assert_eq!(reopened.status.phase, PreviewPhase::Pending);
     assert_eq!(reopened.spec.head_revision, "third");
 

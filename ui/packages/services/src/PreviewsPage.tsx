@@ -1,17 +1,29 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { GitPullRequest } from "lucide-solid";
-import { ErrorBanner, formatDateTime, StatusBadge } from "@maestro/kit";
+import { ErrorBanner, formatDateTime, StatusBadge, TabButton } from "@maestro/kit";
 import { useQuery } from "@maestro/sdk";
+import type { ApiSchemas } from "@maestro/api-client";
 import type { ServicesApi } from "./api";
 import { servicesQuery } from "./queries";
-import { previewEnabledServices, previewServices, serviceDisplayStatus } from "./serviceView";
+import {
+  previewEnabledServices,
+  previewPullRequestState,
+  previewServices,
+  serviceDisplayStatus
+} from "./serviceView";
 import type { Service } from "./types";
 
 function PreviewsPage(props: { api: ServicesApi }) {
   const services = useQuery(() => servicesQuery(props.api));
   const navigate = useNavigate();
-  const previews = () => previewServices(services.data ?? []);
+  const [state, setState] = createSignal<ApiSchemas["PullRequestState"]>("open");
+  const allPreviews = () => previewServices(services.data ?? []);
+  const openPreviews = () =>
+    allPreviews().filter((preview) => previewPullRequestState(preview) === "open");
+  const closedPreviews = () =>
+    allPreviews().filter((preview) => previewPullRequestState(preview) === "closed");
+  const previews = () => (state() === "open" ? openPreviews() : closedPreviews());
   const enabledServices = () => previewEnabledServices(services.data ?? []);
   const openService = (service: Service) => {
     const preview = service.previewResource;
@@ -47,14 +59,31 @@ function PreviewsPage(props: { api: ServicesApi }) {
       >
         <h1 class="mb-5 text-lg font-semibold text-gray-900">Pull request previews</h1>
 
+        <div class="mb-5 flex gap-4 border-b border-gray-200">
+          <TabButton
+            label="Open"
+            count={openPreviews().length}
+            active={state() === "open"}
+            onClick={() => setState("open")}
+          />
+          <TabButton
+            label="Closed"
+            count={closedPreviews().length}
+            active={state() === "closed"}
+            onClick={() => setState("closed")}
+          />
+        </div>
+
         <Show
           when={previews().length > 0}
           fallback={
             <div class="mb-7 rounded-lg border border-dashed border-gray-200 bg-white py-12 text-center">
               <GitPullRequest class="mx-auto mb-3 size-9 text-gray-300" />
-              <p class="text-sm font-medium text-gray-600">No pull request previews found.</p>
+              <p class="text-sm font-medium text-gray-600">No {state()} pull requests.</p>
               <p class="mt-1 text-xs text-gray-400">
-                Open, non-draft pull requests appear here after GitHub discovery.
+                {state() === "open"
+                  ? "Open, non-draft pull requests appear here after GitHub discovery."
+                  : "Closed and merged pull requests with retained previews appear here."}
               </p>
             </div>
           }
@@ -66,7 +95,7 @@ function PreviewsPage(props: { api: ServicesApi }) {
           </div>
         </Show>
 
-        <Show when={enabledServices().length > 0}>
+        <Show when={state() === "open" && enabledServices().length > 0}>
           <div>
             <h3 class="mb-2 text-xs font-medium text-gray-400">Preview-enabled services</h3>
             <div class="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
@@ -94,7 +123,9 @@ function PreviewsPage(props: { api: ServicesApi }) {
           </div>
         </Show>
 
-        <Show when={enabledServices().length === 0 && previews().length === 0}>
+        <Show
+          when={state() === "open" && enabledServices().length === 0 && openPreviews().length === 0}
+        >
           <p class="text-center text-xs text-gray-400">
             No services have pull request previews enabled.
           </p>
@@ -134,8 +165,14 @@ function PreviewRow(props: { service: Service; onOpen: () => void }) {
         </span>
       </div>
       <div class="flex items-center gap-2 pl-6 sm:pl-0">
-        <span class="text-xs font-medium text-gray-500">{preview().status.phase}</span>
-        <StatusBadge status={serviceDisplayStatus(props.service)} />
+        <Show
+          when={
+            previewPullRequestState(props.service) === "open" ||
+            props.service.status.activeDeploymentId != null
+          }
+        >
+          <StatusBadge status={serviceDisplayStatus(props.service)} />
+        </Show>
         <button
           type="button"
           onClick={props.onOpen}

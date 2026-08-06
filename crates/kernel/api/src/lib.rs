@@ -24,10 +24,10 @@ mod workload;
 
 pub use crate::version::MAESTRO_VERSION;
 pub use automation::{
-    NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, RESTART_TARGET_VERSION,
-    UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunSpec, UpgradeRunStatus,
-    Webhook, WebhookCategory, WebhookEvent, WebhookFormat, WebhookNodeAvailability,
-    WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
+    NodeUpgradeStatus, Preview, PreviewPhase, PreviewSpec, PreviewStatus, PullRequestState,
+    RESTART_TARGET_VERSION, UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun,
+    UpgradeRunSpec, UpgradeRunStatus, Webhook, WebhookCategory, WebhookEvent, WebhookFormat,
+    WebhookNodeAvailability, WebhookObservation, WebhookObservedState, WebhookSpec, WebhookStatus,
 };
 pub use command::{
     ArtifactArchiveUploadResponse, CommandRequest, DeploymentCommandResponse,

@@ -11,6 +11,7 @@ function service(): Service {
       version: "v1",
       artifact: { type: "image", reference: "registry.example/api@sha256:abc" },
       exec: "denied",
+      maxRestartAttempts: 10,
       nodeApi: "disabled",
       placement: {},
       replicas: 1
@@ -93,7 +94,7 @@ test("joins preview ownership and sorts deployment reads at the boundary", async
       serviceId: "service/a-pr-7",
       title: "Preview seven"
     },
-    status: { phase: "active" }
+    status: { phase: "active", pullRequestState: "open" }
   } satisfies ApiSchemas["Preview"];
   const older = deployment();
   const newer = {

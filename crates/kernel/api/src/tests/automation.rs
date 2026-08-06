@@ -25,7 +25,10 @@ fn preview_transition_matrix_is_exhaustive() {
                             | PreviewPhase::Canceled
                     ) | (
                         PreviewPhase::Active,
-                        PreviewPhase::Closing | PreviewPhase::Expired | PreviewPhase::Failed
+                        PreviewPhase::Pending
+                            | PreviewPhase::Closing
+                            | PreviewPhase::Expired
+                            | PreviewPhase::Failed
                     ) | (
                         PreviewPhase::Closing,
                         PreviewPhase::Pending
