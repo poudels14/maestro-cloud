@@ -193,6 +193,9 @@ function PreviewOriginBanner(props: {
   resource: NonNullable<Service["previewResource"]>;
   url: string | null;
 }) {
+  const pullRequestUrl = () =>
+    `https://github.com/${props.resource.spec.repository}/pull/${props.resource.spec.pullRequestNumber}`;
+
   return (
     <div class="mb-4 flex flex-col gap-2.5 rounded-lg border border-brand-ring bg-brand-light px-4 py-3 sm:flex-row sm:items-center">
       <div class="flex min-w-0 flex-1 items-center gap-2.5">
@@ -200,6 +203,15 @@ function PreviewOriginBanner(props: {
         <div class="min-w-0 flex-1 truncate text-sm font-semibold text-brand-hover">
           {props.resource.spec.title || `PR #${props.resource.spec.pullRequestNumber}`}
         </div>
+        <a
+          href={pullRequestUrl()}
+          target="_blank"
+          rel="noreferrer"
+          class="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-brand outline-none hover:bg-white/70"
+        >
+          View PR
+          <ArrowUpRight class="size-3" />
+        </a>
       </div>
       <Show when={props.url}>
         {(url) => (
