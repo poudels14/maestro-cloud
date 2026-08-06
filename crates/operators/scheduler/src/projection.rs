@@ -98,9 +98,11 @@ fn deleting_service_assignments(
             } else {
                 matches!(
                     deployment.status.phase,
-                    DeploymentPhase::Building
+                    DeploymentPhase::Preparing
+                        | DeploymentPhase::Building
                         | DeploymentPhase::Publishing
                         | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
                 ) && within_grace(now, *deleted_at, deployment_drain_grace)
             }
@@ -313,6 +315,7 @@ fn active_deployment(
         DeploymentPhase::Building
             | DeploymentPhase::Publishing
             | DeploymentPhase::PendingReady
+            | DeploymentPhase::Retrying
             | DeploymentPhase::Ready
             | DeploymentPhase::Draining
     ) && (deployment.status.phase != DeploymentPhase::Draining
@@ -330,10 +333,12 @@ fn deployment_order(phase: DeploymentPhase) -> u8 {
     match phase {
         DeploymentPhase::Draining => 0,
         DeploymentPhase::Ready => 1,
-        DeploymentPhase::PendingReady => 2,
-        DeploymentPhase::Publishing => 3,
-        DeploymentPhase::Building => 4,
-        _ => 5,
+        DeploymentPhase::Retrying => 2,
+        DeploymentPhase::PendingReady => 3,
+        DeploymentPhase::Publishing => 4,
+        DeploymentPhase::Building => 5,
+        DeploymentPhase::Preparing => 6,
+        _ => 7,
     }
 }
 

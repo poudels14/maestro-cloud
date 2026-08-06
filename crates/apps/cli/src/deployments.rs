@@ -121,9 +121,11 @@ impl From<&Deployment> for DeploymentRow {
 fn phase_name(phase: DeploymentPhase) -> &'static str {
     match phase {
         DeploymentPhase::Queued => "queued",
+        DeploymentPhase::Preparing => "preparing",
         DeploymentPhase::Building => "building",
         DeploymentPhase::Publishing => "publishing",
         DeploymentPhase::PendingReady => "pending-ready",
+        DeploymentPhase::Retrying => "retrying",
         DeploymentPhase::Ready => "ready",
         DeploymentPhase::Crashed => "crashed",
         DeploymentPhase::Terminated => "terminated",

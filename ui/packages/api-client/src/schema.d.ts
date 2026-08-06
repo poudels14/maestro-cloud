@@ -1630,7 +1630,7 @@ export interface components {
         /** @description Stable identity of one immutable service deployment. */
         DeploymentId: string;
         /** @description Persisted phase of an immutable deployment. */
-        DeploymentPhase: "QUEUED" | "BUILDING" | "PUBLISHING" | "PENDING_READY" | "READY" | "CRASHED" | "TERMINATED" | "REMOVED" | "DRAINING" | "CANCELED";
+        DeploymentPhase: "QUEUED" | "PREPARING" | "BUILDING" | "PUBLISHING" | "PENDING_READY" | "RETRYING" | "READY" | "CRASHED" | "TERMINATED" | "REMOVED" | "DRAINING" | "CANCELED";
         /** @description Captured service snapshot and desired lifecycle for one deployment. */
         DeploymentSpec: {
             /** @description Build generated for this deployment, when the artifact needs building. */

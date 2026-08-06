@@ -210,7 +210,7 @@ async fn temporarily_unready_active_replica_does_not_block_redeploy()
     let deployments = world.list::<Deployment>("Deployment").await?;
     assert!(deployments.iter().any(|deployment| {
         deployment.spec.service_generation == Generation(1)
-            && deployment.status.phase == DeploymentPhase::Ready
+            && deployment.status.phase == DeploymentPhase::PendingReady
     }));
     assert!(deployments.iter().any(|deployment| {
         deployment.spec.service_generation == Generation(2)
@@ -338,6 +338,15 @@ async fn store_backed_watched_commit_advances_after_pinned_deployment_exists()
                     Some("example.test/api@sha256:initial".to_string());
             },
         )
+        .await?;
+    let assignment =
+        crate::tests::plan_support::assignment(&initial_deployment, "assignment-initial", 1);
+    world
+        .put("Assignment", &assignment.meta.id, &assignment)
+        .await?;
+    let replica = ready_replica(&initial_deployment, &assignment.meta.id);
+    world
+        .put("ReplicaState", &replica.meta.id, &replica)
         .await?;
     world
         .update::<Service>("Service", "api", |service| {

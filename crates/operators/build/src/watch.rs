@@ -118,7 +118,7 @@ impl BuildWatchReconciler {
         }
         if matches!(
             latest.status.phase,
-            DeploymentPhase::Queued | DeploymentPhase::Building
+            DeploymentPhase::Queued | DeploymentPhase::Preparing | DeploymentPhase::Building
         ) {
             return Ok(requeue);
         }

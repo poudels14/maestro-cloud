@@ -36,6 +36,7 @@ pub(crate) fn retained_digests(
                 DeploymentPhase::Building
                     | DeploymentPhase::Publishing
                     | DeploymentPhase::PendingReady
+                    | DeploymentPhase::Retrying
                     | DeploymentPhase::Ready
                     | DeploymentPhase::Draining
             ) || latest
@@ -59,6 +60,7 @@ pub(crate) fn preserved_digests(
                 DeploymentPhase::Building
                     | DeploymentPhase::Publishing
                     | DeploymentPhase::PendingReady
+                    | DeploymentPhase::Retrying
                     | DeploymentPhase::Ready
                     | DeploymentPhase::Draining
             )

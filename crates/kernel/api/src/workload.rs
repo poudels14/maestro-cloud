@@ -460,12 +460,16 @@ pub fn workload_hostname(service_id: &ServiceId, replica_index: u32) -> String {
 pub enum DeploymentPhase {
     /// Waiting for the deployment operator.
     Queued,
-    /// Preparing or resolving the deployment artifact.
+    /// Resolving secrets and preparing immutable build source material.
+    Preparing,
+    /// Running the configured artifact build backend.
     Building,
     /// Publishing the deployment artifact to assigned nodes before workloads start.
     Publishing,
     /// Workloads started but have not passed readiness checks.
     PendingReady,
+    /// A previously started workload is waiting for a retry attempt.
+    Retrying,
     /// Workloads are healthy and may receive traffic.
     Ready,
     /// The deployment exhausted a terminal failure path.
@@ -476,24 +480,47 @@ pub enum DeploymentPhase {
     Removed,
     /// Traffic is leaving the deployment while requests drain.
     Draining,
-    /// The queued or building deployment was canceled.
+    /// The queued, preparing, or building deployment was canceled.
     Canceled,
 }
 
 impl DeploymentPhase {
-    /// Whether the old-system lifecycle permits this phase transition.
+    /// Whether the deployment lifecycle permits this phase transition.
     pub fn can_transition_to(self, target: Self) -> bool {
         match target {
-            Self::Publishing => matches!(self, Self::Building | Self::PendingReady),
-            Self::PendingReady => matches!(self, Self::Building | Self::Publishing),
-            Self::Ready => matches!(self, Self::Building | Self::Publishing | Self::PendingReady),
+            Self::Preparing => matches!(self, Self::Queued | Self::Building),
+            Self::Building => matches!(self, Self::Queued | Self::Preparing),
+            Self::Publishing => matches!(
+                self,
+                Self::Preparing
+                    | Self::Building
+                    | Self::PendingReady
+                    | Self::Retrying
+                    | Self::Ready
+            ),
+            Self::PendingReady => matches!(
+                self,
+                Self::Building | Self::Publishing | Self::Retrying | Self::Ready
+            ),
+            Self::Retrying => {
+                matches!(self, Self::Publishing | Self::PendingReady | Self::Ready)
+            }
+            Self::Ready => matches!(
+                self,
+                Self::Building | Self::Publishing | Self::PendingReady | Self::Retrying
+            ),
             Self::Crashed => !matches!(self, Self::Crashed | Self::Canceled | Self::Terminated),
             Self::Draining => matches!(
                 self,
-                Self::Ready | Self::PendingReady | Self::Publishing | Self::Building
+                Self::Ready
+                    | Self::Retrying
+                    | Self::PendingReady
+                    | Self::Publishing
+                    | Self::Building
+                    | Self::Preparing
             ),
             Self::Terminated => !matches!(self, Self::Terminated),
-            Self::Queued | Self::Building | Self::Removed | Self::Canceled => true,
+            Self::Queued | Self::Removed | Self::Canceled => true,
         }
     }
 }

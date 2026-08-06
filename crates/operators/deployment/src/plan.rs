@@ -10,7 +10,7 @@ use kernel_api::{
 };
 
 use crate::readiness::{
-    all_ready, all_started, current_slots, drain_elapsed, has_assignments, has_unstarted,
+    all_ready, all_started, current_slots, drain_elapsed, has_assignments, has_retrying,
 };
 use crate::resource::{index, new_build, new_deployment, validate_ownership};
 use crate::{DeploymentInput, DeploymentPlan, ResourceStatusUpdate, ServiceUpdate};
@@ -325,34 +325,46 @@ fn desired_deployment_status(
                 ArtifactTemplate::Build { .. }
             ) {
                 ensure_build(deployment, builds, create_builds)?;
+                desired.phase = DeploymentPhase::Preparing;
+            } else {
+                desired.phase = DeploymentPhase::Building;
             }
-            desired.phase = DeploymentPhase::Building;
         }
-        DeploymentPhase::Building => {
+        DeploymentPhase::Preparing | DeploymentPhase::Building => {
             let artifact_ready = match &deployment.spec.service.artifact {
                 ArtifactTemplate::Image { .. } => true,
                 ArtifactTemplate::Build { .. } => {
                     let build = ensure_build(deployment, builds, create_builds)?;
                     desired.git_commit = build.and_then(resolved_git_commit);
                     match build {
-                        Some(build) if build.status.phase == BuildPhase::Succeeded => {
-                            desired.image_digest =
-                                Some(build.status.image_digest.clone().ok_or_else(|| {
-                                    DeploymentPlanError::SucceededBuildMissingImage {
-                                        build_id: build.meta.id.clone(),
-                                    }
-                                })?);
-                            true
-                        }
-                        Some(build) if build.status.phase == BuildPhase::Failed => {
-                            desired.phase = DeploymentPhase::Crashed;
-                            false
-                        }
-                        Some(build) if build.status.phase == BuildPhase::Canceled => {
-                            desired.phase = DeploymentPhase::Canceled;
-                            false
-                        }
-                        Some(_) | None => false,
+                        Some(build) => match build.status.phase {
+                            BuildPhase::Queued | BuildPhase::Preparing => {
+                                desired.phase = DeploymentPhase::Preparing;
+                                false
+                            }
+                            BuildPhase::Building => {
+                                desired.phase = DeploymentPhase::Building;
+                                false
+                            }
+                            BuildPhase::Succeeded => {
+                                desired.image_digest =
+                                    Some(build.status.image_digest.clone().ok_or_else(|| {
+                                        DeploymentPlanError::SucceededBuildMissingImage {
+                                            build_id: build.meta.id.clone(),
+                                        }
+                                    })?);
+                                true
+                            }
+                            BuildPhase::Failed => {
+                                desired.phase = DeploymentPhase::Crashed;
+                                false
+                            }
+                            BuildPhase::Canceled => {
+                                desired.phase = DeploymentPhase::Canceled;
+                                false
+                            }
+                        },
+                        None => false,
                     }
                 }
             };
@@ -367,16 +379,17 @@ fn desired_deployment_status(
                 );
             }
         }
-        DeploymentPhase::Publishing | DeploymentPhase::PendingReady | DeploymentPhase::Ready => {
-            advance_readiness(
-                service,
-                deployment,
-                assignments,
-                replicas,
-                now,
-                &mut desired,
-            );
-        }
+        DeploymentPhase::Publishing
+        | DeploymentPhase::PendingReady
+        | DeploymentPhase::Retrying
+        | DeploymentPhase::Ready => advance_readiness(
+            service,
+            deployment,
+            assignments,
+            replicas,
+            now,
+            &mut desired,
+        ),
         DeploymentPhase::Draining => {
             if desired.draining_at.is_none() {
                 desired.draining_at = Some(now);
@@ -444,14 +457,14 @@ fn advance_readiness(
     } else if all_ready(deployment, &slots, replicas, count) {
         desired.phase = DeploymentPhase::Ready;
         desired.ready_at.get_or_insert(now);
-    } else if desired.phase != DeploymentPhase::Ready
-        && slots.len() == usize::try_from(count).unwrap_or(usize::MAX)
-    {
-        if all_started(deployment, &slots, replicas, count) {
-            desired.phase = DeploymentPhase::PendingReady;
-        } else if has_unstarted(deployment, &slots, replicas, count) {
-            desired.phase = DeploymentPhase::Publishing;
-        }
+    } else if slots.len() != usize::try_from(count).unwrap_or(usize::MAX) {
+        desired.phase = DeploymentPhase::Publishing;
+    } else if has_retrying(deployment, &slots, replicas, count) {
+        desired.phase = DeploymentPhase::Retrying;
+    } else if all_started(deployment, &slots, replicas, count) {
+        desired.phase = DeploymentPhase::PendingReady;
+    } else {
+        desired.phase = DeploymentPhase::Publishing;
     }
 }
 

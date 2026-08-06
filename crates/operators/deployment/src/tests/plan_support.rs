@@ -181,6 +181,16 @@ pub(super) fn replica(
     }
 }
 
+pub(super) fn observe_replica(
+    input: &mut DeploymentInput,
+    deployment: &Deployment,
+    phase: DeploymentPhase,
+) {
+    let assignment = assignment(deployment, &format!("assignment-{}", deployment.meta.id), 1);
+    input.replicas.push(replica(deployment, &assignment, phase));
+    input.assignments.push(assignment);
+}
+
 pub(super) fn traffic(deployment: &Deployment) -> TrafficGeneration {
     Object {
         meta: metadata(

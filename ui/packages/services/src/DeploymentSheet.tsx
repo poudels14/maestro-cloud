@@ -40,21 +40,21 @@ function DeploymentSheet(props: {
         <Dialog.Content class="fixed top-0 right-0 bottom-0 w-full max-w-5xl bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col outline-none">
           <Show when={props.deployment}>
             {(selected) => {
-              const deployment = selected();
-              const artifact = deployment.spec.service.artifact;
-              const sourceRevision = deploymentGitRevision(deployment);
-              const hasBuild = artifact.type === "build";
+              const deployment = selected;
+              const artifact = () => deployment().spec.service.artifact;
+              const sourceRevision = () => deploymentGitRevision(deployment());
+              const hasBuild = () => artifact().type === "build";
               return (
                 <>
                   <div class="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-200 shrink-0">
                     <div class="flex items-start justify-between gap-3 mb-3">
                       <div class="min-w-0 flex-1">
                         <div class="text-xl font-semibold text-gray-900 leading-snug tracking-tight">
-                          {deploymentTitle(deployment)}
+                          {deploymentTitle(deployment())}
                         </div>
                         <div class="flex items-center gap-2 flex-wrap text-xs mt-1.5">
-                          <StatusBadge status={deployment.status.phase} />
-                          <Show when={sourceRevision}>
+                          <StatusBadge status={deployment().status.phase} />
+                          <Show when={sourceRevision()}>
                             {(revision) => (
                               <span
                                 class="inline-flex items-center gap-1 text-gray-500 font-mono"
@@ -65,13 +65,13 @@ function DeploymentSheet(props: {
                               </span>
                             )}
                           </Show>
-                          <span class="font-mono text-gray-400">{deployment.meta.id}</span>
+                          <span class="font-mono text-gray-400">{deployment().meta.id}</span>
                           <span class="text-gray-300">·</span>
                           <span
                             class="text-gray-400 tabular-nums"
-                            title={new Date(deployment.status.createdAt).toLocaleString()}
+                            title={new Date(deployment().status.createdAt).toLocaleString()}
                           >
-                            {formatDateTime(deployment.status.createdAt, true)}
+                            {formatDateTime(deployment().status.createdAt, true)}
                           </span>
                         </div>
                       </div>
@@ -85,7 +85,7 @@ function DeploymentSheet(props: {
                         active={props.tab === "details"}
                         onClick={() => props.onTabChange("details")}
                       />
-                      <Show when={hasBuild}>
+                      <Show when={hasBuild()}>
                         <SheetTab
                           label="Build"
                           active={props.tab === "build"}
@@ -109,21 +109,21 @@ function DeploymentSheet(props: {
                       <Match when={props.tab === "logs"}>
                         <LogViewer
                           api={props.logsApi}
-                          serviceId={deployment.spec.serviceId}
-                          deploymentId={deployment.meta.id}
-                          buildId={deployment.spec.buildId ?? null}
+                          serviceId={deployment().spec.serviceId}
+                          deploymentId={deployment().meta.id}
+                          buildId={deployment().spec.buildId ?? null}
                           isSystem={false}
                           phase="deploy"
                           embedded
                           fillHeight
                         />
                       </Match>
-                      <Match when={props.tab === "build" && hasBuild}>
+                      <Match when={props.tab === "build" && hasBuild()}>
                         <LogViewer
                           api={props.logsApi}
-                          serviceId={deployment.spec.serviceId}
-                          deploymentId={deployment.meta.id}
-                          buildId={deployment.spec.buildId ?? null}
+                          serviceId={deployment().spec.serviceId}
+                          deploymentId={deployment().meta.id}
+                          buildId={deployment().spec.buildId ?? null}
                           isSystem={false}
                           phase="build"
                           embedded
@@ -131,7 +131,7 @@ function DeploymentSheet(props: {
                         />
                       </Match>
                       <Match when={props.tab === "details"}>
-                        <DeploymentDetails api={props.api} deployment={deployment} />
+                        <DeploymentDetails api={props.api} deployment={deployment()} />
                       </Match>
                     </Switch>
                   </div>

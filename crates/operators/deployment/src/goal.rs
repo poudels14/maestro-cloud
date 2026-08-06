@@ -26,7 +26,7 @@ fn cancellation_status(deployment: &Deployment) -> DeploymentStatus {
     let mut desired = deployment.status.clone();
     if matches!(
         desired.phase,
-        DeploymentPhase::Queued | DeploymentPhase::Building
+        DeploymentPhase::Queued | DeploymentPhase::Preparing | DeploymentPhase::Building
     ) {
         desired.phase = DeploymentPhase::Canceled;
     }
@@ -42,9 +42,11 @@ fn removal_status(
     let mut desired = deployment.status.clone();
     match desired.phase {
         DeploymentPhase::Queued => desired.phase = DeploymentPhase::Canceled,
-        DeploymentPhase::Building
+        DeploymentPhase::Preparing
+        | DeploymentPhase::Building
         | DeploymentPhase::Publishing
         | DeploymentPhase::PendingReady
+        | DeploymentPhase::Retrying
         | DeploymentPhase::Ready => {
             desired.phase = DeploymentPhase::Draining;
             desired.draining_at.get_or_insert(now);

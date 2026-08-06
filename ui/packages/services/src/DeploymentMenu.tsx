@@ -2,8 +2,14 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Ban, EllipsisVertical, RefreshCw, RotateCw, Square } from "lucide-solid";
 import { Show } from "solid-js";
 
-const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING"]);
-const RESTARTABLE_STATUSES = new Set(["BUILDING", "PUBLISHING", "PENDING_READY", "READY"]);
+const CANCELLABLE_STATUSES = new Set(["QUEUED", "PREPARING", "BUILDING"]);
+const RESTARTABLE_STATUSES = new Set([
+  "BUILDING",
+  "PUBLISHING",
+  "PENDING_READY",
+  "RETRYING",
+  "READY"
+]);
 
 export function DeploymentMenu(props: {
   status: string;

@@ -1225,7 +1225,14 @@
             "type": "string"
           },
           {
-            "description": "Preparing or resolving the deployment artifact.",
+            "description": "Resolving secrets and preparing immutable build source material.",
+            "enum": [
+              "PREPARING"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Running the configured artifact build backend.",
             "enum": [
               "BUILDING"
             ],
@@ -1242,6 +1249,13 @@
             "description": "Workloads started but have not passed readiness checks.",
             "enum": [
               "PENDING_READY"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "A previously started workload is waiting for a retry attempt.",
+            "enum": [
+              "RETRYING"
             ],
             "type": "string"
           },
@@ -1281,7 +1295,7 @@
             "type": "string"
           },
           {
-            "description": "The queued or building deployment was canceled.",
+            "description": "The queued, preparing, or building deployment was canceled.",
             "enum": [
               "CANCELED"
             ],

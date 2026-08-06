@@ -149,9 +149,11 @@ fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
 fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
     let phases = [
         DeploymentPhase::Queued,
+        DeploymentPhase::Preparing,
         DeploymentPhase::Building,
         DeploymentPhase::Publishing,
         DeploymentPhase::PendingReady,
+        DeploymentPhase::Retrying,
         DeploymentPhase::Ready,
         DeploymentPhase::Crashed,
         DeploymentPhase::Terminated,
@@ -163,19 +165,40 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
     for current in phases {
         for target in phases {
             let expected = match target {
+                DeploymentPhase::Preparing => {
+                    matches!(current, DeploymentPhase::Queued | DeploymentPhase::Building)
+                }
+                DeploymentPhase::Building => matches!(
+                    current,
+                    DeploymentPhase::Queued | DeploymentPhase::Preparing
+                ),
                 DeploymentPhase::Publishing => matches!(
                     current,
-                    DeploymentPhase::Building | DeploymentPhase::PendingReady
+                    DeploymentPhase::Preparing
+                        | DeploymentPhase::Building
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
+                        | DeploymentPhase::Ready
                 ),
                 DeploymentPhase::PendingReady => matches!(
                     current,
-                    DeploymentPhase::Building | DeploymentPhase::Publishing
+                    DeploymentPhase::Building
+                        | DeploymentPhase::Publishing
+                        | DeploymentPhase::Retrying
+                        | DeploymentPhase::Ready
+                ),
+                DeploymentPhase::Retrying => matches!(
+                    current,
+                    DeploymentPhase::Publishing
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Ready
                 ),
                 DeploymentPhase::Ready => matches!(
                     current,
                     DeploymentPhase::Building
                         | DeploymentPhase::Publishing
                         | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
                 ),
                 DeploymentPhase::Crashed => !matches!(
                     current,
@@ -187,14 +210,15 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                     current,
                     DeploymentPhase::Ready
                         | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
                         | DeploymentPhase::Publishing
                         | DeploymentPhase::Building
+                        | DeploymentPhase::Preparing
                 ),
                 DeploymentPhase::Terminated => current != DeploymentPhase::Terminated,
-                DeploymentPhase::Queued
-                | DeploymentPhase::Building
-                | DeploymentPhase::Removed
-                | DeploymentPhase::Canceled => true,
+                DeploymentPhase::Queued | DeploymentPhase::Removed | DeploymentPhase::Canceled => {
+                    true
+                }
             };
             assert_eq!(current.can_transition_to(target), expected);
         }

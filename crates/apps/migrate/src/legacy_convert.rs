@@ -411,9 +411,11 @@ fn convert_build(
             | DeploymentPhase::Removed
             | DeploymentPhase::Draining => BuildPhase::Failed,
             DeploymentPhase::Queued
+            | DeploymentPhase::Preparing
             | DeploymentPhase::Building
             | DeploymentPhase::Publishing
             | DeploymentPhase::PendingReady
+            | DeploymentPhase::Retrying
             | DeploymentPhase::Ready => BuildPhase::Queued,
         }
     };

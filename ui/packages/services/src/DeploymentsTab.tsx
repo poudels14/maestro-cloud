@@ -182,7 +182,7 @@ function DeploymentsTab(props: {
                         deployment: deployment.meta.id,
                         tab:
                           deployment.spec.service.artifact.type === "build" &&
-                          ["QUEUED", "BUILDING"].includes(deployment.status.phase)
+                          ["QUEUED", "PREPARING", "BUILDING"].includes(deployment.status.phase)
                             ? "build"
                             : "logs"
                       })

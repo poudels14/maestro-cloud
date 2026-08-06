@@ -194,6 +194,7 @@ fn mutate_deployment(
                     DeploymentPhase::Building
                         | DeploymentPhase::Publishing
                         | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
                 )
             {
@@ -210,11 +211,11 @@ fn mutate_deployment(
         DeploymentMutation::Goal(DeploymentGoal::Cancel) => {
             if !matches!(
                 deployment.status.phase,
-                DeploymentPhase::Queued | DeploymentPhase::Building
+                DeploymentPhase::Queued | DeploymentPhase::Preparing | DeploymentPhase::Building
             ) {
                 return Err(ApiError::conflict(
                     "invalidLifecycle",
-                    "Only a queued or building deployment can be canceled",
+                    "Only a queued, preparing, or building deployment can be canceled",
                 ));
             }
             set_goal(deployment, DeploymentGoal::Cancel)

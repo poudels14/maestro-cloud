@@ -283,21 +283,22 @@ fn existing_watched_commit_advances_without_recreating_its_deployment() {
         .create_deployments
         .remove(0);
     initial.status.phase = DeploymentPhase::Ready;
+    initial.status.ready_at = Some(Timestamp(1_000));
     service.status.active_deployment_id = Some(initial.meta.id.clone());
     service.meta.annotations.insert(
         kernel_api::AnnotationKey(kernel_api::BUILD_WATCH_REVISION_ANNOTATION.to_string()),
         "0123456789abcdef0123456789abcdef01234567".to_string(),
     );
-    let mut watched = plan(input(service.clone(), vec![initial.clone()]))
+    let mut snapshot = input(service.clone(), vec![initial.clone()]);
+    observe_replica(&mut snapshot, &initial, DeploymentPhase::Ready);
+    let mut watched = plan(snapshot)
         .expect("watched deployment")
         .create_deployments
         .remove(0);
 
-    let next = plan(input(
-        service.clone(),
-        vec![initial.clone(), watched.clone()],
-    ))
-    .expect("advance watched deployment");
+    let mut snapshot = input(service.clone(), vec![initial.clone(), watched.clone()]);
+    observe_replica(&mut snapshot, &initial, DeploymentPhase::Ready);
+    let next = plan(snapshot).expect("advance watched deployment");
 
     assert!(next.create_deployments.is_empty());
     assert_eq!(next.create_builds.len(), 1);
@@ -305,12 +306,15 @@ fn existing_watched_commit_advances_without_recreating_its_deployment() {
     assert_eq!(next.deployment_updates[0].id, watched.meta.id);
     assert_eq!(
         next.deployment_updates[0].status.phase,
-        DeploymentPhase::Building
+        DeploymentPhase::Preparing
     );
 
     watched.status.phase = DeploymentPhase::Ready;
-    let activated =
-        plan(input(service, vec![initial, watched.clone()])).expect("activate watched deployment");
+    watched.status.ready_at = Some(Timestamp(2_000));
+    let mut snapshot = input(service, vec![initial.clone(), watched.clone()]);
+    observe_replica(&mut snapshot, &initial, DeploymentPhase::Ready);
+    observe_replica(&mut snapshot, &watched, DeploymentPhase::Ready);
+    let activated = plan(snapshot).expect("activate watched deployment");
     assert_eq!(activated.service_updates.len(), 1);
     assert_eq!(
         activated.service_updates[0].status.active_deployment_id,
@@ -334,7 +338,7 @@ fn frozen_build_stays_queued_then_unfreeze_creates_its_build() {
     let active = plan(input(frozen, vec![deployment])).expect("active plan");
     assert_eq!(
         active.deployment_updates[0].status.phase,
-        DeploymentPhase::Building
+        DeploymentPhase::Preparing
     );
     assert_eq!(active.create_builds.len(), 1);
 }
@@ -427,6 +431,35 @@ fn remove_goal_clears_active_service_then_drains_to_removed() {
 }
 
 #[test]
+fn build_source_preparation_is_not_reported_as_building() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let mut deployment = deployment(&service, DeploymentPhase::Queued);
+
+    let preparing =
+        plan(input(service.clone(), vec![deployment.clone()])).expect("prepare build source");
+    assert_eq!(preparing.create_builds.len(), 1);
+    assert_eq!(
+        preparing.deployment_updates[0].status.phase,
+        DeploymentPhase::Preparing
+    );
+
+    deployment.status = preparing.deployment_updates[0].status.clone();
+    let mut build = preparing.create_builds[0].clone();
+    build.status.phase = BuildPhase::Building;
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.builds = vec![build];
+    assert_eq!(
+        plan(snapshot)
+            .expect("start artifact build")
+            .deployment_updates[0]
+            .status
+            .phase,
+        DeploymentPhase::Building
+    );
+}
+
+#[test]
 fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
     let mut svc = service(Generation(1), RolloutState::Active);
     svc.spec.artifact = build_artifact();
@@ -465,7 +498,7 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
     );
     assert_eq!(
         waiting.deployment_updates[0].status.phase,
-        DeploymentPhase::Building
+        DeploymentPhase::Publishing
     );
 
     deployment.status = waiting.deployment_updates[0].status.clone();
@@ -484,6 +517,43 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
             .status
             .phase,
         DeploymentPhase::Ready
+    );
+}
+
+#[test]
+fn ready_deployment_downgrades_while_its_replica_retries() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Ready);
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let mut observed = replica(&deployment, &assignment, DeploymentPhase::Crashed);
+    let mut snapshot = input(service.clone(), vec![deployment.clone()]);
+    snapshot.assignments = vec![assignment.clone()];
+    snapshot.replicas = vec![observed.clone()];
+
+    let retrying = plan(snapshot).expect("retry unhealthy workload");
+    assert_eq!(
+        retrying.deployment_updates[0].status.phase,
+        DeploymentPhase::Retrying
+    );
+    assert_eq!(
+        retrying.service_updates[0].status.active_deployment_id,
+        None
+    );
+
+    deployment.status = retrying.deployment_updates[0].status.clone();
+    service.status = retrying.service_updates[0].status.clone();
+    observed.status.phase = DeploymentPhase::PendingReady;
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.assignments = vec![assignment];
+    snapshot.replicas = vec![observed];
+    assert_eq!(
+        plan(snapshot)
+            .expect("wait for recovered health")
+            .deployment_updates[0]
+            .status
+            .phase,
+        DeploymentPhase::PendingReady
     );
 }
 
@@ -694,6 +764,8 @@ fn active_traffic_acknowledgement_drains_only_superseded_deployments() {
     );
     service.status.active_deployment_id = Some(old.meta.id.clone());
     let mut first = input(service.clone(), vec![old.clone(), incoming.clone()]);
+    observe_replica(&mut first, &old, DeploymentPhase::Ready);
+    observe_replica(&mut first, &incoming, DeploymentPhase::Ready);
     first.traffic_generations = Vec::new();
     let activated = plan(first).expect("activate plan");
     assert_eq!(
@@ -704,6 +776,8 @@ fn active_traffic_acknowledgement_drains_only_superseded_deployments() {
 
     service.status.active_deployment_id = Some(incoming.meta.id.clone());
     let mut acknowledged = input(service, vec![old.clone(), incoming.clone()]);
+    observe_replica(&mut acknowledged, &old, DeploymentPhase::Ready);
+    observe_replica(&mut acknowledged, &incoming, DeploymentPhase::Ready);
     acknowledged.traffic_generations = vec![traffic(&incoming)];
     let drained = plan(acknowledged).expect("drain plan");
     assert_eq!(drained.deployment_updates.len(), 1);
@@ -775,8 +849,10 @@ fn superseded_pending_deployment_drains_before_any_candidate_is_ready() {
         DeploymentPhase::PendingReady,
     );
 
-    let result = plan(input(service, vec![old.clone(), incoming.clone()]))
-        .expect("retire superseded pending deployment");
+    let mut snapshot = input(service, vec![old.clone(), incoming.clone()]);
+    observe_replica(&mut snapshot, &old, DeploymentPhase::PendingReady);
+    observe_replica(&mut snapshot, &incoming, DeploymentPhase::PendingReady);
+    let result = plan(snapshot).expect("retire superseded pending deployment");
 
     assert_eq!(result.create_deployments.len(), 0);
     assert_eq!(result.deployment_updates.len(), 1);
@@ -862,8 +938,10 @@ fn newer_watched_deployment_activates_and_drains_within_one_service_generation()
     incoming.status.created_at = Timestamp(20_000);
     service.status.active_deployment_id = Some(old.meta.id.clone());
 
-    let activated = plan(input(service.clone(), vec![old.clone(), incoming.clone()]))
-        .expect("activate watched deployment");
+    let mut snapshot = input(service.clone(), vec![old.clone(), incoming.clone()]);
+    observe_replica(&mut snapshot, &old, DeploymentPhase::Ready);
+    observe_replica(&mut snapshot, &incoming, DeploymentPhase::Ready);
+    let activated = plan(snapshot).expect("activate watched deployment");
     assert_eq!(
         activated
             .service_updates
@@ -874,6 +952,8 @@ fn newer_watched_deployment_activates_and_drains_within_one_service_generation()
 
     service.status.active_deployment_id = Some(incoming.meta.id.clone());
     let mut acknowledged = input(service, vec![old.clone(), incoming.clone()]);
+    observe_replica(&mut acknowledged, &old, DeploymentPhase::Ready);
+    observe_replica(&mut acknowledged, &incoming, DeploymentPhase::Ready);
     acknowledged.traffic_generations = vec![traffic(&incoming)];
     let drained = plan(acknowledged).expect("drain watched predecessor");
     assert_eq!(drained.deployment_updates.len(), 1);
@@ -902,6 +982,7 @@ fn active_old_traffic_does_not_drain_a_newer_queued_candidate() {
     );
     service.status.active_deployment_id = Some(old.meta.id.clone());
     let mut snapshot = input(service, vec![old.clone(), incoming.clone()]);
+    observe_replica(&mut snapshot, &old, DeploymentPhase::Ready);
     snapshot.traffic_generations = vec![traffic(&old)];
 
     let advancing = plan(snapshot).expect("advance candidate");
