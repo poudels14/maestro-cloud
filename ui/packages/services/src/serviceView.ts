@@ -1,5 +1,6 @@
 import type { ApiSchemas } from "@maestro/api-client";
-import type { Service } from "./types";
+import { sortDeploymentHistory } from "./deploymentView";
+import type { Deployment, Service } from "./types";
 
 function attachPreviewResources(
   services: ApiSchemas["Service"][],
@@ -21,6 +22,25 @@ function serviceDisplayStatus(service: Service): string {
   );
   if (failed) return "FAILED";
   return service.status.activeDeploymentId ? "READY" : "IDLE";
+}
+
+function previewDeploymentStatus(service: Service, deployments: Deployment[]): string {
+  const status = serviceDisplayStatus(service);
+  if (status === "TERMINATED" || status === "FAILED") return status;
+  const revision = service.previewResource?.spec.headRevision;
+  const current = sortDeploymentHistory(deployments).find((deployment) => {
+    if (deployment.spec.serviceGeneration !== service.meta.generation) return false;
+    if (revision == null) return true;
+    const artifact = deployment.spec.service.artifact;
+    return (
+      artifact.type === "build" &&
+      artifact.source.type === "git" &&
+      artifact.source.revision === revision
+    );
+  });
+  if (current) return current.status.phase;
+  if (service.previewResource?.status.phase === "pending") return "QUEUED";
+  return status;
 }
 
 function serviceHasBuild(service: Service): boolean {
@@ -87,6 +107,7 @@ export {
   previewEnabledServices,
   previewPullRequestState,
   previewServices,
+  previewDeploymentStatus,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,

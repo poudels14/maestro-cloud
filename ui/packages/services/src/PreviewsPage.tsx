@@ -1,17 +1,13 @@
 import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { GitPullRequest } from "lucide-solid";
-import { ErrorBanner, formatDateTime, StatusBadge, TabButton } from "@maestro/kit";
+import { ErrorBanner, formatDateTime, TabButton } from "@maestro/kit";
 import { useQuery } from "@maestro/sdk";
 import type { ApiSchemas } from "@maestro/api-client";
 import type { ServicesApi } from "./api";
+import { PreviewStatusBadge } from "./PreviewStatusBadge";
 import { servicesQuery } from "./queries";
-import {
-  previewEnabledServices,
-  previewPullRequestState,
-  previewServices,
-  serviceDisplayStatus
-} from "./serviceView";
+import { previewEnabledServices, previewPullRequestState, previewServices } from "./serviceView";
 import type { Service } from "./types";
 
 function PreviewsPage(props: { api: ServicesApi }) {
@@ -33,7 +29,7 @@ function PreviewsPage(props: { api: ServicesApi }) {
         params: {
           serviceId: preview.spec.baseServiceId,
           prId: String(preview.spec.pullRequestNumber),
-          tab: "overview"
+          tab: "deployments"
         }
       });
     }
@@ -90,7 +86,9 @@ function PreviewsPage(props: { api: ServicesApi }) {
         >
           <div class="mb-7 divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
             <For each={previews()}>
-              {(service) => <PreviewRow service={service} onOpen={() => openService(service)} />}
+              {(service) => (
+                <PreviewRow api={props.api} service={service} onOpen={() => openService(service)} />
+              )}
             </For>
           </div>
         </Show>
@@ -135,7 +133,7 @@ function PreviewsPage(props: { api: ServicesApi }) {
   );
 }
 
-function PreviewRow(props: { service: Service; onOpen: () => void }) {
+function PreviewRow(props: { api: ServicesApi; service: Service; onOpen: () => void }) {
   const preview = () => props.service.previewResource!;
   const pullRequestUrl = () =>
     `https://github.com/${preview().spec.repository}/pull/${preview().spec.pullRequestNumber}`;
@@ -171,7 +169,7 @@ function PreviewRow(props: { service: Service; onOpen: () => void }) {
             props.service.status.activeDeploymentId != null
           }
         >
-          <StatusBadge status={serviceDisplayStatus(props.service)} />
+          <PreviewStatusBadge api={props.api} service={props.service} />
         </Show>
         <button
           type="button"

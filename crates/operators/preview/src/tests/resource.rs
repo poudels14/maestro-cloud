@@ -1,4 +1,4 @@
-use kernel_api::{ArtifactTemplate, BuildSource, Generation, RolloutState};
+use kernel_api::{ArtifactTemplate, BuildSource, DeploymentId, Generation, RolloutState};
 
 use crate::resource::{desired_route, desired_service, owned_by_preview};
 
@@ -41,14 +41,21 @@ fn derived_service_is_stable_pinned_isolated_and_freeze_aware() {
     };
     assert_eq!(revision, &preview.spec.head_revision);
 
-    let unchanged = desired_service(&preview, &base, Some(&first)).expect("rederive service");
+    let mut active = first.clone();
+    active.status.active_deployment_id = Some(DeploymentId::new("deployment-old").unwrap());
+    let unchanged = desired_service(&preview, &base, Some(&active)).expect("rederive service");
     assert_eq!(unchanged.meta.generation, Generation(1));
+    assert_eq!(
+        unchanged.status.active_deployment_id,
+        active.status.active_deployment_id
+    );
 
     let mut pushed = preview.clone();
     pushed.spec.head_revision = "89abcdef0123456789abcdef0123456789abcdef".to_string();
-    let updated = desired_service(&pushed, &base, Some(&first)).expect("derive pushed service");
+    let updated = desired_service(&pushed, &base, Some(&active)).expect("derive pushed service");
     assert_eq!(updated.meta.id, first.meta.id);
     assert_eq!(updated.meta.generation, Generation(2));
+    assert_eq!(updated.status.active_deployment_id, None);
 }
 
 #[test]

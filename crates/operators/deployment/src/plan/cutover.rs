@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    Deployment, DeploymentId, DeploymentPhase, DeploymentStatus, Service, ServiceStatus, Timestamp,
-    TrafficGeneration, TrafficGenerationPhase,
+    Deployment, DeploymentId, DeploymentPhase, DeploymentStatus, Ownership, Service, ServiceStatus,
+    Timestamp, TrafficGeneration, TrafficGenerationPhase,
 };
 
 pub(super) fn coordinate_active_deployment(
@@ -14,6 +14,7 @@ pub(super) fn coordinate_active_deployment(
     desired_statuses: &mut BTreeMap<DeploymentId, DeploymentStatus>,
     desired_service: &mut ServiceStatus,
 ) {
+    let replace_immediately = preview_owned(service);
     retire_superseded_nonserving(
         service,
         deployments,
@@ -21,6 +22,7 @@ pub(super) fn coordinate_active_deployment(
         desired_deployment_id,
         desired_statuses,
         desired_service,
+        replace_immediately,
     );
     let desired_candidate = desired_deployment_id.and_then(|desired_id| {
         deployments.iter().find(|deployment| {
@@ -31,15 +33,19 @@ pub(super) fn coordinate_active_deployment(
         })
     });
     let candidate = desired_candidate.copied().or_else(|| {
-        deployments
-            .iter()
-            .filter(|deployment| {
-                desired_statuses
-                    .get(&deployment.meta.id)
-                    .is_some_and(|status| status.phase == DeploymentPhase::Ready)
-            })
-            .max_by(|left, right| rollout_order(left, right))
-            .copied()
+        if replace_immediately {
+            None
+        } else {
+            deployments
+                .iter()
+                .filter(|deployment| {
+                    desired_statuses
+                        .get(&deployment.meta.id)
+                        .is_some_and(|status| status.phase == DeploymentPhase::Ready)
+                })
+                .max_by(|left, right| rollout_order(left, right))
+                .copied()
+        }
     });
     let active_deployment = desired_service
         .active_deployment_id
@@ -119,6 +125,7 @@ fn retire_superseded_nonserving(
     desired_deployment_id: Option<&DeploymentId>,
     desired_statuses: &mut BTreeMap<DeploymentId, DeploymentStatus>,
     desired_service: &ServiceStatus,
+    replace_immediately: bool,
 ) {
     let desired_deployment = desired_deployment_id.and_then(|desired_id| {
         deployments
@@ -128,7 +135,8 @@ fn retire_superseded_nonserving(
     });
     for deployment in deployments {
         if desired_deployment_id == Some(&deployment.meta.id)
-            || desired_service.active_deployment_id.as_ref() == Some(&deployment.meta.id)
+            || (!replace_immediately
+                && desired_service.active_deployment_id.as_ref() == Some(&deployment.meta.id))
         {
             continue;
         }
@@ -154,6 +162,10 @@ fn retire_superseded_nonserving(
                 status.phase = DeploymentPhase::Draining;
                 status.draining_at.get_or_insert(now);
             }
+            DeploymentPhase::Ready if replace_immediately => {
+                status.phase = DeploymentPhase::Draining;
+                status.draining_at.get_or_insert(now);
+            }
             DeploymentPhase::Ready
             | DeploymentPhase::Crashed
             | DeploymentPhase::Terminated
@@ -162,6 +174,12 @@ fn retire_superseded_nonserving(
             | DeploymentPhase::Canceled => {}
         }
     }
+}
+
+fn preview_owned(service: &Service) -> bool {
+    service.meta.owner_refs.iter().any(|owner| {
+        owner.ownership == Ownership::Controller && owner.resource.kind.as_str() == "Preview"
+    })
 }
 
 fn rollout_order(left: &Deployment, right: &Deployment) -> std::cmp::Ordering {

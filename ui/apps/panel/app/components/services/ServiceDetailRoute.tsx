@@ -15,6 +15,7 @@ import { showErrorToast } from "../AppToasts";
 import { SessionControls } from "../SessionControls";
 import { NodeNavSection } from "../home/NodeNavSection";
 import { ingressApi, logsApi, metricsApi, servicesApi } from "../../features";
+import { pullRequestsServiceId } from "./serviceNavigation";
 
 const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs", "pull-requests"]);
 
@@ -88,7 +89,10 @@ function ServiceDetailRoute(props: { serviceId: string; pullRequestId?: string; 
   const navigateBaseService = () =>
     navigate({
       to: "/services/$serviceId/$tab",
-      params: { serviceId: props.serviceId, tab: "pull-requests" }
+      params: {
+        serviceId: pullRequestsServiceId(props.serviceId, selected()?.previewResource),
+        tab: "pull-requests"
+      }
     });
   const updateSearch = (updates: ServiceDetailSearchUpdate) => {
     const search = mergeDefinedProperties(location().search as ServiceDetailSearch, updates);

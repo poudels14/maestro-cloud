@@ -30,6 +30,43 @@ async fn panel_assets_and_spa_routes_share_the_api_origin() -> Result<(), Box<dy
     assert_body(&server, "/", "panel shell").await?;
     assert_body(&server, "/cluster/logs", "panel shell").await?;
     assert_body(&server, "/assets/app.js", "ready = true").await?;
+    assert_cache_control(&server, "/", "no-store").await?;
+    assert_cache_control(&server, "/cluster/logs", "no-store").await?;
+    assert_cache_control(
+        &server,
+        "/assets/app.js",
+        "public, max-age=31536000, immutable",
+    )
+    .await?;
+
+    let conditional = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/cluster/logs")
+                .header(header::IF_MODIFIED_SINCE, "Thu, 01 Jan 1970 00:00:01 GMT")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(conditional.status(), StatusCode::OK);
+    assert_eq!(
+        conditional.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("no-store"))
+    );
+    let body = conditional.into_body().collect().await?.to_bytes();
+    assert!(String::from_utf8(body.to_vec())?.contains("panel shell"));
+
+    let missing_asset = server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/assets/removed-release.js")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(missing_asset.status(), StatusCode::NOT_FOUND);
+    let body = missing_asset.into_body().collect().await?.to_bytes();
+    assert!(!String::from_utf8(body.to_vec())?.contains("panel shell"));
 
     for path in ["/api", "/api/not-a-route"] {
         let response = server
@@ -105,5 +142,25 @@ async fn assert_body(
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await?.to_bytes();
     assert!(String::from_utf8(body.to_vec())?.contains(expected));
+    Ok(())
+}
+
+async fn assert_cache_control(
+    server: &ApiServer,
+    path: &str,
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let response = server
+        .router()
+        .oneshot(Request::builder().uri(path).body(Body::empty())?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some(expected)
+    );
     Ok(())
 }

@@ -81,6 +81,7 @@ pub(crate) fn desired_service(
     if desired.spec != spec {
         desired.meta.generation = Generation(desired.meta.generation.0.saturating_add(1));
         desired.spec = spec;
+        desired.status.active_deployment_id = None;
     }
     desired.status.replica_override = None;
     desired.status.rollout = base.status.rollout;

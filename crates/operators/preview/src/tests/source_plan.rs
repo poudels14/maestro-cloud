@@ -127,6 +127,10 @@ fn reports_the_current_revision_as_ready_and_a_changed_revision_as_updating() {
         updating.feedback.first().unwrap().head_revision,
         open.head_revision
     );
+    assert_eq!(
+        updating.updates.first().unwrap().status.phase,
+        PreviewPhase::Pending
+    );
 }
 
 #[test]

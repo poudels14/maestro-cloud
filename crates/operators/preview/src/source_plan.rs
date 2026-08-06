@@ -314,6 +314,7 @@ fn update_open_preview(
 ) -> Preview {
     let policy = base.policy;
     let mut desired = current.clone();
+    let revision_changed = current.spec.head_revision != pull_request.head_revision;
     desired.meta.deletion_timestamp = None;
     desired.status.pull_request_state = PullRequestState::Open;
     desired.spec.repository.clone_from(&base.repository);
@@ -327,7 +328,7 @@ fn update_open_preview(
     if desired.spec != current.spec {
         desired.meta.generation = Generation(current.meta.generation.0.saturating_add(1));
     }
-    if current.meta.deletion_timestamp.is_some() {
+    if current.meta.deletion_timestamp.is_some() || revision_changed {
         desired.status.phase = PreviewPhase::Pending;
         desired.status.teardown_at = None;
     }

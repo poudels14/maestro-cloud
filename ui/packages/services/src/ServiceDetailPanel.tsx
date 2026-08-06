@@ -130,6 +130,7 @@ function ServiceDetailPanel(props: {
           </Show>
           <Show when={tab() === "pull-requests"}>
             <PullRequestsTab
+              api={props.api}
               service={props.service}
               services={props.services}
               previewUrl={props.previewUrl}

@@ -74,6 +74,8 @@ async fn preview_derives_updates_reopens_and_expires_owned_resources()
     let pushed = world.child_service().await?;
     assert_eq!(pushed.meta.id.as_str(), "api-pr-42");
     assert_eq!(pushed.status.rollout, RolloutState::Active);
+    assert_eq!(pushed.status.active_deployment_id, None);
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Pending);
     let kernel_api::ArtifactTemplate::Build { template } = pushed.spec.artifact else {
         return Err("preview artifact was not a build".into());
     };
@@ -91,7 +93,7 @@ async fn preview_derives_updates_reopens_and_expires_owned_resources()
 
     world.reopen_preview().await?;
     world.runtime.reconcile_snapshot().await?;
-    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Active);
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Pending);
 
     world.close_preview(Timestamp(20_000)).await?;
     world.clock.set(30_000);

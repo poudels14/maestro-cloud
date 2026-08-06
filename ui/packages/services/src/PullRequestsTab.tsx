@@ -1,11 +1,14 @@
 import { createSignal, For, Show } from "solid-js";
 import { ArrowUpRight, GitPullRequest } from "lucide-solid";
-import { formatDateTime, StatusBadge, TabButton } from "@maestro/kit";
+import { formatDateTime, TabButton } from "@maestro/kit";
 import type { ApiSchemas } from "@maestro/api-client";
+import type { ServicesApi } from "./api";
+import { PreviewStatusBadge } from "./PreviewStatusBadge";
 import type { Service } from "./types";
-import { previewPullRequestState, serviceDisplayStatus, servicePreviews } from "./serviceView";
+import { previewPullRequestState, servicePreviews } from "./serviceView";
 
 function PullRequestsTab(props: {
+  api: ServicesApi;
   service: Service;
   services: Service[];
   previewUrl: (serviceId: string) => string | null;
@@ -51,7 +54,11 @@ function PullRequestsTab(props: {
         <div class="divide-y divide-gray-100 overflow-hidden rounded-xl border border-gray-200 bg-white">
           <For each={previews()}>
             {(preview) => (
-              <PullRequestRow preview={preview} url={props.previewUrl(preview.meta.id)} />
+              <PullRequestRow
+                api={props.api}
+                preview={preview}
+                url={props.previewUrl(preview.meta.id)}
+              />
             )}
           </For>
         </div>
@@ -60,7 +67,7 @@ function PullRequestsTab(props: {
   );
 }
 
-function PullRequestRow(props: { preview: Service; url: string | null }) {
+function PullRequestRow(props: { api: ServicesApi; preview: Service; url: string | null }) {
   const resource = () => props.preview.previewResource!;
   const pullRequestUrl = () =>
     `https://github.com/${resource().spec.repository}/pull/${resource().spec.pullRequestNumber}`;
@@ -68,7 +75,7 @@ function PullRequestRow(props: { preview: Service; url: string | null }) {
   return (
     <div class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:px-5">
       <a
-        href={`/services/${encodeURIComponent(resource().spec.baseServiceId)}/prs/${resource().spec.pullRequestNumber}/overview`}
+        href={`/services/${encodeURIComponent(resource().spec.baseServiceId)}/prs/${resource().spec.pullRequestNumber}/deployments`}
         class="group flex min-w-0 flex-1 items-start gap-3 outline-none"
       >
         <span class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-gray-50">
@@ -99,7 +106,7 @@ function PullRequestRow(props: { preview: Service; url: string | null }) {
             props.preview.status.activeDeploymentId != null
           }
         >
-          <StatusBadge status={serviceDisplayStatus(props.preview)} />
+          <PreviewStatusBadge api={props.api} service={props.preview} />
         </Show>
         <a
           href={pullRequestUrl()}

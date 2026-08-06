@@ -1,12 +1,13 @@
 import { expect, test } from "vitest";
 import type { ApiSchemas } from "@maestro/api-client";
-import type { Service } from "./types";
+import type { Deployment, Service } from "./types";
 import {
   attachPreviewResources,
   isSystemService,
   previewEnabledServices,
   previewPullRequestState,
   previewServices,
+  previewDeploymentStatus,
   serviceDisplayStatus,
   serviceHasBuild,
   servicePreviews,
@@ -28,6 +29,38 @@ function serviceResource(id: string): ApiSchemas["Service"] {
     },
     status: { rollout: "active" }
   };
+}
+
+function deployment(
+  id: string,
+  createdAt: number,
+  phase: Deployment["status"]["phase"]
+): Deployment {
+  return {
+    meta: { id, generation: 1, revision: 2 },
+    spec: {
+      bypassRolloutFreeze: false,
+      goal: "run",
+      restartGeneration: 1,
+      service: serviceResource("api").spec,
+      serviceGeneration: 1,
+      serviceId: "api"
+    },
+    status: { createdAt, phase }
+  };
+}
+
+function previewService(id: string, revision: string): Service {
+  const service = serviceResource(id) as Service;
+  service.spec.artifact = {
+    type: "build",
+    dockerfile: "Dockerfile",
+    source: { type: "git", repository: "owner/repo", revision }
+  };
+  service.previewResource = previewResource("preview-1", id, "api", 1);
+  service.previewResource.spec.headRevision = revision;
+  service.previewResource.status.phase = "pending";
+  return service;
 }
 
 function previewResource(
@@ -159,4 +192,24 @@ test("projects service status and artifact capabilities from resource fields", (
   expect(serviceHasBuild(build)).toBe(true);
   expect(isSystemService(serviceResource("maestro-system-traefik") as Service)).toBe(true);
   expect(isSystemService(idle)).toBe(false);
+});
+
+test("projects the latest deployment phase when a service has not activated", () => {
+  const idle = previewService("api-pr-1", "new-head");
+  const ready = {
+    ...idle,
+    status: { ...idle.status, activeDeploymentId: "deployment-ready" }
+  } satisfies Service;
+  const old = deployment("deployment-ready", 10, "READY");
+  old.spec.serviceId = idle.meta.id;
+  old.spec.serviceGeneration = 0;
+  const crashed = deployment("deployment-crashed", 20, "CRASHED");
+  crashed.spec.serviceId = idle.meta.id;
+  crashed.spec.serviceGeneration = idle.meta.generation;
+  crashed.spec.service = idle.spec;
+  const deployments = [old, crashed];
+
+  expect(previewDeploymentStatus(idle, deployments)).toBe("CRASHED");
+  expect(previewDeploymentStatus(ready, deployments)).toBe("CRASHED");
+  expect(previewDeploymentStatus(idle, [])).toBe("QUEUED");
 });

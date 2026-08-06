@@ -685,6 +685,47 @@ fn active_traffic_acknowledgement_drains_only_superseded_deployments() {
 }
 
 #[test]
+fn preview_update_retires_active_deployment_before_replacement_is_ready() {
+    let mut service = service(Generation(2), RolloutState::Active);
+    service.meta.owner_refs = vec![OwnerReference {
+        resource: ResourceId::new(
+            ResourceKind::new("Preview").unwrap(),
+            ResourceName::new("preview-api-42").unwrap(),
+        ),
+        ownership: Ownership::Controller,
+    }];
+    let old = deployment_generation(
+        &service,
+        "deployment-old",
+        Generation(1),
+        DeploymentPhase::Ready,
+    );
+    let incoming = deployment_generation(
+        &service,
+        "deployment-new",
+        Generation(2),
+        DeploymentPhase::PendingReady,
+    );
+    service.status.active_deployment_id = Some(old.meta.id.clone());
+
+    let replaced = plan(input(service, vec![old.clone(), incoming]))
+        .expect("replace stale preview deployment immediately");
+
+    assert_eq!(replaced.service_updates.len(), 1);
+    assert_eq!(
+        replaced.service_updates[0].status.active_deployment_id,
+        None
+    );
+    let retired = replaced
+        .deployment_updates
+        .iter()
+        .find(|update| update.id == old.meta.id)
+        .expect("old preview deployment is retired");
+    assert_eq!(retired.status.phase, DeploymentPhase::Draining);
+    assert_eq!(retired.status.draining_at, Some(Timestamp(40_000)));
+}
+
+#[test]
 fn superseded_pending_deployment_drains_before_any_candidate_is_ready() {
     let service = service(Generation(2), RolloutState::Active);
     let old = deployment_generation(
