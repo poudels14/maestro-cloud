@@ -336,7 +336,7 @@ const CLUSTER_TEMPLATE: &str = r#"{
   // "preview": {
   //   "domain": "preview.example.com",
   //   "github-token": "aws-secret://maestro/github-token",
-  //   "max-concurrent-previews": 20
+  //   "max-concurrent-previews": 50
   // },
   // Optional override; upgrades use /etc/maestro#default when omitted.
   // "nixos-upgrade": {

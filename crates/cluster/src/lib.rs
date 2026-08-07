@@ -49,8 +49,9 @@ pub use join_crypto::{
 };
 pub use join_key::{JoinKeyError, load_or_create_join_key};
 pub use launch_policy::{
-    ClusterLaunchPolicy, DatadogLaunchConfig, DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig,
-    DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig, PreviewLaunchConfig,
+    ClusterLaunchPolicy, DEFAULT_MAX_CONCURRENT_PREVIEWS, DatadogLaunchConfig,
+    DatadogLogsLaunchConfig, DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig,
+    NixosUpgradeLaunchConfig, PreviewLaunchConfig,
 };
 pub use network::{CidrError, Ipv4Cidr};
 pub use node_lifecycle::{NodeSchedulingAction, set_node_scheduling};

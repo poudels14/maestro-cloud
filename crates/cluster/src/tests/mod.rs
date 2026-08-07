@@ -10,6 +10,7 @@ mod fixtures;
 mod join;
 mod join_crypto;
 mod join_key;
+mod launch_policy;
 mod network;
 mod node_lifecycle;
 mod ports;

@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use kernel_api::SecretValue;
 use serde::{Deserialize, Serialize};
 
+/// Default cluster-wide limit for retained pull-request previews.
+pub const DEFAULT_MAX_CONCURRENT_PREVIEWS: usize = 50;
+
 /// Optional production integrations copied into every protected node launch document.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -120,6 +123,7 @@ pub struct PreviewLaunchConfig {
     /// GitHub token with pull-request read and deployment read/write access.
     pub github_token: SecretValue,
     /// Maximum previews retained cluster-wide, including close grace periods.
+    #[serde(default = "default_max_concurrent_previews")]
     pub max_concurrent_previews: usize,
 }
 
@@ -170,6 +174,10 @@ fn default_depot_executable() -> PathBuf {
 
 const fn default_depot_timeout_secs() -> u64 {
     30 * 60
+}
+
+const fn default_max_concurrent_previews() -> usize {
+    DEFAULT_MAX_CONCURRENT_PREVIEWS
 }
 
 fn default_configuration() -> String {

@@ -104,6 +104,7 @@ pub(crate) struct LogBackupInput {
 pub(crate) struct PreviewInput {
     pub(crate) domain: String,
     pub(crate) github_token: String,
+    #[serde(default = "default_max_concurrent_previews")]
     pub(crate) max_concurrent_previews: usize,
 }
 
@@ -123,6 +124,10 @@ pub(crate) struct NixosUpgradeInput {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_max_concurrent_previews() -> usize {
+    cluster::DEFAULT_MAX_CONCURRENT_PREVIEWS
 }
 
 fn default_depot_executable() -> PathBuf {

@@ -543,6 +543,35 @@ async fn production_launch_policy_resolves_secrets_and_preserves_operational_set
 }
 
 #[tokio::test]
+async fn preview_launch_policy_defaults_concurrency_to_fifty()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24").replace(
+        "\n            node: \"node-1\"",
+        r#"
+            preview: {
+                domain: "preview.example.test",
+                "github-token": "github-secret"
+            },
+            node: "node-1""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(source.to_owned(), document)]),
+    };
+
+    let loaded = load_cluster(source, &reader).await?;
+    assert_eq!(
+        loaded
+            .launch_policy
+            .preview
+            .ok_or("preview launch policy missing")?
+            .max_concurrent_previews,
+        cluster::DEFAULT_MAX_CONCURRENT_PREVIEWS
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn production_launch_policy_rejects_invalid_settings_before_writing_launch_documents()
 -> Result<(), Box<dyn std::error::Error>> {
     let cases = [

@@ -13,7 +13,7 @@ Add the preview integration to the protected cluster config:
   "preview": {
     "domain": "preview.getbaton.ai",
     "github-token": "replace-with-a-fine-grained-token",
-    "max-concurrent-previews": 10
+    "max-concurrent-previews": 50
   }
 }
 ```
@@ -30,6 +30,7 @@ The integration token is not injected into builds. Private repositories must alr
 successfully from the base service; previews inherit its build environment and secrets.
 
 Preview discovery remains disabled until the cluster has a `preview` integration.
+`max-concurrent-previews` defaults to `50` when omitted.
 
 For an existing cluster, update the shared config source and restart each Maestro daemon. Every
 node fetches the current source during startup; no preview token is copied into its launch document.
