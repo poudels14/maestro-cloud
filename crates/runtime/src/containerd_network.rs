@@ -145,15 +145,9 @@ impl NetworkProvider for ContainerdRuntime {
         let pid = match task_attachment(process.as_ref()).map_err(runtime_network_error)? {
             TaskAttachment::Reuse(pid) => pid,
             TaskAttachment::Recreate => {
-                if process.is_some() {
-                    self.delete_task(&container, workload.workload_id())
-                        .await
-                        .map_err(runtime_network_error)?;
-                } else {
-                    self.await_task_cgroup_cleanup(workload.workload_id())
-                        .await
-                        .map_err(runtime_network_error)?;
-                }
+                self.delete_task(&container, workload.workload_id())
+                    .await
+                    .map_err(runtime_network_error)?;
                 self.create_task(workload, &container)
                     .await
                     .map_err(runtime_network_error)?
@@ -384,7 +378,10 @@ fn broadcast(network: Ipv4Addr, prefix_length: u8) -> Ipv4Addr {
 
 fn runtime_network_error(error: RuntimeError) -> NetworkProviderError {
     match error {
-        RuntimeError::Unavailable { message } => unavailable(message),
+        RuntimeError::NotFound { .. }
+        | RuntimeError::Unavailable { .. }
+        | RuntimeError::Stream { .. }
+        | RuntimeError::Timeout { .. } => unavailable(error.to_string()),
         other => rejected(other.to_string()),
     }
 }

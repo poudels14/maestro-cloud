@@ -12,12 +12,40 @@ use crate::containerd::{ContainerdRuntime, snapshot_key};
 use crate::containerd_config::task_host_user;
 use crate::containerd_io::{path_text, prepare_task_files};
 use crate::containerd_support::{
-    container_id, is_not_found, namespaced, namespaced_timeout, runtime_status,
+    container_id, is_already_exists, is_not_found, namespaced, namespaced_timeout, runtime_status,
+    task_status,
 };
-use crate::{RuntimeError, WorkloadHandle};
+use crate::{RuntimeError, WorkloadHandle, WorkloadState};
 
 const TASK_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const RUNC_OPTIONS_TYPE: &str = "containerd.runc.v1.Options";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExistingTaskRecovery {
+    Adopt(u32),
+    Delete,
+    Wait,
+}
+
+pub(crate) fn existing_task_recovery(
+    process: Option<&containerd::types::v1::Process>,
+) -> ExistingTaskRecovery {
+    let Some(process) = process else {
+        return ExistingTaskRecovery::Wait;
+    };
+    match task_status(Some(process)).state {
+        WorkloadState::Created | WorkloadState::Running | WorkloadState::Paused
+            if process.pid != 0 =>
+        {
+            ExistingTaskRecovery::Adopt(process.pid)
+        }
+        WorkloadState::Created
+        | WorkloadState::Running
+        | WorkloadState::Paused
+        | WorkloadState::Stopped
+        | WorkloadState::Failed => ExistingTaskRecovery::Delete,
+    }
+}
 
 #[derive(Clone, PartialEq, Message)]
 struct RuncOptions {
@@ -74,39 +102,69 @@ impl ContainerdRuntime {
         .into_inner()
         .mounts;
         let paths = prepare_task_files(&self.settings.state_root, handle.workload_id()).await?;
-        let response =
-            containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
-                .create(namespaced_timeout(
-                    CreateTaskRequest {
-                        container_id: container_id.to_owned(),
-                        rootfs: mounts,
-                        stdout: path_text(&paths.stdout)?,
-                        stderr: path_text(&paths.stderr)?,
-                        options: Some(Any {
-                            type_url: RUNC_OPTIONS_TYPE.to_owned(),
-                            value: RuncOptions {
-                                io_uid: host_user.user_id,
-                                io_gid: host_user.group_id,
-                            }
-                            .encode_to_vec(),
-                        }),
-                        ..Default::default()
-                    },
-                    &self.settings.namespace,
-                    self.settings.rpc_timeout,
-                )?)
-                .await
-                .map_err(|error| runtime_status(error, handle.workload_id()))?
-                .into_inner();
-        if response.pid == 0 {
-            Err(RuntimeError::Unavailable {
-                message: format!(
-                    "containerd created task for workload `{}` without a process id",
-                    handle.workload_id()
-                ),
-            })
-        } else {
-            Ok(response.pid)
+        let stdout = path_text(&paths.stdout)?;
+        let stderr = path_text(&paths.stderr)?;
+        let options = Some(Any {
+            type_url: RUNC_OPTIONS_TYPE.to_owned(),
+            value: RuncOptions {
+                io_uid: host_user.user_id,
+                io_gid: host_user.group_id,
+            }
+            .encode_to_vec(),
+        });
+        let deadline = self.clock.now().saturating_add(self.settings.kill_timeout);
+        loop {
+            let result =
+                containerd::services::v1::tasks_client::TasksClient::new(self.channel.clone())
+                    .create(namespaced_timeout(
+                        CreateTaskRequest {
+                            container_id: container_id.to_owned(),
+                            rootfs: mounts.clone(),
+                            stdout: stdout.clone(),
+                            stderr: stderr.clone(),
+                            options: options.clone(),
+                            ..Default::default()
+                        },
+                        &self.settings.namespace,
+                        self.settings.rpc_timeout,
+                    )?)
+                    .await;
+            match result {
+                Ok(response) => {
+                    let pid = response.into_inner().pid;
+                    if pid == 0 {
+                        return Err(RuntimeError::Unavailable {
+                            message: format!(
+                                "containerd created task for workload `{}` without a process id",
+                                handle.workload_id()
+                            ),
+                        });
+                    }
+                    return Ok(pid);
+                }
+                Err(error) if is_already_exists(&error) => {
+                    let process = self.task(container_id, handle.workload_id()).await?;
+                    match existing_task_recovery(process.as_ref()) {
+                        ExistingTaskRecovery::Adopt(pid) => return Ok(pid),
+                        ExistingTaskRecovery::Delete => {
+                            self.delete_task(container_id, handle.workload_id()).await?;
+                        }
+                        ExistingTaskRecovery::Wait => {}
+                    }
+                    if self.clock.now() >= deadline {
+                        return Err(RuntimeError::Timeout {
+                            operation: "recover stale containerd task",
+                            workload_id: handle.workload_id().clone(),
+                            timeout: self.settings.kill_timeout,
+                        });
+                    }
+                    let retry_at = self.clock.now().saturating_add(TASK_CLEANUP_POLL_INTERVAL);
+                    self.clock
+                        .sleep_until(std::cmp::min(retry_at, deadline))
+                        .await;
+                }
+                Err(error) => return Err(runtime_status(error, handle.workload_id())),
+            }
         }
     }
 

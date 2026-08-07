@@ -4,6 +4,7 @@ use containerd::types::v1::{Process, Status};
 use crate::containerd_support::{
     metadata_labels, task_container_id, task_status, validate_existing,
 };
+use crate::containerd_task::{ExistingTaskRecovery, existing_task_recovery};
 use crate::{RuntimeError, WorkloadState};
 
 use super::containerd_fixture::metadata;
@@ -58,4 +59,38 @@ fn containerd_task_listing_accepts_service_and_shim_identity_shapes() {
         ..Default::default()
     };
     assert_eq!(task_container_id(&explicit_shape), "maestro-workload-2");
+}
+
+#[test]
+fn containerd_task_creation_recovers_stale_and_ambiguous_task_records() {
+    assert_eq!(existing_task_recovery(None), ExistingTaskRecovery::Wait);
+
+    let created = Process {
+        pid: 42,
+        status: Status::Created as i32,
+        ..Default::default()
+    };
+    assert_eq!(
+        existing_task_recovery(Some(&created)),
+        ExistingTaskRecovery::Adopt(42)
+    );
+
+    let missing_process_id = Process {
+        status: Status::Created as i32,
+        ..Default::default()
+    };
+    assert_eq!(
+        existing_task_recovery(Some(&missing_process_id)),
+        ExistingTaskRecovery::Delete
+    );
+
+    let stopped = Process {
+        pid: 42,
+        status: Status::Stopped as i32,
+        ..Default::default()
+    };
+    assert_eq!(
+        existing_task_recovery(Some(&stopped)),
+        ExistingTaskRecovery::Delete
+    );
 }
