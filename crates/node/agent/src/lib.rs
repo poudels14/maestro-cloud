@@ -13,6 +13,7 @@ mod assignment_error;
 #[cfg(unix)]
 mod assignment_node_api;
 mod assignment_plan;
+mod assignment_progress;
 mod assignment_replica;
 mod assignment_resource;
 mod assignment_restart;
@@ -86,6 +87,9 @@ pub use artifact_replication::{
 };
 pub use assignment::AssignmentAgent;
 pub use assignment_error::AssignmentAgentError;
+pub use assignment_progress::{
+    AssignmentPublishingEvent, AssignmentPublishingSink, AssignmentPublishingState,
+};
 pub use assignment_types::{AssignmentAgentSettings, AssignmentReconcileReport, WorkloadDns};
 pub use cgroup_stats::{
     CgroupCpuStats, CgroupIoStats, CgroupMemoryEvents, CgroupMemoryStats, CgroupProcessStats,

@@ -1,11 +1,11 @@
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentPhase, BuildSource, BuildTemplate, Deployment,
+    ArtifactTemplate, Assignment, AssignmentPhase, BuildId, BuildSource, BuildTemplate, Deployment,
     DeploymentPhase, ReplicaState, ResourceKind, ResourceName, Timestamp,
 };
 use kernel_store::{
@@ -21,7 +21,8 @@ use super::assignment::{assignment, cluster_id, deployment, node_id};
 use crate::assignment::requires_artifact_replication;
 use crate::{
     ArtifactHolderRegistry, ArtifactPeerSource, ArtifactPeerSourceError, ArtifactReplicationAgent,
-    ArtifactReplicationSettings, AssignmentAgent, AssignmentAgentSettings, StatusClock,
+    ArtifactReplicationSettings, AssignmentAgent, AssignmentAgentSettings,
+    AssignmentPublishingEvent, AssignmentPublishingSink, AssignmentPublishingState, StatusClock,
 };
 
 #[test]
@@ -85,6 +86,7 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
     let network = Arc::new(FakeNetworkProvider::default());
     let secrets = tempfile::tempdir()?;
     let node_api = tempfile::tempdir()?;
+    let publishing = Arc::new(RecordingPublishingSink::default());
     let agent = AssignmentAgent::new(
         store.clone(),
         runtime.clone(),
@@ -115,8 +117,10 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
         clock,
         Arc::new(FixedStatusClock),
     )?
-    .with_artifact_replication(replication);
+    .with_artifact_replication(replication)
+    .with_publishing_sink(publishing.clone());
     let mut desired_deployment = deployment();
+    desired_deployment.spec.build_id = Some(BuildId::new("build-1")?);
     desired_deployment.spec.service.artifact = ArtifactTemplate::Build {
         template: BuildTemplate {
             source: BuildSource::Git {
@@ -146,9 +150,9 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
     );
     let pending = load_assignment(&store).await?;
     assert_eq!(pending.status.phase, AssignmentPhase::Pending);
-    let publishing = load_replica(&store).await?;
-    assert_eq!(publishing.status.phase, DeploymentPhase::Publishing);
-    assert_eq!(publishing.status.workload_id, None);
+    let publishing_replica = load_replica(&store).await?;
+    assert_eq!(publishing_replica.status.phase, DeploymentPhase::Publishing);
+    assert_eq!(publishing_replica.status.workload_id, None);
     assert_eq!(
         pending
             .status
@@ -157,6 +161,22 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             .map(|condition| condition.reason.0.as_str()),
         Some("ArtifactReplicationUnavailable")
     );
+    assert!(matches!(
+        publishing.events().as_slice(),
+        [
+            AssignmentPublishingEvent {
+                state: AssignmentPublishingState::Started,
+                ..
+            },
+            AssignmentPublishingEvent {
+                state: AssignmentPublishingState::Waiting { .. },
+                ..
+            }
+        ]
+    ));
+
+    agent.reconcile_once().await?;
+    assert_eq!(publishing.events().len(), 2);
 
     artifacts.available.store(true, Ordering::SeqCst);
     let running = agent.reconcile_once().await?;
@@ -180,7 +200,32 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             .len(),
         1
     );
+    assert!(matches!(
+        publishing.events().last(),
+        Some(AssignmentPublishingEvent {
+            state: AssignmentPublishingState::Completed,
+            ..
+        })
+    ));
     Ok(())
+}
+
+#[derive(Default)]
+struct RecordingPublishingSink {
+    events: Mutex<Vec<AssignmentPublishingEvent>>,
+}
+
+impl RecordingPublishingSink {
+    fn events(&self) -> Vec<AssignmentPublishingEvent> {
+        self.events.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl AssignmentPublishingSink for RecordingPublishingSink {
+    async fn record(&self, event: AssignmentPublishingEvent) {
+        self.events.lock().unwrap().push(event);
+    }
 }
 
 async fn seed(

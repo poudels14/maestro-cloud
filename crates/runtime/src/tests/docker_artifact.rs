@@ -4,10 +4,10 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use docker::errors::Error as DockerError;
-use docker::models::{BuildInfo, ImageSummary};
+use docker::models::{BuildInfo, ImageSummary, PushImageInfo};
 use kernel_api::SecretValue;
 
-use crate::docker_artifact::{bounded_chunk, consume_build_operation};
+use crate::docker_artifact::{bounded_chunk, consume_build_operation, consume_push_operation};
 use crate::docker_artifact_context::write_directory_archive;
 use crate::docker_artifact_support::{
     MANAGED_IMAGE_LABEL, MANAGED_IMAGE_VALUE, TEMPORARY_TAG_PREFIX, build_options, definition_text,
@@ -64,6 +64,33 @@ async fn docker_build_stream_is_forwarded_to_the_artifact_output_sink() {
                 ArtifactBuildOutputStream::Stdout,
                 "Successfully built sha256:abc".to_owned()
             ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn docker_push_stream_is_forwarded_to_the_artifact_output_sink() {
+    let output = RecordingBuildOutput::default();
+    let stream = futures_util::stream::iter([
+        Ok::<_, DockerError>(PushImageInfo {
+            status: Some("Preparing".to_owned()),
+            ..Default::default()
+        }),
+        Ok(PushImageInfo {
+            status: Some("Pushed".to_owned()),
+            ..Default::default()
+        }),
+    ]);
+
+    consume_push_operation("push", Some("registry.example/app:v1"), stream, &output)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *output.0.lock().unwrap(),
+        [
+            (ArtifactBuildOutputStream::Stdout, "Preparing".to_owned()),
+            (ArtifactBuildOutputStream::Stdout, "Pushed".to_owned()),
         ]
     );
 }

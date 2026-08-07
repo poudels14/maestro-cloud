@@ -11,6 +11,7 @@ use super::AssignmentAgent;
 use crate::assignment_error::AssignmentAgentError;
 #[cfg(unix)]
 use crate::assignment_node_api::active_node_api_workloads;
+use crate::assignment_progress::AssignmentPublishingState;
 use crate::assignment_replica::ensure_replica;
 use crate::assignment_replica::record_started;
 use crate::assignment_resource::{decode_assignments, decode_deployments, decode_replicas};
@@ -206,8 +207,15 @@ impl AssignmentAgent {
                         .await?;
                 }
                 None => {
+                    let deployment = resources.deployments.get(&assignment.spec.deployment_id);
+                    let publishing = resources
+                        .replicas
+                        .get(&assignment.meta.id)
+                        .is_none_or(|replica| replica.status.phase == DeploymentPhase::Publishing);
                     self.record_outcome(
                         assignment,
+                        deployment,
+                        publishing,
                         Err(ConvergeFailure::pending(
                             "DnsResolverUnavailable",
                             format!(
@@ -230,7 +238,12 @@ impl AssignmentAgent {
         dns_server: Option<IpAddr>,
         report: &mut AssignmentReconcileReport,
     ) -> Result<Option<IpAddr>, AssignmentAgentError> {
-        let outcome = match resources.deployments.get(&assignment.spec.deployment_id) {
+        let deployment = resources.deployments.get(&assignment.spec.deployment_id);
+        let publishing = resources
+            .replicas
+            .get(&assignment.meta.id)
+            .is_none_or(|replica| replica.status.phase == DeploymentPhase::Publishing);
+        let outcome = match deployment {
             Some(deployment) => {
                 let replica = match resources.replicas.get(&assignment.meta.id) {
                     Some(replica) => Some(replica.clone()),
@@ -246,6 +259,13 @@ impl AssignmentAgent {
                         if ensured.created {
                             report.replica_states_created =
                                 report.replica_states_created.saturating_add(1);
+                            self.record_publishing(
+                                assignment,
+                                deployment,
+                                AssignmentPublishingState::Started,
+                                self.status_clock.now(),
+                            )
+                            .await;
                         }
                         Some(ensured.replica)
                     }
@@ -360,12 +380,15 @@ impl AssignmentAgent {
                 ),
             )),
         };
-        self.record_outcome(assignment, outcome, report).await
+        self.record_outcome(assignment, deployment, publishing, outcome, report)
+            .await
     }
 
     async fn record_outcome(
         &self,
         assignment: &Assignment,
+        deployment: Option<&Deployment>,
+        publishing: bool,
         outcome: Result<ConvergedAssignment, ConvergeFailure>,
         report: &mut AssignmentReconcileReport,
     ) -> Result<Option<IpAddr>, AssignmentAgentError> {
@@ -386,14 +409,28 @@ impl AssignmentAgent {
                     )
                     .await?;
                 }
-                self.update_status(
-                    assignment,
-                    AssignmentOutcome::Running {
-                        handle: &converged.handle,
-                        workload_address: converged.workload_address,
-                    },
-                )
-                .await?;
+                let status = self
+                    .update_status(
+                        assignment,
+                        AssignmentOutcome::Running {
+                            handle: &converged.handle,
+                            workload_address: converged.workload_address,
+                        },
+                    )
+                    .await?;
+                if publishing && let (Some(deployment), Some(status)) = (deployment, status) {
+                    let occurred_at = status.conditions.first().map_or_else(
+                        || self.status_clock.now(),
+                        |condition| condition.last_transition_time,
+                    );
+                    self.record_publishing(
+                        assignment,
+                        deployment,
+                        AssignmentPublishingState::Completed,
+                        occurred_at,
+                    )
+                    .await;
+                }
                 report.running = report.running.saturating_add(1);
                 if converged.restarted {
                     report.restarted = report.restarted.saturating_add(1);
@@ -402,8 +439,25 @@ impl AssignmentAgent {
             }
             Err(failure) => {
                 report.requeue_at = earliest(report.requeue_at, failure.retry_at());
-                self.update_status(assignment, AssignmentOutcome::Unresolved(&failure))
+                let status = self
+                    .update_status(assignment, AssignmentOutcome::Unresolved(&failure))
                     .await?;
+                if publishing
+                    && let (Some(deployment), Some(status)) = (deployment, status)
+                    && let Some(condition) = status.conditions.first()
+                {
+                    self.record_publishing(
+                        assignment,
+                        deployment,
+                        AssignmentPublishingState::Waiting {
+                            reason: condition.reason.0.clone(),
+                            message: condition.message.clone(),
+                            failed: status.phase == kernel_api::AssignmentPhase::Failed,
+                        },
+                        condition.last_transition_time,
+                    )
+                    .await;
+                }
                 report.unresolved = report.unresolved.saturating_add(1);
                 Ok(None)
             }

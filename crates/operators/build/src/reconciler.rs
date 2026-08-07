@@ -371,7 +371,7 @@ impl BuildReconciler {
         &self,
         build: &Build,
         request: &ArtifactBuildRequest,
-        output: &dyn ArtifactBuildOutputSink,
+        output: &BuildLogOutput,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let destination = build
             .spec
@@ -398,37 +398,131 @@ impl BuildReconciler {
                     })?;
                 match destination.as_ref() {
                     Some(destination) => {
-                        backend
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                format!(
+                                    "Building and publishing image to {}",
+                                    destination.as_str()
+                                ),
+                            )
+                            .await;
+                        let digest = backend
                             .build_and_publish_with_output(
                                 request,
                                 &depot.project,
                                 destination,
                                 output,
                             )
-                            .await
+                            .await?;
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                format!("Published image {digest}"),
+                            )
+                            .await;
+                        Ok(digest)
                     }
                     None if backend.registry_enabled() => {
-                        backend
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                "Publishing image to the Depot registry".to_owned(),
+                            )
+                            .await;
+                        let digest = backend
                             .build_and_save_with_output(
                                 request,
                                 &depot.project,
                                 build.spec.deployment_id.as_str(),
                                 output,
                             )
-                            .await
+                            .await?;
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                format!("Published image {digest}"),
+                            )
+                            .await;
+                        Ok(digest)
                     }
                     None => {
-                        backend
+                        let digest = backend
                             .build_with_output(request, &depot.project, output)
-                            .await
+                            .await?;
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                "Build artifact is ready; publishing it to assigned nodes"
+                                    .to_owned(),
+                            )
+                            .await;
+                        Ok(digest)
                     }
                 }
             }
             None => {
                 let digest = self.artifacts.build_with_output(request, output).await?;
                 match destination.as_ref() {
-                    Some(destination) => self.artifacts.publish(&digest, destination).await,
-                    None => Ok(digest),
+                    Some(destination) => {
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                format!("Publishing image to {}", destination.as_str()),
+                            )
+                            .await;
+                        let published = match self
+                            .artifacts
+                            .publish_with_output(&digest, destination, &PublishingLogOutput(output))
+                            .await
+                        {
+                            Ok(published) => published,
+                            Err(error) => {
+                                output
+                                    .event(
+                                        "publishing",
+                                        "error",
+                                        LogStream::Stderr,
+                                        format!("Image publication failed: {error}"),
+                                    )
+                                    .await;
+                                return Err(error);
+                            }
+                        };
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                format!("Published image {published}"),
+                            )
+                            .await;
+                        Ok(published)
+                    }
+                    None => {
+                        output
+                            .event(
+                                "publishing",
+                                "info",
+                                LogStream::Stdout,
+                                "Build artifact is ready; publishing it to assigned nodes"
+                                    .to_owned(),
+                            )
+                            .await;
+                        Ok(digest)
+                    }
                 }
             }
         }
@@ -579,29 +673,31 @@ impl BuildLogOutput {
             sequence: AtomicU64::new(0),
         }
     }
-}
 
-#[async_trait]
-impl ArtifactBuildOutputSink for BuildLogOutput {
-    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+    async fn event(&self, phase: &str, severity: &str, stream: LogStream, message: String) {
+        self.append(phase, severity, stream, "maestro", message.into_bytes())
+            .await;
+    }
+
+    async fn append(
+        &self,
+        phase: &str,
+        severity: &str,
+        stream: LogStream,
+        output_kind: &str,
+        output: Vec<u8>,
+    ) {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         let timestamp = self.timestamp_clock.now();
-        let stream = match stream {
-            ArtifactBuildOutputStream::Stdout => LogStream::Stdout,
-            ArtifactBuildOutputStream::Stderr => LogStream::Stderr,
-        };
         let entry = IngestLogEntry {
             id: LogRecordId {
                 node_id: self.node_id.clone(),
                 producer: LogProducer::Build(self.build_id.clone()),
-                cursor: OriginCursor::new(format!(
-                    "backend-output:{}:{sequence:020}",
-                    self.attempt
-                )),
+                cursor: OriginCursor::new(format!("build-output:{}:{sequence:020}", self.attempt)),
             },
             observed_at: timestamp,
             event_at: timestamp,
-            severity: "info".to_owned(),
+            severity: severity.to_owned(),
             stream,
             origin: LogOrigin::Build {
                 cluster_id: self.cluster_id.clone(),
@@ -610,11 +706,38 @@ impl ArtifactBuildOutputSink for BuildLogOutput {
             },
             body: LogBody::Text(String::from_utf8_lossy(&output).into_owned()),
             attributes: BTreeMap::from([
-                ("maestro.build.phase".to_owned(), "building".to_owned()),
-                ("maestro.build.output".to_owned(), "backend".to_owned()),
+                ("maestro.build.phase".to_owned(), phase.to_owned()),
+                ("maestro.build.output".to_owned(), output_kind.to_owned()),
             ]),
         };
         let _ignored = self.logs.append(&[entry]).await;
+    }
+}
+
+#[async_trait]
+impl ArtifactBuildOutputSink for BuildLogOutput {
+    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+        let stream = match stream {
+            ArtifactBuildOutputStream::Stdout => LogStream::Stdout,
+            ArtifactBuildOutputStream::Stderr => LogStream::Stderr,
+        };
+        self.append("building", "info", stream, "backend", output)
+            .await;
+    }
+}
+
+struct PublishingLogOutput<'a>(&'a BuildLogOutput);
+
+#[async_trait]
+impl ArtifactBuildOutputSink for PublishingLogOutput<'_> {
+    async fn write(&self, stream: ArtifactBuildOutputStream, output: Vec<u8>) {
+        let stream = match stream {
+            ArtifactBuildOutputStream::Stdout => LogStream::Stdout,
+            ArtifactBuildOutputStream::Stderr => LogStream::Stderr,
+        };
+        self.0
+            .append("publishing", "info", stream, "backend", output)
+            .await;
     }
 }
 

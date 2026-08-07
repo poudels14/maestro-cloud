@@ -309,6 +309,19 @@ pub trait ArtifactStore: Send + Sync {
         digest.for_reference(destination)
     }
 
+    /// Publishes an artifact while forwarding backend-native transfer progress.
+    ///
+    /// Stores that do not expose transfer progress retain the ordinary publish behavior.
+    async fn publish_with_output(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+        output: &dyn crate::ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let _ = output;
+        self.publish(digest, destination).await
+    }
+
     /// Resolves a local or remote reference without changing workload state.
     async fn resolve_digest(
         &self,

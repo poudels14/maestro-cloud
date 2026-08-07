@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use bytes::Bytes;
 use docker::errors::Error as DockerError;
-use docker::models::BuildInfo;
+use docker::models::{BuildInfo, PushImageInfo};
 use docker::query_parameters::{
     CreateImageOptionsBuilder, ImportImageOptionsBuilder, ListImagesOptionsBuilder,
     PushImageOptionsBuilder, RemoveImageOptionsBuilder, TagImageOptionsBuilder,
@@ -94,27 +94,30 @@ impl ArtifactStore for DockerRuntime {
         destination: &ArtifactReference,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         self.push(digest, destination).await?;
-        let remote = self
-            .client
-            .inspect_registry_image(
-                destination.as_str(),
+        self.published_digest(destination).await
+    }
+
+    async fn publish_with_output(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.tag(digest, destination).await?;
+        let (repository, tag) = split_tag(destination.as_str())?;
+        let options = PushImageOptionsBuilder::default().tag(&tag).build();
+        consume_push_operation(
+            "push",
+            Some(destination.as_str()),
+            self.client.push_image(
+                &repository,
+                Some(options),
                 self.registry_credential(destination).await?,
-            )
-            .await
-            .map_err(|error| {
-                operation_error("resolve pushed", Some(destination.as_str()), error)
-            })?;
-        let digest = remote
-            .descriptor
-            .digest
-            .filter(|digest| !digest.trim().is_empty())
-            .ok_or_else(|| ArtifactStoreError::Unavailable {
-                message: format!(
-                    "Docker registry inspection for `{}` omitted the pushed digest",
-                    destination.as_str()
-                ),
-            })?;
-        ArtifactDigest::new(digest)?.for_reference(destination)
+            ),
+            output,
+        )
+        .await?;
+        self.published_digest(destination).await
     }
 
     async fn resolve_digest(
@@ -276,6 +279,33 @@ impl ArtifactStore for DockerRuntime {
 }
 
 impl DockerRuntime {
+    async fn published_digest(
+        &self,
+        destination: &ArtifactReference,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let remote = self
+            .client
+            .inspect_registry_image(
+                destination.as_str(),
+                self.registry_credential(destination).await?,
+            )
+            .await
+            .map_err(|error| {
+                operation_error("resolve pushed", Some(destination.as_str()), error)
+            })?;
+        let digest = remote
+            .descriptor
+            .digest
+            .filter(|digest| !digest.trim().is_empty())
+            .ok_or_else(|| ArtifactStoreError::Unavailable {
+                message: format!(
+                    "Docker registry inspection for `{}` omitted the pushed digest",
+                    destination.as_str()
+                ),
+            })?;
+        ArtifactDigest::new(digest)?.for_reference(destination)
+    }
+
     async fn registry_credential(
         &self,
         reference: &ArtifactReference,
@@ -445,6 +475,22 @@ pub(crate) async fn consume_build_operation(
             });
         }
         if !wrote_stream && let Some(status) = info.status.as_deref() {
+            write_docker_output(output, ArtifactBuildOutputStream::Stdout, status).await;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn consume_push_operation(
+    operation: &str,
+    reference: Option<&str>,
+    stream: impl Stream<Item = Result<PushImageInfo, DockerError>>,
+    output: &dyn ArtifactBuildOutputSink,
+) -> Result<(), ArtifactStoreError> {
+    futures_util::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        let info = item.map_err(|error| operation_error(operation, reference, error))?;
+        if let Some(status) = info.status.as_deref() {
             write_docker_output(output, ArtifactBuildOutputStream::Stdout, status).await;
         }
     }

@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentPhase, ConditionType, Deployment, DeploymentPhase,
-    EnvironmentName, ReplicaState, ResourceKind, ResourceName, SecretMountSpec, SecretValue,
+    ArtifactTemplate, Assignment, AssignmentPhase, AssignmentStatus, ConditionType, Deployment,
+    DeploymentPhase, EnvironmentName, ReplicaState, ResourceKind, ResourceName, SecretMountSpec,
+    SecretValue,
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
@@ -25,6 +26,9 @@ use crate::assignment_node_api::mount_node_api;
 use crate::assignment_plan::node_api_user;
 use crate::assignment_plan::{
     WorkloadRuntimeInputs, workload_id, workload_spec_with_environment, workload_user,
+};
+use crate::assignment_progress::{
+    AssignmentPublishingEvent, AssignmentPublishingSink, AssignmentPublishingState,
 };
 use crate::assignment_resource::decode_assignment;
 use crate::assignment_restart::RetryTracker;
@@ -102,6 +106,7 @@ pub struct AssignmentAgent {
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
     artifact_replication: Option<Arc<ArtifactReplicationAgent>>,
+    publishing_sink: Option<Arc<dyn AssignmentPublishingSink>>,
     value_sources: Option<Arc<dyn ValueSourceResolver>>,
     resolved_deployments:
         Mutex<std::collections::BTreeMap<kernel_api::DeploymentId, ResolvedDeployment>>,
@@ -152,6 +157,7 @@ impl AssignmentAgent {
             monotonic_clock,
             status_clock,
             artifact_replication: None,
+            publishing_sink: None,
             value_sources: None,
             resolved_deployments: Mutex::new(std::collections::BTreeMap::new()),
             retries: Mutex::new(retries),
@@ -164,6 +170,12 @@ impl AssignmentAgent {
     /// Requires registry-free build artifacts to be local before workload creation.
     pub fn with_artifact_replication(mut self, replication: Arc<ArtifactReplicationAgent>) -> Self {
         self.artifact_replication = Some(replication);
+        self
+    }
+
+    /// Exposes build-associated node publication transitions to an application-owned sink.
+    pub fn with_publishing_sink(mut self, sink: Arc<dyn AssignmentPublishingSink>) -> Self {
+        self.publishing_sink = Some(sink);
         self
     }
 
@@ -488,7 +500,7 @@ impl AssignmentAgent {
         &self,
         assignment: &Assignment,
         outcome: AssignmentOutcome<'_>,
-    ) -> Result<(), AssignmentAgentError> {
+    ) -> Result<Option<AssignmentStatus>, AssignmentAgentError> {
         let resource_name = ResourceName::new(assignment.meta.id.as_str())?;
         let key = self
             .keyspace
@@ -507,9 +519,9 @@ impl AssignmentAgent {
             }
             let desired = desired_status(&current, outcome, self.status_clock.now());
             if current.status == desired {
-                return Ok(());
+                return Ok(None);
             }
-            current.status = desired;
+            current.status = desired.clone();
             current.meta.revision = stored.version.resource_revision();
             let value = serde_json::to_vec(&current).map_err(|error| {
                 AssignmentAgentError::SerializeResource {
@@ -527,12 +539,37 @@ impl AssignmentAgent {
                 .await?;
             if matches!(result, CasOutcome::Applied(_)) {
                 trace_assignment_transition(&current);
-                return Ok(());
+                return Ok(Some(desired));
             }
         }
         Err(AssignmentAgentError::Contention {
             assignment_id: assignment.meta.id.to_string(),
         })
+    }
+
+    async fn record_publishing(
+        &self,
+        assignment: &Assignment,
+        deployment: &Deployment,
+        state: AssignmentPublishingState,
+        occurred_at: kernel_api::Timestamp,
+    ) {
+        let (Some(sink), Some(build_id)) = (
+            self.publishing_sink.as_ref(),
+            deployment.spec.build_id.as_ref(),
+        ) else {
+            return;
+        };
+        sink.record(AssignmentPublishingEvent {
+            build_id: build_id.clone(),
+            deployment_id: deployment.meta.id.clone(),
+            assignment_id: assignment.meta.id.clone(),
+            node_id: assignment.spec.node_id.clone(),
+            replica_index: assignment.spec.replica_index,
+            occurred_at,
+            state,
+        })
+        .await;
     }
 }
 

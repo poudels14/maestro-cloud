@@ -1,18 +1,24 @@
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use kernel_api::{NodeSpec, WorkloadNetworkMode};
 use kernel_store::Store;
-use logs::{LogStore, OtlpEnvelopeStore, OtlpLogHandler, OtlpSignalHandler, RuntimeLogPipeline};
+use logs::{
+    IngestLogEntry, LogBody, LogOrigin, LogProducer, LogRecordId, LogStore, LogStream,
+    OriginCursor, OtlpEnvelopeStore, OtlpLogHandler, OtlpSignalHandler, RuntimeLogPipeline,
+};
 use metrics::{HostMetricPipeline, HostMetricStore, MetricStore, WorkloadMetricPipeline};
 use node_agent::{
-    AssignmentAgent, AssignmentAgentSettings, FileLogCheckpointStore, HealthAgent,
-    HealthAgentSettings, HostTelemetryAgent, HostTelemetrySettings, NodeApiServices,
-    NodeRegistryAgent, NodeRegistrySettings, RuntimeLogAgent, RuntimeLogAgentSettings,
-    StoreNodeControlHandler, WORKLOAD_BRIDGE_NAME, WorkloadDns, WorkloadStatsAgent,
-    WorkloadStatsSettings,
+    AssignmentAgent, AssignmentAgentSettings, AssignmentPublishingEvent, AssignmentPublishingSink,
+    AssignmentPublishingState, FileLogCheckpointStore, HealthAgent, HealthAgentSettings,
+    HostTelemetryAgent, HostTelemetrySettings, NodeApiServices, NodeRegistryAgent,
+    NodeRegistrySettings, RuntimeLogAgent, RuntimeLogAgentSettings, StoreNodeControlHandler,
+    WORKLOAD_BRIDGE_NAME, WorkloadDns, WorkloadStatsAgent, WorkloadStatsSettings,
 };
 use runtime::{NetworkAddressing, NetworkCidr, NetworkSpec};
+use sha2::{Digest, Sha256};
 use upgrade::{NodeUpgradeAgent, NodeUpgradeAgentSettings};
 
 use crate::control_plane::{DaemonRoleFactory, HostTelemetryDependencies, role_error};
@@ -94,6 +100,10 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         .get(&spec.node_id)
         .ok_or_else(|| RoleError::new("local node disappeared from validated topology"))?;
     let network = assignment_network(node, factory.workload_network_mode)?;
+    let publishing_sink = Arc::new(BuildPublishingLogSink {
+        cluster_id: plan.cluster().cluster_id.clone(),
+        logs: log_store.clone(),
+    });
     let agent = AssignmentAgent::new(
         store.clone(),
         factory.workload_runtime.clone(),
@@ -127,7 +137,7 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
                 )),
                 Arc::new(OtlpLogHandler::new(
                     plan.cluster().cluster_id.clone(),
-                    log_store,
+                    log_store.clone(),
                     factory.status_clock.clone(),
                 )),
                 signals.clone(),
@@ -137,11 +147,164 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
         factory.monotonic_clock.clone(),
         factory.status_clock.clone(),
     )
-    .map_err(|error| role_error("construct assignment agent", error))?;
+    .map_err(|error| role_error("construct assignment agent", error))?
+    .with_publishing_sink(publishing_sink);
     Ok(match &factory.value_sources {
         Some(resolver) => agent.with_value_source_resolver(resolver.clone()),
         None => agent,
     })
+}
+
+struct BuildPublishingLogSink {
+    cluster_id: kernel_api::ClusterId,
+    logs: Arc<dyn LogStore>,
+}
+
+#[async_trait]
+impl AssignmentPublishingSink for BuildPublishingLogSink {
+    async fn record(&self, event: AssignmentPublishingEvent) {
+        let (state, severity, stream, reason, body) = match &event.state {
+            AssignmentPublishingState::Started => (
+                "started",
+                "info",
+                LogStream::Stdout,
+                None,
+                format!(
+                    "Publishing replica {} to node {}",
+                    event.replica_index, event.node_id
+                ),
+            ),
+            AssignmentPublishingState::Waiting {
+                reason,
+                message,
+                failed,
+            } => (
+                if *failed { "failed" } else { "waiting" },
+                if *failed { "error" } else { "warn" },
+                LogStream::Stderr,
+                Some(reason.as_str()),
+                format!(
+                    "Publishing replica {} to node {} is {}: {message}",
+                    event.replica_index,
+                    event.node_id,
+                    if *failed { "failed" } else { "waiting" },
+                ),
+            ),
+            AssignmentPublishingState::Completed => (
+                "completed",
+                "info",
+                LogStream::Stdout,
+                None,
+                format!(
+                    "Published replica {} to node {}",
+                    event.replica_index, event.node_id
+                ),
+            ),
+        };
+        let fingerprint = format!("{:x}", Sha256::digest(body.as_bytes()));
+        let mut attributes = BTreeMap::from([
+            ("maestro.build.phase".to_owned(), "publishing".to_owned()),
+            ("maestro.build.output".to_owned(), "maestro".to_owned()),
+            (
+                "maestro.deployment.id".to_owned(),
+                event.deployment_id.to_string(),
+            ),
+            (
+                "maestro.assignment.id".to_owned(),
+                event.assignment_id.to_string(),
+            ),
+            (
+                "maestro.replica.index".to_owned(),
+                event.replica_index.to_string(),
+            ),
+            ("maestro.publish.state".to_owned(), state.to_owned()),
+        ]);
+        if let Some(reason) = reason {
+            attributes.insert("maestro.publish.reason".to_owned(), reason.to_owned());
+        }
+        let entry = IngestLogEntry {
+            id: LogRecordId {
+                node_id: event.node_id.clone(),
+                producer: LogProducer::Build(event.build_id.clone()),
+                cursor: OriginCursor::new(format!(
+                    "assignment-publishing:{}:{state}:{fingerprint}",
+                    event.assignment_id
+                )),
+            },
+            observed_at: event.occurred_at,
+            event_at: event.occurred_at,
+            severity: severity.to_owned(),
+            stream,
+            origin: LogOrigin::Build {
+                cluster_id: self.cluster_id.clone(),
+                node_id: event.node_id,
+                build_id: event.build_id,
+            },
+            body: LogBody::Text(body),
+            attributes,
+        };
+        let _ignored = self.logs.append(&[entry]).await;
+    }
+}
+
+#[cfg(test)]
+mod publishing_log_tests {
+    use std::sync::Arc;
+
+    use kernel_api::{AssignmentId, BuildId, DeploymentId, NodeId, Timestamp};
+    use logs::{InMemoryLogStore, LogBody, LogStream};
+    use node_agent::{
+        AssignmentPublishingEvent, AssignmentPublishingSink, AssignmentPublishingState,
+    };
+
+    use super::BuildPublishingLogSink;
+
+    #[tokio::test]
+    async fn assignment_wait_reason_is_written_to_the_build_log()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let logs = Arc::new(InMemoryLogStore::new());
+        let sink = BuildPublishingLogSink {
+            cluster_id: kernel_api::ClusterId::new("cluster-1")?,
+            logs: logs.clone(),
+        };
+
+        sink.record(AssignmentPublishingEvent {
+            build_id: BuildId::new("build-1")?,
+            deployment_id: DeploymentId::new("deployment-1")?,
+            assignment_id: AssignmentId::new("assignment-1")?,
+            node_id: NodeId::new("node-1")?,
+            replica_index: 2,
+            occurred_at: Timestamp(1_750_000_000_000),
+            state: AssignmentPublishingState::Waiting {
+                reason: "ArtifactReplicationUnavailable".to_owned(),
+                message: "artifact has no live holder".to_owned(),
+                failed: false,
+            },
+        })
+        .await;
+
+        let entries = logs.entries()?;
+        let [entry] = entries.as_slice() else {
+            return Err(format!("expected one publishing entry, found {}", entries.len()).into());
+        };
+        assert_eq!(entry.stream, LogStream::Stderr);
+        assert_eq!(entry.severity, "warn");
+        assert_eq!(
+            entry.body,
+            LogBody::Text(
+                "Publishing replica 2 to node node-1 is waiting: artifact has no live holder"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            entry
+                .attributes
+                .get("maestro.publish.reason")
+                .map(String::as_str),
+            Some("ArtifactReplicationUnavailable")
+        );
+        Ok(())
+    }
 }
 
 struct AssignmentNetwork {

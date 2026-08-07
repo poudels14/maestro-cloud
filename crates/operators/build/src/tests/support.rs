@@ -428,6 +428,21 @@ impl ArtifactStore for RecordingArtifacts {
         digest.for_reference(destination)
     }
 
+    async fn publish_with_output(
+        &self,
+        digest: &ArtifactDigest,
+        destination: &ArtifactReference,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        output
+            .write(
+                ArtifactBuildOutputStream::Stdout,
+                b"Pushed image layer".to_vec(),
+            )
+            .await;
+        self.publish(digest, destination).await
+    }
+
     async fn resolve_digest(
         &self,
         _reference: &ArtifactReference,

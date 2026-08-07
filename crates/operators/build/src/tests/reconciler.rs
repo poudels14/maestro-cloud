@@ -268,6 +268,46 @@ async fn registry_build_publishes_a_deployment_unique_immutable_reference() -> T
             runtime::ArtifactReference::new("registry.example/team/api:deployment-1")?,
         )]
     );
+    let publishing = world
+        .logs
+        .entries()?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .attributes
+                .get("maestro.build.phase")
+                .is_some_and(|phase| phase == "publishing")
+        })
+        .map(|entry| (entry.body, entry.attributes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        publishing,
+        [
+            (
+                LogBody::Text(
+                    "Publishing image to registry.example/team/api:deployment-1".to_owned()
+                ),
+                BTreeMap::from([
+                    ("maestro.build.output".to_owned(), "maestro".to_owned()),
+                    ("maestro.build.phase".to_owned(), "publishing".to_owned()),
+                ])
+            ),
+            (
+                LogBody::Text("Pushed image layer".to_owned()),
+                BTreeMap::from([
+                    ("maestro.build.output".to_owned(), "backend".to_owned()),
+                    ("maestro.build.phase".to_owned(), "publishing".to_owned()),
+                ])
+            ),
+            (
+                LogBody::Text("Published image registry.example/team/api@sha256:abc123".to_owned()),
+                BTreeMap::from([
+                    ("maestro.build.output".to_owned(), "maestro".to_owned()),
+                    ("maestro.build.phase".to_owned(), "publishing".to_owned()),
+                ])
+            ),
+        ]
+    );
     Ok(())
 }
 
