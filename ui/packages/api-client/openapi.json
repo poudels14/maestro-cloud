@@ -8160,7 +8160,7 @@
   },
   "info": {
     "title": "Maestro Cloud API",
-    "version": "0.6.42"
+    "version": "0.6.43"
   },
   "openapi": "3.0.4",
   "paths": {

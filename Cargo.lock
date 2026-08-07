@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "kernel-api"
-version = "0.6.42"
+version = "0.6.43"
 dependencies = [
  "hex",
  "insta",
