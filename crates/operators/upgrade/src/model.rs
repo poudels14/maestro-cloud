@@ -80,6 +80,16 @@ pub struct NodeUpgradeTarget {
     pub previous_instance_id: NodeInstanceId,
 }
 
+/// Store membership recovery authorized only for a planned all-control-plane reboot.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlannedStoreRecovery {
+    /// Configured master whose persisted store is retained as the source of truth.
+    pub canonical_node_id: NodeId,
+    /// Complete voter set that must be rebuilt after the planned reboot.
+    pub expected_members: BTreeSet<NodeId>,
+}
+
 /// Stable request emitted by the pure planner for a side-effect adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeUpgradeRequest {
@@ -91,6 +101,8 @@ pub struct NodeUpgradeRequest {
     pub target_version: String,
     /// Rolling singleton or all-node target batch.
     pub targets: Vec<NodeUpgradeTarget>,
+    /// Explicit recovery plan when this batch restarts every store voter together.
+    pub store_recovery: Option<PlannedStoreRecovery>,
 }
 
 /// Result returned by an idempotent node-upgrade adapter.

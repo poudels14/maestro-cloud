@@ -51,7 +51,8 @@ use crate::value_source::AwsValueSourceResolver;
 use crate::{
     AdmissionDependencies, AgentStore, BuildOperatorBackends, ControllerLogCapture, Daemon,
     DaemonPlan, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    HostTelemetryDependencies, OperatorLeaderWorkload, OperatorSettings, RunningDaemon,
+    HostTelemetryDependencies, ManagedStoreStart, OperatorLeaderWorkload, OperatorSettings,
+    RunningDaemon,
 };
 
 mod config;
@@ -106,6 +107,7 @@ async fn launch_daemon_inner(
             &aws_sdk,
         ));
     let known_members = control_plane_members(&cluster);
+    let recovery_marker = Arc::new(upgrade::FileStoreRecoveryMarker::new(&data_directory));
     let dns_plugin_settings = dns_plugin_settings(&cluster)?;
     let dns_upstream_settings = SystemDnsPluginSettings::from_resolv_conf_file(
         Path::new("/etc/resolv.conf"),
@@ -148,12 +150,45 @@ async fn launch_daemon_inner(
             clock.clone(),
             EmbeddedEtcdSettings::default(),
         )?);
-        AgentStore::Managed {
-            provider,
-            start_mode: store_mode.provider_mode().ok_or_else(|| {
-                invalid("control-plane nodes cannot use client-only store access")
-            })?,
-        }
+        let normal = store_mode
+            .provider_mode()
+            .ok_or_else(|| invalid("control-plane nodes cannot use client-only store access"))?;
+        let start = match recovery_marker
+            .activated(&cluster.cluster_id, &node_id)
+            .map_err(|error| invalid(error.to_string()))?
+        {
+            None => ManagedStoreStart::Normal(normal),
+            Some(activated) => {
+                let canonical_node_id = activated.plan.canonical_node_id.clone();
+                let permit = cluster::StoreRecoveryPermit::new(
+                    cluster.cluster_id.clone(),
+                    canonical_node_id.clone(),
+                    activated.plan.expected_members,
+                    activated.issued_at_unix_ms,
+                )?;
+                if node_id == canonical_node_id {
+                    ManagedStoreStart::Recover {
+                        permit,
+                        run_id: activated.run_id,
+                        marker: recovery_marker.clone(),
+                    }
+                } else {
+                    let canonical_member = known_members
+                        .get(&canonical_node_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            invalid("canonical recovery member is absent from topology")
+                        })?;
+                    ManagedStoreStart::Rejoin {
+                        permit,
+                        canonical_member,
+                        run_id: activated.run_id,
+                        marker: recovery_marker.clone(),
+                    }
+                }
+            }
+        };
+        AgentStore::Managed { provider, start }
     } else {
         AgentStore::Remote(
             connect_worker_store(
@@ -244,6 +279,7 @@ async fn launch_daemon_inner(
     let node_upgrade = Some(NodeUpgradeDependencies {
         stager: Some(configured_upgrade.stager),
         rebooter: configured_upgrade.rebooter,
+        recovery_marker: recovery_marker.clone(),
     });
     #[cfg(any(target_os = "macos", feature = "macos-platform"))]
     let node_upgrade = None;

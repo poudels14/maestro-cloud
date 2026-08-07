@@ -43,13 +43,13 @@ impl ProcessNodeRebooter {
     pub fn new() -> Self {
         Self::with_runner(
             PathBuf::from("systemctl"),
-            Arc::new(ProcessNixosCommandRunner),
+            Arc::new(ProcessNixosCommandRunner::direct()),
         )
     }
 
     /// Uses an explicit systemctl path for hermetic host packaging.
     pub fn with_binary(binary: impl Into<PathBuf>) -> Self {
-        Self::with_runner(binary.into(), Arc::new(ProcessNixosCommandRunner))
+        Self::with_runner(binary.into(), Arc::new(ProcessNixosCommandRunner::direct()))
     }
 
     pub(crate) fn with_runner(binary: PathBuf, runner: Arc<dyn NixosCommandRunner>) -> Self {

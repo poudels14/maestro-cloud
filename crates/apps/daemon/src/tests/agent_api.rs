@@ -100,7 +100,7 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
         DaemonRoleDependencies {
             agent_store: AgentStore::Managed {
                 provider: Arc::new(FakeProvider::new(store, Arc::new(Mutex::new(0)))),
-                start_mode: cluster::StoreStartMode::Restart,
+                start: crate::ManagedStoreStart::Normal(cluster::StoreStartMode::Restart),
             },
             mesh_backend: RecordingMeshBackend {
                 applications: Arc::new(Mutex::new(Vec::<MeshConfiguration>::new())),

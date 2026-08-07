@@ -75,6 +75,7 @@ pub(crate) fn build_node_upgrade_agent<MeshBackendType, FirewallBackendType, Bri
         dependencies.rebooter.clone(),
         factory.monotonic_clock.clone(),
     )
+    .map(|agent| agent.with_store_recovery_marker(dependencies.recovery_marker.clone()))
     .map(Some)
     .map_err(|error| role_error("construct node upgrade agent", error))
 }

@@ -318,6 +318,14 @@ pub struct StoreRecovery {
     pub report: StoreRecoveryReport,
 }
 
+/// Running member rebuilt from a recovered canonical store.
+pub struct StoreRejoin {
+    /// Owned running store process.
+    pub runtime: Box<dyn StoreRuntime>,
+    /// Ticket used to promote the recovered learner after it catches up.
+    pub ticket: StoreJoinTicket,
+}
+
 /// Requested local process shutdown behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreShutdown {
@@ -377,6 +385,17 @@ pub trait StoreProvider: Send + Sync {
         &self,
         permit: StoreRecoveryPermit,
     ) -> Result<StoreRecovery, StoreProviderError>;
+
+    /// Replaces obsolete local member state and rejoins the recovered canonical member.
+    async fn rejoin_recovered(
+        &self,
+        _permit: StoreRecoveryPermit,
+        _canonical_member: StoreMember,
+    ) -> Result<StoreRejoin, StoreProviderError> {
+        Err(StoreProviderError::InvalidConfiguration {
+            reason: "store provider does not support recovered-member rejoin".to_owned(),
+        })
+    }
 }
 
 /// Matchable store provisioning and membership failures.

@@ -301,6 +301,38 @@ async fn stale_replica_history_is_collected_in_bounded_batches()
 }
 
 #[tokio::test]
+async fn deployment_history_updates_are_committed_in_bounded_batches()
+-> Result<(), Box<dyn std::error::Error>> {
+    let service = image_service();
+    let world = World::new(service.clone()).await?;
+    for index in 0..130 {
+        let deployment = crate::tests::plan_support::deployment_generation(
+            &service,
+            &format!("deployment-history-{index:03}"),
+            service.meta.generation,
+            DeploymentPhase::Queued,
+        );
+        world
+            .put("Deployment", &deployment.meta.id, &deployment)
+            .await?;
+    }
+
+    let report = world.reconcile(Timestamp(1_000)).await?;
+
+    assert_eq!(report.updated_deployments, 130);
+    let deployments = world.list::<Deployment>("Deployment").await?;
+    assert_eq!(deployments.len(), 130);
+    assert_eq!(
+        deployments
+            .iter()
+            .filter(|deployment| deployment.status.phase == DeploymentPhase::Building)
+            .count(),
+        130
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn store_backed_watched_commit_advances_after_pinned_deployment_exists()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut watched_service = build_service();

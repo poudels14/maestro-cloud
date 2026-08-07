@@ -21,7 +21,7 @@ use crate::workload_agents::{
     build_assignment_agent, build_health_agent, build_host_telemetry_agent, build_log_agent,
     build_node_registry_agent, build_node_upgrade_agent, build_stats_agent,
 };
-use crate::{AgentStore, DaemonPlan, RoleError, RoleRuntime, RoleSpec};
+use crate::{AgentStore, DaemonPlan, ManagedStoreStart, RoleError, RoleRuntime, RoleSpec};
 
 const INITIAL_NODE_REGISTRATION_RETRY: Duration = Duration::from_secs(1);
 
@@ -75,12 +75,51 @@ where
         .lock()
         .map_err(|_| RoleError::new("controller-log worker lock was poisoned"))?
         .take();
-    let (store, store_runtime, joined_member) = match &factory.agent_store {
-        AgentStore::Managed {
-            provider,
-            start_mode,
-        } => {
-            let runtime = match provider.start(start_mode.clone()).await {
+    let (store, store_runtime, joined_member, completion) = match &factory.agent_store {
+        AgentStore::Managed { provider, start } => {
+            let (runtime, joined_member, completion) = match start {
+                ManagedStoreStart::Normal(start_mode) => {
+                    let runtime = provider.start(start_mode.clone()).await;
+                    let joined = match start_mode {
+                        cluster::StoreStartMode::Join(ticket) => {
+                            Some((provider.clone(), ticket.clone()))
+                        }
+                        cluster::StoreStartMode::Bootstrap | cluster::StoreStartMode::Restart => {
+                            None
+                        }
+                    };
+                    (runtime, joined, None)
+                }
+                ManagedStoreStart::Recover {
+                    permit,
+                    run_id,
+                    marker,
+                } => (
+                    provider
+                        .recover(permit.clone())
+                        .await
+                        .map(|recovery| recovery.runtime),
+                    None,
+                    Some((marker.clone(), run_id.clone())),
+                ),
+                ManagedStoreStart::Rejoin {
+                    permit,
+                    canonical_member,
+                    run_id,
+                    marker,
+                } => match provider
+                    .rejoin_recovered(permit.clone(), canonical_member.clone())
+                    .await
+                {
+                    Ok(rejoin) => (
+                        Ok(rejoin.runtime),
+                        Some((provider.clone(), rejoin.ticket)),
+                        Some((marker.clone(), run_id.clone())),
+                    ),
+                    Err(error) => (Err(error), None, None),
+                },
+            };
+            let runtime = match runtime {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     return AgentStartupRuntimes::new(
@@ -92,13 +131,9 @@ where
                     .await;
                 }
             };
-            let joined_member = match start_mode {
-                cluster::StoreStartMode::Join(ticket) => Some((provider.clone(), ticket.clone())),
-                cluster::StoreStartMode::Bootstrap | cluster::StoreStartMode::Restart => None,
-            };
-            (runtime.store(), Some(runtime), joined_member)
+            (runtime.store(), Some(runtime), joined_member, completion)
         }
-        AgentStore::Remote(store) => (store.clone(), None, None),
+        AgentStore::Remote(store) => (store.clone(), None, None, None),
     };
     let runtimes =
         AgentStartupRuntimes::new(store_runtime, log_store_runtime, metric_store_runtime);
@@ -113,6 +148,13 @@ where
     {
         return runtimes
             .fail(role_error("activate joined store member", error))
+            .await;
+    }
+    if let Some((marker, run_id)) = completion
+        && let Err(error) = marker.clear(&run_id)
+    {
+        return runtimes
+            .fail(role_error("complete planned store recovery", error))
             .await;
     }
     let controller_stats = Arc::new(logs::LiveControllerStats::new(

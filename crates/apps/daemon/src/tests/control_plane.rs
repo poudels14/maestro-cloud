@@ -121,7 +121,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
         DaemonRoleDependencies {
             agent_store: AgentStore::Managed {
                 provider,
-                start_mode: StoreStartMode::Bootstrap,
+                start: crate::ManagedStoreStart::Normal(StoreStartMode::Bootstrap),
             },
             mesh_backend: backend,
             firewall_backend: RecordingFirewallBackend {

@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cluster::{StoreProvider, StoreStartMode};
-use kernel_api::{NodeInstanceId, ServiceId, WorkloadNetworkMode};
+use cluster::{StoreMember, StoreProvider, StoreRecoveryPermit, StoreStartMode};
+use kernel_api::{NodeInstanceId, ServiceId, UpgradeRunId, WorkloadNetworkMode};
 use kernel_controller::{FencedStore, LeaderElector, LeaderIdentity, StoreLeaderElector};
 use kernel_store::{Clock, Keyspace, Store};
 use logs::{LogSink, LogStoreRuntime, SinkRuntimeRegistry};
@@ -22,7 +22,7 @@ use semver::Version;
 use server::ServerSettings;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use upgrade::{NixosUpgradeStager, NodeRebooter};
+use upgrade::{FileStoreRecoveryMarker, NixosUpgradeStager, NodeRebooter};
 
 pub use self::settings::DaemonRoleSettings;
 use crate::admission::AdmissionDependencies;
@@ -42,11 +42,27 @@ pub enum AgentStore {
     Managed {
         /// Provisioning boundary for the node-local cluster store member.
         provider: Arc<dyn StoreProvider>,
-        /// Explicit bootstrap, join, or restart decision for the local member.
-        start_mode: StoreStartMode,
+        /// Explicit normal start or planned recovery decision for the local member.
+        start: ManagedStoreStart,
     },
     /// Worker node that connects to an already-running cluster store.
     Remote(Arc<dyn Store>),
+}
+
+/// Early store action selected from launch state and a boot-bound recovery marker.
+pub enum ManagedStoreStart {
+    Normal(StoreStartMode),
+    Recover {
+        permit: StoreRecoveryPermit,
+        run_id: UpgradeRunId,
+        marker: Arc<FileStoreRecoveryMarker>,
+    },
+    Rejoin {
+        permit: StoreRecoveryPermit,
+        canonical_member: StoreMember,
+        run_id: UpgradeRunId,
+        marker: Arc<FileStoreRecoveryMarker>,
+    },
 }
 
 /// Node-local seams used by coordinated restart and optional NixOS upgrades.
@@ -55,6 +71,8 @@ pub struct NodeUpgradeDependencies {
     pub stager: Option<Arc<dyn NixosUpgradeStager>>,
     /// Requests host reboot only after collective leader release.
     pub rebooter: Arc<dyn NodeRebooter>,
+    /// Persists recovery authorization before an all-voter reboot.
+    pub recovery_marker: Arc<FileStoreRecoveryMarker>,
 }
 
 /// Host telemetry adapters exposed only on platforms with native host readers.

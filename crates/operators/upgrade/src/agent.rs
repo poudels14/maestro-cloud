@@ -12,12 +12,13 @@ use semver::Version;
 use tokio::sync::watch;
 
 use crate::{
-    NixosUpgradeStager, NixosUpgradeStagingError, NodeRebooter, NodeUpgradeCommand,
-    NodeUpgradeCommandFailure, NodeUpgradeCommandState,
+    FileStoreRecoveryMarker, NixosUpgradeStager, NixosUpgradeStagingError, NodeRebooter,
+    NodeUpgradeCommand, NodeUpgradeCommandFailure, NodeUpgradeCommandState,
 };
 
 const MAX_COMMAND_BYTES: usize = 16 * 1_024;
 const MAX_RUN_BYTES: usize = 256 * 1_024;
+const CANONICAL_RECOVERY_REBOOT_DELAY: Duration = Duration::from_secs(15);
 
 /// Static identity and polling policy for one node's upgrade command agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +83,7 @@ pub struct NodeUpgradeAgent {
     stager: Option<Arc<dyn NixosUpgradeStager>>,
     rebooter: Arc<dyn NodeRebooter>,
     clock: Arc<dyn Clock>,
+    recovery_marker: Option<Arc<FileStoreRecoveryMarker>>,
 }
 
 impl NodeUpgradeAgent {
@@ -104,7 +106,14 @@ impl NodeUpgradeAgent {
             stager,
             rebooter,
             clock,
+            recovery_marker: None,
         })
+    }
+
+    /// Enables the boot-bound recovery authorization used by all-voter restart batches.
+    pub fn with_store_recovery_marker(mut self, marker: Arc<FileStoreRecoveryMarker>) -> Self {
+        self.recovery_marker = Some(marker);
+        self
     }
 
     /// Converges one command without waiting for the next resync interval.
@@ -115,6 +124,9 @@ impl NodeUpgradeAgent {
         let command = decode_command(&stored, &self.settings.node_id)?;
         let run = self.load_run(&command).await?;
         if should_clear(&command, run.as_ref()) {
+            if let Some(marker) = &self.recovery_marker {
+                marker.clear(&command.run_id)?;
+            }
             return self.delete(stored).await;
         }
         if !command_is_active(&command, run.as_ref()) {
@@ -210,6 +222,19 @@ impl NodeUpgradeAgent {
                 }
             }
         }
+        if let Some(marker) = &self.recovery_marker
+            && let Err(error) = marker.prepare(&self.settings.cluster_id, &command)
+        {
+            return self
+                .persist_staging_failure(
+                    stored,
+                    command,
+                    NixosUpgradeStagingError::Rejected {
+                        message: error.to_string(),
+                    },
+                )
+                .await;
+        }
         self.transition(
             stored,
             command,
@@ -226,6 +251,33 @@ impl NodeUpgradeAgent {
         command: NodeUpgradeCommand,
     ) -> Result<NodeUpgradeAgentAction, NodeUpgradeAgentError> {
         let result = if self.settings.instance_id == command.previous_instance_id {
+            if let Some(marker) = &self.recovery_marker
+                && let Err(error) = marker.release(&self.settings.cluster_id, &command)
+            {
+                return self
+                    .transition(
+                        stored,
+                        command,
+                        NodeUpgradeCommandState::Failed,
+                        Some(NodeUpgradeCommandFailure::Rejected {
+                            message: error.to_string(),
+                        }),
+                        NodeUpgradeAgentAction::Failed,
+                    )
+                    .await;
+            }
+            if command.store_recovery.as_ref().is_some_and(|plan| {
+                plan.canonical_node_id == self.settings.node_id
+                    && plan.expected_members.contains(&self.settings.node_id)
+            }) {
+                self.clock
+                    .sleep_until(
+                        self.clock
+                            .now()
+                            .saturating_add(CANONICAL_RECOVERY_REBOOT_DELAY),
+                    )
+                    .await;
+            }
             self.rebooter.reboot().await
         } else {
             Ok(())
@@ -242,13 +294,18 @@ impl NodeUpgradeAgent {
                 .await
             }
             Err(error) => {
+                let mut message = error.to_string();
+                if let Some(marker) = &self.recovery_marker
+                    && let Err(marker_error) = marker.clear(&command.run_id)
+                {
+                    message.push_str("; failed to disarm store recovery: ");
+                    message.push_str(&marker_error.to_string());
+                }
                 self.transition(
                     stored,
                     command,
                     NodeUpgradeCommandState::Failed,
-                    Some(NodeUpgradeCommandFailure::Unavailable {
-                        message: error.to_string(),
-                    }),
+                    Some(NodeUpgradeCommandFailure::Unavailable { message }),
                     NodeUpgradeAgentAction::Failed,
                 )
                 .await
@@ -466,6 +523,9 @@ pub enum NodeUpgradeAgentError {
     /// Cluster persistence was unavailable.
     #[error(transparent)]
     Store(#[from] kernel_store::StoreError),
+    /// The local boot-bound recovery authorization could not be persisted safely.
+    #[error(transparent)]
+    RecoveryMarker(#[from] crate::StoreRecoveryMarkerError),
     /// The node command could not be decoded or did not match its key.
     #[error("node upgrade command is malformed: {message}")]
     MalformedCommand { message: String },
@@ -491,6 +551,7 @@ impl NodeUpgradeAgentError {
         matches!(
             self,
             Self::Store(kernel_store::StoreError::Unavailable { .. })
+                | Self::RecoveryMarker(crate::StoreRecoveryMarkerError::Io { .. })
         )
     }
 }

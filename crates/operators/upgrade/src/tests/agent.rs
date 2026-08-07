@@ -485,6 +485,7 @@ fn command(
         operation: kernel_api::UpgradeOperation::Upgrade,
         target_version: "2.0.0".to_string(),
         previous_instance_id: NodeInstanceId::new("instance-node-1")?,
+        store_recovery: None,
         state,
         failure: None,
     })

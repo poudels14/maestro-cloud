@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use semver::Version;
 
-use crate::nixos::{NixosCommand, NixosCommandError, NixosCommandOutput, NixosCommandRunner};
+use crate::nixos::{
+    NixosCommand, NixosCommandError, NixosCommandOutput, NixosCommandRunner,
+    ProcessNixosCommandRunner,
+};
 use crate::{
     NixosUpgradeStager, NixosUpgradeStagerSettings, NixosUpgradeStagingError,
     ProcessNixosUpgradeStager,
@@ -132,6 +135,39 @@ fn command<const COUNT: usize>(executable: &str, arguments: [&str; COUNT]) -> Ni
         executable: PathBuf::from(executable),
         arguments: arguments.into_iter().map(OsString::from).collect(),
     }
+}
+
+#[test]
+fn production_staging_wraps_nix_in_a_low_priority_systemd_scope() {
+    let invocation = ProcessNixosCommandRunner::isolated().process_invocation(command(
+        "nixos-rebuild",
+        ["boot", "--flake", "/etc/maestro#default"],
+    ));
+
+    assert_eq!(invocation.executable, PathBuf::from("systemd-run"));
+    assert_eq!(
+        invocation.arguments,
+        [
+            "--quiet",
+            "--scope",
+            "--collect",
+            "--nice",
+            "10",
+            "--property",
+            "CPUWeight=10",
+            "--property",
+            "IOWeight=10",
+            "--property",
+            "MemoryHigh=50%",
+            "--property",
+            "MemoryMax=70%",
+            "nixos-rebuild",
+            "boot",
+            "--flake",
+            "/etc/maestro#default",
+        ]
+        .map(OsString::from)
+    );
 }
 
 struct RecordingRunner {

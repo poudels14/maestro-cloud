@@ -12,6 +12,7 @@ mod plan_phases;
 mod plan_support;
 mod reboot;
 mod reconciler;
+mod recovery;
 mod snapshot;
 mod writer;
 
@@ -26,8 +27,8 @@ pub use dispatch::{
 };
 pub use error::UpgradePlanError;
 pub use model::{
-    NodeUpgradeRequest, NodeUpgradeTarget, UpgradeDispatchOutcome, UpgradeInput, UpgradePlan,
-    UpgradePlanAction, UpgradeSettings, UpgradeSettingsError,
+    NodeUpgradeRequest, NodeUpgradeTarget, PlannedStoreRecovery, UpgradeDispatchOutcome,
+    UpgradeInput, UpgradePlan, UpgradePlanAction, UpgradeSettings, UpgradeSettingsError,
 };
 pub use nixos::{
     NixosUpgradeSource, NixosUpgradeStager, NixosUpgradeStagerSettings, NixosUpgradeStagingError,
@@ -36,6 +37,7 @@ pub use nixos::{
 pub use plan::{plan_upgrade, record_dispatch_outcome};
 pub use reboot::{NodeRebootError, NodeRebooter, ProcessNodeRebooter};
 pub use reconciler::{UpgradeError, UpgradeReconciler};
+pub use recovery::{ActivatedStoreRecovery, FileStoreRecoveryMarker, StoreRecoveryMarkerError};
 
 #[cfg(test)]
 mod tests;

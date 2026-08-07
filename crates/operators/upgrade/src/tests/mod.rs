@@ -6,3 +6,4 @@ mod nixos;
 mod plan;
 mod reconciler;
 mod reconciler_world;
+mod recovery;

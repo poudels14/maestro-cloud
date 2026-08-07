@@ -71,6 +71,9 @@ pub struct NodeUpgradeCommand {
     pub target_version: String,
     /// Daemon identity observed before the operator drained this node.
     pub previous_instance_id: NodeInstanceId,
+    /// Planned recovery shared by the complete control-plane reboot batch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_recovery: Option<crate::PlannedStoreRecovery>,
     /// Current stage of the leader-to-agent handshake.
     pub state: NodeUpgradeCommandState,
     /// Failure detail present exactly when `state` is `Failed`.
@@ -87,6 +90,7 @@ impl NodeUpgradeCommand {
             operation: request.operation,
             target_version: request.target_version.clone(),
             previous_instance_id: target.previous_instance_id.clone(),
+            store_recovery: request.store_recovery.clone(),
             state: NodeUpgradeCommandState::Requested,
             failure: None,
         })
@@ -98,6 +102,7 @@ impl NodeUpgradeCommand {
             && self.operation == desired.operation
             && self.target_version == desired.target_version
             && self.previous_instance_id == desired.previous_instance_id
+            && self.store_recovery == desired.store_recovery
     }
 }
 

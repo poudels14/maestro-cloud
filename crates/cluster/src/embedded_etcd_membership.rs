@@ -2,12 +2,85 @@ use etcd_client::{Client, GetOptions, Member, MemberAddOptions};
 
 use crate::{
     EmbeddedEtcdSettings, MemberActivation, MemberState, StoreJoinTicket, StoreMember,
-    StoreProviderConfig, StoreProviderError,
+    StoreProviderConfig, StoreProviderError, StoreRecoveryPermit,
     embedded_etcd_plan::{
         EtcdJoinTicketData, EtcdMemberPlan, TICKET_FORMAT_VERSION, client_url, peer_url,
     },
     embedded_etcd_process::connect_options,
 };
+
+pub(crate) async fn stage_recovered_local_member(
+    config: &StoreProviderConfig,
+    settings: EmbeddedEtcdSettings,
+    canonical_member: &StoreMember,
+    permit: &StoreRecoveryPermit,
+) -> Result<StoreJoinTicket, StoreProviderError> {
+    let endpoint = client_url(config, canonical_member.host_address);
+    let mut client = connect_endpoints(config, settings, vec![endpoint]).await?;
+    let listed = client.member_list().await.map_err(unavailable)?;
+    validate_recovered_members(config, canonical_member, permit, listed.members())?;
+    let local_peer = peer_url(config, config.local_member().host_address);
+    if let Some(existing) = member_by_peer(listed.members(), &local_peer) {
+        return ticket_from_members(
+            config,
+            &config.local_member().node_id,
+            existing.id(),
+            listed.members(),
+        );
+    }
+    let response = client
+        .member_add(
+            [local_peer],
+            Some(MemberAddOptions::new().with_is_learner()),
+        )
+        .await
+        .map_err(membership_error)?;
+    let added = response
+        .member()
+        .ok_or_else(|| StoreProviderError::Unavailable {
+            reason: "membership response omitted the recovered learner".to_owned(),
+        })?;
+    ticket_from_members(
+        config,
+        &config.local_member().node_id,
+        added.id(),
+        response.member_list(),
+    )
+}
+
+fn validate_recovered_members(
+    config: &StoreProviderConfig,
+    canonical_member: &StoreMember,
+    permit: &StoreRecoveryPermit,
+    members: &[Member],
+) -> Result<(), StoreProviderError> {
+    if members.is_empty() {
+        return Err(StoreProviderError::UnsafeRecovery {
+            reason: "recovered store has no canonical member".to_owned(),
+        });
+    }
+    let canonical_peer = peer_url(config, canonical_member.host_address);
+    let canonical_present = members.iter().any(|member| {
+        !member.is_learner() && member.peer_urls().iter().any(|url| url == &canonical_peer)
+    });
+    if !canonical_present {
+        return Err(StoreProviderError::UnsafeRecovery {
+            reason: "recovered store does not contain the canonical active member".to_owned(),
+        });
+    }
+    for member in members {
+        let plan = member_plan(config, member)?;
+        if !permit.expected_members().contains(&plan.node_id) {
+            return Err(StoreProviderError::UnsafeRecovery {
+                reason: format!(
+                    "recovered store contains unexpected member `{}`",
+                    plan.node_id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
 
 pub(crate) async fn stage_member(
     config: &StoreProviderConfig,

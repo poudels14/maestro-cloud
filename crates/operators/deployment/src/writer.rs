@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Display;
 
 use kernel_api::{Object, ResourceKind, ResourceName, ResourceRevision};
@@ -10,12 +11,10 @@ use serde::Serialize;
 use crate::snapshot::{ResourceSnapshot, StoredResource};
 use crate::{DeploymentPlan, ResourceStatusUpdate, ServiceUpdate};
 
-// FencedStore adds one leader compare. Each simple deletion consumes one
-// compare and one mutation; replica deletion also proves its Assignment is
-// still absent. These batch sizes stay below etcd's default 128-op limit while
-// leaving room for the primary Service compare.
-const SIMPLE_GC_BATCH_SIZE: usize = 60;
-const REPLICA_GC_BATCH_SIZE: usize = 40;
+// etcd counts every compare and mutation against one transaction's operation
+// limit. FencedStore contributes one additional leadership compare.
+const ETCD_TRANSACTION_OPERATION_LIMIT: usize = 128;
+const FENCED_STORE_COMPARE_COUNT: usize = 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DeploymentWriteReport {
@@ -50,9 +49,9 @@ impl DeploymentWriter {
 
     /// Commits one lifecycle generation under the active leader fence.
     ///
-    /// Status and creation mutations remain one atomic transaction. Independent
-    /// garbage collection is bounded and level-triggered so retained history can
-    /// never exceed a backend transaction limit.
+    /// Independent history and garbage-collection writes are bounded and
+    /// level-triggered. The Service pointer and both sides of an active cutover
+    /// remain one atomic transaction.
     pub(crate) async fn apply(
         &self,
         store: &FencedStore,
@@ -70,65 +69,102 @@ impl DeploymentWriter {
             });
         }
 
-        let mut compares = snapshot.primary_compares();
-        let mut mutations = Vec::new();
+        let primary = snapshot.primary_compares();
+        let batch_size = transaction_batch_size(primary.len(), 2)?;
+        let mut writes = Vec::new();
+        let mut cutover_writes = Vec::new();
+        let cutover_deployments = cutover_deployments(snapshot, plan);
 
         for deployment in &plan.create_deployments {
-            self.create(
+            writes.push(self.create(
                 &self.deployment_kind,
                 &deployment.meta.id,
                 deployment,
-                &mut compares,
-                &mut mutations,
-            )?;
+                WriteKind::DeploymentCreated,
+            )?);
         }
         for build in &plan.create_builds {
-            self.create(
+            writes.push(self.create(
                 &self.build_kind,
                 &build.meta.id,
                 build,
-                &mut compares,
-                &mut mutations,
-            )?;
+                WriteKind::BuildCreated,
+            )?);
         }
         for update in &plan.deployment_updates {
             let current = required(&snapshot.deployments, &update.id, "Deployment")?;
             let resource = status_replacement(current, update, "Deployment")?;
-            compares.push(exact(&current.stored));
-            mutations.push(put(&current.stored, &resource, "Deployment", &update.id)?);
+            let write = PlannedWrite {
+                compare: exact(&current.stored),
+                mutation: put(&current.stored, &resource, "Deployment", &update.id)?,
+                kind: WriteKind::DeploymentUpdated,
+            };
+            if cutover_deployments.contains(&update.id) {
+                cutover_writes.push(write);
+            } else {
+                writes.push(write);
+            }
         }
         for update in &plan.service_updates {
             let current = required(&snapshot.services, &update.id, "Service")?;
             let resource = service_replacement(current, update)?;
-            compares.push(exact(&current.stored));
-            mutations.push(put(&current.stored, &resource, "Service", &update.id)?);
-        }
-
-        let outcome = store
-            .txn(Transaction {
-                compares,
-                mutations,
-            })
-            .await?;
-        if outcome == TransactionOutcome::Conflict {
-            return Ok(DeploymentWriteReport {
-                deleted_deployments: garbage.deleted_deployments,
-                deleted_builds: garbage.deleted_builds,
-                deleted_replicas: garbage.deleted_replicas,
-                conflict: true,
-                ..Default::default()
+            cutover_writes.push(PlannedWrite {
+                compare: exact(&current.stored),
+                mutation: put(&current.stored, &resource, "Service", &update.id)?,
+                kind: WriteKind::ServiceUpdated,
             });
         }
-        Ok(DeploymentWriteReport {
-            created_deployments: plan.create_deployments.len(),
-            created_builds: plan.create_builds.len(),
-            updated_deployments: plan.deployment_updates.len(),
-            updated_services: plan.service_updates.len(),
+
+        let mut report = DeploymentWriteReport {
             deleted_deployments: garbage.deleted_deployments,
             deleted_builds: garbage.deleted_builds,
             deleted_replicas: garbage.deleted_replicas,
-            conflict: false,
-        })
+            ..Default::default()
+        };
+        self.apply_write_batches(store, &primary, &writes, batch_size, &mut report)
+            .await?;
+        if report.conflict {
+            return Ok(report);
+        }
+        if cutover_writes.len() > batch_size {
+            return Err(DeploymentWriteError::AtomicGroupTooLarge {
+                operations: transaction_operations(primary.len(), cutover_writes.len(), 2),
+                limit: ETCD_TRANSACTION_OPERATION_LIMIT,
+            });
+        }
+        self.apply_write_batches(store, &primary, &cutover_writes, batch_size, &mut report)
+            .await?;
+        Ok(report)
+    }
+
+    async fn apply_write_batches(
+        &self,
+        store: &FencedStore,
+        primary: &[Compare],
+        writes: &[PlannedWrite],
+        batch_size: usize,
+        report: &mut DeploymentWriteReport,
+    ) -> Result<(), DeploymentWriteError> {
+        for batch in writes.chunks(batch_size) {
+            let mut compares = primary.to_vec();
+            compares.extend(batch.iter().map(|write| write.compare.clone()));
+            let mutations = batch.iter().map(|write| write.mutation.clone()).collect();
+            if store
+                .txn(Transaction {
+                    compares,
+                    mutations,
+                })
+                .await?
+                == TransactionOutcome::Conflict
+            {
+                report.conflict = true;
+                return Ok(());
+            }
+            for write in batch {
+                write.kind.record(report);
+            }
+        }
+        Ok(())
     }
 
     async fn collect_garbage(
@@ -140,7 +176,10 @@ impl DeploymentWriter {
         let mut report = GarbageCollectionReport::default();
         let primary = snapshot.primary_compares();
 
-        for ids in plan.delete_replicas.chunks(REPLICA_GC_BATCH_SIZE) {
+        let replica_batch_size = transaction_batch_size(primary.len(), 3)?;
+        let simple_batch_size = transaction_batch_size(primary.len(), 2)?;
+
+        for ids in plan.delete_replicas.chunks(replica_batch_size) {
             let mut compares = primary.clone();
             let mut mutations = Vec::with_capacity(ids.len());
             for id in ids {
@@ -176,6 +215,7 @@ impl DeploymentWriter {
                 &snapshot.builds,
                 &plan.delete_builds,
                 "Build",
+                simple_batch_size,
             )
             .await?;
         report.deleted_builds = builds.applied;
@@ -191,6 +231,7 @@ impl DeploymentWriter {
                 &snapshot.deployments,
                 &plan.delete_deployments,
                 "Deployment",
+                simple_batch_size,
             )
             .await?;
         report.deleted_deployments = deployments.applied;
@@ -205,12 +246,13 @@ impl DeploymentWriter {
         resources: &std::collections::BTreeMap<Id, StoredResource<Resource>>,
         ids: &[Id],
         kind: &'static str,
+        batch_size: usize,
     ) -> Result<BatchReport, DeploymentWriteError>
     where
         Id: Ord + Display,
     {
         let mut report = BatchReport::default();
-        for ids in ids.chunks(SIMPLE_GC_BATCH_SIZE) {
+        for ids in ids.chunks(batch_size) {
             let mut compares = primary.to_vec();
             let mut mutations = Vec::with_capacity(ids.len());
             for id in ids {
@@ -239,21 +281,100 @@ impl DeploymentWriter {
         kind: &ResourceKind,
         id: &Id,
         resource: &Resource,
-        compares: &mut Vec<Compare>,
-        mutations: &mut Vec<Mutation>,
-    ) -> Result<(), DeploymentWriteError> {
+        write_kind: WriteKind,
+    ) -> Result<PlannedWrite, DeploymentWriteError> {
         let key = self.keyspace.resource(kind, &id.clone().into());
-        compares.push(Compare {
-            key: key.clone(),
-            expected: ExpectedVersion::Missing,
-        });
-        mutations.push(Mutation::Put {
-            key,
-            value: serialize(kind.as_str(), id, resource)?,
-            session: None,
-        });
-        Ok(())
+        Ok(PlannedWrite {
+            compare: Compare {
+                key: key.clone(),
+                expected: ExpectedVersion::Missing,
+            },
+            mutation: Mutation::Put {
+                key,
+                value: serialize(kind.as_str(), id, resource)?,
+                session: None,
+            },
+            kind: write_kind,
+        })
     }
+}
+
+#[derive(Debug, Clone)]
+struct PlannedWrite {
+    compare: Compare,
+    mutation: Mutation,
+    kind: WriteKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WriteKind {
+    DeploymentCreated,
+    BuildCreated,
+    DeploymentUpdated,
+    ServiceUpdated,
+}
+
+impl WriteKind {
+    fn record(self, report: &mut DeploymentWriteReport) {
+        match self {
+            Self::DeploymentCreated => {
+                report.created_deployments = report.created_deployments.saturating_add(1);
+            }
+            Self::BuildCreated => {
+                report.created_builds = report.created_builds.saturating_add(1);
+            }
+            Self::DeploymentUpdated => {
+                report.updated_deployments = report.updated_deployments.saturating_add(1);
+            }
+            Self::ServiceUpdated => {
+                report.updated_services = report.updated_services.saturating_add(1);
+            }
+        }
+    }
+}
+
+fn cutover_deployments(
+    snapshot: &ResourceSnapshot,
+    plan: &DeploymentPlan,
+) -> BTreeSet<kernel_api::DeploymentId> {
+    let mut deployments = snapshot
+        .services
+        .values()
+        .filter_map(|service| service.resource.status.active_deployment_id.clone())
+        .collect::<BTreeSet<_>>();
+    deployments.extend(
+        plan.service_updates
+            .iter()
+            .filter_map(|update| update.status.active_deployment_id.clone()),
+    );
+    deployments
+}
+
+fn transaction_batch_size(
+    primary_compares: usize,
+    operations_per_item: usize,
+) -> Result<usize, DeploymentWriteError> {
+    let fixed = primary_compares.saturating_add(FENCED_STORE_COMPARE_COUNT);
+    let available = ETCD_TRANSACTION_OPERATION_LIMIT.saturating_sub(fixed);
+    let capacity = available / operations_per_item;
+    if capacity == 0 {
+        Err(DeploymentWriteError::AtomicGroupTooLarge {
+            operations: fixed.saturating_add(operations_per_item),
+            limit: ETCD_TRANSACTION_OPERATION_LIMIT,
+        })
+    } else {
+        Ok(capacity)
+    }
+}
+
+fn transaction_operations(
+    primary_compares: usize,
+    items: usize,
+    operations_per_item: usize,
+) -> usize {
+    primary_compares
+        .saturating_add(FENCED_STORE_COMPARE_COUNT)
+        .saturating_add(items.saturating_mul(operations_per_item))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -395,4 +516,7 @@ pub enum DeploymentWriteError {
         resource_id: String,
         message: String,
     },
+    /// One lifecycle group that must remain atomic cannot fit in etcd.
+    #[error("deployment lifecycle atomic group requires {operations} operations; limit is {limit}")]
+    AtomicGroupTooLarge { operations: usize, limit: usize },
 }

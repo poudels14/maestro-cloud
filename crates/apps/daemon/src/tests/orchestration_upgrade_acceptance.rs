@@ -84,7 +84,11 @@ impl UpgradeAcceptanceWorld {
         for index in 1..=3_u8 {
             let node_id = NodeId::new(format!("node-{index}"))?;
             let mut resource = node(&node_id, index)?;
-            resource.spec.role = NodeRole::ControlPlane;
+            resource.spec.role = if index == 1 {
+                NodeRole::Master
+            } else {
+                NodeRole::ControlPlane
+            };
             resource.status.conditions.push(Condition {
                 condition_type: ConditionType::ArtifactReplicationReady,
                 state: ConditionState::True,

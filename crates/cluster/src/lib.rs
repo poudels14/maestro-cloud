@@ -59,7 +59,7 @@ pub use ports::{ClusterPorts, ClusterPortsError, DEFAULT_WIREGUARD_PORT};
 pub use provider::{
     MemberActivation, MemberState, StoreJoinTicket, StoreMember, StoreProvider,
     StoreProviderConfig, StoreProviderError, StoreRecovery, StoreRecoveryPermit,
-    StoreRecoveryReport, StoreRuntime, StoreShutdown, StoreStartMode,
+    StoreRecoveryReport, StoreRejoin, StoreRuntime, StoreShutdown, StoreStartMode,
 };
 pub use removal::{NodeRemovalCoordinator, NodeRemovalError, NodeRemovalPlan};
 pub use tailscale::{

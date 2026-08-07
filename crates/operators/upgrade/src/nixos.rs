@@ -9,6 +9,12 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1_024;
+const SYSTEMD_RUN_BINARY: &str = "systemd-run";
+const NIX_CPU_WEIGHT: &str = "CPUWeight=10";
+const NIX_IO_WEIGHT: &str = "IOWeight=10";
+const NIX_MEMORY_HIGH: &str = "MemoryHigh=50%";
+const NIX_MEMORY_MAX: &str = "MemoryMax=70%";
+const NIX_NICE_LEVEL: &str = "10";
 
 /// Validated source selected by a staged NixOS boot generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +140,7 @@ pub struct ProcessNixosUpgradeStager {
 impl ProcessNixosUpgradeStager {
     /// Builds a process adapter from validated static settings.
     pub fn new(settings: NixosUpgradeStagerSettings) -> Self {
-        Self::with_runner(settings, Arc::new(ProcessNixosCommandRunner))
+        Self::with_runner(settings, Arc::new(ProcessNixosCommandRunner::isolated()))
     }
 
     pub(crate) fn with_runner(
@@ -220,11 +226,56 @@ pub(crate) trait NixosCommandRunner: Send + Sync {
     async fn run(&self, command: NixosCommand) -> Result<NixosCommandOutput, NixosCommandError>;
 }
 
-pub(crate) struct ProcessNixosCommandRunner;
+pub(crate) struct ProcessNixosCommandRunner {
+    isolate_resources: bool,
+}
+
+impl ProcessNixosCommandRunner {
+    pub(crate) const fn direct() -> Self {
+        Self {
+            isolate_resources: false,
+        }
+    }
+
+    pub(crate) const fn isolated() -> Self {
+        Self {
+            isolate_resources: true,
+        }
+    }
+
+    pub(crate) fn process_invocation(&self, invocation: NixosCommand) -> NixosCommand {
+        if !self.isolate_resources {
+            return invocation;
+        }
+
+        // A scope keeps the upgrade process as our child, so cancellation still
+        // kills it, while systemd accounts and schedules the complete Nix process
+        // tree independently from Maestro and its embedded etcd process.
+        let mut arguments = vec![
+            OsString::from("--quiet"),
+            OsString::from("--scope"),
+            OsString::from("--collect"),
+            OsString::from("--nice"),
+            OsString::from(NIX_NICE_LEVEL),
+            OsString::from("--property"),
+            OsString::from(NIX_CPU_WEIGHT),
+            OsString::from("--property"),
+            OsString::from(NIX_IO_WEIGHT),
+            OsString::from("--property"),
+            OsString::from(NIX_MEMORY_HIGH),
+            OsString::from("--property"),
+            OsString::from(NIX_MEMORY_MAX),
+            invocation.executable.clone().into_os_string(),
+        ];
+        arguments.extend(invocation.arguments);
+        NixosCommand::new(PathBuf::from(SYSTEMD_RUN_BINARY), arguments)
+    }
+}
 
 #[async_trait]
 impl NixosCommandRunner for ProcessNixosCommandRunner {
     async fn run(&self, invocation: NixosCommand) -> Result<NixosCommandOutput, NixosCommandError> {
+        let invocation = self.process_invocation(invocation);
         let mut command = Command::new(&invocation.executable);
         command
             .args(&invocation.arguments)

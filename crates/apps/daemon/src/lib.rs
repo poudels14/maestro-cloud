@@ -60,7 +60,7 @@ pub use cluster::{
 };
 pub use control_plane::{
     AgentStore, DaemonRoleDependencies, DaemonRoleFactory, DaemonRoleSettings,
-    HostTelemetryDependencies, LeaderWorkload, NodeUpgradeDependencies,
+    HostTelemetryDependencies, LeaderWorkload, ManagedStoreStart, NodeUpgradeDependencies,
 };
 pub use controller_logs::{
     CONTROLLER_LOG_COMPONENT, ControllerLogCapture, ControllerLogCaptureError, ControllerLogLayer,

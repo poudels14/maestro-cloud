@@ -27,6 +27,9 @@ pub enum UpgradePlanError {
     /// Two control-plane voters cannot preserve quorum during rolling maintenance.
     #[error("rolling maintenance cannot safely restart a two-voter control plane")]
     UnsafeTwoVoterRollingUpgrade,
+    /// An all-at-once batch would stop quorum without authorizing canonical recovery.
+    #[error("all-node maintenance that restarts quorum must select every control-plane voter")]
+    UnsafePartialControlPlaneBatch,
     /// Target semantic version was malformed.
     #[error("invalid upgrade target version `{value}`: {message}")]
     InvalidTargetVersion { value: String, message: String },

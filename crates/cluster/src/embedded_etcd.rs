@@ -11,10 +11,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     MemberActivation, StoreJoinTicket, StoreMember, StoreProvider, StoreProviderConfig,
-    StoreProviderError, StoreRecovery, StoreRecoveryPermit, StoreRecoveryReport, StoreRuntime,
-    StoreShutdown, StoreStartMode,
+    StoreProviderError, StoreRecovery, StoreRecoveryPermit, StoreRecoveryReport, StoreRejoin,
+    StoreRuntime, StoreShutdown, StoreStartMode,
     embedded_etcd_files::materialize_security,
-    embedded_etcd_membership::{activate_member, remove_member, stage_member},
+    embedded_etcd_membership::{
+        activate_member, remove_member, stage_member, stage_recovered_local_member,
+    },
     embedded_etcd_plan::{EtcdLaunchMode, EtcdStartPlan},
     embedded_etcd_process::{EtcdProcess, ReadinessDeadline, RunningEtcd, connect_store},
 };
@@ -221,6 +223,22 @@ impl StoreProvider for EmbeddedEtcdProvider {
             },
         })
     }
+
+    async fn rejoin_recovered(
+        &self,
+        permit: StoreRecoveryPermit,
+        canonical_member: StoreMember,
+    ) -> Result<StoreRejoin, StoreProviderError> {
+        validate_rejoin(&self.config, &permit, &canonical_member)?;
+        let ticket =
+            stage_recovered_local_member(&self.config, self.settings, &canonical_member, &permit)
+                .await?;
+        prepare_recovered_rejoin_state(&self.config, &ticket)?;
+        let runtime = self
+            .launch(EtcdLaunchMode::Start(StoreStartMode::Join(ticket.clone())))
+            .await?;
+        Ok(StoreRejoin { runtime, ticket })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +328,110 @@ fn validate_recovery(
         });
     }
     Ok(())
+}
+
+fn validate_rejoin(
+    config: &StoreProviderConfig,
+    permit: &StoreRecoveryPermit,
+    canonical_member: &StoreMember,
+) -> Result<(), StoreProviderError> {
+    let configured = config.known_members().keys().cloned().collect();
+    if permit.cluster_id() != config.cluster_id()
+        || permit.retained_node() != &canonical_member.node_id
+        || permit.expected_members() != &configured
+        || canonical_member.node_id == config.local_member().node_id
+        || config.known_members().get(&canonical_member.node_id) != Some(canonical_member)
+    {
+        return Err(StoreProviderError::UnsafeRecovery {
+            reason: "rejoin permit differs from local cluster membership".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn prepare_recovered_rejoin_state(
+    config: &StoreProviderConfig,
+    ticket: &StoreJoinTicket,
+) -> Result<(), StoreProviderError> {
+    let path = config.data_directory().join("provider-state.json");
+    let desired = LocalProviderState {
+        format_version: LOCAL_STATE_FORMAT_VERSION,
+        cluster_id: config.cluster_id().clone(),
+        node_id: config.local_member().node_id.clone(),
+        initialization: LocalInitialization::Join(hex::encode(Sha256::digest(
+            ticket.provider_data()?,
+        ))),
+    };
+    if read_local_state(&path)?.as_ref() == Some(&desired) {
+        return Ok(());
+    }
+    let data = config.data_directory().join("data");
+    match std::fs::remove_dir_all(&data) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(StoreProviderError::Lifecycle {
+                reason: format!(
+                    "failed to discard obsolete member data `{}`: {error}",
+                    data.display()
+                ),
+            });
+        }
+    }
+    write_replacement_state(&path, &desired)
+}
+
+fn write_replacement_state(
+    path: &Path,
+    state: &LocalProviderState,
+) -> Result<(), StoreProviderError> {
+    let parent = path.parent().ok_or_else(|| StoreProviderError::Lifecycle {
+        reason: "provider state path has no parent".to_owned(),
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| StoreProviderError::Lifecycle {
+        reason: format!(
+            "failed to create provider directory `{}`: {error}",
+            parent.display()
+        ),
+    })?;
+    let temporary = path.with_extension("tmp");
+    let encoded =
+        serde_json::to_vec_pretty(state).map_err(|error| StoreProviderError::Lifecycle {
+            reason: format!("failed to encode local provider state: {error}"),
+        })?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| StoreProviderError::Lifecycle {
+            reason: format!(
+                "failed to create provider state `{}`: {error}",
+                temporary.display()
+            ),
+        })?;
+    file.write_all(&encoded)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| StoreProviderError::Lifecycle {
+            reason: format!(
+                "failed to persist provider state `{}`: {error}",
+                temporary.display()
+            ),
+        })?;
+    std::fs::rename(&temporary, path).map_err(|error| StoreProviderError::Lifecycle {
+        reason: format!(
+            "failed to replace provider state `{}`: {error}",
+            path.display()
+        ),
+    })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| StoreProviderError::Lifecycle {
+            reason: format!(
+                "failed to sync provider directory `{}`: {error}",
+                parent.display()
+            ),
+        })
 }
 
 fn read_local_state(path: &Path) -> Result<Option<LocalProviderState>, StoreProviderError> {

@@ -398,6 +398,7 @@ fn request(
                 })
             })
             .collect::<Result<Vec<_>, kernel_api::InvalidIdentifier>>()?,
+        store_recovery: None,
     })
 }
 
@@ -413,6 +414,7 @@ fn command_for(
         operation: request.operation,
         target_version: request.target_version.clone(),
         previous_instance_id: target.previous_instance_id.clone(),
+        store_recovery: request.store_recovery.clone(),
         state,
         failure: None,
     }

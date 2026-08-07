@@ -264,14 +264,13 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
         NodeId::new("control-a")?,
         NodeId::new("control-b")?,
     ]);
-    let recovery = provider_1
-        .recover(StoreRecoveryPermit::new(
-            ClusterId::new("embedded-provider-three-node")?,
-            NodeId::new("master")?,
-            expected_members,
-            1_750_000_000_000,
-        )?)
-        .await?;
+    let permit = StoreRecoveryPermit::new(
+        ClusterId::new("embedded-provider-three-node")?,
+        NodeId::new("master")?,
+        expected_members,
+        1_750_000_000_000,
+    )?;
+    let recovery = provider_1.recover(permit.clone()).await?;
     assert_eq!(recovery.report.retained_node, NodeId::new("master")?);
     assert_eq!(
         recovery.report.members_to_rejoin,
@@ -286,6 +285,27 @@ async fn real_members_stage_activate_rejoin_and_recover_after_loss()
             .map(|value| value.value),
         Some(b"survived-node-loss".to_vec())
     );
+    let canonical = StoreMember {
+        node_id: NodeId::new("master")?,
+        host_address: Ipv4Addr::LOCALHOST,
+    };
+    let rejoin_2 = provider_2
+        .rejoin_recovered(permit.clone(), canonical.clone())
+        .await?;
+    await_activation(&provider_2, &rejoin_2.ticket).await?;
+    let rejoin_3 = provider_3.rejoin_recovered(permit, canonical).await?;
+    await_activation(&provider_3, &rejoin_3.ticket).await?;
+    assert_eq!(
+        rejoin_3
+            .runtime
+            .store()
+            .get(&key)
+            .await?
+            .map(|value| value.value),
+        Some(b"survived-node-loss".to_vec())
+    );
+    rejoin_3.runtime.shutdown(StoreShutdown::Immediate).await?;
+    rejoin_2.runtime.shutdown(StoreShutdown::Immediate).await?;
     recovery.runtime.shutdown(StoreShutdown::Immediate).await?;
     Ok(())
 }

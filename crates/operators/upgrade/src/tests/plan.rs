@@ -138,9 +138,16 @@ fn rolling_upgrade_drains_retries_restarts_and_advances_one_node_at_a_time() -> 
 }
 
 #[test]
-fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement() {
+fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement()
+-> Result<(), String> {
     let settings = settings(2);
     let mut nodes = topology_three_voters();
+    nodes
+        .iter_mut()
+        .find(|node| node.meta.id.as_str() == "node-3")
+        .expect("node-3 exists")
+        .status
+        .version = "3.0.0".to_owned();
     let initialized = plan_upgrade(
         input(run(UpgradeMode::AllNodes), &nodes, Vec::new(), 10_000),
         settings,
@@ -172,10 +179,22 @@ fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement
         settings,
     )
     .expect("plan all-node dispatch");
-    assert!(matches!(
-        dispatch.action,
-        UpgradePlanAction::Dispatch(ref request) if request.targets.len() == 3
-    ));
+    let UpgradePlanAction::Dispatch(request) = dispatch.action else {
+        return Err("all-node applying phase did not dispatch".to_owned());
+    };
+    assert_eq!(request.targets.len(), 3);
+    let recovery = request
+        .store_recovery
+        .expect("all-voter reboot carries a recovery plan");
+    assert_eq!(recovery.canonical_node_id.as_str(), "node-1");
+    assert_eq!(
+        recovery
+            .expected_members
+            .iter()
+            .map(NodeId::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["node-1", "node-2", "node-3"])
+    );
     let restarting = record_dispatch_outcome(
         input(applying.run, &nodes, Vec::new(), 10_000),
         settings,
@@ -200,6 +219,21 @@ fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement
     );
     apply_updates(&mut nodes, completed.node_updates);
     assert!(maintained_nodes(&nodes).is_empty());
+    Ok(())
+}
+
+#[test]
+fn all_node_mode_rejects_a_quorum_batch_that_omits_a_voter() {
+    let nodes = topology_three_voters();
+    let mut upgrade = run(UpgradeMode::AllNodes);
+    upgrade.spec.node_ids = vec![
+        NodeId::new("node-1").unwrap(),
+        NodeId::new("node-2").unwrap(),
+    ];
+    assert!(matches!(
+        plan_upgrade(input(upgrade, &nodes, Vec::new(), 10_000), settings(2)),
+        Err(UpgradePlanError::UnsafePartialControlPlaneBatch)
+    ));
 }
 
 #[test]
