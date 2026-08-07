@@ -3,6 +3,7 @@
 mod agent;
 mod backend;
 mod conditions;
+mod convergence;
 mod dispatch;
 mod error;
 mod model;
@@ -21,6 +22,7 @@ pub use agent::{
     NodeUpgradeAgentSettingsError,
 };
 pub use backend::{NodeUpgradeBackend, NodeUpgradeBackendError};
+pub use convergence::VersionConvergenceReconciler;
 pub use dispatch::{
     NodeUpgradeCommand, NodeUpgradeCommandFailure, NodeUpgradeCommandState,
     StoreNodeUpgradeBackend, StoreNodeUpgradeBackendSettings, StoreNodeUpgradeBackendSettingsError,

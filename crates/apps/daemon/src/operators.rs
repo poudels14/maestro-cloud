@@ -11,7 +11,7 @@ use kernel_store::Clock;
 use preview::{PreviewReconciler, PreviewSourceReconciler};
 use scheduler::SchedulerReconciler;
 use tokio::sync::watch;
-use upgrade::UpgradeReconciler;
+use upgrade::{UpgradeReconciler, VersionConvergenceReconciler};
 use webhook::WebhookReconciler;
 
 use crate::operator_leader::OperatorBackends;
@@ -30,6 +30,8 @@ pub struct OperatorInvocationReport {
     pub previews: usize,
     /// UpgradeRun resources passed to coordinated node maintenance.
     pub upgrades: usize,
+    /// Master Node resources checked for mixed-version convergence.
+    pub version_convergence: usize,
     /// Service resources passed to deployment reconciliation.
     pub deployment: usize,
     /// Service resources passed to scheduling reconciliation.
@@ -54,6 +56,7 @@ pub struct OperatorSuite {
     build_watch: ControllerRuntime<BuildWatchReconciler>,
     preview_sources: Option<ControllerRuntime<PreviewSourceReconciler>>,
     previews: Option<ControllerRuntime<PreviewReconciler>>,
+    version_convergence: Option<ControllerRuntime<VersionConvergenceReconciler>>,
     upgrades: Option<ControllerRuntime<UpgradeReconciler>>,
     deployment: ControllerRuntime<DeploymentReconciler>,
     scheduler: ControllerRuntime<SchedulerReconciler>,
@@ -129,18 +132,32 @@ impl OperatorSuite {
                 (Some(_), None) => return Err(OperatorSuiteError::PreviewBackendMissing),
                 (None, Some(_)) => return Err(OperatorSuiteError::PreviewBackendUnexpected),
             };
-        let upgrades = match (settings.upgrade, backends.upgrades.as_ref()) {
-            (Some(upgrade_settings), Some(backend)) => Some(
-                Arc::new(UpgradeReconciler::new(
-                    cluster_id.clone(),
-                    monotonic_clock.clone(),
-                    timestamp_clock.clone(),
-                    upgrade_settings,
-                    backend.clone(),
-                )?)
-                .runtime(store.clone(), settings.runtime.clone()),
+        let (version_convergence, upgrades) = match (settings.upgrade, backends.upgrades.as_ref()) {
+            (Some(upgrade_settings), Some(backend)) => (
+                Some(
+                    Arc::new(VersionConvergenceReconciler::new(
+                        cluster_id.clone(),
+                        timestamp_clock.clone(),
+                        upgrade_settings,
+                    )?)
+                    .runtime(
+                        store.clone(),
+                        monotonic_clock.clone(),
+                        settings.runtime.clone(),
+                    ),
+                ),
+                Some(
+                    Arc::new(UpgradeReconciler::new(
+                        cluster_id.clone(),
+                        monotonic_clock.clone(),
+                        timestamp_clock.clone(),
+                        upgrade_settings,
+                        backend.clone(),
+                    )?)
+                    .runtime(store.clone(), settings.runtime.clone()),
+                ),
             ),
-            (None, None) => None,
+            (None, None) => (None, None),
             (Some(_), None) => return Err(OperatorSuiteError::UpgradeBackendMissing),
             (None, Some(_)) => return Err(OperatorSuiteError::UpgradeBackendUnexpected),
         };
@@ -218,6 +235,7 @@ impl OperatorSuite {
             build_watch,
             preview_sources,
             previews,
+            version_convergence,
             upgrades,
             deployment,
             scheduler,
@@ -232,11 +250,17 @@ impl OperatorSuite {
 
     /// Runs one bounded pass in dependency order for startup and deterministic tests.
     pub async fn reconcile_snapshot(&self) -> Result<OperatorInvocationReport, ControllerError> {
+        let version_convergence = match &self.version_convergence {
+            Some(runtime) => runtime.reconcile_snapshot().await?,
+            None => 0,
+        };
+        let upgrades = match &self.upgrades {
+            Some(runtime) => runtime.reconcile_snapshot().await?,
+            None => 0,
+        };
         Ok(OperatorInvocationReport {
-            upgrades: match &self.upgrades {
-                Some(runtime) => runtime.reconcile_snapshot().await?,
-                None => 0,
-            },
+            version_convergence,
+            upgrades,
             deployment: self.deployment.reconcile_snapshot().await?,
             builds: self.builds.reconcile_snapshot().await?,
             scheduler: self.scheduler.reconcile_snapshot().await?,
@@ -288,6 +312,9 @@ impl OperatorSuite {
         if let Some(runtime) = &self.upgrades {
             push_tail!("upgrade", runtime);
         }
+        if let Some(runtime) = &self.version_convergence {
+            push_tail!("version-convergence", runtime);
+        }
         push_tail!("deployment", self.deployment);
         push_tail!("scheduler", self.scheduler);
         push_tail!("ingress", self.ingress);
@@ -306,6 +333,7 @@ impl OperatorSuite {
         let build_watch = self.build_watch.run(shutdown.clone());
         let preview_sources = run_optional(self.preview_sources.as_ref(), shutdown.clone());
         let previews = run_optional(self.previews.as_ref(), shutdown.clone());
+        let version_convergence = run_optional(self.version_convergence.as_ref(), shutdown.clone());
         let upgrades = run_optional(self.upgrades.as_ref(), shutdown.clone());
         let scheduler = self.scheduler.run(shutdown.clone());
         let ingress = self.ingress.run(shutdown.clone());
@@ -320,6 +348,7 @@ impl OperatorSuite {
             build_watch,
             preview_sources,
             previews,
+            version_convergence,
             upgrades,
             scheduler,
             ingress,

@@ -125,6 +125,7 @@ async fn suite_composes_service_operators_and_zero_policy_firewall_baseline()
     assert_eq!(first.preview_sources, 1);
     assert_eq!(first.previews, 0);
     assert_eq!(first.upgrades, 0);
+    assert_eq!(first.version_convergence, 1);
     let stored = one::<Service>(&store, &keys, "Service").await?;
     assert_eq!(stored.meta.finalizers.len(), 4);
 

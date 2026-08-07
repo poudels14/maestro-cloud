@@ -254,6 +254,12 @@ pub enum UpgradeError {
     /// Static retry or observation settings were invalid.
     #[error(transparent)]
     InvalidSettings(#[from] UpgradeSettingsError),
+    /// The convergence retry backoff was invalid.
+    #[error(transparent)]
+    InvalidBackoff(#[from] kernel_controller::BackoffError),
+    /// A node version prevented an automatic convergence decision.
+    #[error(transparent)]
+    InvalidPlan(#[from] UpgradePlanError),
     /// The leadership fence or backing store rejected an operation.
     #[error(transparent)]
     Controller(#[from] kernel_controller::ControllerError),
@@ -286,4 +292,7 @@ pub enum UpgradeError {
     /// Desired state could not be encoded for its fenced transaction.
     #[error("failed to serialize upgrade state: {message}")]
     Serialize { message: String },
+    /// An operator-owned automatic upgrade attempt annotation was malformed.
+    #[error("automatic upgrade run `{run_id}` has invalid attempt `{value}`")]
+    InvalidAutoUpgradeAttempt { run_id: UpgradeRunId, value: String },
 }

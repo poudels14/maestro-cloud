@@ -98,9 +98,10 @@ pub(crate) struct StoredResource<Resource> {
     pub(crate) stored: StoredValue,
 }
 
-type ResourceMap<Id, Spec, Status> = BTreeMap<Id, StoredResource<Object<Id, Spec, Status>>>;
+pub(crate) type ResourceMap<Id, Spec, Status> =
+    BTreeMap<Id, StoredResource<Object<Id, Spec, Status>>>;
 
-fn decode_kind<Id, Spec, Status>(
+pub(crate) fn decode_kind<Id, Spec, Status>(
     values: &[StoredValue],
     keyspace: &Keyspace,
     kind_name: &'static str,
