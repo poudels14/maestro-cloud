@@ -325,24 +325,39 @@ fn role_name(role: NodeRole) -> &'static str {
 }
 
 fn node_state(node: &Node) -> &'static str {
-    let conditions = node
-        .status
-        .conditions
-        .iter()
-        .filter(|condition| condition.condition_type == kernel_api::ConditionType::Draining)
-        .collect::<Vec<_>>();
-    match conditions.as_slice() {
-        [] => "schedulable",
-        [condition] => match condition.state {
-            ConditionState::True => "draining",
-            ConditionState::False => "schedulable",
-            ConditionState::Unknown if condition.reason.0 == "ReplicatingArtifacts" => {
-                "preparing-drain"
-            }
-            ConditionState::Unknown => "unknown",
-        },
-        _ => "unknown",
+    let conditions = &node.status.conditions;
+    if conditions.iter().any(|condition| {
+        condition.condition_type == kernel_api::ConditionType::Maintenance
+            && condition.state == ConditionState::True
+    }) {
+        return "maintenance";
     }
+    if conditions.iter().any(|condition| {
+        condition.condition_type == kernel_api::ConditionType::Draining
+            && condition.state == ConditionState::True
+    }) {
+        return "draining";
+    }
+    if conditions.iter().any(|condition| {
+        condition.condition_type == kernel_api::ConditionType::Schedulable
+            && condition.state == ConditionState::False
+    }) {
+        return "unschedulable";
+    }
+    if conditions.iter().any(|condition| {
+        condition.condition_type == kernel_api::ConditionType::Draining
+            && condition.state == ConditionState::Unknown
+            && condition.reason.0 == "ReplicatingArtifacts"
+    }) {
+        return "preparing-drain";
+    }
+    if conditions.iter().any(|condition| {
+        condition.condition_type == kernel_api::ConditionType::Draining
+            && condition.state == ConditionState::Unknown
+    }) {
+        return "unknown";
+    }
+    "schedulable"
 }
 
 #[derive(Clone, Copy)]

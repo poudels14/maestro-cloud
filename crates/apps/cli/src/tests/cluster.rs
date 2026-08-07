@@ -163,6 +163,36 @@ async fn cluster_info_and_nodes_are_stable_and_explicit() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
+async fn cluster_nodes_report_maintenance_as_unschedulable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut api = api()?;
+    let node = api
+        .nodes
+        .iter_mut()
+        .find(|node| node.meta.id.to_string() == "node-z")
+        .ok_or("node-z missing")?;
+    node.status.conditions.push(serde_json::from_value(json!({
+        "type": "MAINTENANCE",
+        "status": "true",
+        "reason": "UpgradeRun:upgrade-test",
+        "message": "node reserved for an upgrade",
+        "observedGeneration": 1,
+        "lastTransitionTime": 1
+    }))?);
+
+    let mut output = Vec::new();
+    list_nodes(&api, &mut output).await?;
+    let output = String::from_utf8(output)?;
+    let node_row = output
+        .lines()
+        .find(|line| line.starts_with("node-z"))
+        .ok_or("node-z row missing")?;
+    assert!(node_row.contains("maintenance"));
+    assert!(!node_row.contains("schedulable"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn node_commands_submit_the_observed_revision_and_request_id()
 -> Result<(), Box<dyn std::error::Error>> {
     let api = api()?;
