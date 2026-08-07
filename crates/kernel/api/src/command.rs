@@ -95,8 +95,12 @@ pub struct UpgradeCreateRequest {
     /// Operation, target version, node selection, and batching strategy.
     pub spec: UpgradeRunSpec,
     /// Atomically cancel non-terminal maintenance before creating this run.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub force: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Selection for canceling cluster maintenance without copying an opaque run identity.
