@@ -22,16 +22,16 @@ use crate::docker_support::{
 };
 use crate::{
     ArtifactStore, Capabilities, EventRequest, ExecMode, ExecRequest, ExecSession, LogMode,
-    LogRequest, LogStream, ObservedWorkload, RegistryCredential, RuntimeCapability, RuntimeError,
-    RuntimeEventStream, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec,
-    WorkloadState, WorkloadStatsReading, WorkloadStatus,
+    LogRequest, LogStream, ObservedWorkload, RegistryCredential, RegistryCredentialProvider,
+    RuntimeCapability, RuntimeError, RuntimeEventStream, ShutdownRequest, WorkloadHandle,
+    WorkloadRuntime, WorkloadSpec, WorkloadState, WorkloadStatsReading, WorkloadStatus,
 };
 
 /// Docker Engine workload backend using Bollard's native daemon API.
 #[derive(Clone)]
 pub struct DockerRuntime {
     pub(crate) client: Docker,
-    pub(crate) registry_credentials: Arc<BTreeMap<String, RegistryCredential>>,
+    pub(crate) registry_credentials: Arc<dyn RegistryCredentialProvider>,
 }
 
 impl DockerRuntime {
@@ -58,6 +58,15 @@ impl DockerRuntime {
         registry_credentials: BTreeMap<String, RegistryCredential>,
     ) -> Self {
         self.registry_credentials = Arc::new(registry_credentials);
+        self
+    }
+
+    /// Supplies an on-demand credential provider for registry transfers.
+    pub fn with_registry_credential_provider(
+        mut self,
+        registry_credentials: Arc<dyn RegistryCredentialProvider>,
+    ) -> Self {
+        self.registry_credentials = registry_credentials;
         self
     }
 

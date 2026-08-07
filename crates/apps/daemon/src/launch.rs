@@ -24,6 +24,7 @@ use node_agent::{
 };
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
 use runtime::DockerRuntime;
+use runtime::RegistryCredentialProvider;
 #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
 use runtime::{ContainerdRuntime, ContainerdRuntimeSettings, TokioRuntimeClock};
 use server::{ServerSettings, TlsIdentity};
@@ -37,6 +38,7 @@ use crate::NodeUpgradeDependencies;
 use crate::cloudflare_resources::CloudflareSystemResources;
 use crate::datadog::{build_datadog_sinks, configure_datadog};
 use crate::dns_resources::DnsResolverSystemResources;
+use crate::ecr_registry::DaemonRegistryCredentialProvider;
 use crate::launch_error::{DaemonLaunchError, invalid};
 use crate::log_backup_config::configure_log_maintenance;
 #[cfg(any(target_os = "macos", feature = "macos-platform"))]
@@ -97,6 +99,12 @@ async fn launch_daemon_inner(
         preview,
         nixos_upgrade,
     } = config;
+    let aws_sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let registry_credentials: Arc<dyn RegistryCredentialProvider> =
+        Arc::new(DaemonRegistryCredentialProvider::new(
+            crate::depot_config::registry_credentials(depot.as_ref()),
+            &aws_sdk,
+        ));
     let known_members = control_plane_members(&cluster);
     let dns_plugin_settings = dns_plugin_settings(&cluster)?;
     let dns_upstream_settings = SystemDnsPluginSettings::from_resolv_conf_file(
@@ -165,20 +173,19 @@ async fn launch_daemon_inner(
                 socket: containerd_socket,
                 namespace: format!("maestro-{}", cluster.cluster_id),
                 state_root: data_directory.join("runtime").join("containerd"),
-                registry_credentials: crate::depot_config::registry_credentials(depot.as_ref()),
                 ..ContainerdRuntimeSettings::default()
             },
             Arc::new(TokioRuntimeClock::new()),
         )
-        .await?,
+        .await?
+        .with_registry_credential_provider(registry_credentials.clone()),
     );
     #[cfg(any(target_os = "macos", feature = "macos-platform"))]
     let runtime = {
         let _containerd_socket = containerd_socket;
         Arc::new(
-            DockerRuntime::connect_with_defaults()?.with_registry_credentials(
-                crate::depot_config::registry_credentials(depot.as_ref()),
-            ),
+            DockerRuntime::connect_with_defaults()?
+                .with_registry_credential_provider(registry_credentials.clone()),
         )
     };
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
@@ -200,7 +207,13 @@ async fn launch_daemon_inner(
     let depot_backend = depot
         .as_ref()
         .map(|depot| {
-            crate::depot_config::configure_depot(depot, build_root.join("depot"), runtime.clone())
+            crate::depot_config::configure_depot(
+                depot,
+                build_root.join("depot"),
+                volatile_root.join("depot-registry-auth"),
+                runtime.clone(),
+                registry_credentials.clone(),
+            )
         })
         .transpose()
         .map_err(|error| invalid(error.to_string()))?;
@@ -314,7 +327,6 @@ async fn launch_daemon_inner(
         HttpWebhookBackend::new(Duration::from_secs(10))
             .map_err(|error| invalid(error.to_string()))?,
     );
-    let aws_sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let value_sources = Arc::new(AwsValueSourceResolver::new(&aws_sdk));
     let plan = DaemonPlan::new(cluster, node_id, data_directory)?;
     let health_prober = Arc::new(NetworkHealthProber::new(Duration::from_secs(5))?);

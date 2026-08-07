@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use build::{DEPOT_REGISTRY_HOST, DepotBuildBackend, DepotBuildSettings, ProcessDepotBuildBackend};
 use cluster::DepotLaunchConfig;
-use runtime::{ArtifactStore, RegistryCredential};
+use runtime::{ArtifactStore, RegistryCredential, RegistryCredentialProvider};
 
 pub(crate) fn validate_depot(config: &DepotLaunchConfig) -> Result<(), DepotLaunchError> {
     if config.token.expose().trim().is_empty() || config.token.expose().contains('\0') {
@@ -35,16 +35,20 @@ pub(crate) fn validate_depot(config: &DepotLaunchConfig) -> Result<(), DepotLaun
 pub(crate) fn configure_depot(
     config: &DepotLaunchConfig,
     state_root: PathBuf,
+    registry_auth_root: PathBuf,
     artifacts: Arc<dyn ArtifactStore>,
+    registry_credentials: Arc<dyn RegistryCredentialProvider>,
 ) -> Result<Arc<dyn DepotBuildBackend>, DepotLaunchError> {
     validate_depot(config)?;
     let mut settings = DepotBuildSettings::new(config.token.clone(), state_root);
+    settings.registry_auth_root = registry_auth_root;
     settings.executable = config.executable.clone();
     settings.build_timeout = Duration::from_secs(config.timeout_secs);
     settings.registry = config.registry;
-    Ok(Arc::new(ProcessDepotBuildBackend::new(
-        settings, artifacts,
-    )?))
+    Ok(Arc::new(
+        ProcessDepotBuildBackend::new(settings, artifacts)?
+            .with_registry_credential_provider(registry_credentials),
+    ))
 }
 
 pub(crate) fn registry_credentials(

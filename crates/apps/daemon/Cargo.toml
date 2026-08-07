@@ -15,6 +15,10 @@ aws-config = { workspace = true, default-features = false, features = [
   "default-https-client",
   "rt-tokio"
 ] }
+aws-sdk-ecr = { workspace = true, default-features = false, features = [
+  "default-https-client",
+  "rt-tokio"
+] }
 aws-sdk-s3 = { workspace = true, default-features = false, features = [
   "default-https-client",
   "http-1x",
@@ -66,6 +70,7 @@ tracing.workspace = true
 url.workspace = true
 tracing-subscriber.workspace = true
 maestro-cli = { version = "0.1.0", path = "../cli" }
+zeroize.workspace = true
 
 [lints]
 workspace = true

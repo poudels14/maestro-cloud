@@ -22,6 +22,7 @@ mod depot_config;
 mod dns_launch;
 mod dns_reconciler;
 mod dns_resources;
+mod ecr_registry;
 mod error;
 mod join_activation;
 mod launch;

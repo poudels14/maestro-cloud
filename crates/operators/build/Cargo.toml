@@ -25,6 +25,7 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process"] }
 uuid.workspace = true
 url.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

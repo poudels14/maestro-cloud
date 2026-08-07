@@ -287,6 +287,16 @@ configured; registry-free Depot builds download and import an image archive.
 Registry credentials remain a node-runtime responsibility. Direct Depot pushes
 use the Docker credential provider available to the Maestro daemon.
 
+Private Amazon ECR registry hosts are authenticated automatically through the
+standard AWS credential chain, including an EC2 instance role. Maestro requests
+an ECR authorization token immediately before each registry operation and does
+not cache it or write it to durable storage. Depot pushes receive the credential
+through an owner-only temporary Docker configuration under the node's volatile
+runtime directory; containerd pulls and native pushes receive it directly
+through their registry authentication stream. The temporary configuration is
+removed when the Depot process completes. Scope the node role to only the
+required ECR repositories and image actions.
+
 Set cluster-level `depot.registry` to `true` to use Depot Registry when a
 Depot-backed service does not configure `build.registry`. Maestro passes the
 Depot token to the node runtime only for authenticated pulls from

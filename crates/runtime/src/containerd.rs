@@ -34,9 +34,9 @@ use crate::containerd_volume::prepare_managed_volumes;
 use crate::file_log::FileLogStream;
 use crate::{
     ArtifactStore, Capabilities, CgroupPath, EventRequest, ExecRequest, ExecSession, LogRequest,
-    LogStream, ObservedWorkload, RuntimeCapability, RuntimeClock, RuntimeError, RuntimeEventStream,
-    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState,
-    WorkloadStatsReading, WorkloadStatus, WorkloadUserNamespace,
+    LogStream, ObservedWorkload, RegistryCredentialProvider, RuntimeCapability, RuntimeClock,
+    RuntimeError, RuntimeEventStream, ShutdownRequest, WorkloadHandle, WorkloadRuntime,
+    WorkloadSpec, WorkloadState, WorkloadStatsReading, WorkloadStatus, WorkloadUserNamespace,
 };
 
 /// Native containerd workload backend scoped to one explicit containerd namespace.
@@ -44,6 +44,7 @@ use crate::{
 pub struct ContainerdRuntime {
     pub(crate) channel: Channel,
     pub(crate) settings: Arc<ContainerdRuntimeSettings>,
+    pub(crate) registry_credentials: Arc<dyn RegistryCredentialProvider>,
     pub(crate) clock: Arc<dyn RuntimeClock>,
     pub(crate) build_runner: Arc<dyn BuildctlRunner>,
     next_exec: Arc<AtomicU64>,
@@ -80,15 +81,26 @@ impl ContainerdRuntime {
         let build_runner = Arc::new(ProcessBuildctlRunner);
         let user_namespaces =
             Arc::new(ContainerdUserNamespaceAllocator::new(&settings.state_root)?);
+        let registry_credentials = Arc::new(settings.registry_credentials.clone());
         Ok(Self {
             channel,
             settings: Arc::new(settings),
+            registry_credentials,
             clock,
             build_runner,
             next_exec: Arc::new(AtomicU64::new(1)),
             network_state: Arc::new(tokio::sync::Mutex::new(ContainerdNetworkState::default())),
             user_namespaces,
         })
+    }
+
+    /// Supplies an on-demand credential provider for registry transfers.
+    pub fn with_registry_credential_provider(
+        mut self,
+        registry_credentials: Arc<dyn RegistryCredentialProvider>,
+    ) -> Self {
+        self.registry_credentials = registry_credentials;
+        self
     }
 
     pub(crate) async fn container(

@@ -58,8 +58,11 @@ impl ArtifactStore for DockerRuntime {
         consume_operation(
             "pull",
             Some(reference.as_str()),
-            self.client
-                .create_image(Some(options), None, self.registry_credential(reference)?),
+            self.client.create_image(
+                Some(options),
+                None,
+                self.registry_credential(reference).await?,
+            ),
         )
         .await?;
         self.local_digest(reference.as_str()).await
@@ -79,7 +82,7 @@ impl ArtifactStore for DockerRuntime {
             self.client.push_image(
                 &repository,
                 Some(options),
-                self.registry_credential(destination)?,
+                self.registry_credential(destination).await?,
             ),
         )
         .await
@@ -93,7 +96,10 @@ impl ArtifactStore for DockerRuntime {
         self.push(digest, destination).await?;
         let remote = self
             .client
-            .inspect_registry_image(destination.as_str(), self.registry_credential(destination)?)
+            .inspect_registry_image(
+                destination.as_str(),
+                self.registry_credential(destination).await?,
+            )
             .await
             .map_err(|error| {
                 operation_error("resolve pushed", Some(destination.as_str()), error)
@@ -122,7 +128,7 @@ impl ArtifactStore for DockerRuntime {
                     .client
                     .inspect_registry_image(
                         reference.as_str(),
-                        self.registry_credential(reference)?,
+                        self.registry_credential(reference).await?,
                     )
                     .await
                     .map_err(|error| operation_error("resolve", Some(reference.as_str()), error))?;
@@ -270,20 +276,22 @@ impl ArtifactStore for DockerRuntime {
 }
 
 impl DockerRuntime {
-    fn registry_credential(
+    async fn registry_credential(
         &self,
         reference: &ArtifactReference,
     ) -> Result<Option<docker::auth::DockerCredentials>, ArtifactStoreError> {
         let parsed = reference.parsed()?;
         let registry = parsed.registry();
-        Ok(self.registry_credentials.get(registry).map(|credential| {
-            docker::auth::DockerCredentials {
+        Ok(self
+            .registry_credentials
+            .credential(registry)
+            .await?
+            .map(|credential| docker::auth::DockerCredentials {
                 username: Some(credential.username().to_owned()),
                 password: Some(credential.secret().expose().to_owned()),
                 serveraddress: Some(registry.to_owned()),
                 ..Default::default()
-            }
-        }))
+            }))
     }
 }
 

@@ -34,7 +34,7 @@ use crate::containerd_image::resolve_host_manifest_descriptor;
 use crate::{
     ArtifactBuildOutputSink, ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest,
     ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
-    DiscardArtifactBuildOutput, RegistryCredential, RuntimeError,
+    DiscardArtifactBuildOutput, RegistryCredential, RegistryCredentialProvider, RuntimeError,
 };
 
 const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
@@ -64,7 +64,7 @@ impl ArtifactStore for ContainerdRuntime {
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let platform = host_platform();
         let registry_reference = registry_reference(reference.as_str())?;
-        let auth = registry_auth(reference, &self.settings.registry_credentials)?;
+        let auth = registry_auth(reference, self.registry_credentials.as_ref()).await?;
         let source = containerd::to_any(&OciRegistry {
             reference: registry_reference,
             resolver: auth.as_ref().map(RegistryAuth::resolver),
@@ -105,7 +105,7 @@ impl ArtifactStore for ContainerdRuntime {
     ) -> Result<(), ArtifactStoreError> {
         let image = select_image(&self.images().await?, digest)?;
         let registry_reference = registry_reference(destination.as_str())?;
-        let auth = registry_auth(destination, &self.settings.registry_credentials)?;
+        let auth = registry_auth(destination, self.registry_credentials.as_ref()).await?;
         registry_transfer(
             self.channel.clone(),
             self.settings.namespace.clone(),
@@ -604,15 +604,15 @@ impl RegistryAuth {
     }
 }
 
-fn registry_auth(
+async fn registry_auth(
     reference: &ArtifactReference,
-    credentials: &std::collections::BTreeMap<String, RegistryCredential>,
+    credentials: &dyn RegistryCredentialProvider,
 ) -> Result<Option<RegistryAuth>, ArtifactStoreError> {
     let parsed = reference.parsed()?;
     let host = parsed.registry();
     Ok(credentials
-        .get(host)
-        .cloned()
+        .credential(host)
+        .await?
         .map(|credential| RegistryAuth {
             stream_id: next_transfer_id("registry-auth"),
             host: host.to_owned(),

@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use kernel_api::SecretValue;
 use runtime::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
     ArtifactDigest, ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactSource,
-    ArtifactStore, ArtifactStoreError,
+    ArtifactStore, ArtifactStoreError, RegistryCredential, RegistryCredentialProvider,
 };
 
 use super::support::TestResult;
@@ -126,11 +127,16 @@ async fn depot_cli_pushes_from_the_remote_builder_without_importing_a_tarball() 
     std::fs::write(context.join("Dockerfile"), b"FROM scratch\n")?;
     let artifacts = Arc::new(ImportingArtifacts::default());
     let runner = Arc::new(RecordingDepotRunner::default());
+    let registry_credentials: Arc<dyn RegistryCredentialProvider> = Arc::new(BTreeMap::from([(
+        "registry.example".to_owned(),
+        RegistryCredential::new("registry-user", SecretValue::new("registry-password")),
+    )]));
     let backend = ProcessDepotBuildBackend::with_runner(
         DepotBuildSettings::new(SecretValue::new("depot-token"), state_root),
         artifacts.clone(),
         runner.clone(),
-    )?;
+    )?
+    .with_registry_credential_provider(registry_credentials);
     let request = ArtifactBuildRequest {
         source: ArtifactSource::Directory {
             root: std::fs::canonicalize(context)?,
@@ -153,8 +159,8 @@ async fn depot_cli_pushes_from_the_remote_builder_without_importing_a_tarball() 
         )?
     );
     assert!(artifacts.imports().is_empty());
-    let arguments = runner
-        .only_invocation()?
+    let invocation = runner.only_invocation()?;
+    let arguments = invocation
         .arguments
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -175,6 +181,29 @@ async fn depot_cli_pushes_from_the_remote_builder_without_importing_a_tarball() 
             .iter()
             .all(|argument| !argument.starts_with("type=docker,dest="))
     );
+    let docker_config = invocation
+        .docker_config
+        .as_ref()
+        .ok_or("Docker credential config missing")?;
+    assert_eq!(docker_config.directory_mode, 0o700);
+    assert_eq!(docker_config.file_mode, 0o600);
+    assert_eq!(
+        docker_config.document,
+        serde_json::json!({
+            "auths": {
+                "registry.example": {
+                    "auth": base64::engine::general_purpose::STANDARD
+                        .encode("registry-user:registry-password")
+                }
+            }
+        })
+    );
+    assert!(
+        arguments
+            .iter()
+            .all(|argument| !argument.contains("registry-password"))
+    );
+    assert!(!docker_config.directory.exists());
     Ok(())
 }
 
@@ -387,6 +416,15 @@ struct InvocationSnapshot {
     environment: BTreeMap<String, String>,
     timeout: Duration,
     definition: Vec<u8>,
+    docker_config: Option<DockerConfigSnapshot>,
+}
+
+#[derive(Clone)]
+struct DockerConfigSnapshot {
+    directory: PathBuf,
+    directory_mode: u32,
+    file_mode: u32,
+    document: serde_json::Value,
 }
 
 #[derive(Default)]
@@ -432,6 +470,47 @@ impl DepotRunner for RecordingDepotRunner {
                 )
             })
             .collect();
+        let docker_config = match invocation
+            .environment
+            .iter()
+            .find(|(key, _)| key == "DOCKER_CONFIG")
+        {
+            Some((_, directory)) => {
+                let directory = PathBuf::from(directory.expose());
+                let file = directory.join("config.json");
+                let directory_mode = std::fs::metadata(&directory)
+                    .map_err(|error| ArtifactStoreError::Unavailable {
+                        message: format!("inspect Docker credential directory: {error}"),
+                    })?
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                let file_mode = std::fs::metadata(&file)
+                    .map_err(|error| ArtifactStoreError::Unavailable {
+                        message: format!("inspect Docker credential file: {error}"),
+                    })?
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                let encoded = tokio::fs::read(&file).await.map_err(|error| {
+                    ArtifactStoreError::Unavailable {
+                        message: format!("read Docker credential file: {error}"),
+                    }
+                })?;
+                let document = serde_json::from_slice(&encoded).map_err(|error| {
+                    ArtifactStoreError::Unavailable {
+                        message: format!("parse Docker credential file: {error}"),
+                    }
+                })?;
+                Some(DockerConfigSnapshot {
+                    directory,
+                    directory_mode,
+                    file_mode,
+                    document,
+                })
+            }
+            None => None,
+        };
         let definition = tokio::fs::read(
             invocation
                 .directory
@@ -448,6 +527,7 @@ impl DepotRunner for RecordingDepotRunner {
             environment,
             timeout,
             definition,
+            docker_config,
         });
         let result = if publishes {
             br#"{"containerimage.digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#

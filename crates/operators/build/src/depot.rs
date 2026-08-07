@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -6,14 +7,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use kernel_api::SecretValue;
 use runtime::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, ArtifactBuildRequest, ArtifactByteStream,
     ArtifactDigest, ArtifactReference, ArtifactStore, ArtifactStoreError,
-    DiscardArtifactBuildOutput,
+    DiscardArtifactBuildOutput, RegistryCredential, RegistryCredentialProvider,
     build_context::{BuildContext as DepotBuildContext, prepare_context},
     forward_artifact_build_output,
 };
+use serde::Serialize;
+use tokio::io::AsyncWriteExt;
+use zeroize::Zeroizing;
 
 const FILE_CHUNK_BYTES: usize = 64 * 1_024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
@@ -29,6 +34,8 @@ pub struct DepotBuildSettings {
     pub token: SecretValue,
     /// Owner-only root for extracted contexts and downloaded image archives.
     pub state_root: PathBuf,
+    /// Owner-only volatile root for temporary registry authentication files.
+    pub registry_auth_root: PathBuf,
     /// Single target platform downloaded into the local runtime.
     pub platform: String,
     /// Maximum wall-clock duration of one remote build.
@@ -46,10 +53,12 @@ pub struct DepotBuildSettings {
 impl DepotBuildSettings {
     /// Creates production defaults for the host architecture.
     pub fn new(token: SecretValue, state_root: PathBuf) -> Self {
+        let registry_auth_root = state_root.join("registry-auth");
         Self {
             executable: PathBuf::from("depot"),
             token,
             state_root,
+            registry_auth_root,
             platform: host_platform().to_owned(),
             build_timeout: Duration::from_secs(30 * 60),
             max_context_bytes: 4 * 1_024 * 1_024 * 1_024,
@@ -67,8 +76,14 @@ impl DepotBuildSettings {
                 "Depot executable cannot be empty or contain a null byte",
             ));
         }
-        if !self.state_root.is_absolute() || self.state_root.to_str().is_none() {
-            return Err(rejected("Depot state root must be an absolute UTF-8 path"));
+        if !self.state_root.is_absolute()
+            || self.state_root.to_str().is_none()
+            || !self.registry_auth_root.is_absolute()
+            || self.registry_auth_root.to_str().is_none()
+        {
+            return Err(rejected(
+                "Depot state and registry authentication roots must be absolute UTF-8 paths",
+            ));
         }
         if self.token.expose().trim().is_empty() || self.token.expose().contains('\0') {
             return Err(rejected(
@@ -168,6 +183,7 @@ pub struct ProcessDepotBuildBackend {
     settings: DepotBuildSettings,
     artifacts: Arc<dyn ArtifactStore>,
     runner: Arc<dyn DepotRunner>,
+    registry_credentials: Arc<dyn RegistryCredentialProvider>,
 }
 
 impl ProcessDepotBuildBackend {
@@ -189,7 +205,17 @@ impl ProcessDepotBuildBackend {
             settings,
             artifacts,
             runner,
+            registry_credentials: Arc::new(BTreeMap::new()),
         })
+    }
+
+    /// Supplies on-demand credentials for direct remote-builder registry pushes.
+    pub fn with_registry_credential_provider(
+        mut self,
+        registry_credentials: Arc<dyn RegistryCredentialProvider>,
+    ) -> Self {
+        self.registry_credentials = registry_credentials;
+        self
     }
 
     async fn build_artifact(
@@ -244,7 +270,7 @@ impl ProcessDepotBuildBackend {
         .await?;
         let metadata = workspace.path().join("metadata.json");
         create_private_output(&metadata).await?;
-        let invocation = publish_invocation(
+        let mut invocation = publish_invocation(
             request,
             project,
             &self.settings,
@@ -252,6 +278,21 @@ impl ProcessDepotBuildBackend {
             destination,
             &metadata,
         )?;
+        let registry_host = destination.registry_host()?;
+        let _registry_auth =
+            if let Some(credential) = self.registry_credentials.credential(&registry_host).await? {
+                Some(
+                    configure_registry_auth(
+                        &self.settings.registry_auth_root,
+                        &registry_host,
+                        &credential,
+                        &mut invocation,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
         self.runner
             .run(invocation, self.settings.build_timeout, output_sink)
             .await?;
@@ -285,6 +326,90 @@ impl ProcessDepotBuildBackend {
             .await?;
         published_digest(&metadata, &destination).await
     }
+}
+
+#[derive(Serialize)]
+struct DockerCredentialConfig<'a> {
+    auths: BTreeMap<&'a str, DockerCredentialEntry<'a>>,
+}
+
+#[derive(Serialize)]
+struct DockerCredentialEntry<'a> {
+    auth: &'a str,
+}
+
+async fn configure_registry_auth(
+    registry_auth_root: &Path,
+    registry_host: &str,
+    credential: &RegistryCredential,
+    invocation: &mut DepotInvocation,
+) -> Result<tempfile::TempDir, ArtifactStoreError> {
+    let docker_config = create_private_tempdir(
+        registry_auth_root.to_owned(),
+        "auth-",
+        "registry credential",
+    )
+    .await?;
+
+    let basic = Zeroizing::new(format!(
+        "{}:{}",
+        credential.username(),
+        credential.secret().expose()
+    ));
+    let authorization = Zeroizing::new(BASE64.encode(basic.as_bytes()));
+    let encoded = Zeroizing::new(
+        serde_json::to_vec(&DockerCredentialConfig {
+            auths: BTreeMap::from([(
+                registry_host,
+                DockerCredentialEntry {
+                    auth: authorization.as_str(),
+                },
+            )]),
+        })
+        .map_err(|_| rejected("serialize private registry credentials"))?,
+    );
+    let config_file = docker_config.path().join("config.json");
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&config_file)
+        .await
+        .map_err(|error| {
+            unavailable_io(
+                "create private registry credential file",
+                &config_file,
+                error,
+            )
+        })?;
+    file.write_all(&encoded).await.map_err(|error| {
+        unavailable_io(
+            "write private registry credential file",
+            &config_file,
+            error,
+        )
+    })?;
+    file.flush().await.map_err(|error| {
+        unavailable_io(
+            "flush private registry credential file",
+            &config_file,
+            error,
+        )
+    })?;
+    drop(file);
+
+    invocation.environment.push((
+        OsString::from("DOCKER_CONFIG"),
+        SecretValue::new(path_text(
+            docker_config.path(),
+            "Docker credential directory",
+        )?),
+    ));
+    invocation.redactions.push(credential.secret().clone());
+    invocation
+        .redactions
+        .push(SecretValue::new(authorization.to_string()));
+    Ok(docker_config)
 }
 
 #[async_trait]
@@ -644,7 +769,14 @@ pub(crate) fn validate_key(kind: DepotKeyKind, key: &str) -> Result<(), Artifact
 }
 
 async fn create_workspace(state_root: &Path) -> Result<tempfile::TempDir, ArtifactStoreError> {
-    let root = state_root.join("builds");
+    create_private_tempdir(state_root.join("builds"), "build-", "workspace").await
+}
+
+async fn create_private_tempdir(
+    root: PathBuf,
+    prefix: &'static str,
+    kind: &'static str,
+) -> Result<tempfile::TempDir, ArtifactStoreError> {
     tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&root).map_err(|error| unavailable_io("create", &root, error))?;
         let metadata = std::fs::symlink_metadata(&root)
@@ -653,20 +785,27 @@ async fn create_workspace(state_root: &Path) -> Result<tempfile::TempDir, Artifa
             .map_err(|error| unavailable_io("resolve", &root, error))?;
         if !metadata.file_type().is_dir() || canonical != root {
             return Err(rejected(format!(
-                "Depot workspace root `{}` must be a real directory",
+                "Depot {kind} root `{}` must be a real directory",
                 root.display()
             )));
         }
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
             .map_err(|error| unavailable_io("protect", &root, error))?;
-        tempfile::Builder::new()
-            .prefix("build-")
+        let directory = tempfile::Builder::new()
+            .prefix(prefix)
             .tempdir_in(&root)
-            .map_err(|error| unavailable_io("create temporary workspace in", &root, error))
+            .map_err(|error| {
+                unavailable_io("create private temporary directory in", &root, error)
+            })?;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| {
+                unavailable_io("protect temporary directory", directory.path(), error)
+            })?;
+        Ok(directory)
     })
     .await
     .map_err(|error| ArtifactStoreError::Unavailable {
-        message: format!("Depot workspace preparation stopped unexpectedly: {error}"),
+        message: format!("Depot {kind} preparation stopped unexpectedly: {error}"),
     })?
 }
 

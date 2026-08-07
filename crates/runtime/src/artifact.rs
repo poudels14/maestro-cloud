@@ -27,8 +27,36 @@ impl ArtifactReference {
         &self.0
     }
 
+    /// Returns the exact registry host selected by this reference.
+    pub fn registry_host(&self) -> Result<String, ArtifactStoreError> {
+        Ok(self.parsed()?.registry().to_owned())
+    }
+
     pub(crate) fn parsed(&self) -> Result<Reference, ArtifactStoreError> {
         parse_oci_reference(&self.0)
+    }
+}
+
+/// Resolves short-lived credentials for one exact registry host.
+///
+/// Implementations must not persist credentials or return credentials for a
+/// host other than the exact input value.
+#[async_trait]
+pub trait RegistryCredentialProvider: Send + Sync {
+    /// Returns credentials for `registry_host`, or `None` for anonymous access.
+    async fn credential(
+        &self,
+        registry_host: &str,
+    ) -> Result<Option<RegistryCredential>, ArtifactStoreError>;
+}
+
+#[async_trait]
+impl RegistryCredentialProvider for BTreeMap<String, RegistryCredential> {
+    async fn credential(
+        &self,
+        registry_host: &str,
+    ) -> Result<Option<RegistryCredential>, ArtifactStoreError> {
+        Ok(self.get(registry_host).cloned())
     }
 }
 
