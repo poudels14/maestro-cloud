@@ -13,6 +13,7 @@ use maestro_cli::{NodeLaunchOptions, prepare_node_launch};
 use node_agent::{TailscaleDnsPluginSettings, TailscaleDnsRoute};
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -155,6 +156,7 @@ fn initialize_tracing() -> daemon::ControllerLogCapture {
     let (controller_layer, controller_logs) = controller_log_capture();
     tracing_subscriber::registry()
         .with(filter)
+        .with(dependency_log_filter())
         .with(
             tracing_subscriber::fmt::layer()
                 .json()
@@ -165,6 +167,12 @@ fn initialize_tracing() -> daemon::ControllerLogCapture {
         .with(controller_layer)
         .init();
     controller_logs
+}
+
+fn dependency_log_filter() -> Targets {
+    Targets::new()
+        .with_default(LevelFilter::TRACE)
+        .with_target("hickory_server::server", LevelFilter::WARN)
 }
 
 async fn run(
@@ -436,5 +444,22 @@ async fn shutdown_signal() -> std::io::Result<()> {
     #[cfg(not(unix))]
     {
         tokio::signal::ctrl_c().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing::Level;
+
+    use super::dependency_log_filter;
+
+    #[test]
+    fn suppresses_dns_access_logs_without_hiding_dns_failures() {
+        let filter = dependency_log_filter();
+
+        assert!(!filter.would_enable("hickory_server::server", &Level::INFO));
+        assert!(!filter.would_enable("hickory_server::server::request", &Level::DEBUG));
+        assert!(filter.would_enable("hickory_server::server", &Level::WARN));
+        assert!(filter.would_enable("maestro::controller", &Level::INFO));
     }
 }
