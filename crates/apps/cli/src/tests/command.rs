@@ -459,14 +459,14 @@ fn restart_confirmation_identifies_the_admin_origin() -> Result<(), Box<dyn std:
 
     let confirmed = confirm_restart(
         &RestartTarget::Node("node-a".to_string()),
-        "http://10.50.0.250",
+        "http://10.50.0.5",
         &mut input,
         &mut output,
     )?;
 
     let output = String::from_utf8(output)?;
     assert!(!confirmed);
-    assert!(output.contains("Admin API: http://10.50.0.250"));
+    assert!(output.contains("Admin API: http://10.50.0.5"));
     assert!(output.contains("Restart cluster node `node-a`? [y/N]:"));
     Ok(())
 }
@@ -507,7 +507,7 @@ fn rolling_upgrade_confirmation_is_succinct() -> Result<(), Box<dyn std::error::
         kernel_api::MAESTRO_VERSION,
         UpgradeBatch::Rolling,
         &[],
-        "http://10.50.0.250",
+        "http://10.50.0.5",
         &mut input,
         &mut output,
     )?;

@@ -6,7 +6,7 @@ use crate::{ServerSettings, ServerSettingsError};
 #[test]
 fn managed_plaintext_requires_one_exact_bridge_address() -> Result<(), Box<dyn std::error::Error>> {
     let settings = ServerSettings::new(
-        "10.50.0.250:80".parse()?,
+        "10.50.0.5:80".parse()?,
         Some(SecretValue::new(
             "operator-test-secret-with-at-least-32-characters",
         )),

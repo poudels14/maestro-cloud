@@ -149,7 +149,7 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
     run(
         &api,
         RolloutOptions {
-            admin_origin: "http://10.50.0.250",
+            admin_origin: "http://10.50.0.5",
             config_source: "services.jsonc",
             filters: &["api".to_string()],
             mode: RolloutMode::Apply,
@@ -163,7 +163,7 @@ async fn rollout_previews_masked_changes_then_applies_the_previewed_revision()
     )
     .await?;
     let output = String::from_utf8(output)?;
-    assert!(output.contains("Admin API: http://10.50.0.250"));
+    assert!(output.contains("Admin API: http://10.50.0.5"));
     assert!(output.contains("Apply 1 service change(s)? [y/N]:"));
     assert!(output.contains("warning: ignored field `futureRoot`"));
     assert!(output.contains("environment.TOKEN: ••••-old -> ••••-new"));
@@ -208,7 +208,7 @@ async fn rollout_dry_run_never_writes_and_prompts_for_apply()
     run(
         &api,
         RolloutOptions {
-            admin_origin: "http://10.50.0.250",
+            admin_origin: "http://10.50.0.5",
             config_source: "services.jsonc",
             filters: &[],
             mode: RolloutMode::Preview,

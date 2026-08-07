@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 
-use kernel_api::{Assignment, NodeId, WorkloadNetworkMode};
+use kernel_api::{
+    ADMIN_ADDRESS_OFFSET, Assignment, NodeId, SYSTEM_SERVICE_ADDRESS_END,
+    SYSTEM_SERVICE_ADDRESS_START, USER_WORKLOAD_ADDRESS_START, WorkloadNetworkMode,
+    is_system_service,
+};
 
 use crate::model::{ScheduleNode, UnschedulableReason};
 use crate::plan::PlannedAssignment;
-
-const SYSTEM_RESERVED_HOSTS: u32 = 55;
 
 pub(crate) fn allocate_addresses(
     assignments: &mut [PlannedAssignment],
@@ -72,7 +74,7 @@ pub(crate) fn allocate_addresses(
         };
         let node_used = used.entry(assignment.node_id.clone()).or_default();
         assignment.workload_address = subnet
-            .workload_addresses()
+            .addresses(is_system_service(&assignment.service_id))
             .find(|address| node_used.insert(*address));
         if assignment.workload_address.is_none() {
             failures.push((
@@ -84,6 +86,32 @@ pub(crate) fn allocate_addresses(
         }
     }
     failures
+}
+
+pub(crate) fn assignment_address_matches_pool(
+    assignment: &Assignment,
+    nodes: &[ScheduleNode],
+) -> bool {
+    let Some(node) = nodes
+        .iter()
+        .find(|node| node.node_id == assignment.spec.node_id)
+    else {
+        return true;
+    };
+    if node.workload_network_mode == WorkloadNetworkMode::RuntimeDelegated {
+        return assignment.spec.workload_address.is_none();
+    }
+    let Some(subnet) = node
+        .workload_subnet
+        .as_deref()
+        .and_then(|value| WorkloadSubnet::parse(value).ok())
+    else {
+        return true;
+    };
+    let Some(IpAddr::V4(address)) = assignment.spec.workload_address else {
+        return false;
+    };
+    subnet.address_matches_pool(address, is_system_service(&assignment.spec.service_id))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,11 +131,36 @@ impl WorkloadSubnet {
         Ok(Self { network, prefix })
     }
 
-    fn workload_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
-        let first = u32::from(self.network).saturating_add(2);
+    fn addresses(self, system_service: bool) -> impl Iterator<Item = Ipv4Addr> {
+        let network = u32::from(self.network);
         let broadcast = u32::from(self.network) | !prefix_mask(self.prefix);
-        let end = broadcast.saturating_sub(SYSTEM_RESERVED_HOSTS);
-        (first..end).map(Ipv4Addr::from)
+        (network.saturating_add(1)..broadcast)
+            .filter(move |address| {
+                let offset = address.saturating_sub(network);
+                if system_service {
+                    (SYSTEM_SERVICE_ADDRESS_START..=SYSTEM_SERVICE_ADDRESS_END).contains(&offset)
+                        && offset != ADMIN_ADDRESS_OFFSET
+                } else {
+                    offset >= USER_WORKLOAD_ADDRESS_START
+                }
+            })
+            .map(Ipv4Addr::from)
+    }
+
+    fn address_matches_pool(self, address: Ipv4Addr, system_service: bool) -> bool {
+        let address = u32::from(address);
+        let network = u32::from(self.network);
+        let broadcast = network | !prefix_mask(self.prefix);
+        if address <= network || address >= broadcast {
+            return false;
+        }
+        let offset = address - network;
+        if system_service {
+            (SYSTEM_SERVICE_ADDRESS_START..=SYSTEM_SERVICE_ADDRESS_END).contains(&offset)
+                && offset != ADMIN_ADDRESS_OFFSET
+        } else {
+            offset >= USER_WORKLOAD_ADDRESS_START
+        }
     }
 }
 

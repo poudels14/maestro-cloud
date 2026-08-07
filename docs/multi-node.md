@@ -15,8 +15,10 @@ Keep these address spaces separate:
 
 Each workload subnet uses its first host address as the `maestro0` bridge and
 authoritative DNS resolver. For example, node subnet `172.22.1.0/24` uses
-`172.22.1.1`. Workload addresses start at `.2`; Maestro reserves the highest 55
-host addresses for system services.
+`172.22.1.1`. Maestro reserves `.2` through `.31` for system infrastructure,
+with the Admin API and panel fixed at `.5`. Schedulable system-service replicas
+use the remaining addresses in that range, while user workload addresses start
+at `.32`.
 
 Workload-capable nodes publish a WireGuard public key, private host endpoint,
 and workload subnet. Their node agents converge the exact peer and route set.

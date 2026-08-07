@@ -60,10 +60,10 @@ fn service_sources_are_scoped_to_their_local_node_ruleset() {
         .iter()
         .find(|ruleset| ruleset.node_id.as_str() == "node-2")
         .unwrap();
-    assert!(first.script.contains("10.42.1.10"));
-    assert!(!first.script.contains("10.42.2.10"));
-    assert!(second.script.contains("10.42.2.10"));
-    assert!(!second.script.contains("10.42.1.10"));
+    assert!(first.script.contains("10.42.1.32"));
+    assert!(!first.script.contains("10.42.2.32"));
+    assert!(second.script.contains("10.42.2.32"));
+    assert!(!second.script.contains("10.42.1.32"));
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn system_dns_and_control_guards_precede_user_policy() {
         .find("ip saddr @host_access_")
         .expect("system host access");
     let guarded_admin = script
-        .find("ip daddr 10.42.1.250 tcp dport 3000 reject")
+        .find("ip daddr 10.42.1.5 tcp dport 3000 reject")
         .expect("Admin endpoint guard");
     let workload_reject = script
         .find("ip saddr @all_workloads_v4 ct direction original reject")
@@ -184,7 +184,7 @@ fn user_workloads_cannot_connect_to_local_or_remote_system_assignments() {
     for ruleset in output.rulesets {
         assert!(ruleset.script.contains(
             "set system_destinations_v4 {\n        type ipv4_addr\n        flags interval\n        \
-             elements = { 10.42.1.20, 10.42.1.250, 10.42.2.20 }"
+             elements = { 10.42.1.2, 10.42.1.3, 10.42.2.3 }"
         ));
         assert!(ruleset.script.contains(
             "ip saddr @local_workloads_v4 ip daddr @system_destinations_v4 \
@@ -224,15 +224,15 @@ fn host_ports_route_to_one_running_local_system_assignment_without_capturing_adm
         .find(|ruleset| ruleset.node_id.as_str() == "node-2")
         .unwrap();
     assert!(first.script.contains(
-        "iifname != \"maestro0\" ip daddr != 10.42.1.250 tcp dport 443 \
-                 dnat ip to 10.42.1.20:8443"
+        "iifname != \"maestro0\" ip daddr != 10.42.1.5 tcp dport 443 \
+         dnat ip to 10.42.1.3:8443"
     ));
-    assert!(!first.script.contains("10.42.2.20:8443"));
+    assert!(!first.script.contains("10.42.2.3:8443"));
     assert!(second.script.contains(
-        "iifname != \"maestro0\" ip daddr != 10.42.2.250 tcp dport 443 \
-                 dnat ip to 10.42.2.20:8443"
+        "iifname != \"maestro0\" ip daddr != 10.42.2.5 tcp dport 443 \
+         dnat ip to 10.42.2.3:8443"
     ));
-    assert!(!second.script.contains("10.42.1.20:8443"));
+    assert!(!second.script.contains("10.42.1.3:8443"));
     assert!(first.script.contains("tcp dport 443 reject"));
     assert!(second.script.contains("tcp dport 443 reject"));
 }
@@ -370,7 +370,7 @@ impl World {
                 trusted_source_cidrs: vec!["100.64.0.0/10".to_owned()],
                 host_ports: vec![3000],
                 endpoints: vec![SystemHostEndpoint {
-                    address: Ipv4Addr::new(10, 42, 1, 250),
+                    address: Ipv4Addr::new(10, 42, 1, 5),
                     public_port: 80,
                     listener_port: 3000,
                 }],
@@ -442,11 +442,11 @@ impl World {
             network("node-2", "10.42.2.0/24", 51821),
         ];
         let assignments = vec![
-            assignment("api-node-1", &api, "node-1", "10.42.1.10"),
-            assignment("api-node-2", &api, "node-2", "10.42.2.10"),
-            assignment("dns-node-1", &system, "node-1", "10.42.1.250"),
-            assignment("ingress-node-1", &ingress, "node-1", "10.42.1.20"),
-            assignment("ingress-node-2", &ingress, "node-2", "10.42.2.20"),
+            assignment("api-node-1", &api, "node-1", "10.42.1.32"),
+            assignment("api-node-2", &api, "node-2", "10.42.2.32"),
+            assignment("dns-node-1", &system, "node-1", "10.42.1.2"),
+            assignment("ingress-node-1", &ingress, "node-1", "10.42.1.3"),
+            assignment("ingress-node-2", &ingress, "node-2", "10.42.2.3"),
         ];
         Self {
             settings,

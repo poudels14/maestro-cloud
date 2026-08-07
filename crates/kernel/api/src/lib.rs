@@ -83,8 +83,9 @@ pub use schema::{
 pub use secret::{MaskedSecret, SecretValue};
 pub use service_validation::ServiceSpecError;
 pub use system_service::{
-    CLOUDFLARE_SERVICE_ID, DNS_RESOLVER_SERVICE_ID, SYSTEM_RESOURCE_PREFIX,
-    TAILSCALE_GATEWAY_SERVICE_ID, TRAEFIK_SERVICE_ID, desired_service_replicas,
+    ADMIN_ADDRESS_OFFSET, CLOUDFLARE_SERVICE_ID, DNS_RESOLVER_SERVICE_ID, SYSTEM_RESOURCE_PREFIX,
+    SYSTEM_SERVICE_ADDRESS_END, SYSTEM_SERVICE_ADDRESS_START, TAILSCALE_GATEWAY_SERVICE_ID,
+    TRAEFIK_SERVICE_ID, USER_WORKLOAD_ADDRESS_START, desired_service_replicas,
     is_system_resource_id, is_system_service,
 };
 pub use value_source::{ExternalValueSource, InvalidExternalValueSource};

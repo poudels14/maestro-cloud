@@ -359,7 +359,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
     let workload_address = cluster
         .nodes
         .get(&NodeId::new("master")?)
-        .and_then(|node| node.workload_subnet.workload_addresses().next())
+        .and_then(|node| node.workload_subnet.user_workload_addresses().next())
         .ok_or("master workload address missing")?;
     assert_eq!(
         health_targets

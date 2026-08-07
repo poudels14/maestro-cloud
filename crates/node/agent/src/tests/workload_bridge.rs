@@ -19,7 +19,7 @@ async fn bridge_agent_applies_the_exact_desired_state() -> Result<(), Box<dyn st
         applications: applications.clone(),
     };
     let desired = WorkloadBridge::new(Ipv4Addr::new(10, 42, 1, 1), 24, 1_420)?
-        .with_admin_address(Ipv4Addr::new(10, 42, 1, 250))?;
+        .with_admin_address(Ipv4Addr::new(10, 42, 1, 5))?;
     let agent = WorkloadBridgeAgent::new(
         desired.clone(),
         backend,
@@ -50,7 +50,7 @@ async fn bridge_agent_recovers_after_backend_failure() -> Result<(), Box<dyn std
     };
     let clock = Arc::new(ManualClock::default());
     let desired = WorkloadBridge::new(Ipv4Addr::new(10, 42, 1, 1), 24, 1_420)?
-        .with_admin_address(Ipv4Addr::new(10, 42, 1, 250))?;
+        .with_admin_address(Ipv4Addr::new(10, 42, 1, 5))?;
     let agent = Arc::new(WorkloadBridgeAgent::new(
         desired.clone(),
         backend,
@@ -102,7 +102,7 @@ fn bridge_settings_reject_unsafe_or_hot_looping_state() -> Result<(), Box<dyn st
     ));
     assert!(matches!(
         WorkloadBridge::new(Ipv4Addr::new(10, 42, 1, 1), 24, 1_420)?
-            .with_admin_address(Ipv4Addr::new(10, 42, 2, 250)),
+            .with_admin_address(Ipv4Addr::new(10, 42, 2, 5)),
         Err(WorkloadBridgeError::AdminAddressOutsideSubnet { .. })
     ));
     let desired = WorkloadBridge::new(Ipv4Addr::new(10, 42, 1, 1), 24, 1_420)?;

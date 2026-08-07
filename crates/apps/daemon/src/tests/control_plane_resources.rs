@@ -24,7 +24,7 @@ pub(super) async fn seed_agent_resources(
     node_api_user: Option<WorkloadUserSpec>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let workload_address = workload_subnet
-        .workload_addresses()
+        .user_workload_addresses()
         .next()
         .ok_or("workload subnet has no assignable address")?;
     let assignment = workload_assignment(node_id, workload_address, network_mode)?;

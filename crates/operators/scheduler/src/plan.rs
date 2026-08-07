@@ -7,7 +7,7 @@ use kernel_api::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::address::allocate_addresses;
+use crate::address::{allocate_addresses, assignment_address_matches_pool};
 use crate::model::{
     NodeSchedulingState, ScheduleInput, ScheduleNode, SchedulePlan, ServiceSchedule,
     UnschedulableReason, UnschedulableReplica,
@@ -157,6 +157,7 @@ fn plan_service<'a>(
                 .copied();
             let existing_is_eligible = existing.is_some_and(|assignment| {
                 assignment.spec.restart_generation == group.restart_generation
+                    && assignment_address_matches_pool(assignment, &input.nodes)
                     && (input.held.contains(&assignment.meta.id)
                         || candidates
                             .iter()

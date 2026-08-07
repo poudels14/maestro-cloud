@@ -21,45 +21,43 @@ fn reports_network_containment_and_address_capacity() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn workload_range_preserves_gateway_and_system_addresses() -> Result<(), Box<dyn std::error::Error>>
-{
+fn address_ranges_separate_gateway_admin_system_and_user_workloads()
+-> Result<(), Box<dyn std::error::Error>> {
     let network = "172.22.4.0/24".parse::<Ipv4Cidr>()?;
-    let addresses = network.workload_addresses().collect::<Vec<_>>();
+    let system = network.system_service_addresses().collect::<Vec<_>>();
+    let users = network.user_workload_addresses().collect::<Vec<_>>();
 
     assert_eq!(
         network.gateway_address(),
         Some(Ipv4Addr::new(172, 22, 4, 1))
     );
-    assert_eq!(addresses.first(), Some(&Ipv4Addr::new(172, 22, 4, 2)));
-    assert_eq!(addresses.last(), Some(&Ipv4Addr::new(172, 22, 4, 199)));
-    assert_eq!(
-        network.host_address_from_end(1),
-        Some(Ipv4Addr::new(172, 22, 4, 254))
-    );
-    assert_eq!(
-        network.admin_address(),
-        Some(Ipv4Addr::new(172, 22, 4, 250))
-    );
-    assert!(network.is_workload_address(Ipv4Addr::new(172, 22, 4, 100)));
-    assert!(!network.is_workload_address(Ipv4Addr::new(172, 22, 4, 200)));
+    assert_eq!(system.len(), 29);
+    assert_eq!(system.first(), Some(&Ipv4Addr::new(172, 22, 4, 2)));
+    assert_eq!(system.last(), Some(&Ipv4Addr::new(172, 22, 4, 31)));
+    assert!(!system.contains(&Ipv4Addr::new(172, 22, 4, 5)));
+    assert_eq!(network.admin_address(), Some(Ipv4Addr::new(172, 22, 4, 5)));
+    assert_eq!(users.first(), Some(&Ipv4Addr::new(172, 22, 4, 32)));
+    assert_eq!(users.last(), Some(&Ipv4Addr::new(172, 22, 4, 254)));
+    assert!(network.is_system_service_address(Ipv4Addr::new(172, 22, 4, 2)));
+    assert!(!network.is_system_service_address(Ipv4Addr::new(172, 22, 4, 5)));
+    assert!(network.is_user_workload_address(Ipv4Addr::new(172, 22, 4, 200)));
     Ok(())
 }
 
 #[test]
-fn larger_standalone_range_preserves_first_slash_24_system_addresses()
+fn larger_standalone_range_uses_low_system_addresses_and_remaining_user_hosts()
 -> Result<(), Box<dyn std::error::Error>> {
     let network = "10.202.0.0/16".parse::<Ipv4Cidr>()?;
-    let addresses = network.workload_addresses().collect::<Vec<_>>();
+    let addresses = network.user_workload_addresses().collect::<Vec<_>>();
 
+    assert!(!addresses.contains(&Ipv4Addr::new(10, 202, 0, 31)));
+    assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 32)));
     assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 199)));
-    assert!(!addresses.contains(&Ipv4Addr::new(10, 202, 0, 200)));
-    assert!(!addresses.contains(&Ipv4Addr::new(10, 202, 0, 250)));
+    assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 200)));
+    assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 250)));
     assert!(addresses.contains(&Ipv4Addr::new(10, 202, 0, 255)));
     assert!(addresses.contains(&Ipv4Addr::new(10, 202, 255, 254)));
-    assert_eq!(
-        network.admin_address(),
-        Some(Ipv4Addr::new(10, 202, 0, 250))
-    );
+    assert_eq!(network.admin_address(), Some(Ipv4Addr::new(10, 202, 0, 5)));
     Ok(())
 }
 
@@ -79,15 +77,15 @@ proptest! {
     }
 
     #[test]
-    fn generated_workload_addresses_stay_inside_their_network(
+    fn generated_user_workload_addresses_stay_inside_their_network(
         second_octet in any::<u8>(),
         third_octet in any::<u8>(),
     ) {
         let network = Ipv4Cidr::new(Ipv4Addr::new(10, second_octet, third_octet, 0), 24)?;
 
-        for address in network.workload_addresses() {
+        for address in network.user_workload_addresses() {
             prop_assert!(network.contains(address));
-            prop_assert!(network.is_workload_address(address));
+            prop_assert!(network.is_user_workload_address(address));
             prop_assert_ne!(address, network.network_address());
             prop_assert_ne!(address, network.broadcast_address());
         }

@@ -109,7 +109,7 @@ async fn creates_a_native_deployment_with_a_ready_environment_url()
                 "state": "success",
                 "description": "Maestro preview is ready.",
                 "environment_url": "https://api-pr-42.preview.example.com",
-                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
+                "log_url": "http://10.42.0.5/services/api/prs/42/deployments"
             }))?,
         ),
     ]));
@@ -169,7 +169,7 @@ async fn creates_a_native_deployment_with_a_ready_environment_url()
     assert_eq!(
         status.get("log_url"),
         Some(&serde_json::json!(
-            "http://10.42.0.250/services/api/prs/42/deployments"
+            "http://10.42.0.5/services/api/prs/42/deployments"
         ))
     );
     Ok(())
@@ -193,7 +193,7 @@ async fn reuses_an_existing_deployment_and_caches_its_matching_status()
                 "state": "in_progress",
                 "description": "Maestro is deploying the latest commit.",
                 "environment_url": null,
-                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
+                "log_url": "http://10.42.0.5/services/api/prs/42/deployments"
             }]))?,
         ),
     ]));
@@ -249,7 +249,7 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
                 "state": "success",
                 "description": "Maestro preview is ready.",
                 "environment_url": "https://api-pr-42.preview.example.com",
-                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
+                "log_url": "http://10.42.0.5/services/api/prs/42/deployments"
             }]))?,
         ),
         json_response(503, Vec::new()),
@@ -267,7 +267,7 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
                 "state": "success",
                 "description": "Maestro preview is ready.",
                 "environment_url": "https://api-pr-42.preview.example.com",
-                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
+                "log_url": "http://10.42.0.5/services/api/prs/42/deployments"
             }]))?,
         ),
         json_response(
@@ -301,7 +301,7 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
     assert_eq!(
         inactive.get("log_url"),
         Some(&serde_json::json!(
-            "http://10.42.0.250/services/api/prs/42/deployments"
+            "http://10.42.0.5/services/api/prs/42/deployments"
         ))
     );
     Ok(())
@@ -376,7 +376,7 @@ fn deployment(state: PullRequestDeploymentState) -> PullRequestDeployment {
         .to_string(),
         environment_url: (state == PullRequestDeploymentState::Success)
             .then(|| "https://api-pr-42.preview.example.com".to_string()),
-        log_url: Some("http://10.42.0.250/services/api/prs/42/deployments".to_string()),
+        log_url: Some("http://10.42.0.5/services/api/prs/42/deployments".to_string()),
     }
 }
 

@@ -222,18 +222,17 @@ operator credentials or load the panel, while mutual-TLS node endpoints remain
 available to cluster peers. Ordinary user services are also denied from
 initiating traffic to system assignments or host control listeners.
 
-The daemon also serves the same panel on each returned bridge address. Node
-certificates include both the control-plane endpoint and the bridge address,
-and Maestro admits bridge-to-API traffic only from running managed Tailscale
-gateway replicas. This subnet-routed fallback is:
+The daemon also serves the same panel at host offset `.5` in each workload
+subnet. Maestro admits traffic to this Admin address only from running managed
+Tailscale gateway replicas. This subnet-routed fallback is:
 
 ```text
-https://<dnsNameserver>:<cluster API port>/
+http://<workload-subnet>.5/
 ```
 
-For example, a node whose bridge resolver is `172.22.1.1` and whose API port is
-`3000` serves the panel at `https://172.22.1.1:3000/`. Trust the private Maestro
-cluster CA in the operator browser when using this fallback.
+For example, a node whose bridge resolver is `172.22.1.1` serves the panel at
+`http://172.22.1.5/`. The `.1` address remains the DNS resolver; `.5` is the
+Admin endpoint.
 
 In the Tailscale admin console, add each address as a custom nameserver and
 restrict it to `maestro.internal`. Do not make it a global nameserver unless

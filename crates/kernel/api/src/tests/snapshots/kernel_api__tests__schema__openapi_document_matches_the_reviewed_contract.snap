@@ -4782,6 +4782,11 @@ expression: document
       "PreviewSpec": {
         "description": "Desired pull-request preview derivation and teardown policy.",
         "properties": {
+          "author": {
+            "default": "",
+            "description": "Source-control login of the pull-request author.",
+            "type": "string"
+          },
           "baseServiceId": {
             "allOf": [
               {
@@ -4803,6 +4808,11 @@ expression: document
               }
             ],
             "description": "Absolute preview expiry time."
+          },
+          "headReference": {
+            "default": "",
+            "description": "Mutable source branch name reported by the repository.",
+            "type": "string"
           },
           "headRevision": {
             "description": "Current pull-request head revision.",

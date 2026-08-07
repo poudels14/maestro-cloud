@@ -30,7 +30,7 @@ use super::support::{base_service, metadata};
 fn ready_feedback_exposes_preview_and_dashboard_urls_on_the_native_deployment() {
     let settings = PreviewSettings::new("preview.example.com")
         .unwrap()
-        .with_dashboard_origin("http://10.42.0.250")
+        .with_dashboard_origin("http://10.42.0.5")
         .unwrap();
     let deployment = crate::source_reconciler::github_deployment(
         &PreviewFeedback {
@@ -52,7 +52,7 @@ fn ready_feedback_exposes_preview_and_dashboard_urls_on_the_native_deployment() 
     );
     assert_eq!(
         deployment.log_url.as_deref(),
-        Some("http://10.42.0.250/services/api/prs/42/deployments")
+        Some("http://10.42.0.5/services/api/prs/42/deployments")
     );
 }
 

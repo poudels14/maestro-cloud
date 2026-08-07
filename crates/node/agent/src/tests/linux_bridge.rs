@@ -7,7 +7,7 @@ use crate::linux_bridge::address_delta;
 #[test]
 fn bridge_address_delta_adds_missing_and_removes_only_stale_ipv4() {
     let gateway = Ipv4Addr::new(10, 42, 1, 1);
-    let admin = Ipv4Addr::new(10, 42, 1, 250);
+    let admin = Ipv4Addr::new(10, 42, 1, 5);
     let desired_addresses = [(gateway, 24), (admin, 24)];
     let stale = AddressMessageBuilder::<Ipv4Addr>::new()
         .index(12)

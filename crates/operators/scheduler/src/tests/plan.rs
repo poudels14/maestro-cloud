@@ -244,17 +244,63 @@ fn workload_addresses_are_stable_unique_and_do_not_reuse_draining_addresses() {
         .collect::<BTreeSet<_>>();
     assert_eq!(addresses.len(), 2);
     assert!(addresses.iter().all(|address| match address {
-        Some(IpAddr::V4(address)) => address.octets()[3] >= 2 && address.octets()[3] < 200,
+        Some(IpAddr::V4(address)) => address.octets()[3] >= 32,
         Some(IpAddr::V6(_)) | None => false,
     }));
 
-    let old = assignment("old", "dep-old", 0, "node-a", 1, [10, 42, 1, 2]);
+    let old = assignment("old", "dep-old", 0, "node-a", 1, [10, 42, 1, 32]);
     let mut replacement = input(1);
     replacement.current = vec![old];
     replacement.services[0].groups[0].deployment_id = deployment_id("dep-new");
     assert_eq!(
         plan(replacement).assignments[0].spec.workload_address,
-        Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 3)))
+        Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 33)))
+    );
+}
+
+#[test]
+fn system_and_user_services_use_disjoint_low_and_high_address_pools() {
+    let mut system = input(29);
+    system.nodes.truncate(1);
+    system.services[0].service_id = service_id("maestro-system-traefik");
+    let planned = plan(system);
+    assert!(planned.unschedulable.is_empty());
+    let addresses = planned
+        .assignments
+        .iter()
+        .map(|assignment| assignment.spec.workload_address)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(addresses.len(), 29);
+    assert!(addresses.contains(&Some(IpAddr::V4(Ipv4Addr::new(10, 42, 2, 2)))));
+    assert!(addresses.contains(&Some(IpAddr::V4(Ipv4Addr::new(10, 42, 2, 31)))));
+    assert!(!addresses.contains(&Some(IpAddr::V4(Ipv4Addr::new(10, 42, 2, 5)))));
+
+    let mut user = input(1);
+    user.nodes.truncate(1);
+    assert_eq!(
+        plan(user).assignments[0].spec.workload_address,
+        Some(IpAddr::V4(Ipv4Addr::new(10, 42, 2, 32)))
+    );
+}
+
+#[test]
+fn assignments_in_the_wrong_address_pool_are_replaced() {
+    let previous = assignment("old", "dep-1", 0, "node-a", 1, [10, 42, 1, 5]);
+    let mut next = input(1);
+    next.services[0].placement.node_id = Some(node_id("node-a"));
+    next.current = vec![previous.clone()];
+
+    let planned = plan(next);
+    let replacement = &planned.assignments[0];
+    assert_ne!(replacement.meta.id, previous.meta.id);
+    assert_eq!(replacement.spec.placement_epoch, 2);
+    assert_eq!(
+        replacement.spec.replaces_assignment_id.as_ref(),
+        Some(&previous.meta.id)
+    );
+    assert_eq!(
+        replacement.spec.workload_address,
+        Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 32)))
     );
 }
 

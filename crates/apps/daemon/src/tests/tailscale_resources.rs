@@ -51,12 +51,12 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
         resources.system_host_access.endpoints,
         [
             firewall::SystemHostEndpoint {
-                address: "172.22.0.250".parse()?,
+                address: "172.22.0.5".parse()?,
                 public_port: 80,
                 listener_port: 3_011,
             },
             firewall::SystemHostEndpoint {
-                address: "172.22.1.250".parse()?,
+                address: "172.22.1.5".parse()?,
                 public_port: 80,
                 listener_port: 3_012,
             },
@@ -118,6 +118,10 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         AUTH_SCRIPT.contains("awk '$1 == \"nameserver\" { print $2; exit }' /etc/resolv.conf"),
         "the gateway must use Maestro's mounted resolver address without requiring iproute2"
+    );
+    assert!(
+        AUTH_SCRIPT.contains("admin=\"${gateway%.*}.5\""),
+        "the gateway must proxy the fixed low Admin address"
     );
     assert!(
         !AUTH_SCRIPT.contains("ip -4 route"),

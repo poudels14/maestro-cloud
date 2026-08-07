@@ -273,7 +273,7 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
             .ok_or("Admin listener missing")?;
         assert_eq!(
             admin.bind_address,
-            std::net::SocketAddr::from(([172, 22, 0, 250], node.endpoint.api_port))
+            std::net::SocketAddr::from(([172, 22, 0, 5], node.endpoint.api_port))
         );
         assert!(
             admin

@@ -7,6 +7,15 @@ pub const TAILSCALE_GATEWAY_SERVICE_ID: &str = "maestro-system-tailscale-gateway
 /// Managed cluster DNS resolver workload service identity.
 pub const DNS_RESOLVER_SERVICE_ID: &str = "maestro-system-dns";
 
+/// First host offset reserved for schedulable Maestro system services.
+pub const SYSTEM_SERVICE_ADDRESS_START: u32 = 2;
+/// Last host offset reserved for schedulable Maestro system services.
+pub const SYSTEM_SERVICE_ADDRESS_END: u32 = 31;
+/// Fixed host offset used by the node-local Admin API and panel.
+pub const ADMIN_ADDRESS_OFFSET: u32 = 5;
+/// First host offset available to user workloads.
+pub const USER_WORKLOAD_ADDRESS_START: u32 = SYSTEM_SERVICE_ADDRESS_END + 1;
+
 /// Reserved identity prefix for Maestro-managed system resources.
 pub const SYSTEM_RESOURCE_PREFIX: &str = "maestro-system-";
 

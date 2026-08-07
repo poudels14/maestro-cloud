@@ -12,11 +12,6 @@ pub struct Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
-    /// Number of highest host addresses reserved for Maestro system services.
-    pub const SYSTEM_RESERVED_HOSTS: u32 = 55;
-    /// Stable offset from the first `/24` broadcast address used by Admin.
-    pub const ADMIN_ADDRESS_OFFSET: u32 = 5;
-
     /// Creates a CIDR when `network` is the canonical address for `prefix`.
     pub fn new(network: Ipv4Addr, prefix: u8) -> Result<Self, CidrError> {
         let network =
@@ -79,62 +74,50 @@ impl Ipv4Cidr {
             .map(Ipv4Addr::from)
     }
 
-    /// Returns a usable address relative to the broadcast address.
-    pub fn host_address_from_end(self, offset: u32) -> Option<Ipv4Addr> {
-        let network = u32::from(self.network_address());
-        let broadcast = u32::from(self.broadcast_address());
-        broadcast
-            .checked_sub(offset)
-            .filter(|address| *address > network && *address < broadcast)
-            .map(Ipv4Addr::from)
-    }
-
-    /// Returns a fixed system address from the end of the first `/24`.
-    ///
-    /// Keeping system addresses in the first `/24` preserves the historical
-    /// Maestro address layout for larger standalone networks.
-    pub fn system_address_from_end(self, offset: u32) -> Option<Ipv4Addr> {
-        if self.prefix() >= 24 {
-            return self.host_address_from_end(offset);
-        }
-
-        let network = u32::from(self.network_address());
-        network
-            .checked_add(255)
-            .and_then(|end| end.checked_sub(offset))
-            .filter(|address| *address > network)
-            .map(Ipv4Addr::from)
-    }
-
-    /// Returns the predictable Admin endpoint reserved at `.250` in a `/24`.
+    /// Returns the predictable Admin endpoint at host offset `.5`.
     pub fn admin_address(self) -> Option<Ipv4Addr> {
-        self.system_address_from_end(Self::ADMIN_ADDRESS_OFFSET)
+        self.host_address(kernel_api::ADMIN_ADDRESS_OFFSET)
     }
 
-    /// Iterates addresses available for workload replicas.
-    ///
-    /// The network and gateway addresses are excluded, as are the broadcast
-    /// address and Maestro's fixed system allocation in the first `/24`.
-    pub fn workload_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
+    /// Iterates low addresses reserved for schedulable system-service replicas.
+    pub fn system_service_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
         self.network
             .hosts()
-            .filter(move |address| self.is_workload_address(*address))
+            .filter(move |address| self.is_system_service_address(*address))
     }
 
-    /// Returns whether `address` belongs to the workload allocation range.
-    pub fn is_workload_address(self, address: Ipv4Addr) -> bool {
-        let address = u32::from(address);
-        let first = u32::from(self.network_address()).saturating_add(2);
-        let broadcast = u32::from(self.broadcast_address());
-        let system_end = if self.prefix() < 24 {
-            u32::from(self.network_address()).saturating_add(255)
-        } else {
-            broadcast
+    /// Iterates addresses available for user-workload replicas.
+    pub fn user_workload_addresses(self) -> impl Iterator<Item = Ipv4Addr> {
+        self.network
+            .hosts()
+            .filter(move |address| self.is_user_workload_address(*address))
+    }
+
+    /// Returns whether `address` belongs to the system-service allocation range.
+    pub fn is_system_service_address(self, address: Ipv4Addr) -> bool {
+        let Some(offset) = u32::from(address).checked_sub(u32::from(self.network_address())) else {
+            return false;
         };
-        let system_start = system_end.saturating_sub(Self::SYSTEM_RESERVED_HOSTS);
-        address >= first
-            && address < broadcast
-            && !(address >= system_start && address < system_end)
+        self.contains(address)
+            && (kernel_api::SYSTEM_SERVICE_ADDRESS_START..=kernel_api::SYSTEM_SERVICE_ADDRESS_END)
+                .contains(&offset)
+            && offset != kernel_api::ADMIN_ADDRESS_OFFSET
+            && address != self.broadcast_address()
+    }
+
+    /// Returns whether `address` belongs to the user-workload allocation range.
+    pub fn is_user_workload_address(self, address: Ipv4Addr) -> bool {
+        let address = u32::from(address);
+        let first = u32::from(self.network_address())
+            .saturating_add(kernel_api::USER_WORKLOAD_ADDRESS_START);
+        let broadcast = u32::from(self.broadcast_address());
+        address >= first && address < broadcast
+    }
+
+    fn host_address(self, offset: u32) -> Option<Ipv4Addr> {
+        let address = u32::from(self.network_address()).checked_add(offset)?;
+        let address = Ipv4Addr::from(address);
+        (self.contains(address) && address != self.broadcast_address()).then_some(address)
     }
 
     /// Returns whether the whole network is RFC 1918 private space.

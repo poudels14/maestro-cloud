@@ -62,7 +62,7 @@ done
 
 gateway="$(awk '$1 == "nameserver" { print $2; exit }' /etc/resolv.conf)"
 [ -n "$gateway" ] || fail_gateway "could not discover the node workload gateway"
-admin="${gateway%.*}.250"
+admin="${gateway%.*}.5"
 
 admin_ready=false
 admin_attempt=0
