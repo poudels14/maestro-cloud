@@ -8,7 +8,7 @@ use kernel_api::{
 use semver::Version;
 
 use crate::conditions::{
-    MaintenanceAction, reject_foreign_maintenance, set_maintenance, set_ready_condition,
+    MaintenanceAction, has_foreign_maintenance, set_maintenance, set_ready_condition,
 };
 use crate::plan_support::{
     duration_between, maintenance_order, parse_node_version, plan, selected_nodes,
@@ -24,6 +24,7 @@ pub(crate) fn initialize(
     input: UpgradeInput,
     nodes: BTreeMap<NodeId, Node>,
     target: &Version,
+    observation_interval: Duration,
 ) -> Result<UpgradePlan, UpgradePlanError> {
     if nodes.is_empty() {
         return Err(UpgradePlanError::NoNodes);
@@ -38,8 +39,28 @@ pub(crate) fn initialize(
     }
     validate_live_nodes(&nodes, &input.live_nodes)?;
     let selected = selected_nodes(&input.run, &nodes)?;
-    for node in &selected {
-        reject_foreign_maintenance(node, &input.run)?;
+    let blocked = selected
+        .iter()
+        .filter(|node| has_foreign_maintenance(node, &input.run))
+        .map(|node| node.meta.id.to_string())
+        .collect::<Vec<_>>();
+    if !blocked.is_empty() {
+        let mut run = input.run;
+        set_ready_condition(
+            &mut run,
+            ConditionState::False,
+            "MaintenanceBlocked",
+            &format!(
+                "waiting for existing maintenance to release nodes: {}",
+                blocked.join(", ")
+            ),
+            input.now,
+        );
+        return Ok(plan(
+            run,
+            Vec::new(),
+            UpgradePlanAction::Requeue(observation_interval),
+        ));
     }
     let mut pending = selected
         .iter()

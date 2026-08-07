@@ -138,9 +138,13 @@ async fn assignment_reconcile_retries_transient_runtime_failure_from_pending_sta
         Some("RetryBackoff")
     );
 
+    let waiting = agent.reconcile_once().await?;
+    assert_eq!(waiting.unresolved, 1);
+    assert_eq!(world.load_assignment().await?.status, pending.status);
+
     world.status_clock.advance(Duration::from_secs(5));
-    let second = agent.reconcile_once().await?;
-    assert_eq!(second.running, 1);
+    let resumed = agent.reconcile_once().await?;
+    assert_eq!(resumed.running, 1);
     assert_running(&world).await?;
     Ok(())
 }

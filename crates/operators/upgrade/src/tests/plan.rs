@@ -369,6 +369,38 @@ fn rolling_upgrade_rejects_a_two_voter_control_plane() {
     ));
 }
 
+#[test]
+fn pending_upgrade_waits_quietly_for_foreign_maintenance() {
+    let mut nodes = topology_three_voters();
+    nodes[0].status.conditions.push(Condition {
+        condition_type: ConditionType::Maintenance,
+        state: ConditionState::True,
+        reason: ConditionReason("UpgradeRun:upgrade-active".to_string()),
+        message: "node is reserved by another upgrade".to_string(),
+        observed_generation: Generation(1),
+        last_transition_time: Timestamp(9_500),
+    });
+
+    let waiting = plan_upgrade(
+        input(run(UpgradeMode::Rolling), &nodes, Vec::new(), 10_000),
+        settings(2),
+    )
+    .expect("foreign maintenance is an expected wait state");
+
+    assert_eq!(waiting.run.status.phase, UpgradePhase::Pending);
+    assert!(waiting.run.status.nodes.is_empty());
+    assert!(waiting.node_updates.is_empty());
+    assert_eq!(
+        waiting.action,
+        UpgradePlanAction::Requeue(Duration::from_secs(1))
+    );
+    assert!(waiting.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "MaintenanceBlocked"
+            && condition.state == ConditionState::False
+            && condition.message.contains("node-1")
+    }));
+}
+
 fn settings(max_attempts: u32) -> UpgradeSettings {
     UpgradeSettings::new(Duration::from_secs(5), Duration::from_secs(1), max_attempts).unwrap()
 }

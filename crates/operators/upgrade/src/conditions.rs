@@ -80,21 +80,12 @@ pub(crate) fn set_maintenance(
     Ok(())
 }
 
-pub(crate) fn reject_foreign_maintenance(
-    node: &Node,
-    run: &UpgradeRun,
-) -> Result<(), UpgradePlanError> {
-    if node.status.conditions.iter().any(|condition| {
+pub(crate) fn has_foreign_maintenance(node: &Node, run: &UpgradeRun) -> bool {
+    node.status.conditions.iter().any(|condition| {
         condition.condition_type == ConditionType::Maintenance
             && condition.state == ConditionState::True
             && condition.reason.0 != maintenance_owner(run)
-    }) {
-        Err(UpgradePlanError::NodeAlreadyMaintained {
-            node_id: node.meta.id.clone(),
-        })
-    } else {
-        Ok(())
-    }
+    })
 }
 
 fn maintenance_owner(run: &UpgradeRun) -> String {

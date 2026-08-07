@@ -24,7 +24,7 @@ pub fn plan_upgrade(
     match input.run.status.phase {
         UpgradePhase::Pending => {
             let target = parse_target(&input.run.spec.target_version)?;
-            initialize(input, nodes, &target)
+            initialize(input, nodes, &target, settings.observation_interval)
         }
         UpgradePhase::Draining => plan_draining(input, nodes, settings),
         UpgradePhase::Applying => plan_dispatch(input, nodes),

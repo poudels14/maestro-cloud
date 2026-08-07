@@ -260,9 +260,21 @@ impl AssignmentAgent {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .retry_at(&assignment.meta.id);
                 if let Some(retry_at) = retry_at.filter(|retry_at| *retry_at > now) {
+                    let message = assignment
+                        .status
+                        .conditions
+                        .iter()
+                        .find(|condition| {
+                            condition.condition_type == kernel_api::ConditionType::RuntimeReady
+                                && condition.reason.0 == "RetryBackoff"
+                        })
+                        .map_or_else(
+                            || format!("workload retry is delayed until {}", retry_at.0),
+                            |condition| condition.message.clone(),
+                        );
                     Err(ConvergeFailure::pending_at(
                         "RetryBackoff",
-                        format!("workload retry is delayed until {}", retry_at.0),
+                        message,
                         retry_at,
                     ))
                 } else {
