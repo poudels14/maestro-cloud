@@ -107,7 +107,8 @@ async fn creates_a_native_deployment_with_a_ready_environment_url()
                 "id": 1,
                 "state": "success",
                 "description": "Maestro preview is ready.",
-                "environment_url": "https://api-pr-42.preview.example.com"
+                "environment_url": "https://api-pr-42.preview.example.com",
+                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
             }))?,
         ),
     ]));
@@ -164,6 +165,12 @@ async fn creates_a_native_deployment_with_a_ready_environment_url()
         status.get("environment_url"),
         Some(&serde_json::json!("https://api-pr-42.preview.example.com"))
     );
+    assert_eq!(
+        status.get("log_url"),
+        Some(&serde_json::json!(
+            "http://10.42.0.250/services/api/prs/42/deployments"
+        ))
+    );
     Ok(())
 }
 
@@ -184,7 +191,8 @@ async fn reuses_an_existing_deployment_and_caches_its_matching_status()
                 "id": 3,
                 "state": "in_progress",
                 "description": "Maestro is deploying the latest commit.",
-                "environment_url": null
+                "environment_url": null,
+                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
             }]))?,
         ),
     ]));
@@ -239,7 +247,8 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
                 "id": 1,
                 "state": "success",
                 "description": "Maestro preview is ready.",
-                "environment_url": "https://api-pr-42.preview.example.com"
+                "environment_url": "https://api-pr-42.preview.example.com",
+                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
             }]))?,
         ),
         json_response(503, Vec::new()),
@@ -256,7 +265,8 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
                 "id": 1,
                 "state": "success",
                 "description": "Maestro preview is ready.",
-                "environment_url": "https://api-pr-42.preview.example.com"
+                "environment_url": "https://api-pr-42.preview.example.com",
+                "log_url": "http://10.42.0.250/services/api/prs/42/deployments"
             }]))?,
         ),
         json_response(
@@ -287,6 +297,12 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
     let inactive: serde_json::Value = serde_json::from_slice(&requests.last().unwrap().body)?;
     assert_eq!(inactive.get("state"), Some(&serde_json::json!("inactive")));
     assert!(inactive.get("environment_url").is_none());
+    assert_eq!(
+        inactive.get("log_url"),
+        Some(&serde_json::json!(
+            "http://10.42.0.250/services/api/prs/42/deployments"
+        ))
+    );
     Ok(())
 }
 
@@ -358,6 +374,7 @@ fn deployment(state: PullRequestDeploymentState) -> PullRequestDeployment {
         .to_string(),
         environment_url: (state == PullRequestDeploymentState::Success)
             .then(|| "https://api-pr-42.preview.example.com".to_string()),
+        log_url: Some("http://10.42.0.250/services/api/prs/42/deployments".to_string()),
     }
 }
 

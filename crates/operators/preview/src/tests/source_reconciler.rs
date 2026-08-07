@@ -27,7 +27,11 @@ use crate::{
 use super::support::{base_service, metadata};
 
 #[test]
-fn ready_feedback_exposes_the_preview_url_on_the_native_deployment() {
+fn ready_feedback_exposes_preview_and_dashboard_urls_on_the_native_deployment() {
+    let settings = PreviewSettings::new("preview.example.com")
+        .unwrap()
+        .with_dashboard_origin("http://10.42.0.250")
+        .unwrap();
     let deployment = crate::source_reconciler::github_deployment(
         &PreviewFeedback {
             base_service_id: ServiceId::new("api").unwrap(),
@@ -37,7 +41,7 @@ fn ready_feedback_exposes_the_preview_url_on_the_native_deployment() {
             service_id: ServiceId::new("api-pr-42").unwrap(),
             kind: PreviewFeedbackKind::Ready,
         },
-        "preview.example.com",
+        &settings,
     );
 
     assert_eq!(deployment.state, PullRequestDeploymentState::Success);
@@ -45,6 +49,10 @@ fn ready_feedback_exposes_the_preview_url_on_the_native_deployment() {
     assert_eq!(
         deployment.environment_url.as_deref(),
         Some("https://api-pr-42.preview.example.com")
+    );
+    assert_eq!(
+        deployment.log_url.as_deref(),
+        Some("http://10.42.0.250/services/api/prs/42/deployments")
     );
 }
 
@@ -95,7 +103,9 @@ async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview(
     let deployments = api.deployments();
     assert_eq!(deployments.len(), 4);
     assert!(deployments.iter().all(|item| {
-        item.2.environment == "maestro-preview/api/pr-42" && item.2.environment_url.is_none()
+        item.2.environment == "maestro-preview/api/pr-42"
+            && item.2.environment_url.is_none()
+            && item.2.log_url.is_none()
     }));
     let mut deployments = deployments.iter();
     let first = deployments.next().unwrap();

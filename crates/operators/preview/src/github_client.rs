@@ -68,6 +68,7 @@ struct DesiredDeploymentStatus {
     state: PullRequestDeploymentState,
     description: String,
     environment_url: Option<String>,
+    log_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -77,6 +78,8 @@ struct DeploymentStatusRequest<'a> {
     environment: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     environment_url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    log_url: Option<&'a str>,
     auto_inactive: bool,
 }
 
@@ -263,6 +266,7 @@ impl GithubPullRequestClient {
                 description: &status.description,
                 environment,
                 environment_url: status.environment_url.as_deref(),
+                log_url: status.log_url.as_deref(),
                 auto_inactive: false,
             },
             "deployment status",
@@ -369,6 +373,7 @@ impl PullRequestApi for GithubPullRequestClient {
             state: deployment.state,
             description: deployment.description.clone(),
             environment_url: deployment.environment_url.clone(),
+            log_url: deployment.log_url.clone(),
         };
         if self
             .deployments
@@ -422,6 +427,7 @@ impl PullRequestApi for GithubPullRequestClient {
                         state: PullRequestDeploymentState::Inactive,
                         description: "Superseded by a newer Maestro preview.".to_string(),
                         environment_url: None,
+                        log_url: deployment.log_url.clone(),
                     },
                 )
                 .await?;
@@ -492,6 +498,8 @@ struct GithubDeploymentStatus {
     description: Option<String>,
     #[serde(default)]
     environment_url: Option<String>,
+    #[serde(default)]
+    log_url: Option<String>,
 }
 
 fn classify_response(
@@ -590,6 +598,7 @@ fn deployment_status_matches(
             .as_deref()
             .filter(|url| !url.is_empty())
             == desired.environment_url.as_deref()
+        && current.log_url.as_deref().filter(|url| !url.is_empty()) == desired.log_url.as_deref()
 }
 
 fn validate_deployment(deployment: &PullRequestDeployment) -> Result<(), PullRequestApiError> {
@@ -632,6 +641,26 @@ fn validate_deployment(deployment: &PullRequestDeployment) -> Result<(), PullReq
         {
             return Err(PullRequestApiError::Rejected {
                 message: "GitHub deployment environment URL must be an HTTPS origin".to_string(),
+            });
+        }
+    }
+    if let Some(log_url) = deployment.log_url.as_deref() {
+        let parsed = url::Url::parse(log_url).map_err(|_| PullRequestApiError::Rejected {
+            message: "GitHub deployment log URL is invalid".to_string(),
+        })?;
+        let private_http = parsed.scheme() == "http"
+            && matches!(
+                parsed.host(),
+                Some(url::Host::Ipv4(address)) if address.is_private()
+            );
+        if (parsed.scheme() != "https" && !private_http)
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(PullRequestApiError::Rejected {
+                message: "GitHub deployment log URL must use HTTPS or private IPv4 HTTP"
+                    .to_string(),
             });
         }
     }

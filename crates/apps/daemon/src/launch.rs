@@ -204,10 +204,26 @@ async fn launch_daemon_inner(
         })
         .transpose()
         .map_err(|error| invalid(error.to_string()))?;
-    let configured_preview = preview
+    let mut configured_preview = preview
         .as_ref()
         .map(crate::preview_config::configure_preview)
         .transpose()?;
+    if cluster.tailscale.is_some()
+        && let Some(preview) = configured_preview.as_mut()
+    {
+        let address = local_node.workload_subnet.admin_address().ok_or_else(|| {
+            invalid(format!(
+                "node workload subnet `{}` has no reserved Admin address",
+                local_node.workload_subnet
+            ))
+        })?;
+        preview.settings.derivation = preview
+            .settings
+            .derivation
+            .clone()
+            .with_dashboard_origin(format!("http://{address}"))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
     let configured_upgrade =
         crate::upgrade_config::configure_nixos_upgrade(nixos_upgrade.as_ref())?;
     let running_version = configured_upgrade.running_version.clone();

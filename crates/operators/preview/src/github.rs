@@ -113,4 +113,6 @@ pub struct PullRequestDeployment {
     pub description: String,
     /// Public preview URL once the environment is ready.
     pub environment_url: Option<String>,
+    /// Maestro dashboard page for deployment progress and output.
+    pub log_url: Option<String>,
 }

@@ -65,7 +65,7 @@ struct RepositoryRetry {
 pub struct PreviewSourceReconciler {
     api: Arc<dyn PullRequestApi>,
     settings: PreviewSourceSettings,
-    preview_domain: String,
+    preview_settings: PreviewSettings,
     keyspace: Keyspace,
     node_prefix: StorePrefix,
     timestamp_clock: Arc<dyn TimestampClock>,
@@ -101,7 +101,7 @@ impl PreviewSourceReconciler {
         Ok(Self {
             api,
             settings,
-            preview_domain: preview_settings.preview_domain().to_string(),
+            preview_settings,
             node_prefix: keyspace.resource_kind(&node_kind),
             writer: PreviewSourceWriter::new(&cluster_id)?,
             keyspace,
@@ -221,7 +221,7 @@ impl PreviewSourceReconciler {
                 continue;
             };
             store.verify_leadership().await?;
-            let deployment = github_deployment(feedback, &self.preview_domain);
+            let deployment = github_deployment(feedback, &self.preview_settings);
             if let Err(error) = self
                 .api
                 .publish_deployment(owner, repository, &deployment)
@@ -302,7 +302,7 @@ fn repository_coordinates<'a>(
 
 pub(crate) fn github_deployment(
     feedback: &PreviewFeedback,
-    preview_domain: &str,
+    settings: &PreviewSettings,
 ) -> PullRequestDeployment {
     let (state, description) = match feedback.kind {
         PreviewFeedbackKind::Creating => (
@@ -346,10 +346,25 @@ pub(crate) fn github_deployment(
             format!(
                 "https://{}.{}",
                 feedback.service_id.as_str(),
-                preview_domain
+                settings.preview_domain()
             )
         }),
+        log_url: dashboard_url(settings, feedback),
     }
+}
+
+fn dashboard_url(settings: &PreviewSettings, feedback: &PreviewFeedback) -> Option<String> {
+    let pull_request_number = feedback.pull_request_number.to_string();
+    let mut url = settings.dashboard_origin()?.clone();
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .push("services")
+        .push(feedback.base_service_id.as_str())
+        .push("prs")
+        .push(&pull_request_number)
+        .push("deployments");
+    Some(url.into())
 }
 
 fn classify_preview(error: PreviewError) -> ReconcileError {
