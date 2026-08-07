@@ -193,6 +193,7 @@ impl PreviewCluster for PreviewAcceptanceWorld {
         self.pull_requests.set_open(PullRequest {
             number: fixture.pull_request_number,
             title: "Acceptance preview".to_string(),
+            author: "maestro-test".to_string(),
             readiness: PullRequestReadiness::Ready,
             created_at: Timestamp(10_000),
             head_reference: "feature/acceptance".to_string(),

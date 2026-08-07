@@ -2911,6 +2911,11 @@ export interface components {
         };
         /** @description Desired pull-request preview derivation and teardown policy. */
         PreviewSpec: {
+            /**
+             * @description Source-control login of the pull-request author.
+             * @default
+             */
+            author: string;
             /** @description Base service copied into the isolated preview service. */
             baseServiceId: components["schemas"]["ServiceId"];
             /**
@@ -2920,6 +2925,11 @@ export interface components {
             closeGracePeriodSecs: number;
             /** @description Absolute preview expiry time. */
             expiresAt: components["schemas"]["Timestamp"];
+            /**
+             * @description Mutable source branch name reported by the repository.
+             * @default
+             */
+            headReference: string;
             /** @description Current pull-request head revision. */
             headRevision: string;
             /**

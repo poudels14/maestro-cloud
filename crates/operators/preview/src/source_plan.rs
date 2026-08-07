@@ -293,6 +293,8 @@ fn new_preview(candidate: &Candidate<'_>) -> Result<Preview, PreviewSourcePlanEr
             repository: candidate.base.repository.clone(),
             pull_request_number: candidate.pull_request.number,
             title: candidate.pull_request.title.clone(),
+            head_reference: candidate.pull_request.head_reference.clone(),
+            author: candidate.pull_request.author.clone(),
             head_revision: candidate.pull_request.head_revision.clone(),
             service_id,
             close_grace_period_secs: policy.close_grace_period_secs,
@@ -319,6 +321,11 @@ fn update_open_preview(
     desired.status.pull_request_state = PullRequestState::Open;
     desired.spec.repository.clone_from(&base.repository);
     desired.spec.title.clone_from(&pull_request.title);
+    desired
+        .spec
+        .head_reference
+        .clone_from(&pull_request.head_reference);
+    desired.spec.author.clone_from(&pull_request.author);
     desired
         .spec
         .head_revision

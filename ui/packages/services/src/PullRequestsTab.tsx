@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import { ArrowUpRight, GitPullRequest } from "lucide-solid";
-import { formatDateTime, TabButton } from "@maestro/kit";
+import { TabButton } from "@maestro/kit";
 import type { ApiSchemas } from "@maestro/api-client";
 import type { ServicesApi } from "./api";
 import { PreviewStatusBadge } from "./PreviewStatusBadge";
@@ -90,12 +90,13 @@ function PullRequestRow(props: { api: ServicesApi; preview: Service; url: string
               {resource().spec.title || resource().spec.repository}
             </span>
           </span>
-          <span class="mt-0.5 block truncate text-xs text-gray-400">
-            {resource().spec.repository}
-            {" · "}
-            <span class="font-mono">{resource().spec.headRevision.slice(0, 12)}</span>
-            {" · expires "}
-            {formatDateTime(resource().spec.expiresAt, true)}
+          <span class="mt-0.5 flex min-w-0 gap-3 text-xs text-gray-400">
+            <span class="truncate">
+              Branch: <span class="font-mono">{resource().spec.headReference || "unknown"}</span>
+            </span>
+            <span class="shrink-0">
+              Author: {resource().spec.author ? `@${resource().spec.author}` : "unknown"}
+            </span>
           </span>
         </span>
       </a>

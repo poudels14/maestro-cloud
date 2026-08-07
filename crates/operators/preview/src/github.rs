@@ -19,6 +19,8 @@ pub struct PullRequest {
     pub number: u64,
     /// Human-readable pull-request title.
     pub title: String,
+    /// Source-control login of the pull-request author.
+    pub author: String,
     /// Draft or ready state.
     pub readiness: PullRequestReadiness,
     /// Creation time used for global oldest-first quota selection.

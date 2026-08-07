@@ -130,6 +130,8 @@ pub(crate) fn convert_preview(
             repository,
             pull_request_number: source.pr_number,
             title: source.title.clone(),
+            head_reference: source.head_ref.clone(),
+            author: String::new(),
             head_revision: source.head_sha.clone(),
             service_id,
             close_grace_period_secs: policy.close_grace_period_secs,

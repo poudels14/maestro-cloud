@@ -30,6 +30,8 @@ async fn preview_routes_expose_revisioned_source_status() -> Result<(), Box<dyn 
             repository: "owner/repo".to_string(),
             pull_request_number: 42,
             title: "Add pagination".to_string(),
+            head_reference: "feature/pagination".to_string(),
+            author: "octocat".to_string(),
             head_revision: "abc123".to_string(),
             service_id: ServiceId::new("preview-api-42")?,
             close_grace_period_secs: 300,

@@ -37,6 +37,8 @@ fn admits_oldest_candidates_globally_and_reports_exclusions() {
     let created = plan.creates.first().unwrap();
     assert_eq!(created.meta.id.as_str(), "worker-pr-8");
     assert_eq!(created.spec.repository, "acme/worker");
+    assert_eq!(created.spec.head_reference, "feature-8");
+    assert_eq!(created.spec.author, "author-8");
     assert_eq!(created.spec.expires_at, Timestamp(3_602_000));
     assert_eq!(
         feedback_count(&plan.feedback, PreviewFeedbackKind::QuotaExceeded),
@@ -77,6 +79,8 @@ fn updates_pushes_and_reopens_without_changing_preview_identity() {
     let desired = plan.updates.first().unwrap();
     assert_eq!(desired.meta.id.as_str(), "api-pr-42");
     assert_eq!(desired.spec.service_id.as_str(), "api-pr-42");
+    assert_eq!(desired.spec.head_reference, open.head_reference);
+    assert_eq!(desired.spec.author, open.author);
     assert_eq!(desired.spec.head_revision, open.head_revision);
     assert_eq!(desired.meta.generation, Generation(8));
     assert_eq!(desired.meta.deletion_timestamp, None);
@@ -309,6 +313,7 @@ fn pull_request(
     PullRequest {
         number,
         title: format!("Pull request {number}"),
+        author: format!("author-{number}"),
         readiness,
         created_at: Timestamp(created_at),
         head_reference: format!("feature-{number}"),

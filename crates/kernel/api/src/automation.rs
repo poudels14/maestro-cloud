@@ -19,6 +19,12 @@ pub struct PreviewSpec {
     /// Human-readable pull-request title.
     #[serde(default)]
     pub title: String,
+    /// Mutable source branch name reported by the repository.
+    #[serde(default)]
+    pub head_reference: String,
+    /// Source-control login of the pull-request author.
+    #[serde(default)]
+    pub author: String,
     /// Current pull-request head revision.
     pub head_revision: String,
     /// Derived service identity owned by this preview.

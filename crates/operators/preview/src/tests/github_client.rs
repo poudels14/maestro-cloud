@@ -48,6 +48,7 @@ async fn lists_every_page_and_preserves_pull_request_eligibility_fields()
     let first = pull_requests.first().unwrap();
     assert_eq!(first.number, 1);
     assert_eq!(first.created_at, Timestamp(1_704_067_200_000));
+    assert_eq!(first.author, "author-1");
     assert_eq!(first.head_reference, "feature-1");
     assert_eq!(first.head_revision, format!("{:040x}", 1));
     assert_eq!(
@@ -351,6 +352,7 @@ fn pull_request_json(number: u64, draft: bool, repository: &str) -> serde_json::
     serde_json::json!({
         "number": number,
         "title": format!("Pull request {number}"),
+        "user": {"login": format!("author-{number}")},
         "draft": draft,
         "created_at": "2024-01-01T00:00:00Z",
         "head": {

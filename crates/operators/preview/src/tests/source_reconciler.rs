@@ -502,6 +502,7 @@ fn pull_request(revision: &str) -> PullRequest {
     PullRequest {
         number: 42,
         title: "Preview this".to_string(),
+        author: "octocat".to_string(),
         readiness: PullRequestReadiness::Ready,
         created_at: Timestamp(0),
         head_reference: "feature".to_string(),

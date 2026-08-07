@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
 import { GitPullRequest } from "lucide-solid";
-import { ErrorBanner, formatDateTime, TabButton } from "@maestro/kit";
+import { ErrorBanner, TabButton } from "@maestro/kit";
 import { useQuery } from "@maestro/sdk";
 import type { ApiSchemas } from "@maestro/api-client";
 import type { ServicesApi } from "./api";
@@ -153,12 +153,16 @@ function PreviewRow(props: { api: ServicesApi; service: Service; onOpen: () => v
               PR #{preview().spec.pullRequestNumber}
             </a>
             <span class="truncate text-gray-500">
-              · {preview().spec.title || preview().spec.repository}
+              {preview().spec.title || preview().spec.repository}
             </span>
           </span>
-          <span class="block truncate text-xs text-gray-400">
-            {preview().spec.repository} · {preview().spec.headRevision.slice(0, 12)} · expires{" "}
-            {formatDateTime(preview().spec.expiresAt, true)}
+          <span class="flex min-w-0 gap-3 text-xs text-gray-400">
+            <span class="truncate">
+              Branch: <span class="font-mono">{preview().spec.headReference || "unknown"}</span>
+            </span>
+            <span class="shrink-0">
+              Author: {preview().spec.author ? `@${preview().spec.author}` : "unknown"}
+            </span>
           </span>
         </span>
       </div>

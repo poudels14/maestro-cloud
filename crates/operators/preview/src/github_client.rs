@@ -441,6 +441,7 @@ impl PullRequestApi for GithubPullRequestClient {
 struct PullRequestResponse {
     number: u64,
     title: String,
+    user: Option<PullRequestUser>,
     #[serde(default)]
     draft: bool,
     created_at: String,
@@ -457,6 +458,7 @@ impl PullRequestResponse {
         Ok(PullRequest {
             number: self.number,
             title: self.title,
+            author: self.user.map_or_else(String::new, |user| user.login),
             readiness: if self.draft {
                 PullRequestReadiness::Draft
             } else {
@@ -468,6 +470,11 @@ impl PullRequestResponse {
             head_repository: self.head.repository.map(|repository| repository.full_name),
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestUser {
+    login: String,
 }
 
 #[derive(Debug, Deserialize)]
