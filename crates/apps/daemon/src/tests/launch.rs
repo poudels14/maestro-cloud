@@ -235,7 +235,6 @@ fn api_listener_includes_the_routed_workload_bridge() -> Result<(), Box<dyn std:
     launch.cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-test"),
         advertise_routes: None,
-        replicas: 1,
         tags: Vec::new(),
         cross_cluster_dns: Vec::new(),
     });

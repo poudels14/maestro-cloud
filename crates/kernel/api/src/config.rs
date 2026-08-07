@@ -96,8 +96,6 @@ pub struct MaskedTailscaleConfig {
     pub advertise_routes: Vec<String>,
     /// Cluster bridge resolvers reachable through the advertised routes.
     pub dns_nameservers: Vec<String>,
-    /// Desired gateway replica count.
-    pub replicas: u32,
     /// Tailnet policy tags applied during authentication.
     pub tags: Vec<String>,
     /// Explicit remote cluster suffixes forwarded through the managed gateways.

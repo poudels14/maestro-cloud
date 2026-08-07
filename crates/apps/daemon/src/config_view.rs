@@ -54,7 +54,6 @@ pub(crate) fn masked_cluster_config(
                     .filter(|address| routes.iter().any(|route| route.contains(*address)))
                     .map(|address| address.to_string())
                     .collect(),
-                replicas: tailscale.replicas,
                 tags: tailscale.tags.clone(),
                 cross_cluster_dns: tailscale
                     .cross_cluster_dns

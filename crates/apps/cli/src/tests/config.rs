@@ -331,7 +331,6 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_workload_rou
             tailscale: {
                 "auth-key": "aws-secret://tailscale-auth",
                 "advertise-routes": null,
-                replicas: 1,
                 "cross-cluster-dns": [{
                     "cluster-id": "remote",
                     nameservers: ["172.23.1.1", "172.23.2.1"]
@@ -377,6 +376,30 @@ async fn tailscale_config_resolves_auth_sources_and_defaults_to_the_workload_rou
         route.nameservers,
         [Ipv4Addr::new(172, 23, 1, 1), Ipv4Addr::new(172, 23, 2, 1)]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tailscale_replica_count_is_not_configurable() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "file:///config/maestro.jsonc";
+    let document = cluster_document("172.22.1.0/24").replace(
+        "\n            node: \"node-1\"",
+        r#"
+            tailscale: {
+                "auth-key": "tskey-auth-reusable-test-secret",
+                replicas: 1
+            },
+            node: "node-1""#,
+    );
+    let reader = MemoryReader {
+        sources: BTreeMap::from([(source.to_owned(), document)]),
+    };
+
+    let error = load_cluster(source, &reader)
+        .await
+        .expect_err("Tailscale replicas must be derived from workload nodes");
+
+    assert!(error.to_string().contains("unknown field `replicas`"));
     Ok(())
 }
 

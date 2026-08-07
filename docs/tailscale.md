@@ -104,7 +104,6 @@ Add `tailscale` beside `cluster` and `node` in the shared cluster document:
   "tailscale": {
     "auth-key": "aws-secret://maestro/production/tailscale-auth-key",
     "advertise-routes": null,
-    "replicas": 2,
     "tags": [],
     "cross-cluster-dns": [
       {
@@ -124,16 +123,14 @@ documents and is never returned by the cluster config API.
 The defaults are:
 
 - `advertise-routes: null`, which advertises every workload-node subnet;
-- `replicas: 2`; and
 - `tags: []`, which leaves identity and policy to the auth key; and
 - `cross-cluster-dns: []`, which disables remote suffix forwarding.
 
 Every explicit advertised route must be unique, canonical, contained by an
 explicit workload-node subnet, and the route set must include at least one
-workload bridge resolver. Replica count cannot exceed the number of
-workload-capable nodes. Set `replicas` to `1` for a single-node cluster. Set
-`tags` to `[]` when the auth key is intentionally untagged; tagged gateways
-remain the recommended production configuration.
+workload bridge resolver. Maestro runs exactly one gateway replica per
+workload-capable node. Set `tags` to `[]` when the auth key is intentionally
+untagged; tagged gateways remain the recommended production configuration.
 
 Validate the merged config before bootstrap:
 
@@ -166,7 +163,6 @@ Use every address in `tailscale.dnsNameservers` as a restricted nameserver for
   "tailscale": {
     "advertiseRoutes": ["172.22.0.0/16"],
     "dnsNameservers": ["172.22.1.1", "172.22.2.1"],
-    "replicas": 2,
     "tags": [],
     "crossClusterDns": [
       {

@@ -143,13 +143,11 @@ fn default_nixos_configuration() -> String {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) struct TailscaleInput {
     pub(crate) auth_key: String,
     #[serde(default)]
     pub(crate) advertise_routes: Option<Vec<String>>,
-    #[serde(default = "default_tailscale_replicas")]
-    pub(crate) replicas: u32,
     #[serde(default = "default_tailscale_tags")]
     pub(crate) tags: Vec<String>,
     #[serde(default)]
@@ -179,10 +177,6 @@ const fn default_cloudflare_tunnel_replicas() -> u32 {
 pub(crate) struct CrossClusterDnsInput {
     pub(crate) cluster_id: String,
     pub(crate) nameservers: Vec<String>,
-}
-
-const fn default_tailscale_replicas() -> u32 {
-    2
 }
 
 fn default_tailscale_tags() -> Vec<String> {

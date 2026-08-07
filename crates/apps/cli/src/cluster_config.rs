@@ -192,7 +192,6 @@ async fn convert_tailscale(
     Ok(Some(TailscaleGatewayConfig {
         auth_key: SecretValue::new(auth_key),
         advertise_routes,
-        replicas: input.replicas,
         tags: input.tags,
         cross_cluster_dns,
     }))
@@ -323,10 +322,6 @@ fn preflight_error(error: ClusterPreflightError) -> CliError {
         ClusterPreflightError::InvalidTailscale(error) => match error {
             TailscaleConfigError::WeakAuthKey | TailscaleConfigError::AuthKeyTooLong => {
                 "tailscale.auth-key".to_string()
-            }
-            TailscaleConfigError::ZeroReplicas
-            | TailscaleConfigError::InsufficientWorkloadNodes { .. } => {
-                "tailscale.replicas".to_string()
             }
             TailscaleConfigError::EmptyAdvertiseRoutes
             | TailscaleConfigError::NoReachableDnsResolver => {

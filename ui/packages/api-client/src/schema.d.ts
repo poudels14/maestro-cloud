@@ -2098,11 +2098,6 @@ export interface components {
             crossClusterDns: components["schemas"]["MaskedCrossClusterDnsRoute"][];
             /** @description Cluster bridge resolvers reachable through the advertised routes. */
             dnsNameservers: string[];
-            /**
-             * Format: uint32
-             * @description Desired gateway replica count.
-             */
-            replicas: number;
             /** @description Tailnet policy tags applied during authentication. */
             tags: string[];
         };

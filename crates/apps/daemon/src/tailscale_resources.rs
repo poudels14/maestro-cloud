@@ -110,6 +110,11 @@ impl TailscaleSystemResources {
             .filter(|node| node.role.runs_workloads())
             .map(|node| node.workload_subnet)
             .collect::<Vec<_>>();
+        let replicas = u32::try_from(workload_subnets.len()).map_err(|_| {
+            TailscaleResourceError::TooManyWorkloadNodes {
+                count: workload_subnets.len(),
+            }
+        })?;
         let routes = config
             .advertised_routes(&workload_subnets)
             .into_iter()
@@ -183,7 +188,7 @@ impl TailscaleSystemResources {
                     executable: "/bin/sh".to_owned(),
                     arguments: vec!["-ceu".to_owned(), AUTH_SCRIPT.to_owned()],
                 }),
-                replicas: config.replicas,
+                replicas,
                 exposed_ports: vec![TAILSCALE_SOCKS_PORT, 9_002],
                 health_check: Some(HealthCheckSpec {
                     probe: HealthProbe::Http {
@@ -288,4 +293,7 @@ pub enum TailscaleResourceError {
     /// One workload subnet could not provide its reserved Admin address.
     #[error("workload subnet `{subnet}` has no reserved Admin address")]
     MissingAdminAddress { subnet: String },
+    /// The public Service contract cannot represent the cluster's node count.
+    #[error("Tailscale gateway cannot represent {count} workload nodes as Service replicas")]
+    TooManyWorkloadNodes { count: usize },
 }

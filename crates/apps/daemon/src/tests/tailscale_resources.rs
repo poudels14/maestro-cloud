@@ -29,7 +29,6 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
-        replicas: 2,
         tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
@@ -202,13 +201,35 @@ fn builds_pinned_gateway_resources() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn runs_one_gateway_replica_per_workload_node() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cluster = cluster_with_nodes(&[
+        ("node-a", NodeRole::Master),
+        ("node-b", NodeRole::Worker),
+        ("node-c", NodeRole::Worker),
+    ])?;
+    cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
+        auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
+        advertise_routes: None,
+        tags: vec!["tag:maestro".to_owned()],
+        cross_cluster_dns: Vec::new(),
+    });
+
+    let resources = required(
+        TailscaleSystemResources::from_cluster(&cluster)?,
+        "Tailscale resources",
+    )?;
+
+    assert_eq!(resources.service.spec.replicas, 3);
+    Ok(())
+}
+
+#[test]
 fn untagged_gateway_omits_the_advertise_tags_argument() -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster =
         cluster_with_nodes(&[("node-a", NodeRole::Master), ("node-b", NodeRole::Worker)])?;
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
-        replicas: 2,
         tags: Vec::new(),
         cross_cluster_dns: Vec::new(),
     });
@@ -247,7 +268,6 @@ async fn reconciles_enable_update_and_removal_as_fenced_writes()
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-first-reusable-secret"),
         advertise_routes: None,
-        replicas: 2,
         tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
@@ -285,7 +305,7 @@ async fn reconciles_enable_update_and_removal_as_fenced_writes()
         .tailscale
         .as_mut()
         .ok_or_else(|| std::io::Error::other("Tailscale config is missing"))?;
-    config.replicas = 1;
+    config.tags.clear();
     config.auth_key = SecretValue::new("tskey-auth-rotated-reusable-secret");
     let desired = required(
         TailscaleSystemResources::from_cluster(&cluster)?,
@@ -296,7 +316,7 @@ async fn reconciles_enable_update_and_removal_as_fenced_writes()
         .await?;
     let service: Service = read(&store, &cluster_id, "Service").await?;
     assert_eq!(service.meta.generation.0, 3);
-    assert_eq!(service.spec.replicas, 1);
+    assert_eq!(service.spec.replicas, 2);
     assert_eq!(
         gateway_auth_key(&service),
         "tskey-auth-live-rotation-secret"
@@ -352,7 +372,6 @@ async fn refuses_a_reserved_id_collision_without_creating_the_other_resource()
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
-        replicas: 1,
         tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
@@ -391,7 +410,6 @@ async fn stale_leadership_cannot_create_gateway_resources() -> Result<(), Box<dy
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
-        replicas: 1,
         tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });
@@ -432,7 +450,6 @@ async fn live_auth_key_changes_trigger_fenced_gateway_reconciliation()
     cluster.tailscale = Some(cluster::TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-launch-document-secret"),
         advertise_routes: None,
-        replicas: 1,
         tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: Vec::new(),
     });

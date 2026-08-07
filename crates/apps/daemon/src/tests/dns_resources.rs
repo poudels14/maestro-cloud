@@ -27,7 +27,6 @@ fn builds_store_authenticated_delegated_dns_service() -> Result<(), Box<dyn std:
     cluster.tailscale = Some(TailscaleGatewayConfig {
         auth_key: SecretValue::new("tskey-auth-reusable-test-secret"),
         advertise_routes: None,
-        replicas: 1,
         tags: vec!["tag:maestro".to_owned()],
         cross_cluster_dns: vec![CrossClusterDnsRoute {
             cluster_id: ClusterId::new("remote")?,

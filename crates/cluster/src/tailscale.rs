@@ -37,9 +37,6 @@ pub struct TailscaleGatewayConfig {
     /// Private workload routes advertised to the tailnet, or every node subnet by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advertise_routes: Option<Vec<Ipv4Cidr>>,
-    /// Desired high-availability gateway replicas.
-    #[serde(default = "default_replicas")]
-    pub replicas: u32,
     /// Tailnet policy tags assigned during initial authentication.
     #[serde(default = "default_tags")]
     pub tags: Vec<String>,
@@ -65,16 +62,6 @@ impl TailscaleGatewayConfig {
         workload_subnets: &[Ipv4Cidr],
     ) -> Result<(), TailscaleConfigError> {
         validate_auth_key(&self.auth_key)?;
-        if self.replicas == 0 {
-            return Err(TailscaleConfigError::ZeroReplicas);
-        }
-        if self.replicas as usize > workload_subnets.len() {
-            return Err(TailscaleConfigError::InsufficientWorkloadNodes {
-                replicas: self.replicas,
-                workload_nodes: workload_subnets.len(),
-            });
-        }
-
         if self.advertise_routes.as_ref().is_some_and(Vec::is_empty) {
             return Err(TailscaleConfigError::EmptyAdvertiseRoutes);
         }
@@ -184,13 +171,6 @@ pub enum TailscaleConfigError {
     WeakAuthKey,
     #[error("Tailscale auth key must contain no more than 512 characters")]
     AuthKeyTooLong,
-    #[error("Tailscale replica count must be greater than zero")]
-    ZeroReplicas,
-    #[error("Tailscale requests {replicas} replicas but only {workload_nodes} nodes run workloads")]
-    InsufficientWorkloadNodes {
-        replicas: u32,
-        workload_nodes: usize,
-    },
     #[error("Tailscale advertise routes must not be an empty list")]
     EmptyAdvertiseRoutes,
     #[error("Tailscale advertise route {index} `{route}` is outside every workload subnet")]
@@ -249,10 +229,6 @@ pub enum TailscaleConfigError {
         /// Resolver address already present in the route.
         nameserver: Ipv4Addr,
     },
-}
-
-const fn default_replicas() -> u32 {
-    2
 }
 
 fn default_tags() -> Vec<String> {

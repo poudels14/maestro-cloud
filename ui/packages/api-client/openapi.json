@@ -2781,12 +2781,6 @@
             },
             "type": "array"
           },
-          "replicas": {
-            "description": "Desired gateway replica count.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
           "tags": {
             "description": "Tailnet policy tags applied during authentication.",
             "items": {
@@ -2798,7 +2792,6 @@
         "required": [
           "advertiseRoutes",
           "dnsNameservers",
-          "replicas",
           "tags",
           "crossClusterDns"
         ],

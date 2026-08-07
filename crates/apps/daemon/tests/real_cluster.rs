@@ -631,7 +631,6 @@ fn topology(
         OperatorAccess::Tailscale => Some(TailscaleGatewayConfig {
             auth_key: SecretValue::new("tskey-auth-real-cluster-fixture"),
             advertise_routes: None,
-            replicas: 1,
             tags: Vec::new(),
             cross_cluster_dns: Vec::new(),
         }),
@@ -687,7 +686,6 @@ fn write_cluster_config(path: &Path, cluster: &ClusterConfig) -> Result<(), Real
             "advertise-routes": tailscale.advertise_routes.as_ref().map(|routes| {
                 routes.iter().map(ToString::to_string).collect::<Vec<_>>()
             }),
-            "replicas": tailscale.replicas,
             "tags": tailscale.tags,
             "cross-cluster-dns": tailscale.cross_cluster_dns,
         })
