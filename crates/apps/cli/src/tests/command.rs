@@ -282,11 +282,26 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "node-a",
             "--upgrade-run-id",
             "upgrade-1",
+            "--force",
             "--yes",
         ])
         .is_ok()
     );
     assert!(Cli::try_parse_from(["maestro", "cluster", "upgrade", "--batch=all", "-y",]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "unfreeze", "--run", "upgrade-1",]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "unfreeze"]).is_ok());
+    assert!(Cli::try_parse_from(["maestro", "cluster", "unfreeze", "--all"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "maestro",
+            "cluster",
+            "unfreeze",
+            "--run",
+            "upgrade-1",
+            "--all",
+        ])
+        .is_err()
+    );
     assert!(
         Cli::try_parse_from([
             "maestro",
@@ -295,7 +310,7 @@ fn context_command_surface_matches_the_rewrite_contract() {
             "--upgrade-run",
             "upgrade-1",
         ])
-        .is_ok()
+        .is_err()
     );
     assert!(Cli::try_parse_from(["maestro", "services", "ls"]).is_ok());
     assert!(
@@ -481,6 +496,7 @@ fn upgrade_confirmation_identifies_the_admin_origin_and_warns_about_all_node_mod
         kernel_api::MAESTRO_VERSION,
         UpgradeBatch::All,
         &["node-b".to_string(), "node-a".to_string()],
+        false,
         "https://admin.maestro.example.test",
         &mut input,
         &mut output,
@@ -507,6 +523,7 @@ fn rolling_upgrade_confirmation_is_succinct() -> Result<(), Box<dyn std::error::
         kernel_api::MAESTRO_VERSION,
         UpgradeBatch::Rolling,
         &[],
+        false,
         "http://10.50.0.5",
         &mut input,
         &mut output,
@@ -518,5 +535,26 @@ fn rolling_upgrade_confirmation_is_succinct() -> Result<(), Box<dyn std::error::
         kernel_api::MAESTRO_VERSION
     );
     assert!(output.contains(&expected));
+    Ok(())
+}
+
+#[test]
+fn forced_upgrade_confirmation_names_the_superseded_maintenance()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut input = std::io::Cursor::new(b"no\n".to_vec());
+    let mut output = Vec::new();
+
+    confirm_upgrade(
+        kernel_api::MAESTRO_VERSION,
+        UpgradeBatch::Rolling,
+        &[],
+        true,
+        "http://10.50.0.5",
+        &mut input,
+        &mut output,
+    )?;
+
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("Existing maintenance: cancel"));
     Ok(())
 }

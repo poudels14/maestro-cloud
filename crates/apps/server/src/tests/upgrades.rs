@@ -1,14 +1,15 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use kernel_api::{
-    RESTART_TARGET_VERSION, ResourceRevision, UpgradeOperation, UpgradePhase, UpgradeRun,
+    RESTART_TARGET_VERSION, ResourceRevision, UpgradeCancelResponse, UpgradeOperation,
+    UpgradePhase, UpgradeRun,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::{ApiServer, ServerSettings};
 
-use super::{decode, request, seeded_store};
+use super::{decode, put, request, seeded_store};
 
 #[tokio::test]
 async fn upgrades_are_validated_created_observed_and_canceled_optimistically()
@@ -182,6 +183,125 @@ async fn restart_runs_require_the_restart_sentinel_and_persist_the_operation()
     Ok(())
 }
 
+#[tokio::test]
+async fn force_atomically_supersedes_existing_maintenance() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (store, cluster_id) = seeded_store().await?;
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+    let old = upgrade_payload("upgrade-old", false);
+    assert_eq!(
+        start(&server, "start-old", old).await?.status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        start(
+            &server,
+            "start-blocked",
+            upgrade_payload("upgrade-blocked", false),
+        )
+        .await?
+        .status(),
+        StatusCode::CONFLICT
+    );
+
+    let forced = start(
+        &server,
+        "start-forced",
+        upgrade_payload("upgrade-forced", true),
+    )
+    .await?;
+    assert_eq!(forced.status(), StatusCode::ACCEPTED);
+    assert!(
+        get(&server, "upgrade-old")
+            .await?
+            .meta
+            .deletion_timestamp
+            .is_some()
+    );
+    let replacement = get(&server, "upgrade-forced").await?;
+    assert_eq!(replacement.status.phase, UpgradePhase::Pending);
+    assert!(replacement.meta.deletion_timestamp.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_and_all_cancellation_select_maintenance_server_side()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (store, cluster_id) = seeded_store().await?;
+    let active = run("upgrade-active", "verifying")?;
+    let queued = run("upgrade-queued", "pending")?;
+    put(
+        store.as_ref(),
+        &cluster_id,
+        "UpgradeRun",
+        "upgrade-active",
+        &active,
+    )
+    .await?;
+    put(
+        store.as_ref(),
+        &cluster_id,
+        "UpgradeRun",
+        "upgrade-queued",
+        &queued,
+    )
+    .await?;
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let current = cancel_current(&server, "cancel-current", false).await?;
+    assert_eq!(current.status(), StatusCode::ACCEPTED);
+    let current = decode::<UpgradeCancelResponse>(current).await?;
+    assert_eq!(
+        current
+            .upgrade_run_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["upgrade-active"]
+    );
+    assert!(
+        get(&server, "upgrade-active")
+            .await?
+            .meta
+            .deletion_timestamp
+            .is_some()
+    );
+    assert!(
+        get(&server, "upgrade-queued")
+            .await?
+            .meta
+            .deletion_timestamp
+            .is_none()
+    );
+
+    let all = cancel_current(&server, "cancel-all", true).await?;
+    assert_eq!(all.status(), StatusCode::ACCEPTED);
+    let all = decode::<UpgradeCancelResponse>(all).await?;
+    assert_eq!(
+        all.upgrade_run_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["upgrade-queued"]
+    );
+    assert!(
+        get(&server, "upgrade-queued")
+            .await?
+            .meta
+            .deletion_timestamp
+            .is_some()
+    );
+    Ok(())
+}
+
 async fn list(server: &ApiServer) -> Result<Vec<UpgradeRun>, Box<dyn std::error::Error>> {
     decode(request(server, "/api/cluster/upgrades", None).await?).await
 }
@@ -212,6 +332,21 @@ async fn start(
         "/api/cluster/upgrades".to_string(),
         idempotency_key,
         payload,
+    )
+    .await
+}
+
+async fn cancel_current(
+    server: &ApiServer,
+    idempotency_key: &str,
+    all: bool,
+) -> Result<axum::response::Response, Box<dyn std::error::Error>> {
+    mutate(
+        server,
+        Method::DELETE,
+        "/api/cluster/upgrades".to_string(),
+        idempotency_key,
+        json!({"all": all}),
     )
     .await
 }
@@ -249,4 +384,28 @@ async fn mutate(
                 .body(Body::from(serde_json::to_vec(&payload)?))?,
         )
         .await?)
+}
+
+fn upgrade_payload(upgrade_run_id: &str, force: bool) -> Value {
+    json!({
+        "upgradeRunId": upgrade_run_id,
+        "spec": {
+            "operation": "upgrade",
+            "targetVersion": "2.0.0",
+            "mode": "rolling"
+        },
+        "force": force
+    })
+}
+
+fn run(id: &str, phase: &str) -> Result<UpgradeRun, serde_json::Error> {
+    serde_json::from_value(json!({
+        "meta": {"id": id, "revision": 0, "generation": 1},
+        "spec": {
+            "operation": "upgrade",
+            "targetVersion": "2.0.0",
+            "mode": "rolling"
+        },
+        "status": {"phase": phase}
+    }))
 }

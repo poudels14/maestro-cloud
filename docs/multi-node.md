@@ -287,6 +287,24 @@ upgrade run. The all-node prompt warns that services and the control plane will
 be unavailable. Use `-y` only in automation that has already enforced the same
 operator approval.
 
+If maintenance is stuck, cancel the current run without copying its generated
+identity. Use `--run` only when selecting an exact retained run, or `--all` to
+cancel every active and queued run:
+
+```sh
+maestro cluster unfreeze
+maestro cluster unfreeze --run upgrade-example
+maestro cluster unfreeze --all
+```
+
+To replace existing maintenance with a newer upgrade in one command, use
+`--force`. The normal topology, quorum, version, and confirmation checks still
+apply:
+
+```sh
+maestro cluster upgrade --force
+```
+
 Permanent removal is a separate, irreversible workflow:
 
 ```sh

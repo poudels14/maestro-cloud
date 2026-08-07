@@ -136,6 +136,11 @@ impl Keyspace {
         self.key(&format!("control/node-upgrades/{node_id}"))
     }
 
+    /// Serialization fence for cluster maintenance admission and cancellation.
+    pub fn maintenance_revision(&self) -> StoreKey {
+        self.key("control/maintenance-revision")
+    }
+
     /// Durable progress record for one permanent node removal.
     pub fn node_removal(&self, node_id: &NodeId) -> StoreKey {
         self.key(&format!("control/node-removals/{node_id}"))

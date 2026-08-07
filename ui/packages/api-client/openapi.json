@@ -7320,6 +7320,30 @@
         ],
         "type": "object"
       },
+      "UpgradeCancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "UpgradeCancelResponse": {
+        "properties": {
+          "upgradeRunIds": {
+            "items": {
+              "$ref": "#/components/schemas/UpgradeRunId"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "upgradeRunIds"
+        ],
+        "type": "object"
+      },
       "UpgradeCommandResponse": {
         "properties": {
           "deletionTimestamp": {
@@ -7345,6 +7369,10 @@
       "UpgradeCreateRequest": {
         "additionalProperties": false,
         "properties": {
+          "force": {
+            "default": false,
+            "type": "boolean"
+          },
           "spec": {
             "$ref": "#/components/schemas/UpgradeRunSpec"
           },
@@ -9051,6 +9079,61 @@
       }
     },
     "/api/cluster/upgrades": {
+      "delete": {
+        "operationId": "cancelCurrentMaintenance",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeCancelResponse"
+                }
+              }
+            },
+            "description": "Lifecycle command accepted for reconciliation"
+          },
+          "400": {
+            "description": "Invalid command request"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "409": {
+            "description": "Revision, idempotency, or lifecycle conflict"
+          },
+          "413": {
+            "description": "Request body exceeds the command limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "browserSession": []
+          }
+        ]
+      },
       "get": {
         "operationId": "listUpgrades",
         "responses": {

@@ -7,10 +7,11 @@ use axum::routing::get;
 use axum::{Json, Router};
 use kernel_api::{
     BuiltinKind, CommandRequest, Generation, Object, ObjectMeta, RESTART_TARGET_VERSION,
-    ResourceKind, ResourceRevision, UpgradeCommandResponse, UpgradeCreateRequest, UpgradeOperation,
-    UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
+    ResourceKind, ResourceRevision, UpgradeCancelRequest, UpgradeCancelResponse,
+    UpgradeCommandResponse, UpgradeCreateRequest, UpgradeOperation, UpgradePhase, UpgradeRun,
+    UpgradeRunId, UpgradeRunSpec, UpgradeRunStatus,
 };
-use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
+use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, Transaction};
 use semver::Version;
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
@@ -18,7 +19,10 @@ use crate::{ApiError, AppState, OperatorIdentity, mutation, resource};
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/cluster/upgrades", get(list).post(create))
+        .route(
+            "/api/cluster/upgrades",
+            get(list).post(create).delete(cancel_current),
+        )
         .route(
             "/api/cluster/upgrades/{upgrade_run_id}",
             get(get_upgrade).delete(cancel),
@@ -64,27 +68,155 @@ async fn create(
     let keys = Keyspace::new(&state.cluster_id);
     let kind = upgrade_kind()?;
     let key = keys.resource(&kind, &payload.upgrade_run_id.clone().into());
+    let gate = state
+        .store
+        .get(&keys.maintenance_revision())
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to read maintenance fence: {error}"))
+        })?;
+    let stored_runs = load_runs(&state, &keys, &kind).await?;
+    if stored_runs
+        .iter()
+        .any(|(_, run)| run.meta.id == payload.upgrade_run_id)
+    {
+        return Err(ApiError::conflict(
+            "upgradeRunExists",
+            "UpgradeRun id already exists",
+        ));
+    }
+    let non_terminal = stored_runs
+        .into_iter()
+        .filter(|(_, run)| is_non_terminal(run))
+        .collect::<Vec<_>>();
+    if !payload.force && !non_terminal.is_empty() {
+        let ids = non_terminal
+            .iter()
+            .map(|(_, run)| run.meta.id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ApiError::conflict(
+            "maintenanceInProgress",
+            format!("cluster maintenance is already in progress: {ids}; retry with --force"),
+        ));
+    }
     let run = new_run(payload.upgrade_run_id, payload.spec);
     let response = UpgradeCommandResponse::from(&run);
+    let now = state.timestamp_clock.now();
+    let mut compares = vec![
+        maintenance_compare(&keys, gate.as_ref()),
+        Compare {
+            key: key.clone(),
+            expected: ExpectedVersion::Missing,
+        },
+    ];
+    let mut mutations = vec![maintenance_mutation(
+        &keys,
+        run.meta.id.as_str().as_bytes().to_vec(),
+    )];
+    if payload.force {
+        for (stored, mut superseded) in non_terminal {
+            superseded.meta.deletion_timestamp = Some(now);
+            compares.push(Compare {
+                key: stored.key.clone(),
+                expected: ExpectedVersion::Exact(stored.version),
+            });
+            mutations.push(Mutation::Put {
+                key: stored.key,
+                value: encode_run(&superseded)?,
+                session: None,
+            });
+        }
+    }
+    mutations.push(Mutation::Put {
+        key,
+        value: encode_run(&run)?,
+        session: None,
+    });
     let response = request
         .commit(
             &state,
             response,
             Transaction {
-                compares: vec![Compare {
-                    key: key.clone(),
-                    expected: ExpectedVersion::Missing,
-                }],
-                mutations: vec![Mutation::Put {
-                    key,
-                    value: serde_json::to_vec(&run).map_err(|error| {
-                        ApiError::internal(format!("failed to encode UpgradeRun: {error}"))
-                    })?,
-                    session: None,
-                }],
+                compares,
+                mutations,
             },
-            "upgradeRunExists",
-            "UpgradeRun id already exists",
+            "maintenanceChanged",
+            "cluster maintenance changed while the command was being accepted; retry the command",
+        )
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn cancel_current(
+    State(state): State<AppState>,
+    Extension(operator): Extension<OperatorIdentity>,
+    headers: HeaderMap,
+    payload: Result<Json<UpgradeCancelRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<UpgradeCancelResponse>), ApiError> {
+    let payload = payload
+        .map_err(|rejection| mutation::json_rejection(rejection, "maintenance cancellation"))?
+        .0;
+    let request = MutationRequest::new(
+        &state,
+        &headers,
+        &operator,
+        "DELETE /api/cluster/upgrades",
+        &[],
+        &payload,
+    )?;
+    if let Some(response) = request.replay(&state).await? {
+        return Ok((StatusCode::ACCEPTED, Json(response)));
+    }
+    let keys = Keyspace::new(&state.cluster_id);
+    let kind = upgrade_kind()?;
+    let gate = state
+        .store
+        .get(&keys.maintenance_revision())
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("failed to read maintenance fence: {error}"))
+        })?;
+    let candidates = load_runs(&state, &keys, &kind)
+        .await?
+        .into_iter()
+        .filter(|(_, run)| is_non_terminal(run))
+        .collect::<Vec<_>>();
+    let selected = select_cancellations(candidates, payload.all)?;
+    let now = state.timestamp_clock.now();
+    let response = UpgradeCancelResponse {
+        upgrade_run_ids: selected
+            .iter()
+            .map(|(_, run)| run.meta.id.clone())
+            .collect(),
+    };
+    let mut compares = vec![maintenance_compare(&keys, gate.as_ref())];
+    let mut mutations = vec![maintenance_mutation(
+        &keys,
+        request.request_id().as_str().as_bytes().to_vec(),
+    )];
+    for (stored, mut run) in selected {
+        run.meta.deletion_timestamp = Some(now);
+        compares.push(Compare {
+            key: stored.key.clone(),
+            expected: ExpectedVersion::Exact(stored.version),
+        });
+        mutations.push(Mutation::Put {
+            key: stored.key,
+            value: encode_run(&run)?,
+            session: None,
+        });
+    }
+    let response = request
+        .commit(
+            &state,
+            response,
+            Transaction {
+                compares,
+                mutations,
+            },
+            "maintenanceChanged",
+            "cluster maintenance changed while cancellation was being accepted; retry the command",
         )
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
@@ -206,6 +338,90 @@ fn new_run(upgrade_run_id: UpgradeRunId, spec: UpgradeRunSpec) -> UpgradeRun {
             conditions: Vec::new(),
         },
     }
+}
+
+async fn load_runs(
+    state: &AppState,
+    keys: &Keyspace,
+    kind: &ResourceKind,
+) -> Result<Vec<(StoredValue, UpgradeRun)>, ApiError> {
+    let snapshot = state
+        .store
+        .list(&keys.resource_kind(kind))
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to list UpgradeRuns: {error}")))?;
+    snapshot
+        .values
+        .into_iter()
+        .map(|stored| {
+            let run = resource::decode(&stored, keys, kind, BuiltinKind::UpgradeRun)?;
+            Ok((stored, run))
+        })
+        .collect()
+}
+
+fn is_non_terminal(run: &UpgradeRun) -> bool {
+    run.meta.deletion_timestamp.is_none()
+        && !matches!(
+            run.status.phase,
+            UpgradePhase::Completed | UpgradePhase::Failed | UpgradePhase::Canceled
+        )
+}
+
+fn select_cancellations(
+    candidates: Vec<(StoredValue, UpgradeRun)>,
+    all: bool,
+) -> Result<Vec<(StoredValue, UpgradeRun)>, ApiError> {
+    if candidates.is_empty() {
+        return Err(ApiError::not_found("cluster has no active maintenance"));
+    }
+    if all {
+        return Ok(candidates);
+    }
+    let active = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_, run))| {
+            (run.status.phase != UpgradePhase::Pending).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let selected = match active.as_slice() {
+        [index] => *index,
+        [] if candidates.len() == 1 => 0,
+        _ => {
+            return Err(ApiError::conflict(
+                "ambiguousMaintenance",
+                "multiple maintenance runs are active or queued; retry with --all",
+            ));
+        }
+    };
+    Ok(candidates
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| (index == selected).then_some(candidate))
+        .collect())
+}
+
+fn maintenance_compare(keys: &Keyspace, stored: Option<&StoredValue>) -> Compare {
+    Compare {
+        key: keys.maintenance_revision(),
+        expected: stored.map_or(ExpectedVersion::Missing, |stored| {
+            ExpectedVersion::Exact(stored.version)
+        }),
+    }
+}
+
+fn maintenance_mutation(keys: &Keyspace, value: Vec<u8>) -> Mutation {
+    Mutation::Put {
+        key: keys.maintenance_revision(),
+        value,
+        session: None,
+    }
+}
+
+fn encode_run(run: &UpgradeRun) -> Result<Vec<u8>, ApiError> {
+    serde_json::to_vec(run)
+        .map_err(|error| ApiError::internal(format!("failed to encode UpgradeRun: {error}")))
 }
 
 fn parse_id(value: String) -> Result<UpgradeRunId, ApiError> {

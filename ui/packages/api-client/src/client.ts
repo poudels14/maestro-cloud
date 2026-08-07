@@ -97,6 +97,11 @@ export interface MaestroApiClient {
     idempotencyKey: string,
     options?: ApiRequestOptions
   ): Promise<ApiSchemas["UpgradeCommandResponse"]>;
+  cancelCurrentMaintenance(
+    request: ApiSchemas["UpgradeCancelRequest"],
+    idempotencyKey: string,
+    options?: ApiRequestOptions
+  ): Promise<ApiSchemas["UpgradeCancelResponse"]>;
   cancelUpgrade(
     upgradeRunId: string,
     request: ApiSchemas["CommandRequest"],

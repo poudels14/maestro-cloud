@@ -334,7 +334,7 @@ export interface paths {
         get: operations["listUpgrades"];
         put?: never;
         post: operations["startUpgrade"];
-        delete?: never;
+        delete: operations["cancelCurrentMaintenance"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3433,6 +3433,13 @@ export interface components {
             /** @description Service owning the replica. */
             serviceId: components["schemas"]["ServiceId"];
         };
+        UpgradeCancelRequest: {
+            /** @default false */
+            all: boolean;
+        };
+        UpgradeCancelResponse: {
+            upgradeRunIds: components["schemas"]["UpgradeRunId"][];
+        };
         UpgradeCommandResponse: {
             deletionTimestamp?: components["schemas"]["Timestamp"];
             generation: components["schemas"]["Generation"];
@@ -3440,6 +3447,8 @@ export interface components {
             upgradeRunId: components["schemas"]["UpgradeRunId"];
         };
         UpgradeCreateRequest: {
+            /** @default false */
+            force: boolean;
             spec: components["schemas"]["UpgradeRunSpec"];
             upgradeRunId: components["schemas"]["UpgradeRunId"];
         };
@@ -4475,6 +4484,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpgradeCommandResponse"];
+                };
+            };
+            /** @description Invalid command request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision, idempotency, or lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request body exceeds the command limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cancelCurrentMaintenance: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Lifecycle command accepted for reconciliation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeCancelResponse"];
                 };
             };
             /** @description Invalid command request */

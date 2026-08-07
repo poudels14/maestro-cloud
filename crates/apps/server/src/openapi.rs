@@ -425,6 +425,15 @@ fn upgrade_collection_operation() -> Value {
                 "UpgradeCommandResponse",
             ),
         );
+        item.insert(
+            "delete".to_string(),
+            command_operation(
+                "cancelCurrentMaintenance",
+                &[],
+                "UpgradeCancelRequest",
+                "UpgradeCancelResponse",
+            ),
+        );
     }
     operation
 }

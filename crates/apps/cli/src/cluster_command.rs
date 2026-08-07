@@ -188,15 +188,21 @@ pub(crate) enum ClusterCommand {
         /// Stable request key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Cancel existing non-terminal maintenance before starting this upgrade.
+        #[arg(long)]
+        force: bool,
         /// Skip the interactive upgrade confirmation.
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Cancel a stale upgrade run and release its owned drains.
+    /// Cancel current cluster maintenance and release its owned drains.
     Unfreeze {
-        /// Exact upgrade run identity to cancel.
+        /// Exact maintenance run identity to cancel.
+        #[arg(long, conflicts_with = "all")]
+        run: Option<String>,
+        /// Cancel every active or queued maintenance run.
         #[arg(long)]
-        upgrade_run: String,
+        all: bool,
         /// Stable request key to reuse after an ambiguous transport failure.
         #[arg(long)]
         idempotency_key: Option<String>,
@@ -395,6 +401,7 @@ pub(crate) async fn run(
             node_ids,
             upgrade_run_id,
             idempotency_key,
+            force,
             yes,
         } => {
             let client = active_client()?;
@@ -403,6 +410,7 @@ pub(crate) async fn run(
                     &target_version,
                     batch,
                     &node_ids,
+                    force,
                     client.admin_origin(),
                     input,
                     output,
@@ -418,18 +426,21 @@ pub(crate) async fn run(
                 batch.into(),
                 node_ids,
                 upgrade_run_id,
+                force,
                 request_id(idempotency_key)?,
                 output,
             )
             .await
         }
         ClusterCommand::Unfreeze {
-            upgrade_run,
+            run,
+            all,
             idempotency_key,
         } => {
             upgrades::cancel(
                 &active_client()?,
-                upgrade_run,
+                run,
+                all,
                 request_id(idempotency_key)?,
                 output,
             )
@@ -442,6 +453,7 @@ pub(crate) fn confirm_upgrade(
     target_version: &str,
     batch: UpgradeBatch,
     node_ids: &[String],
+    force: bool,
     admin_origin: &str,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
@@ -457,6 +469,10 @@ pub(crate) fn confirm_upgrade(
     };
     writeln!(output, "Admin API: {admin_origin}")
         .map_err(|source| CliError::io("failed to write upgrade confirmation", source))?;
+    if force {
+        writeln!(output, "Existing maintenance: cancel")
+            .map_err(|source| CliError::io("failed to write upgrade confirmation", source))?;
+    }
     write!(
         output,
         "Upgrade {target} to Maestro {target_version}+ {strategy}? [y/N]: "

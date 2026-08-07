@@ -2,8 +2,8 @@ use std::sync::Mutex;
 
 use kernel_api::{
     CommandRequest, Generation, NodeId, RESTART_TARGET_VERSION, RequestId, Timestamp,
-    UpgradeCommandResponse, UpgradeCreateRequest, UpgradeMode, UpgradeOperation, UpgradePhase,
-    UpgradeRun, UpgradeRunId,
+    UpgradeCancelRequest, UpgradeCancelResponse, UpgradeCommandResponse, UpgradeCreateRequest,
+    UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunId,
 };
 use serde_json::json;
 
@@ -15,6 +15,7 @@ struct RecordingUpgradeApi {
     runs: Vec<UpgradeRun>,
     starts: Mutex<Vec<(RequestId, UpgradeCreateRequest)>>,
     cancels: Mutex<Vec<(UpgradeRunId, RequestId, CommandRequest)>>,
+    bulk_cancels: Mutex<Vec<(RequestId, UpgradeCancelRequest)>>,
 }
 
 #[tokio::test]
@@ -118,6 +119,23 @@ impl UpgradeApi for RecordingUpgradeApi {
             deletion_timestamp: Some(Timestamp(100)),
         })
     }
+
+    async fn cancel_upgrades(
+        &self,
+        request_id: &RequestId,
+        request: UpgradeCancelRequest,
+    ) -> Result<UpgradeCancelResponse, CliError> {
+        self.bulk_cancels
+            .lock()
+            .map_err(|_| poisoned())?
+            .push((request_id.clone(), request));
+        Ok(UpgradeCancelResponse {
+            upgrade_run_ids: vec![
+                UpgradeRunId::new("upgrade-a")
+                    .map_err(|error| CliError::invalid_input(error.to_string()))?,
+            ],
+        })
+    }
 }
 
 #[tokio::test]
@@ -132,13 +150,15 @@ async fn upgrade_commands_preserve_selection_identity_and_revision()
         UpgradeMode::AllNodes,
         vec!["node-a".to_string()],
         Some("upgrade-new".to_string()),
+        true,
         RequestId::new("start-upgrade-1")?,
         &mut output,
     )
     .await?;
     cancel(
         &api,
-        "upgrade-a".to_string(),
+        Some("upgrade-a".to_string()),
+        false,
         RequestId::new("cancel-upgrade-1")?,
         &mut output,
     )
@@ -149,6 +169,7 @@ async fn upgrade_commands_preserve_selection_identity_and_revision()
     assert_eq!(request.upgrade_run_id.as_str(), "upgrade-new");
     assert_eq!(request.spec.target_version, "2.0.0");
     assert_eq!(request.spec.mode, UpgradeMode::AllNodes);
+    assert!(request.force);
     assert_eq!(
         request.spec.node_ids.first().map(NodeId::as_str),
         Some("node-a")
@@ -165,7 +186,7 @@ async fn upgrade_commands_preserve_selection_identity_and_revision()
     );
     assert!(output.contains("--upgrade-run-id upgrade-new"));
     assert!(output.contains("--idempotency-key start-upgrade-1"));
-    assert!(output.contains("upgrade `upgrade-a` cancellation accepted"));
+    assert!(output.contains("maintenance `upgrade-a` cancellation accepted"));
     Ok(())
 }
 
@@ -179,6 +200,7 @@ async fn upgrade_rejects_duplicate_nodes_before_mutation() -> Result<(), Box<dyn
         UpgradeMode::Rolling,
         vec!["node-a".to_string(), "node-a".to_string()],
         Some("upgrade-duplicate".to_string()),
+        false,
         RequestId::new("upgrade-duplicate-1")?,
         &mut Vec::new(),
     )
@@ -194,6 +216,43 @@ async fn upgrade_rejects_duplicate_nodes_before_mutation() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[tokio::test]
+async fn unfreeze_without_a_run_uses_server_side_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = api()?;
+    let mut output = Vec::new();
+
+    cancel(
+        &api,
+        None,
+        false,
+        RequestId::new("cancel-current-1")?,
+        &mut output,
+    )
+    .await?;
+    cancel(
+        &api,
+        None,
+        true,
+        RequestId::new("cancel-all-1")?,
+        &mut output,
+    )
+    .await?;
+
+    let requests = api
+        .bulk_cancels
+        .lock()
+        .map_err(|_| "bulk cancel lock poisoned")?;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].0.as_str(), "cancel-current-1");
+    assert!(!requests[0].1.all);
+    assert_eq!(requests[1].0.as_str(), "cancel-all-1");
+    assert!(requests[1].1.all);
+    let output = String::from_utf8(output)?;
+    assert!(output.contains("cancellation accepted for `upgrade-a`"));
+    Ok(())
+}
+
 fn api() -> Result<RecordingUpgradeApi, Box<dyn std::error::Error>> {
     Ok(RecordingUpgradeApi {
         runs: vec![
@@ -202,6 +261,7 @@ fn api() -> Result<RecordingUpgradeApi, Box<dyn std::error::Error>> {
         ],
         starts: Mutex::new(Vec::new()),
         cancels: Mutex::new(Vec::new()),
+        bulk_cancels: Mutex::new(Vec::new()),
     })
 }
 

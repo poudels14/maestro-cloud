@@ -69,6 +69,10 @@ test("new operator operations preserve paths, queries, bodies, and idempotency",
     {} as ApiSchemas["TailscaleAuthKeyRotationRequest"],
     "tailscale-key"
   );
+  await client.cancelCurrentMaintenance(
+    {} as ApiSchemas["UpgradeCancelRequest"],
+    "cancel-maintenance-key"
+  );
   await client.diffService("service/a", {} as ApiSchemas["ServiceDiffRequest"]);
   await client.applyServiceRollout(
     "service/a",
@@ -97,6 +101,7 @@ test("new operator operations preserve paths, queries, bodies, and idempotency",
     get("/api/cluster/placements?serviceId=service%2Fa&deploymentId=deployment%2Fb&replicaIndex=2"),
     get("/api/cluster/tailscale/auth-key"),
     mutation("PUT", "/api/cluster/tailscale/auth-key", "tailscale-key"),
+    mutation("DELETE", "/api/cluster/upgrades", "cancel-maintenance-key"),
     mutation("POST", "/api/services/service%2Fa/diff"),
     mutation("POST", "/api/services/service%2Fa/rollout", "rollout-key"),
     mutation("POST", "/api/services/service%2Fa/rollout/diff"),

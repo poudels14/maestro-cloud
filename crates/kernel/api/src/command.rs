@@ -94,6 +94,26 @@ pub struct UpgradeCreateRequest {
     pub upgrade_run_id: UpgradeRunId,
     /// Operation, target version, node selection, and batching strategy.
     pub spec: UpgradeRunSpec,
+    /// Atomically cancel non-terminal maintenance before creating this run.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Selection for canceling cluster maintenance without copying an opaque run identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpgradeCancelRequest {
+    /// Cancel every non-terminal maintenance run instead of requiring exactly one.
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// Accepted cancellation of one or more cluster maintenance runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeCancelResponse {
+    /// Runs atomically marked for cancellation in stable identity order.
+    pub upgrade_run_ids: Vec<UpgradeRunId>,
 }
 
 /// Accepted cluster upgrade mutation.

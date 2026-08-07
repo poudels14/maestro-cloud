@@ -148,6 +148,8 @@ function createApiClient(transport: ApiTransport): MaestroApiClient {
       get(`/api/cluster/upgrades/${encodeURIComponent(upgradeRunId)}`, options),
     startUpgrade: (request, idempotencyKey, options) =>
       mutate("POST", "/api/cluster/upgrades", request, idempotencyKey, options),
+    cancelCurrentMaintenance: (request, idempotencyKey, options) =>
+      mutate("DELETE", "/api/cluster/upgrades", request, idempotencyKey, options),
     cancelUpgrade: (upgradeRunId, request, idempotencyKey, options) =>
       mutate(
         "DELETE",

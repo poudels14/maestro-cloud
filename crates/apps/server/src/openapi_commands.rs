@@ -134,7 +134,31 @@ pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
             "required": ["upgradeRunId", "spec"],
             "properties": {
                 "upgradeRunId": {"$ref": "#/components/schemas/UpgradeRunId"},
-                "spec": {"$ref": "#/components/schemas/UpgradeRunSpec"}
+                "spec": {"$ref": "#/components/schemas/UpgradeRunSpec"},
+                "force": {"type": "boolean", "default": false}
+            }
+        }),
+    );
+    schemas.insert(
+        "UpgradeCancelRequest".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "all": {"type": "boolean", "default": false}
+            }
+        }),
+    );
+    schemas.insert(
+        "UpgradeCancelResponse".to_string(),
+        json!({
+            "type": "object",
+            "required": ["upgradeRunIds"],
+            "properties": {
+                "upgradeRunIds": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/UpgradeRunId"}
+                }
             }
         }),
     );

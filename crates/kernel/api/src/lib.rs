@@ -37,7 +37,8 @@ pub use command::{
     ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
     ServiceRolloutResponse, ServiceRolloutRevisions, ServiceRolloutSpec, ServiceWriteRequest,
     ServiceWriteResponse, TailscaleAuthKeyRotationRequest, TailscaleAuthKeyRotationResponse,
-    TailscaleAuthKeyStatus, UpgradeCommandResponse, UpgradeCreateRequest,
+    TailscaleAuthKeyStatus, UpgradeCancelRequest, UpgradeCancelResponse, UpgradeCommandResponse,
+    UpgradeCreateRequest,
 };
 pub use condition::{Condition, ConditionReason, ConditionState, ConditionType};
 pub use config::{

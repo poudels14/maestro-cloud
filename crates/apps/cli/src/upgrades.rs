@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::io::Write;
 
 use kernel_api::{
-    CommandRequest, NodeId, RESTART_TARGET_VERSION, RequestId, UpgradeCommandResponse,
-    UpgradeCreateRequest, UpgradeMode, UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunId,
-    UpgradeRunSpec,
+    CommandRequest, NodeId, RESTART_TARGET_VERSION, RequestId, UpgradeCancelRequest,
+    UpgradeCancelResponse, UpgradeCommandResponse, UpgradeCreateRequest, UpgradeMode,
+    UpgradeOperation, UpgradePhase, UpgradeRun, UpgradeRunId, UpgradeRunSpec,
 };
 
 use crate::CliError;
@@ -55,6 +55,7 @@ pub(crate) async fn start(
     mode: UpgradeMode,
     node_ids: Vec<String>,
     upgrade_run_id: Option<String>,
+    force: bool,
     request_id: RequestId,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
@@ -65,6 +66,7 @@ pub(crate) async fn start(
         mode,
         node_ids,
         upgrade_run_id,
+        force,
         request_id,
         output,
     )
@@ -85,6 +87,7 @@ pub(crate) async fn restart(
         UpgradeMode::Rolling,
         target.into_node_ids(),
         restart_run_id,
+        false,
         request_id,
         output,
     )
@@ -99,6 +102,7 @@ async fn start_operation(
     mode: UpgradeMode,
     node_ids: Vec<String>,
     run_id: Option<String>,
+    force: bool,
     request_id: RequestId,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
@@ -142,6 +146,7 @@ async fn start_operation(
                     mode,
                     node_ids,
                 },
+                force,
             },
         )
         .await?;
@@ -162,33 +167,61 @@ async fn start_operation(
 
 pub(crate) async fn cancel(
     client: &impl UpgradeApi,
-    upgrade_run_id: String,
+    run_id: Option<String>,
+    all: bool,
     request_id: RequestId,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let upgrade_run_id = UpgradeRunId::new(upgrade_run_id)
-        .map_err(|error| CliError::invalid_input(error.to_string()))?;
-    let run = client.get_upgrade(&upgrade_run_id).await?;
-    let response = client
-        .cancel_upgrade(
-            &upgrade_run_id,
-            &request_id,
-            CommandRequest {
-                expected_revision: run.meta.revision,
-            },
+    if let Some(run_id) = run_id {
+        if all {
+            return Err(CliError::invalid_input(
+                "--run and --all cannot be used together",
+            ));
+        }
+        let upgrade_run_id = UpgradeRunId::new(run_id)
+            .map_err(|error| CliError::invalid_input(error.to_string()))?;
+        let run = client.get_upgrade(&upgrade_run_id).await?;
+        let response = client
+            .cancel_upgrade(
+                &upgrade_run_id,
+                &request_id,
+                CommandRequest {
+                    expected_revision: run.meta.revision,
+                },
+            )
+            .await?;
+        if response.upgrade_run_id != upgrade_run_id || response.deletion_timestamp.is_none() {
+            return Err(CliError::invalid_api_response(
+                "maintenance cancellation receipt does not match the submitted run",
+            ));
+        }
+        writeln!(
+            output,
+            "[maestro]: maintenance `{}` cancellation accepted",
+            response.upgrade_run_id
         )
-        .await?;
-    if response.upgrade_run_id != upgrade_run_id || response.deletion_timestamp.is_none() {
-        return Err(CliError::invalid_api_response(
-            "upgrade cancellation receipt does not match the submitted run",
-        ));
+        .map_err(output_error)
+    } else {
+        let response = client
+            .cancel_upgrades(&request_id, UpgradeCancelRequest { all })
+            .await?;
+        if response.upgrade_run_ids.is_empty() {
+            return Err(CliError::invalid_api_response(
+                "maintenance cancellation receipt contains no runs",
+            ));
+        }
+        writeln!(
+            output,
+            "[maestro]: cancellation accepted for {}",
+            response
+                .upgrade_run_ids
+                .iter()
+                .map(|run_id| format!("`{run_id}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .map_err(output_error)
     }
-    writeln!(
-        output,
-        "[maestro]: upgrade `{}` cancellation accepted",
-        response.upgrade_run_id
-    )
-    .map_err(output_error)
 }
 
 pub(crate) trait UpgradeApi {
@@ -208,6 +241,12 @@ pub(crate) trait UpgradeApi {
         request_id: &RequestId,
         request: CommandRequest,
     ) -> Result<UpgradeCommandResponse, CliError>;
+
+    async fn cancel_upgrades(
+        &self,
+        request_id: &RequestId,
+        request: UpgradeCancelRequest,
+    ) -> Result<UpgradeCancelResponse, CliError>;
 }
 
 impl UpgradeApi for ApiClient {
@@ -241,6 +280,15 @@ impl UpgradeApi for ApiClient {
             &request,
         )
         .await
+    }
+
+    async fn cancel_upgrades(
+        &self,
+        request_id: &RequestId,
+        request: UpgradeCancelRequest,
+    ) -> Result<UpgradeCancelResponse, CliError> {
+        self.delete("/api/cluster/upgrades", request_id, &request)
+            .await
     }
 }
 
