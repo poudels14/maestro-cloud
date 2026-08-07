@@ -17,6 +17,8 @@ use runtime::{
 
 const FILE_CHUNK_BYTES: usize = 64 * 1_024;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+/// Hostname of Depot's project-scoped OCI registry.
+pub const DEPOT_REGISTRY_HOST: &str = "registry.depot.dev";
 
 /// Node-local limits and credentials for Depot remote builds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +39,8 @@ pub struct DepotBuildSettings {
     pub max_context_entries: usize,
     /// Maximum image archive bytes accepted from Depot.
     pub max_output_bytes: u64,
+    /// Saves build output in Depot Registry instead of downloading an image archive.
+    pub registry: bool,
 }
 
 impl DepotBuildSettings {
@@ -51,6 +55,7 @@ impl DepotBuildSettings {
             max_context_bytes: 4 * 1_024 * 1_024 * 1_024,
             max_context_entries: 100_000,
             max_output_bytes: 20 * 1_024 * 1_024 * 1_024,
+            registry: false,
         }
     }
 
@@ -91,6 +96,11 @@ impl DepotBuildSettings {
 /// Protected remote-build seam selected by the Build reconciler.
 #[async_trait]
 pub trait DepotBuildBackend: Send + Sync {
+    /// Reports whether builds without an explicit registry should use Depot Registry.
+    fn registry_enabled(&self) -> bool {
+        false
+    }
+
     /// Builds with one service project and imports the result into local artifact storage.
     async fn build(
         &self,
@@ -105,6 +115,17 @@ pub trait DepotBuildBackend: Send + Sync {
         project: &str,
         destination: &ArtifactReference,
     ) -> Result<ArtifactDigest, ArtifactStoreError>;
+
+    /// Builds and saves output in the project's Depot Registry under one unique tag.
+    async fn build_and_save(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        tag: &str,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let _ = (request, project, tag);
+        Err(rejected("Depot Registry is not supported by this backend"))
+    }
 
     /// Builds while forwarding Depot's native progress to the caller.
     async fn build_with_output(
@@ -127,6 +148,18 @@ pub trait DepotBuildBackend: Send + Sync {
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let _ = output;
         self.build_and_publish(request, project, destination).await
+    }
+
+    /// Saves in Depot Registry while forwarding Depot's native progress.
+    async fn build_and_save_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        tag: &str,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        let _ = output;
+        self.build_and_save(request, project, tag).await
     }
 }
 
@@ -224,10 +257,42 @@ impl ProcessDepotBuildBackend {
             .await?;
         published_digest(&metadata, destination).await
     }
+
+    async fn build_and_save_artifact(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        tag: &str,
+        output_sink: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        validate_request(request, project)?;
+        let destination = ArtifactReference::new(format!("{DEPOT_REGISTRY_HOST}/{project}:{tag}"))?;
+        let workspace = create_workspace(&self.settings.state_root).await?;
+        let context = prepare_context(
+            &request.source,
+            workspace.path(),
+            self.settings.max_context_bytes,
+            self.settings.max_context_entries,
+            "Depot",
+        )
+        .await?;
+        let metadata = workspace.path().join("metadata.json");
+        create_private_output(&metadata).await?;
+        let invocation =
+            save_invocation(request, project, &self.settings, &context, tag, &metadata)?;
+        self.runner
+            .run(invocation, self.settings.build_timeout, output_sink)
+            .await?;
+        published_digest(&metadata, &destination).await
+    }
 }
 
 #[async_trait]
 impl DepotBuildBackend for ProcessDepotBuildBackend {
+    fn registry_enabled(&self) -> bool {
+        self.settings.registry
+    }
+
     async fn build(
         &self,
         request: &ArtifactBuildRequest,
@@ -264,6 +329,27 @@ impl DepotBuildBackend for ProcessDepotBuildBackend {
         output: &dyn ArtifactBuildOutputSink,
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         self.build_and_publish_artifact(request, project, destination, output)
+            .await
+    }
+
+    async fn build_and_save(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        tag: &str,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_and_save_artifact(request, project, tag, &DiscardArtifactBuildOutput)
+            .await
+    }
+
+    async fn build_and_save_with_output(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        tag: &str,
+        output: &dyn ArtifactBuildOutputSink,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        self.build_and_save_artifact(request, project, tag, output)
             .await
     }
 }
@@ -478,6 +564,30 @@ fn publish_invocation(
     Ok(invocation)
 }
 
+fn save_invocation(
+    request: &ArtifactBuildRequest,
+    project: &str,
+    settings: &DepotBuildSettings,
+    context: &DepotBuildContext,
+    tag: &str,
+    metadata: &Path,
+) -> Result<DepotInvocation, ArtifactStoreError> {
+    let metadata = path_text(metadata, "Depot metadata output")?;
+    let destination = ArtifactReference::new(format!("{DEPOT_REGISTRY_HOST}/{project}:{tag}"))?;
+    let mut invocation =
+        common_invocation(request, project, settings, context, destination.as_str())?;
+    invocation.arguments.extend([
+        OsString::from("--metadata-file"),
+        OsString::from(metadata),
+        OsString::from("--save"),
+        OsString::from("--save-tag"),
+        OsString::from(tag),
+        OsString::from("."),
+    ]);
+    invocation.result_path = PathBuf::from(metadata);
+    Ok(invocation)
+}
+
 fn validate_request(
     request: &ArtifactBuildRequest,
     project: &str,
@@ -508,9 +618,7 @@ fn validate_request(
         }
     }
     if !request.tags.is_empty() {
-        return Err(rejected(
-            "Depot builds assign references only after local import",
-        ));
+        return Err(rejected("Depot builds do not accept caller-supplied tags"));
     }
     Ok(())
 }

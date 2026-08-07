@@ -407,6 +407,16 @@ impl BuildReconciler {
                             )
                             .await
                     }
+                    None if backend.registry_enabled() => {
+                        backend
+                            .build_and_save_with_output(
+                                request,
+                                &depot.project,
+                                build.spec.deployment_id.as_str(),
+                                output,
+                            )
+                            .await
+                    }
                     None => {
                         backend
                             .build_with_output(request, &depot.project, output)

@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use build::{DepotBuildBackend, DepotBuildSettings, ProcessDepotBuildBackend};
+use build::{DEPOT_REGISTRY_HOST, DepotBuildBackend, DepotBuildSettings, ProcessDepotBuildBackend};
 use cluster::DepotLaunchConfig;
-use runtime::ArtifactStore;
+use runtime::{ArtifactStore, RegistryCredential};
 
 pub(crate) fn validate_depot(config: &DepotLaunchConfig) -> Result<(), DepotLaunchError> {
     if config.token.expose().trim().is_empty() || config.token.expose().contains('\0') {
@@ -40,9 +41,24 @@ pub(crate) fn configure_depot(
     let mut settings = DepotBuildSettings::new(config.token.clone(), state_root);
     settings.executable = config.executable.clone();
     settings.build_timeout = Duration::from_secs(config.timeout_secs);
+    settings.registry = config.registry;
     Ok(Arc::new(ProcessDepotBuildBackend::new(
         settings, artifacts,
     )?))
+}
+
+pub(crate) fn registry_credentials(
+    config: Option<&DepotLaunchConfig>,
+) -> BTreeMap<String, RegistryCredential> {
+    config
+        .filter(|config| config.registry)
+        .map(|config| {
+            BTreeMap::from([(
+                DEPOT_REGISTRY_HOST.to_owned(),
+                RegistryCredential::new("x-token", config.token.clone()),
+            )])
+        })
+        .unwrap_or_default()
 }
 
 /// Invalid Depot process configuration.

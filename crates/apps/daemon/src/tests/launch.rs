@@ -333,6 +333,7 @@ fn depot_launch_config_is_validated_serialized_and_debug_redacted()
         token: SecretValue::new("depot-super-secret"),
         executable: PathBuf::from("/opt/depot/bin/depot"),
         timeout_secs: 900,
+        registry: true,
     });
     launch.validate()?;
     assert!(!format!("{launch:?}").contains("depot-super-secret"));
@@ -343,6 +344,13 @@ fn depot_launch_config_is_validated_serialized_and_debug_redacted()
             .and_then(|depot| depot.get("executable"))
             .and_then(serde_json::Value::as_str),
         Some("/opt/depot/bin/depot")
+    );
+    assert_eq!(
+        encoded
+            .get("depot")
+            .and_then(|depot| depot.get("registry"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
     );
 
     launch

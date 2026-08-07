@@ -268,6 +268,14 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
         )?,
         registry_build_deployment("registry-build", 4, "registry.test/api@sha256:built")?,
         image_deployment("registry", 5, "registry.test/api@sha256:external")?,
+        deployment(
+            "depot-registry-build",
+            6,
+            DeploymentPhase::Ready,
+            Some(
+                "registry.depot.dev/project@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+        )?,
     ];
     assert_eq!(
         retained_digests(&deployments)?,
@@ -283,6 +291,9 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
             ArtifactDigest::new("sha256:latest")?,
             ArtifactDigest::new("registry.test/api@sha256:built")?,
             ArtifactDigest::new("registry.test/api@sha256:external")?,
+            ArtifactDigest::new(
+                "registry.depot.dev/project@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )?,
         ])
     );
     Ok(())

@@ -8,13 +8,15 @@ use crate::ArtifactReplicationError;
 pub(crate) fn retained_digests(
     deployments: &[Deployment],
 ) -> Result<BTreeSet<ArtifactDigest>, ArtifactReplicationError> {
+    let registry_free = deployments
+        .iter()
+        .map(registry_free_build)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut latest = BTreeMap::<ServiceId, (kernel_api::Timestamp, DeploymentId)>::new();
-    for deployment in deployments.iter().filter(|deployment| {
-        matches!(
-            &deployment.spec.service.artifact,
-            ArtifactTemplate::Build { template } if template.registry.is_none()
-        ) && deployment.status.image_digest.is_some()
-    }) {
+    for (deployment, registry_free) in deployments.iter().zip(&registry_free) {
+        if !registry_free || deployment.status.image_digest.is_none() {
+            continue;
+        }
         let candidate = (deployment.status.created_at, deployment.meta.id.clone());
         latest
             .entry(deployment.spec.service_id.clone())
@@ -27,25 +29,40 @@ pub(crate) fn retained_digests(
     }
     deployments
         .iter()
-        .filter(|deployment| {
-            matches!(
-                &deployment.spec.service.artifact,
-                ArtifactTemplate::Build { template } if template.registry.is_none()
-            ) && (matches!(
-                deployment.status.phase,
-                DeploymentPhase::Building
-                    | DeploymentPhase::Publishing
-                    | DeploymentPhase::PendingReady
-                    | DeploymentPhase::Retrying
-                    | DeploymentPhase::Ready
-                    | DeploymentPhase::Draining
-            ) || latest
-                .get(&deployment.spec.service_id)
-                .is_some_and(|(_, id)| id == &deployment.meta.id))
+        .zip(registry_free)
+        .filter(|(deployment, registry_free)| {
+            *registry_free
+                && (matches!(
+                    deployment.status.phase,
+                    DeploymentPhase::Building
+                        | DeploymentPhase::Publishing
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
+                        | DeploymentPhase::Ready
+                        | DeploymentPhase::Draining
+                ) || latest
+                    .get(&deployment.spec.service_id)
+                    .is_some_and(|(_, id)| id == &deployment.meta.id))
         })
-        .filter_map(|deployment| deployment.status.image_digest.as_deref())
+        .filter_map(|(deployment, _)| deployment.status.image_digest.as_deref())
         .map(|digest| ArtifactDigest::new(digest.to_owned()).map_err(Into::into))
         .collect()
+}
+
+fn registry_free_build(deployment: &Deployment) -> Result<bool, ArtifactReplicationError> {
+    let ArtifactTemplate::Build { template } = &deployment.spec.service.artifact else {
+        return Ok(false);
+    };
+    if template.registry.is_some() {
+        return Ok(false);
+    }
+    deployment
+        .status
+        .image_digest
+        .as_deref()
+        .map(ArtifactDigest::new)
+        .transpose()?
+        .map_or(Ok(true), |digest| digest.is_internal().map_err(Into::into))
 }
 
 pub(crate) fn preserved_digests(

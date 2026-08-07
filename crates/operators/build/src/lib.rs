@@ -16,7 +16,9 @@ mod watch_writer;
 mod writer;
 
 pub use archive::{ArtifactArchiveStore, ArtifactArchiveWrite};
-pub use depot::{DepotBuildBackend, DepotBuildSettings, ProcessDepotBuildBackend};
+pub use depot::{
+    DEPOT_REGISTRY_HOST, DepotBuildBackend, DepotBuildSettings, ProcessDepotBuildBackend,
+};
 pub use local_source::LocalBuildSourceProvider;
 pub use reconciler::BuildReconciler;
 pub use source::{

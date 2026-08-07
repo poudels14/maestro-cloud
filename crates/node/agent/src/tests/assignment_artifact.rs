@@ -18,10 +18,42 @@ use runtime::{
 };
 
 use super::assignment::{assignment, cluster_id, deployment, node_id};
+use crate::assignment::requires_artifact_replication;
 use crate::{
     ArtifactHolderRegistry, ArtifactPeerSource, ArtifactPeerSourceError, ArtifactReplicationAgent,
     ArtifactReplicationSettings, AssignmentAgent, AssignmentAgentSettings, StatusClock,
 };
+
+#[test]
+fn registry_bound_build_output_bypasses_peer_replication() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut desired = deployment();
+    desired.spec.service.artifact = ArtifactTemplate::Build {
+        template: BuildTemplate {
+            source: BuildSource::Git {
+                repository: "https://example.test/api.git".to_owned(),
+                revision: "main".to_owned(),
+            },
+            dockerfile: "Dockerfile".to_owned(),
+            watch: false,
+            registry: None,
+            depot: None,
+            environment: Default::default(),
+            environment_source: None,
+            secrets: Default::default(),
+            secrets_source: None,
+        },
+    };
+    desired.status.image_digest = Some(
+        "registry.depot.dev/project@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .to_owned(),
+    );
+    assert!(!requires_artifact_replication(&desired)?);
+
+    desired.status.image_digest = Some("sha256:local-build".to_owned());
+    assert!(requires_artifact_replication(&desired)?);
+    Ok(())
+}
 
 #[tokio::test]
 async fn registry_free_assignment_waits_for_a_verified_local_artifact()

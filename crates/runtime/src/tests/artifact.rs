@@ -23,3 +23,29 @@ fn artifact_references_use_the_oci_distribution_grammar() {
     assert!(ArtifactReference::new("team/api:").is_err());
     assert!(ArtifactReference::new("team/api@sha256:abc").is_err());
 }
+
+#[test]
+fn artifact_digests_distinguish_node_local_and_registry_bound_content() {
+    assert!(
+        ArtifactDigest::new("sha256:local")
+            .unwrap()
+            .is_internal()
+            .unwrap()
+    );
+    assert!(
+        ArtifactDigest::new(
+            "maestro.local/artifacts/build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+            .unwrap()
+            .is_internal()
+            .unwrap()
+    );
+    assert!(
+        !ArtifactDigest::new(
+            "registry.depot.dev/project@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+            .unwrap()
+            .is_internal()
+            .unwrap()
+    );
+}

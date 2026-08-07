@@ -308,6 +308,36 @@ async fn depot_build_publishes_directly_without_a_local_artifact_round_trip() ->
 }
 
 #[tokio::test]
+async fn depot_registry_flag_saves_without_an_explicit_service_registry() -> TestResult {
+    let world = TestWorld::new().await?;
+    let mut build = queued_build("Dockerfile")?;
+    build.spec.template.depot = Some(DepotBuildConfig {
+        project: "project-123".to_owned(),
+    });
+    world.seed(&build).await?;
+    let artifacts = Arc::new(RecordingArtifacts::successful()?);
+    let depot = Arc::new(RecordingDepot::with_registry()?);
+    let controller = world.runtime_with_depot(
+        Arc::new(RecordingSource::successful("commit-abc")),
+        artifacts.clone(),
+        Some(depot.clone()),
+    )?;
+
+    assert_eq!(controller.reconcile_snapshot().await?, 0);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+    assert_eq!(controller.reconcile_snapshot().await?, 1);
+
+    assert!(artifacts.calls().is_empty());
+    assert_eq!(depot.saved_tags(), ["deployment-1".to_owned()]);
+    assert_eq!(
+        world.build().await?.status.image_digest.as_deref(),
+        Some("registry.depot.dev/project-123@sha256:depot")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn depot_build_fails_cleanly_when_cluster_has_no_token() -> TestResult {
     let world = TestWorld::new().await?;
     let mut build = queued_build("Dockerfile")?;
@@ -525,18 +555,29 @@ fn only_condition(build: &Build) -> TestResult<&Condition> {
 
 struct RecordingDepot {
     digest: ArtifactDigest,
+    registry_enabled: bool,
     projects: Mutex<Vec<String>>,
     requests: Mutex<Vec<ArtifactBuildRequest>>,
     destinations: Mutex<Vec<runtime::ArtifactReference>>,
+    saved_tags: Mutex<Vec<String>>,
 }
 
 impl RecordingDepot {
     fn new() -> TestResult<Self> {
         Ok(Self {
             digest: ArtifactDigest::new("sha256:depot")?,
+            registry_enabled: false,
             projects: Mutex::new(Vec::new()),
             requests: Mutex::new(Vec::new()),
             destinations: Mutex::new(Vec::new()),
+            saved_tags: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn with_registry() -> TestResult<Self> {
+        Ok(Self {
+            registry_enabled: true,
+            ..Self::new()?
         })
     }
 
@@ -551,10 +592,18 @@ impl RecordingDepot {
     fn destinations(&self) -> Vec<runtime::ArtifactReference> {
         lock(&self.destinations).clone()
     }
+
+    fn saved_tags(&self) -> Vec<String> {
+        lock(&self.saved_tags).clone()
+    }
 }
 
 #[async_trait]
 impl DepotBuildBackend for RecordingDepot {
+    fn registry_enabled(&self) -> bool {
+        self.registry_enabled
+    }
+
     async fn build(
         &self,
         request: &ArtifactBuildRequest,
@@ -575,6 +624,21 @@ impl DepotBuildBackend for RecordingDepot {
         lock(&self.projects).push(project.to_owned());
         lock(&self.destinations).push(destination.clone());
         self.digest.for_reference(destination)
+    }
+
+    async fn build_and_save(
+        &self,
+        request: &ArtifactBuildRequest,
+        project: &str,
+        tag: &str,
+    ) -> Result<ArtifactDigest, ArtifactStoreError> {
+        lock(&self.requests).push(request.clone());
+        lock(&self.projects).push(project.to_owned());
+        lock(&self.saved_tags).push(tag.to_owned());
+        self.digest
+            .for_reference(&runtime::ArtifactReference::new(format!(
+                "registry.depot.dev/{project}:{tag}"
+            ))?)
     }
 }
 

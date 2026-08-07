@@ -5,14 +5,14 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use containerd::services::v1::{StreamInit, streaming_client::StreamingClient};
 use containerd::tonic::{Streaming, transport::Channel};
-use containerd::types::transfer::{Data, WindowUpdate};
+use containerd::types::transfer::{AuthRequest, AuthResponse, AuthType, Data, WindowUpdate};
 use futures_util::stream;
 use prost::{Message, Name};
 use prost_types::Any;
 use tokio::sync::mpsc;
 
 use crate::containerd_artifact_support::{artifact_request, operation_error, stream_error};
-use crate::{ArtifactByteStream, ArtifactStoreError};
+use crate::{ArtifactByteStream, ArtifactStoreError, RegistryCredential};
 
 const DATA_BYTES: usize = 32 * 1_024;
 const WINDOW_BYTES: usize = 2 * DATA_BYTES;
@@ -55,7 +55,7 @@ pub(crate) async fn open_stream(
     channel: Channel,
     namespace: &str,
     stream_id: &str,
-    lease_id: &str,
+    lease_id: Option<&str>,
 ) -> Result<ArtifactDuplex, ArtifactStoreError> {
     let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE);
     sender
@@ -68,7 +68,7 @@ pub(crate) async fn open_stream(
         receiver.recv().await.map(|message| (message, receiver))
     });
     let mut incoming = StreamingClient::new(channel)
-        .stream(artifact_request(outbound, namespace, Some(lease_id))?)
+        .stream(artifact_request(outbound, namespace, lease_id)?)
         .await
         .map_err(|error| operation_error("open artifact stream", None, error))?
         .into_inner();
@@ -80,6 +80,66 @@ pub(crate) async fn open_stream(
     Ok(ArtifactDuplex {
         sender: Some(sender),
         incoming,
+    })
+}
+
+pub(crate) async fn serve_registry_auth(
+    mut duplex: ArtifactDuplex,
+    mut transfer: TransferTask,
+    registry_host: &str,
+    credential: &RegistryCredential,
+) -> Result<(), ArtifactStoreError> {
+    loop {
+        let message = tokio::select! {
+            result = &mut transfer => {
+                duplex.sender.take();
+                return result;
+            }
+            result = duplex.incoming.message() => result
+                .map_err(|error| stream_error("registry authentication", error))?,
+        }
+        .ok_or_else(|| {
+            stream_error(
+                "registry authentication",
+                "server closed the callback stream before transfer completion",
+            )
+        })?;
+        let request = decode::<AuthRequest>(&message, "registry authentication request")?;
+        let response = registry_auth_response(&request, registry_host, credential)?;
+        duplex
+            .sender
+            .as_ref()
+            .ok_or_else(|| stream_error("registry authentication", "callback stream is closed"))?
+            .send(containerd::to_any(&response))
+            .await
+            .map_err(|_| {
+                stream_error(
+                    "registry authentication",
+                    "callback response channel closed",
+                )
+            })?;
+    }
+}
+
+pub(crate) fn registry_auth_response(
+    request: &AuthRequest,
+    registry_host: &str,
+    credential: &RegistryCredential,
+) -> Result<AuthResponse, ArtifactStoreError> {
+    if request.host != registry_host {
+        return Err(stream_error(
+            "registry authentication",
+            format!(
+                "registry `{registry_host}` requested credentials for unexpected host `{}`",
+                request.host
+            ),
+        ));
+    }
+    Ok(AuthResponse {
+        auth_type: AuthType::Credentials as i32,
+        secret: credential.secret().expose().to_owned(),
+        username: credential.username().to_owned(),
+        expire_at: None,
     })
 }
 

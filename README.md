@@ -287,6 +287,21 @@ configured; registry-free Depot builds download and import an image archive.
 Registry credentials remain a node-runtime responsibility. Direct Depot pushes
 use the Docker credential provider available to the Maestro daemon.
 
+Set cluster-level `depot.registry` to `true` to use Depot Registry when a
+Depot-backed service does not configure `build.registry`. Maestro passes the
+Depot token to the node runtime only for authenticated pulls from
+`registry.depot.dev`; explicit service registries still take precedence. The
+flag defaults to `false`.
+
+```jsonc
+{
+  "depot": {
+    "token": "aws-secret://maestro/depot-token",
+    "registry": true
+  }
+}
+```
+
 To use Depot, configure the cluster-level `depot.token`, then select the remote
 builder per service:
 

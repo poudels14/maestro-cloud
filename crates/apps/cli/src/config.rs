@@ -324,7 +324,8 @@ const CLUSTER_TEMPLATE: &str = r#"{
   // },
   // "depot": {
   //   "token": "aws-secret://maestro/depot-token",
-  //   "timeout-secs": 1800
+  //   "timeout-secs": 1800,
+  //   "registry": true
   // },
   // "log-backup": {
   //   "bucket": "maestro-production-logs",

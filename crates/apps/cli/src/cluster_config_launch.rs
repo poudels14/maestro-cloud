@@ -50,6 +50,7 @@ pub(crate) async fn convert_launch_policy(
                 ),
                 executable: input.executable.clone(),
                 timeout_secs: input.timeout_secs,
+                registry: input.registry,
             };
             if config.token.expose().contains('\0') {
                 return Err(invalid("depot.token", "must not contain a null byte"));

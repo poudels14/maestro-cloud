@@ -105,6 +105,7 @@ mod workload;
 pub use artifact::{
     ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest, ArtifactPrunePolicy,
     ArtifactPruneReport, ArtifactReference, ArtifactSource, ArtifactStore, ArtifactStoreError,
+    RegistryCredential,
 };
 pub use artifact_output::{
     ArtifactBuildOutputSink, ArtifactBuildOutputStream, DiscardArtifactBuildOutput,

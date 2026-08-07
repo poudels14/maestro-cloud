@@ -7,6 +7,8 @@ use kernel_api::SecretValue;
 use oci_spec::distribution::Reference;
 use serde::{Deserialize, Serialize};
 
+const INTERNAL_REGISTRY: &str = "maestro.local";
+
 /// Image name, tag, or digest accepted by an artifact backend.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -27,6 +29,33 @@ impl ArtifactReference {
 
     pub(crate) fn parsed(&self) -> Result<Reference, ArtifactStoreError> {
         parse_oci_reference(&self.0)
+    }
+}
+
+/// Username and secret supplied only to one exact OCI registry host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryCredential {
+    username: String,
+    secret: SecretValue,
+}
+
+impl RegistryCredential {
+    /// Creates a registry credential without exposing its secret through debug output.
+    pub fn new(username: impl Into<String>, secret: SecretValue) -> Self {
+        Self {
+            username: username.into(),
+            secret,
+        }
+    }
+
+    /// Returns the registry username.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Returns the protected registry secret.
+    pub fn secret(&self) -> &SecretValue {
+        &self.secret
     }
 }
 
@@ -63,6 +92,14 @@ impl ArtifactDigest {
     /// Returns the immutable backend digest.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Reports whether this digest belongs to Maestro's node-local artifact store.
+    pub fn is_internal(&self) -> Result<bool, ArtifactStoreError> {
+        if !self.0.contains('@') {
+            return Ok(true);
+        }
+        Ok(parse_oci_reference(&self.0)?.registry() == INTERNAL_REGISTRY)
     }
 
     /// Rebinds this content digest to the repository portion of a destination.

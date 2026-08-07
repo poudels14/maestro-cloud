@@ -165,6 +165,7 @@ async fn launch_daemon_inner(
                 socket: containerd_socket,
                 namespace: format!("maestro-{}", cluster.cluster_id),
                 state_root: data_directory.join("runtime").join("containerd"),
+                registry_credentials: crate::depot_config::registry_credentials(depot.as_ref()),
                 ..ContainerdRuntimeSettings::default()
             },
             Arc::new(TokioRuntimeClock::new()),
@@ -174,7 +175,11 @@ async fn launch_daemon_inner(
     #[cfg(any(target_os = "macos", feature = "macos-platform"))]
     let runtime = {
         let _containerd_socket = containerd_socket;
-        Arc::new(DockerRuntime::connect_with_defaults()?)
+        Arc::new(
+            DockerRuntime::connect_with_defaults()?.with_registry_credentials(
+                crate::depot_config::registry_credentials(depot.as_ref()),
+            ),
+        )
     };
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     let volatile_root = PathBuf::from("/run/maestro")

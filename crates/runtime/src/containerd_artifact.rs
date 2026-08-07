@@ -11,7 +11,8 @@ use containerd::services::v1::{
 use containerd::tonic::Code;
 use containerd::tonic::transport::Channel;
 use containerd::types::transfer::{
-    ImageExportStream, ImageImportStream, ImageStore, OciRegistry, UnpackConfiguration,
+    ImageExportStream, ImageImportStream, ImageStore, OciRegistry, RegistryResolver,
+    UnpackConfiguration,
 };
 use kernel_api::Timestamp;
 use prost_types::Any;
@@ -21,7 +22,7 @@ use uuid::Uuid;
 
 use crate::containerd::ContainerdRuntime;
 use crate::containerd_artifact_stream::{
-    ContainerdArtifactStream, TransferTask, open_stream, upload_stream,
+    ContainerdArtifactStream, TransferTask, open_stream, serve_registry_auth, upload_stream,
 };
 use crate::containerd_artifact_support::{
     MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, host_platform, image_digest,
@@ -33,7 +34,7 @@ use crate::containerd_image::resolve_host_manifest_descriptor;
 use crate::{
     ArtifactBuildOutputSink, ArtifactBuildRequest, ArtifactByteStream, ArtifactDigest,
     ArtifactPrunePolicy, ArtifactPruneReport, ArtifactReference, ArtifactStore, ArtifactStoreError,
-    DiscardArtifactBuildOutput, RuntimeError,
+    DiscardArtifactBuildOutput, RegistryCredential, RuntimeError,
 };
 
 const LEASE_EXPIRATION_LABEL: &str = "containerd.io/gc.expire";
@@ -63,9 +64,10 @@ impl ArtifactStore for ContainerdRuntime {
     ) -> Result<ArtifactDigest, ArtifactStoreError> {
         let platform = host_platform();
         let registry_reference = registry_reference(reference.as_str())?;
+        let auth = registry_auth(reference, &self.settings.registry_credentials)?;
         let source = containerd::to_any(&OciRegistry {
             reference: registry_reference,
-            resolver: None,
+            resolver: auth.as_ref().map(RegistryAuth::resolver),
         });
         let destination = containerd::to_any(&ImageStore {
             name: reference.as_str().to_owned(),
@@ -77,14 +79,17 @@ impl ArtifactStore for ContainerdRuntime {
             }],
             ..Default::default()
         });
-        transfer(
+        registry_transfer(
             self.channel.clone(),
             self.settings.namespace.clone(),
-            source,
-            destination,
-            "pull",
-            Some(reference.as_str().to_owned()),
-            None,
+            RegistryTransfer {
+                source,
+                destination,
+                operation: "pull",
+                reference: Some(reference.as_str().to_owned()),
+                lease_id: None,
+                auth,
+            },
         )
         .await?;
         let image = self
@@ -100,20 +105,24 @@ impl ArtifactStore for ContainerdRuntime {
     ) -> Result<(), ArtifactStoreError> {
         let image = select_image(&self.images().await?, digest)?;
         let registry_reference = registry_reference(destination.as_str())?;
-        transfer(
+        let auth = registry_auth(destination, &self.settings.registry_credentials)?;
+        registry_transfer(
             self.channel.clone(),
             self.settings.namespace.clone(),
-            containerd::to_any(&ImageStore {
-                name: image.name,
-                ..Default::default()
-            }),
-            containerd::to_any(&OciRegistry {
-                reference: registry_reference,
-                resolver: None,
-            }),
-            "push",
-            Some(destination.as_str().to_owned()),
-            None,
+            RegistryTransfer {
+                source: containerd::to_any(&ImageStore {
+                    name: image.name,
+                    ..Default::default()
+                }),
+                destination: containerd::to_any(&OciRegistry {
+                    reference: registry_reference,
+                    resolver: auth.as_ref().map(RegistryAuth::resolver),
+                }),
+                operation: "push",
+                reference: Some(destination.as_str().to_owned()),
+                lease_id: None,
+                auth,
+            },
         )
         .await
     }
@@ -182,7 +191,7 @@ impl ArtifactStore for ContainerdRuntime {
             self.channel.clone(),
             &self.settings.namespace,
             &stream_id,
-            &lease_id,
+            Some(&lease_id),
         )
         .await
         {
@@ -234,7 +243,7 @@ impl ArtifactStore for ContainerdRuntime {
             self.channel.clone(),
             &self.settings.namespace,
             &stream_id,
-            &lease_id,
+            Some(&lease_id),
         )
         .await
         {
@@ -568,6 +577,91 @@ async fn transfer(
         .await
         .map_err(|error| operation_error(operation, reference.as_deref(), error))?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct RegistryAuth {
+    stream_id: String,
+    host: String,
+    credential: RegistryCredential,
+}
+
+struct RegistryTransfer {
+    source: Any,
+    destination: Any,
+    operation: &'static str,
+    reference: Option<String>,
+    lease_id: Option<String>,
+    auth: Option<RegistryAuth>,
+}
+
+impl RegistryAuth {
+    fn resolver(&self) -> RegistryResolver {
+        RegistryResolver {
+            auth_stream: self.stream_id.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+fn registry_auth(
+    reference: &ArtifactReference,
+    credentials: &std::collections::BTreeMap<String, RegistryCredential>,
+) -> Result<Option<RegistryAuth>, ArtifactStoreError> {
+    let parsed = reference.parsed()?;
+    let host = parsed.registry();
+    Ok(credentials
+        .get(host)
+        .cloned()
+        .map(|credential| RegistryAuth {
+            stream_id: next_transfer_id("registry-auth"),
+            host: host.to_owned(),
+            credential,
+        }))
+}
+
+async fn registry_transfer(
+    channel: Channel,
+    namespace: String,
+    request: RegistryTransfer,
+) -> Result<(), ArtifactStoreError> {
+    let RegistryTransfer {
+        source,
+        destination,
+        operation,
+        reference,
+        lease_id,
+        auth,
+    } = request;
+    let Some(auth) = auth else {
+        return transfer(
+            channel,
+            namespace,
+            source,
+            destination,
+            operation,
+            reference,
+            lease_id,
+        )
+        .await;
+    };
+    let duplex = open_stream(
+        channel.clone(),
+        &namespace,
+        &auth.stream_id,
+        lease_id.as_deref(),
+    )
+    .await?;
+    let transfer = TransferTask::new(transfer(
+        channel,
+        namespace,
+        source,
+        destination,
+        operation,
+        reference,
+        lease_id,
+    ));
+    serve_registry_auth(duplex, transfer, &auth.host, &auth.credential).await
 }
 
 async fn create_lease(

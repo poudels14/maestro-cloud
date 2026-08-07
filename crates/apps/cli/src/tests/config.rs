@@ -451,7 +451,8 @@ async fn production_launch_policy_resolves_secrets_and_preserves_operational_set
             depot: {
                 token: "aws-secret://depot-token",
                 executable: "/opt/depot/bin/depot",
-                "timeout-secs": 900
+                "timeout-secs": 900,
+                registry: true
             },
             "log-backup": {
                 bucket: "maestro-logs",
@@ -514,6 +515,7 @@ async fn production_launch_policy_resolves_secrets_and_preserves_operational_set
         std::path::Path::new("/opt/depot/bin/depot")
     );
     assert_eq!(depot.timeout_secs, 900);
+    assert!(depot.registry);
     let backup = loaded
         .launch_policy
         .log_backup

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use crate::RuntimeError;
 use crate::containerd_settings::ContainerdRuntimeSettings;
+use crate::{RegistryCredential, RuntimeError};
+use kernel_api::SecretValue;
 
 #[test]
 fn containerd_defaults_are_valid_and_explicit() {
@@ -66,6 +67,18 @@ fn containerd_settings_reject_relative_empty_and_zero_values() {
 
     let settings = ContainerdRuntimeSettings {
         buildkit_address: "bad\naddress".to_owned(),
+        ..ContainerdRuntimeSettings::default()
+    };
+    assert!(matches!(
+        settings.validate(),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let settings = ContainerdRuntimeSettings {
+        registry_credentials: std::collections::BTreeMap::from([(
+            "invalid/host".to_owned(),
+            RegistryCredential::new("x-token", SecretValue::new("protected")),
+        )]),
         ..ContainerdRuntimeSettings::default()
     };
     assert!(matches!(

@@ -71,6 +71,24 @@ fn validate_runtime_environment(
     Ok(())
 }
 
+pub(crate) fn requires_artifact_replication(
+    deployment: &Deployment,
+) -> Result<bool, runtime::ArtifactStoreError> {
+    let ArtifactTemplate::Build { template } = &deployment.spec.service.artifact else {
+        return Ok(false);
+    };
+    if template.registry.is_some() {
+        return Ok(false);
+    }
+    deployment
+        .status
+        .image_digest
+        .as_deref()
+        .map(ArtifactDigest::new)
+        .transpose()?
+        .map_or(Ok(true), |digest| digest.is_internal())
+}
+
 /// Level-triggered node reconciler for assignment lifecycle, adoption, and garbage collection.
 pub struct AssignmentAgent {
     store: Arc<dyn Store>,
@@ -170,10 +188,9 @@ impl AssignmentAgent {
         dns_server: Option<std::net::IpAddr>,
         retrying: bool,
     ) -> Result<ConvergedAssignment, ConvergeFailure> {
-        if matches!(
-            &deployment.spec.service.artifact,
-            ArtifactTemplate::Build { template } if template.registry.is_none()
-        ) && let Some(replication) = self.artifact_replication.as_ref()
+        if requires_artifact_replication(deployment).map_err(|error| {
+            ConvergeFailure::failed("ArtifactReplicationRejected", error.to_string())
+        })? && let Some(replication) = self.artifact_replication.as_ref()
         {
             let digest = deployment.status.image_digest.as_deref().ok_or_else(|| {
                 ConvergeFailure::pending(

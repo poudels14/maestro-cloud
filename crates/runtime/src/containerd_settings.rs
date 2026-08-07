@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::RegistryCredential;
 #[cfg(any(test, all(feature = "containerd", target_os = "linux")))]
 use crate::RuntimeError;
 
@@ -38,6 +40,8 @@ pub struct ContainerdRuntimeSettings {
     pub rpc_timeout: Duration,
     /// Deadline for a forced task shutdown to become observable.
     pub kill_timeout: Duration,
+    /// Exact registry-host credentials used by native artifact transfers.
+    pub registry_credentials: BTreeMap<String, RegistryCredential>,
 }
 
 impl ContainerdRuntimeSettings {
@@ -96,6 +100,21 @@ impl ContainerdRuntimeSettings {
                 message: "containerd build limits must be positive".to_owned(),
             });
         }
+        for (host, credential) in &self.registry_credentials {
+            if host.is_empty()
+                || host.contains('/')
+                || host.chars().any(char::is_whitespace)
+                || credential.username().is_empty()
+                || credential.username().contains('\0')
+                || credential.secret().expose().is_empty()
+                || credential.secret().expose().contains('\0')
+            {
+                return Err(RuntimeError::InvalidSpec {
+                    message: "registry credentials require an exact host and non-empty username and secret"
+                        .to_owned(),
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -117,6 +136,7 @@ impl Default for ContainerdRuntimeSettings {
             log_poll_interval: Duration::from_millis(100),
             rpc_timeout: Duration::from_secs(5),
             kill_timeout: Duration::from_secs(5),
+            registry_credentials: BTreeMap::new(),
         }
     }
 }

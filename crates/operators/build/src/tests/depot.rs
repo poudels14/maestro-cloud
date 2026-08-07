@@ -179,6 +179,63 @@ async fn depot_cli_pushes_from_the_remote_builder_without_importing_a_tarball() 
 }
 
 #[tokio::test]
+async fn depot_cli_saves_to_its_registry_without_importing_a_tarball() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let state_root = absolute_without_symlinks(temporary.path().join("state"))?;
+    let context = temporary.path().join("context");
+    std::fs::create_dir(&context)?;
+    std::fs::write(context.join("Dockerfile"), b"FROM scratch\n")?;
+    let artifacts = Arc::new(ImportingArtifacts::default());
+    let runner = Arc::new(RecordingDepotRunner::default());
+    let mut settings = DepotBuildSettings::new(SecretValue::new("depot-token"), state_root);
+    settings.registry = true;
+    let backend =
+        ProcessDepotBuildBackend::with_runner(settings, artifacts.clone(), runner.clone())?;
+    let request = ArtifactBuildRequest {
+        source: ArtifactSource::Directory {
+            root: std::fs::canonicalize(context)?,
+            definition: PathBuf::from("Dockerfile"),
+        },
+        arguments: BTreeMap::new(),
+        secrets: BTreeMap::new(),
+        tags: Vec::new(),
+    };
+
+    assert!(backend.registry_enabled());
+    let digest = backend
+        .build_and_save(&request, "project-123", "deployment-1")
+        .await?;
+
+    assert_eq!(
+        digest,
+        ArtifactDigest::new(
+            "registry.depot.dev/project-123@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )?
+    );
+    assert!(artifacts.imports().is_empty());
+    let arguments = runner
+        .only_invocation()?
+        .arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(contains_pair(
+        &arguments,
+        "--tag",
+        "registry.depot.dev/project-123:deployment-1"
+    ));
+    assert!(contains_pair(&arguments, "--save-tag", "deployment-1"));
+    assert!(arguments.iter().any(|argument| argument == "--save"));
+    assert!(arguments.iter().all(|argument| argument != "--push"));
+    assert!(
+        arguments
+            .iter()
+            .all(|argument| !argument.starts_with("type=docker,dest="))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn depot_process_streams_both_outputs_and_redacts_protected_values() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let executable = temporary.path().join("fake-depot");

@@ -82,6 +82,8 @@ pub(crate) struct DepotInput {
     pub(crate) executable: PathBuf,
     #[serde(default = "default_depot_timeout_secs")]
     pub(crate) timeout_secs: u64,
+    #[serde(default)]
+    pub(crate) registry: bool,
 }
 
 #[derive(Debug, Deserialize)]

@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use containerd::services::v1::StreamInit;
-use containerd::types::transfer::{Data, WindowUpdate};
+use containerd::types::transfer::{AuthRequest, AuthType, Data, WindowUpdate};
+use kernel_api::SecretValue;
 
-use crate::ArtifactStoreError;
-use crate::containerd_artifact_stream::{TransferTask, decode};
+use crate::containerd_artifact_stream::{TransferTask, decode, registry_auth_response};
+use crate::{ArtifactStoreError, RegistryCredential};
 
 struct DropMarker(Arc<AtomicBool>);
 
@@ -65,4 +66,33 @@ fn containerd_stream_rejects_unexpected_protocol_messages() {
         decode::<Data>(&message, "test"),
         Err(ArtifactStoreError::Stream { .. })
     ));
+}
+
+#[test]
+fn containerd_registry_auth_is_scoped_to_the_exact_configured_host() {
+    let credential = RegistryCredential::new("x-token", SecretValue::new("protected"));
+    let response = registry_auth_response(
+        &AuthRequest {
+            host: "registry.depot.dev".to_owned(),
+            reference: "registry.depot.dev/project@sha256:abc".to_owned(),
+            wwwauthenticate: Vec::new(),
+        },
+        "registry.depot.dev",
+        &credential,
+    )
+    .unwrap();
+    assert_eq!(response.auth_type, AuthType::Credentials as i32);
+    assert_eq!(response.username, "x-token");
+    assert_eq!(response.secret, "protected");
+
+    let error = registry_auth_response(
+        &AuthRequest {
+            host: "attacker.example".to_owned(),
+            reference: "attacker.example/image:latest".to_owned(),
+            wwwauthenticate: Vec::new(),
+        },
+        "registry.depot.dev",
+        &credential,
+    );
+    assert!(matches!(error, Err(ArtifactStoreError::Stream { .. })));
 }

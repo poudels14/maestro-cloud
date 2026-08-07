@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,15 +22,16 @@ use crate::docker_support::{
 };
 use crate::{
     ArtifactStore, Capabilities, EventRequest, ExecMode, ExecRequest, ExecSession, LogMode,
-    LogRequest, LogStream, ObservedWorkload, RuntimeCapability, RuntimeError, RuntimeEventStream,
-    ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec, WorkloadState,
-    WorkloadStatsReading, WorkloadStatus,
+    LogRequest, LogStream, ObservedWorkload, RegistryCredential, RuntimeCapability, RuntimeError,
+    RuntimeEventStream, ShutdownRequest, WorkloadHandle, WorkloadRuntime, WorkloadSpec,
+    WorkloadState, WorkloadStatsReading, WorkloadStatus,
 };
 
 /// Docker Engine workload backend using Bollard's native daemon API.
 #[derive(Clone)]
 pub struct DockerRuntime {
     pub(crate) client: Docker,
+    pub(crate) registry_credentials: Arc<BTreeMap<String, RegistryCredential>>,
 }
 
 impl DockerRuntime {
@@ -44,7 +46,19 @@ impl DockerRuntime {
 
     /// Wraps an existing Bollard client while preserving its connection configuration.
     pub fn new(client: Docker) -> Self {
-        Self { client }
+        Self {
+            client,
+            registry_credentials: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    /// Supplies credentials scoped to exact registry hosts.
+    pub fn with_registry_credentials(
+        mut self,
+        registry_credentials: BTreeMap<String, RegistryCredential>,
+    ) -> Self {
+        self.registry_credentials = Arc::new(registry_credentials);
+        self
     }
 
     pub(crate) async fn inspect_container(

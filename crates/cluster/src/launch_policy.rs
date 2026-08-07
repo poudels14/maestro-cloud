@@ -87,6 +87,9 @@ pub struct DepotLaunchConfig {
     /// Maximum wall-clock duration of one Depot build.
     #[serde(default = "default_depot_timeout_secs")]
     pub timeout_secs: u64,
+    /// Uses Depot Registry for immutable build output instead of downloading archives.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub registry: bool,
 }
 
 /// Node-local S3 destination for committed cold log partitions.
@@ -155,6 +158,10 @@ impl NixosUpgradeLaunchConfig {
 
 const fn default_true() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn default_depot_executable() -> PathBuf {
