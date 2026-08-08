@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use kernel_api::{
     ArtifactArchiveId, ArtifactArchiveUploadResponse, CommandRequest, Deployment,
-    DeploymentCommandResponse, DeploymentId, Generation, RequestId, Service,
+    DeploymentCommandResponse, DeploymentId, Generation, Preview, RequestId, Service,
     ServiceCommandResponse, ServiceDiffChange, ServiceDiffStatus, ServiceId,
     ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
     ServiceRolloutRequest, ServiceRolloutResponse,
@@ -38,6 +38,10 @@ impl ServiceApi for RecordingApi {
     }
 
     async fn list_services(&self) -> Result<Vec<Service>, CliError> {
+        Err(unexpected())
+    }
+
+    async fn list_previews(&self) -> Result<Vec<Preview>, CliError> {
         Err(unexpected())
     }
 

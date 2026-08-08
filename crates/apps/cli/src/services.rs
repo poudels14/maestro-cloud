@@ -1,18 +1,20 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 use kernel_api::{
-    ArtifactArchiveId, ArtifactArchiveUploadResponse, ArtifactTemplate, CommandRequest, Deployment,
-    DeploymentCommandResponse, DeploymentId, RequestId, RolloutState, Service,
-    ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest,
-    ServiceRolloutDiffResponse, ServiceRolloutRequest, ServiceRolloutResponse,
+    ArtifactArchiveId, ArtifactArchiveUploadResponse, ArtifactTemplate, BuiltinKind,
+    CommandRequest, Deployment, DeploymentCommandResponse, DeploymentId, Ownership, Preview,
+    RequestId, RolloutState, Service, ServiceCommandResponse, ServiceId,
+    ServiceReplicaOverrideRequest, ServiceRolloutDiffRequest, ServiceRolloutDiffResponse,
+    ServiceRolloutRequest, ServiceRolloutResponse,
 };
 
 use crate::CliError;
 use crate::api_client::ApiClient;
 
 pub(crate) async fn list(client: &impl ServiceApi, output: &mut dyn Write) -> Result<(), CliError> {
-    let services = client.list_services().await?;
-    write_services(services, output)
+    let (services, previews) = tokio::try_join!(client.list_services(), client.list_previews())?;
+    write_services(services, previews, output)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +168,8 @@ pub(crate) trait ServiceApi {
 
     async fn list_services(&self) -> Result<Vec<Service>, CliError>;
 
+    async fn list_previews(&self) -> Result<Vec<Preview>, CliError>;
+
     async fn get_service(&self, service_id: &ServiceId) -> Result<Service, CliError>;
 
     async fn get_deployment(
@@ -225,6 +229,10 @@ impl ServiceApi for ApiClient {
 
     async fn list_services(&self) -> Result<Vec<Service>, CliError> {
         self.get("/api/services").await
+    }
+
+    async fn list_previews(&self) -> Result<Vec<Preview>, CliError> {
+        self.get("/api/previews").await
     }
 
     async fn get_service(&self, service_id: &ServiceId) -> Result<Service, CliError> {
@@ -328,6 +336,7 @@ impl ServiceApi for ApiClient {
 
 pub(crate) fn write_services(
     mut services: Vec<Service>,
+    previews: Vec<Preview>,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     services.sort_by(|left, right| left.meta.id.cmp(&right.meta.id));
@@ -336,7 +345,35 @@ pub(crate) fn write_services(
             .map_err(|source| CliError::io("failed to write command output", source))?;
         return Ok(());
     }
-    let rows = services.iter().map(ServiceRow::from).collect::<Vec<_>>();
+    let service_ids = services
+        .iter()
+        .map(|service| service.meta.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut previews_by_base = BTreeMap::<ServiceId, Vec<ServiceRow>>::new();
+    let mut service_rows = Vec::new();
+    for service in &services {
+        if let Some(base_service_id) = preview_base_service(service, &previews)
+            .filter(|base_service_id| service_ids.contains(*base_service_id))
+        {
+            previews_by_base
+                .entry(base_service_id.clone())
+                .or_default()
+                .push(ServiceRow::from(service).indented(4));
+        } else {
+            service_rows.push((service.meta.id.clone(), ServiceRow::from(service)));
+        }
+    }
+    let groups = service_rows
+        .into_iter()
+        .map(|(service_id, service)| ServiceGroup {
+            service,
+            previews: previews_by_base.remove(&service_id).unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let rows = groups
+        .iter()
+        .flat_map(|group| std::iter::once(&group.service).chain(group.previews.iter()))
+        .collect::<Vec<_>>();
     let widths = ColumnWidths::for_rows(&rows);
     writeln!(
         output,
@@ -355,27 +392,61 @@ pub(crate) fn write_services(
         active_width = widths.active,
     )
     .map_err(|source| CliError::io("failed to write command output", source))?;
-    for row in rows {
-        writeln!(
-            output,
-            "{:<id_width$}  {:<name_width$}  {:<version_width$}  {:>replicas_width$}  {:<rollout_width$}  {:<active_width$}  {}",
-            row.id,
-            row.name,
-            row.version,
-            row.replicas,
-            row.rollout,
-            row.active,
-            row.artifact,
-            id_width = widths.id,
-            name_width = widths.name,
-            version_width = widths.version,
-            replicas_width = widths.replicas,
-            rollout_width = widths.rollout,
-            active_width = widths.active,
-        )
-        .map_err(|source| CliError::io("failed to write command output", source))?;
+    for group in groups {
+        write_service_row(output, &group.service, widths)?;
+        if !group.previews.is_empty() {
+            writeln!(output, "  PR")
+                .map_err(|source| CliError::io("failed to write command output", source))?;
+            for row in &group.previews {
+                write_service_row(output, row, widths)?;
+            }
+        }
     }
     Ok(())
+}
+
+fn write_service_row(
+    output: &mut dyn Write,
+    row: &ServiceRow,
+    widths: ColumnWidths,
+) -> Result<(), CliError> {
+    writeln!(
+        output,
+        "{:<id_width$}  {:<name_width$}  {:<version_width$}  {:>replicas_width$}  {:<rollout_width$}  {:<active_width$}  {}",
+        row.id,
+        row.name,
+        row.version,
+        row.replicas,
+        row.rollout,
+        row.active,
+        row.artifact,
+        id_width = widths.id,
+        name_width = widths.name,
+        version_width = widths.version,
+        replicas_width = widths.replicas,
+        rollout_width = widths.rollout,
+        active_width = widths.active,
+    )
+    .map_err(|source| CliError::io("failed to write command output", source))
+}
+
+fn preview_base_service<'a>(service: &Service, previews: &'a [Preview]) -> Option<&'a ServiceId> {
+    previews
+        .iter()
+        .find(|preview| {
+            preview.spec.service_id == service.meta.id
+                && service.meta.owner_refs.iter().any(|owner| {
+                    owner.ownership == Ownership::Controller
+                        && owner.resource.kind.as_str() == BuiltinKind::Preview.as_str()
+                        && owner.resource.id.as_str() == preview.meta.id.as_str()
+                })
+        })
+        .map(|preview| &preview.spec.base_service_id)
+}
+
+struct ServiceGroup {
+    service: ServiceRow,
+    previews: Vec<ServiceRow>,
 }
 
 struct ServiceRow {
@@ -405,7 +476,10 @@ impl From<&Service> for ServiceRow {
             .map(ToString::to_string)
             .unwrap_or_else(|| "-".to_string());
         let artifact = match &service.spec.artifact {
-            ArtifactTemplate::Image { reference } => reference.clone(),
+            ArtifactTemplate::Image { reference } => reference
+                .split_once('@')
+                .map_or(reference.as_str(), |(reference, _digest)| reference)
+                .to_string(),
             ArtifactTemplate::Build { .. } => "build".to_string(),
         };
         Self {
@@ -420,6 +494,13 @@ impl From<&Service> for ServiceRow {
     }
 }
 
+impl ServiceRow {
+    fn indented(mut self, width: usize) -> Self {
+        self.id.insert_str(0, &" ".repeat(width));
+        self
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ColumnWidths {
     id: usize,
@@ -431,7 +512,7 @@ struct ColumnWidths {
 }
 
 impl ColumnWidths {
-    fn for_rows(rows: &[ServiceRow]) -> Self {
+    fn for_rows(rows: &[&ServiceRow]) -> Self {
         Self {
             id: width("ID", rows.iter().map(|row| row.id.as_str())),
             name: width("NAME", rows.iter().map(|row| row.name.as_str())),

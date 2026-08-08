@@ -1,9 +1,9 @@
 use std::sync::Mutex;
 
 use kernel_api::{
-    ArtifactArchiveId, ArtifactArchiveUploadResponse, CommandRequest, Deployment,
-    DeploymentCommandResponse, DeploymentGoal, DeploymentId, Generation, RequestId, RolloutState,
-    Service, ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest,
+    ArtifactArchiveId, ArtifactArchiveUploadResponse, ArtifactTemplate, CommandRequest, Deployment,
+    DeploymentCommandResponse, DeploymentGoal, DeploymentId, Generation, Preview, RequestId,
+    RolloutState, Service, ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest,
     ServiceRolloutDiffRequest, ServiceRolloutDiffResponse, ServiceRolloutRequest,
     ServiceRolloutResponse,
 };
@@ -17,17 +17,21 @@ use crate::services::{
 
 #[test]
 fn service_listing_is_stable_and_never_prints_secrets() -> Result<(), Box<dyn std::error::Error>> {
-    let services = vec![
-        service("worker", "Worker", "2", 3, None)?,
-        service("api", "API", "1", 2, Some(1))?,
-    ];
+    let mut worker = service("worker", "Worker", "2", 3, None)?;
+    let ArtifactTemplate::Image { reference } = &mut worker.spec.artifact else {
+        unreachable!("fixture uses an image artifact")
+    };
+    reference.push_str("@sha256:0123456789abcdef");
+    let services = vec![worker, service("api", "API", "1", 2, Some(1))?];
     let mut output = Vec::new();
-    write_services(services, &mut output)?;
+    write_services(services, Vec::new(), &mut output)?;
     let output = String::from_utf8(output)?;
     assert!(output.contains("ID"));
     assert!(output.contains("api"));
     assert!(output.contains("1*"));
     assert!(output.contains("registry.example.test/api:1"));
+    assert!(output.contains("registry.example.test/worker:2"));
+    assert!(!output.contains("sha256:"));
     assert!(
         output
             .find("api")
@@ -40,8 +44,46 @@ fn service_listing_is_stable_and_never_prints_secrets() -> Result<(), Box<dyn st
 #[test]
 fn empty_service_listing_is_explicit() -> Result<(), Box<dyn std::error::Error>> {
     let mut output = Vec::new();
-    write_services(Vec::new(), &mut output)?;
+    write_services(Vec::new(), Vec::new(), &mut output)?;
     assert_eq!(String::from_utf8(output)?, "[maestro]: no services found\n");
+    Ok(())
+}
+
+#[test]
+fn preview_services_are_indented_under_a_pr_group() -> Result<(), Box<dyn std::error::Error>> {
+    let mut preview_1025 = service("app-pr-1025", "app-pr-1025", "1", 1, None)?;
+    preview_1025.meta.owner_refs = serde_json::from_value(json!([{
+        "resource": {"kind": "Preview", "id": "preview-1025"},
+        "ownership": "controller"
+    }]))?;
+    let mut preview_1010 = service("app-pr-1010", "app-pr-1010", "1", 1, None)?;
+    preview_1010.meta.owner_refs = serde_json::from_value(json!([{
+        "resource": {"kind": "Preview", "id": "preview-1010"},
+        "ownership": "controller"
+    }]))?;
+    let mut output = Vec::new();
+
+    write_services(
+        vec![
+            preview_1025,
+            service("maestro-system-traefik", "Traefik", "3", 3, None)?,
+            service("app", "dashboard", "1", 1, None)?,
+            preview_1010,
+        ],
+        vec![
+            preview("preview-1010", "app", "app-pr-1010", 1010)?,
+            preview("preview-1025", "app", "app-pr-1025", 1025)?,
+        ],
+        &mut output,
+    )?;
+
+    let output = String::from_utf8(output)?;
+    let lines = output.lines().collect::<Vec<_>>();
+    assert!(lines[1].starts_with("app "));
+    assert_eq!(lines[2], "  PR");
+    assert!(lines[3].starts_with("    app-pr-1010 "));
+    assert!(lines[4].starts_with("    app-pr-1025 "));
+    assert!(lines[5].starts_with("maestro-system-traefik "));
     Ok(())
 }
 
@@ -162,6 +204,10 @@ impl ServiceApi for RecordingServiceApi {
 
     async fn list_services(&self) -> Result<Vec<Service>, CliError> {
         Ok(vec![self.service.clone()])
+    }
+
+    async fn list_previews(&self) -> Result<Vec<Preview>, CliError> {
+        Ok(Vec::new())
     }
 
     async fn get_service(&self, _service_id: &ServiceId) -> Result<Service, CliError> {
@@ -313,6 +359,36 @@ fn deployment(service: &Service) -> Result<Deployment, serde_json::Error> {
         "status": {
             "phase": "QUEUED",
             "createdAt": 1
+        }
+    }))
+}
+
+fn preview(
+    id: &str,
+    base_service_id: &str,
+    service_id: &str,
+    pull_request_number: u64,
+) -> Result<Preview, serde_json::Error> {
+    serde_json::from_value(json!({
+        "meta": {
+            "id": id,
+            "revision": 1,
+            "generation": 1
+        },
+        "spec": {
+            "baseServiceId": base_service_id,
+            "repository": "Baton-AI/baton",
+            "pullRequestNumber": pull_request_number,
+            "title": format!("PR {pull_request_number}"),
+            "headReference": format!("feature/{pull_request_number}"),
+            "author": "octocat",
+            "headRevision": "abc123",
+            "serviceId": service_id,
+            "closeGracePeriodSecs": 60,
+            "expiresAt": 10_000
+        },
+        "status": {
+            "phase": "active"
         }
     }))
 }
