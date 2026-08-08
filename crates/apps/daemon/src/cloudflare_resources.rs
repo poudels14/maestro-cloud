@@ -30,6 +30,18 @@ impl CloudflareSystemResources {
         let Some(config) = &cluster.cloudflare else {
             return Ok(None);
         };
+        let workload_nodes = cluster
+            .nodes
+            .values()
+            .filter(|node| node.role.runs_workloads())
+            .count();
+        let replicas = u32::try_from(workload_nodes)
+            .ok()
+            .and_then(|workload_nodes| config.replicas.checked_mul(workload_nodes))
+            .ok_or(CloudflareResourceError::ReplicaCountOverflow {
+                replicas_per_node: config.replicas,
+                workload_nodes,
+            })?;
         let service = Object {
             meta: ObjectMeta {
                 id: ServiceId::new(CLOUDFLARE_SERVICE_ID)?,
@@ -63,7 +75,7 @@ impl CloudflareSystemResources {
                         TOKEN_FILE.to_owned(),
                     ],
                 }),
-                replicas: config.replicas,
+                replicas,
                 exposed_ports: vec![METRICS_PORT],
                 health_check: Some(HealthCheckSpec {
                     probe: HealthProbe::Http {
@@ -105,6 +117,13 @@ impl CloudflareSystemResources {
 /// Invalid built-in Cloudflare Tunnel resource construction.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CloudflareResourceError {
+    #[error(
+        "Cloudflare Tunnel replica count overflows with {replicas_per_node} replicas per node across {workload_nodes} workload nodes"
+    )]
+    ReplicaCountOverflow {
+        replicas_per_node: u32,
+        workload_nodes: usize,
+    },
     #[error(transparent)]
     Identifier(#[from] kernel_api::InvalidIdentifier),
     #[error(transparent)]

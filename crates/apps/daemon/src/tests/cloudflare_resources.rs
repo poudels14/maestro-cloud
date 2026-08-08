@@ -26,7 +26,7 @@ fn builds_a_pinned_secret_mounted_ready_connector_service() -> Result<(), Box<dy
     let service = &resources.service;
     assert_eq!(service.meta.id.as_str(), CLOUDFLARE_SERVICE_ID);
     assert_eq!(service.spec.name, "Cloudflare Tunnel");
-    assert_eq!(service.spec.replicas, 2);
+    assert_eq!(service.spec.replicas, 4);
     assert_eq!(service.spec.node_api, NodeApiAccess::Disabled);
     assert_eq!(service.spec.exec, ExecPolicy::Denied);
     assert_eq!(service.spec.user, Some(WorkloadUserSpec::UNPRIVILEGED));
@@ -73,6 +73,31 @@ fn builds_a_pinned_secret_mounted_ready_connector_service() -> Result<(), Box<dy
     assert_eq!(mount_path, "/run/secrets/cloudflare");
     assert_eq!(files.get("token").map(SecretValue::expose), Some(token));
     assert!(!format!("{service:?}").contains(token));
+    Ok(())
+}
+
+#[test]
+fn provisions_the_configured_replica_count_on_every_workload_node()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut cluster = cluster_with_nodes(&[
+        ("master", NodeRole::Master),
+        ("hybrid", NodeRole::Hybrid),
+        ("worker", NodeRole::Worker),
+        ("control-plane", NodeRole::ControlPlane),
+    ])?;
+    cluster.cloudflare = Some(CloudflareTunnelConfig {
+        token: SecretValue::new("test-cloudflare-tunnel-token"),
+        replicas: 3,
+    });
+
+    let resources =
+        CloudflareSystemResources::from_cluster(&cluster)?.ok_or("Cloudflare resources missing")?;
+
+    assert_eq!(resources.service.spec.replicas, 9);
+    assert_eq!(
+        resources.service.spec.placement.replica_spread,
+        ReplicaSpread::BestEffort
+    );
     Ok(())
 }
 

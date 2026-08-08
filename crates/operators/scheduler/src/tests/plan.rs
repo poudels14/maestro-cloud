@@ -31,6 +31,27 @@ fn plan_is_deterministic_and_spreads_replicas() {
 }
 
 #[test]
+fn best_effort_spread_places_equal_replica_counts_on_three_nodes() {
+    let mut three_nodes = input(9);
+    three_nodes.nodes.push(node("node-c", "10.42.3.0/24"));
+    three_nodes.services[0].placement.replica_spread = ReplicaSpread::BestEffort;
+
+    let planned = plan(three_nodes);
+
+    assert!(planned.unschedulable.is_empty());
+    let counts = planned.assignments.iter().fold(
+        BTreeMap::<NodeId, usize>::new(),
+        |mut counts, assignment| {
+            *counts.entry(assignment.spec.node_id.clone()).or_default() += 1;
+            counts
+        },
+    );
+    assert_eq!(counts.get(&node_id("node-a")), Some(&3));
+    assert_eq!(counts.get(&node_id("node-b")), Some(&3));
+    assert_eq!(counts.get(&node_id("node-c")), Some(&3));
+}
+
+#[test]
 fn generated_assignment_ids_are_stable_content_addresses() {
     let output = plan(input(1));
 

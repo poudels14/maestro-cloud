@@ -114,7 +114,7 @@ pub struct MaskedCloudflareConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MaskedCloudflareTunnelConfig {
-    /// Desired number of highly available connector workloads.
+    /// Desired number of highly available connector workloads per workload-capable node.
     pub replicas: u32,
 }
 

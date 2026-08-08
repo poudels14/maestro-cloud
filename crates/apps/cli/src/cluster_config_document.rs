@@ -164,6 +164,7 @@ pub(crate) struct CloudflareInput {
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct CloudflareTunnelInput {
     pub(crate) token: String,
+    /// Desired number of connector workloads on every workload-capable node.
     #[serde(default = "default_cloudflare_tunnel_replicas")]
     pub(crate) replicas: u32,
 }

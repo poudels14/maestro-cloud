@@ -2026,7 +2026,7 @@ export interface components {
         MaskedCloudflareTunnelConfig: {
             /**
              * Format: uint32
-             * @description Desired number of highly available connector workloads.
+             * @description Desired number of highly available connector workloads per workload-capable node.
              */
             replicas: number;
         };

@@ -2572,7 +2572,7 @@
         "description": "Secret-free view of one Cloudflare Tunnel connector fleet.",
         "properties": {
           "replicas": {
-            "description": "Desired number of highly available connector workloads.",
+            "description": "Desired number of highly available connector workloads per workload-capable node.",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
