@@ -21,6 +21,7 @@ pub(crate) struct DeploymentWriteReport {
     pub(crate) created_deployments: usize,
     pub(crate) created_builds: usize,
     pub(crate) updated_deployments: usize,
+    pub(crate) updated_replicas: usize,
     pub(crate) updated_services: usize,
     pub(crate) deleted_deployments: usize,
     pub(crate) deleted_builds: usize,
@@ -104,6 +105,15 @@ impl DeploymentWriter {
             } else {
                 writes.push(write);
             }
+        }
+        for update in &plan.replica_updates {
+            let current = required(&snapshot.replicas, &update.id, "ReplicaState")?;
+            let resource = status_replacement(current, update, "ReplicaState")?;
+            writes.push(PlannedWrite {
+                compare: exact(&current.stored),
+                mutation: put(&current.stored, &resource, "ReplicaState", &update.id)?,
+                kind: WriteKind::ReplicaUpdated,
+            });
         }
         for update in &plan.service_updates {
             let current = required(&snapshot.services, &update.id, "Service")?;
@@ -311,6 +321,7 @@ enum WriteKind {
     DeploymentCreated,
     BuildCreated,
     DeploymentUpdated,
+    ReplicaUpdated,
     ServiceUpdated,
 }
 
@@ -325,6 +336,9 @@ impl WriteKind {
             }
             Self::DeploymentUpdated => {
                 report.updated_deployments = report.updated_deployments.saturating_add(1);
+            }
+            Self::ReplicaUpdated => {
+                report.updated_replicas = report.updated_replicas.saturating_add(1);
             }
             Self::ServiceUpdated => {
                 report.updated_services = report.updated_services.saturating_add(1);

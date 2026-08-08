@@ -44,12 +44,37 @@ pub enum AssignmentPhase {
     Pending,
     /// The assigned workload is running.
     Running,
+    /// The workload is being stopped by its owning node agent.
+    Stopping,
     /// The workload is stopping without accepting new traffic.
     Draining,
     /// The workload stopped and no longer owns runtime state.
     Stopped,
     /// The node agent could not converge the assignment.
     Failed,
+}
+
+/// Machine-readable cause for a node agent deliberately stopping a workload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WorkloadStopReason {
+    /// The scheduler or deployment lifecycle removed the assignment.
+    AssignmentRemoved,
+    /// The daemon is shutting down without an active maintenance reservation.
+    DaemonShutdown,
+    /// The node is reserved for a restart, upgrade, or other coordinated maintenance.
+    NodeMaintenance,
+}
+
+impl WorkloadStopReason {
+    /// Stable condition reason paired with this stop cause.
+    pub fn condition_reason(self) -> &'static str {
+        match self {
+            Self::AssignmentRemoved => "AssignmentRemoved",
+            Self::DaemonShutdown => "DaemonShutdown",
+            Self::NodeMaintenance => "NodeMaintenance",
+        }
+    }
 }
 
 /// Observed workload identity and lifecycle for an assignment.

@@ -20,7 +20,14 @@ pub(crate) enum AssignmentOutcome<'a> {
         workload_address: std::net::IpAddr,
     },
     Unresolved(&'a ConvergeFailure),
-    Stopped,
+    Stopping {
+        reason: kernel_api::WorkloadStopReason,
+        message: &'a str,
+    },
+    Stopped {
+        reason: kernel_api::WorkloadStopReason,
+        message: &'a str,
+    },
 }
 
 pub(crate) struct ConvergeFailure {
@@ -214,13 +221,21 @@ pub(crate) fn desired_status(
             failure.reason,
             failure.message.clone(),
         ),
-        AssignmentOutcome::Stopped => (
+        AssignmentOutcome::Stopping { reason, message } => (
+            AssignmentPhase::Stopping,
+            assignment.status.workload_id.clone(),
+            assignment.status.workload_address,
+            ConditionState::False,
+            reason.condition_reason(),
+            message.to_owned(),
+        ),
+        AssignmentOutcome::Stopped { reason, message } => (
             AssignmentPhase::Stopped,
             None,
             None,
             ConditionState::False,
-            "WorkloadRemoved",
-            "runtime workload and network reservation are removed".to_owned(),
+            reason.condition_reason(),
+            message.to_owned(),
         ),
     };
     let previous = assignment

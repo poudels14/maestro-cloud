@@ -15,8 +15,9 @@ async fn deployment_commands_restart_cancel_remove_and_enforce_ownership()
     let (store, cluster_id) = seeded_store().await?;
     let ready = deployment("ready-deployment", "api")?;
     let queued = deployment_in_phase("queued-deployment", "api", DeploymentPhase::Queued)?;
+    let stopped = deployment_in_phase("stopped-deployment", "api", DeploymentPhase::Stopped)?;
     let unrelated = deployment("other-deployment", "other")?;
-    for value in [&ready, &queued, &unrelated] {
+    for value in [&ready, &queued, &stopped, &unrelated] {
         put(
             &store,
             &cluster_id,
@@ -57,6 +58,21 @@ async fn deployment_commands_restart_cancel_remove_and_enforce_ownership()
     assert_eq!(replay.status(), StatusCode::ACCEPTED);
     assert_eq!(
         decode::<Value>(replay).await?.get("restartGeneration"),
+        Some(&json!(2))
+    );
+
+    let current = get_deployment(&server, "stopped-deployment").await?;
+    let restarted = command(
+        &server,
+        "stopped-deployment",
+        "restart",
+        "restart-stopped-deployment",
+        current.meta.revision.0,
+    )
+    .await?;
+    assert_eq!(restarted.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        decode::<Value>(restarted).await?.get("restartGeneration"),
         Some(&json!(2))
     );
 

@@ -32,17 +32,10 @@ pub(crate) fn retained_digests(
         .zip(registry_free)
         .filter(|(deployment, registry_free)| {
             *registry_free
-                && (matches!(
-                    deployment.status.phase,
-                    DeploymentPhase::Building
-                        | DeploymentPhase::Publishing
-                        | DeploymentPhase::PendingReady
-                        | DeploymentPhase::Retrying
-                        | DeploymentPhase::Ready
-                        | DeploymentPhase::Draining
-                ) || latest
-                    .get(&deployment.spec.service_id)
-                    .is_some_and(|(_, id)| id == &deployment.meta.id))
+                && (requires_artifact(deployment.status.phase)
+                    || latest
+                        .get(&deployment.spec.service_id)
+                        .is_some_and(|(_, id)| id == &deployment.meta.id))
         })
         .filter_map(|(deployment, _)| deployment.status.image_digest.as_deref())
         .map(|digest| ArtifactDigest::new(digest.to_owned()).map_err(Into::into))
@@ -71,20 +64,26 @@ pub(crate) fn preserved_digests(
     let mut preserved = retained_digests(deployments)?;
     for digest in deployments
         .iter()
-        .filter(|deployment| {
-            matches!(
-                deployment.status.phase,
-                DeploymentPhase::Building
-                    | DeploymentPhase::Publishing
-                    | DeploymentPhase::PendingReady
-                    | DeploymentPhase::Retrying
-                    | DeploymentPhase::Ready
-                    | DeploymentPhase::Draining
-            )
-        })
+        .filter(|deployment| requires_artifact(deployment.status.phase))
         .filter_map(|deployment| deployment.status.image_digest.as_deref())
     {
         preserved.insert(ArtifactDigest::new(digest.to_owned())?);
     }
     Ok(preserved)
+}
+
+fn requires_artifact(phase: DeploymentPhase) -> bool {
+    matches!(
+        phase,
+        DeploymentPhase::Building
+            | DeploymentPhase::Publishing
+            | DeploymentPhase::Starting
+            | DeploymentPhase::PendingReady
+            | DeploymentPhase::Retrying
+            | DeploymentPhase::Ready
+            | DeploymentPhase::Recovering
+            | DeploymentPhase::Stopping
+            | DeploymentPhase::Stopped
+            | DeploymentPhase::Draining
+    )
 }

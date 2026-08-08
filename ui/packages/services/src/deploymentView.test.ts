@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { Deployment, ReplicaState } from "./types";
 import {
-  deploymentFailure,
+  deploymentStatusDetail,
   deploymentGitRevision,
   deploymentTitle,
   replicaDisplayName,
@@ -89,7 +89,28 @@ test("deployment presentation surfaces terminal readiness failures", () => {
     }
   ];
 
-  expect(deploymentFailure(failed)).toBe("replica 0: failed to fetch AWS secret `maestro/api`");
+  expect(deploymentStatusDetail(failed)).toBe(
+    "replica 0: failed to fetch AWS secret `maestro/api`"
+  );
+});
+
+test("deployment presentation surfaces an unknown recovery reason", () => {
+  const recovering = deployment("deployment-a", 10);
+  recovering.status.phase = "RECOVERING";
+  recovering.status.conditions = [
+    {
+      lastTransitionTime: 10,
+      message: "one or more replica nodes have no active liveness session",
+      observedGeneration: 1,
+      reason: "NodeUnreachable",
+      status: "unknown",
+      type: "READY"
+    }
+  ];
+
+  expect(deploymentStatusDetail(recovering)).toBe(
+    "one or more replica nodes have no active liveness session"
+  );
 });
 
 test("replica presentation prefers workload identity and surfaces failed conditions", () => {

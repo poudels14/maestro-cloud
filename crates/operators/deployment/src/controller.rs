@@ -17,6 +17,8 @@ pub struct DeploymentReport {
     pub created_builds: usize,
     /// Deployment statuses atomically replaced.
     pub updated_deployments: usize,
+    /// Replica statuses invalidated after their node liveness expired.
+    pub updated_replicas: usize,
     /// Service statuses atomically replaced.
     pub updated_services: usize,
     /// Removed Deployment histories garbage collected during Service finalization.
@@ -123,6 +125,7 @@ fn report(
         created_deployments: write.created_deployments,
         created_builds: write.created_builds,
         updated_deployments: write.updated_deployments,
+        updated_replicas: write.updated_replicas,
         updated_services: write.updated_services,
         deleted_deployments: write.deleted_deployments,
         deleted_builds: write.deleted_builds,

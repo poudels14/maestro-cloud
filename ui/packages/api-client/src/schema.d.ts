@@ -1369,7 +1369,7 @@ export interface components {
         /** @description Stable identity of a scheduled workload assignment. */
         AssignmentId: string;
         /** @description Runtime lifecycle of an assignment. */
-        AssignmentPhase: "pending" | "running" | "draining" | "stopped" | "failed";
+        AssignmentPhase: "pending" | "running" | "stopping" | "draining" | "stopped" | "failed";
         /** @description Desired placement of one deployment replica on one node. */
         AssignmentSpec: {
             /** @description Immutable deployment being placed. */
@@ -1609,7 +1609,7 @@ export interface components {
         /** @description Three-valued state of a status condition. */
         ConditionState: "true" | "false" | "unknown";
         /** @description Stable machine-readable name of a status condition. */
-        ConditionType: "READY" | "SCHEDULABLE" | "DRAINING" | "MAINTENANCE" | "ARTIFACT_REPLICATION_READY" | "MESH_READY" | "HEALTH_READY" | "RUNTIME_READY" | "FIREWALL_READY" | "LEGACY_DATA_PLANE_READY";
+        ConditionType: "READY" | "SCHEDULABLE" | "DRAINING" | "MAINTENANCE" | "ARTIFACT_REPLICATION_READY" | "MESH_READY" | "HEALTH_READY" | "RUNTIME_READY" | "CLEANUP_COMPLETE" | "FIREWALL_READY" | "LEGACY_DATA_PLANE_READY";
         ControllerStatsSnapshot: {
             deadLetters: components["schemas"]["DeadLetterStatsSnapshot"];
             /** Format: int64 */
@@ -1644,7 +1644,7 @@ export interface components {
         /** @description Stable identity of one immutable service deployment. */
         DeploymentId: string;
         /** @description Persisted phase of an immutable deployment. */
-        DeploymentPhase: "QUEUED" | "PREPARING" | "BUILDING" | "PUBLISHING" | "PENDING_READY" | "RETRYING" | "READY" | "CRASHED" | "TERMINATED" | "REMOVED" | "DRAINING" | "CANCELED";
+        DeploymentPhase: "QUEUED" | "PREPARING" | "BUILDING" | "PUBLISHING" | "STARTING" | "PENDING_READY" | "RETRYING" | "READY" | "RECOVERING" | "STOPPING" | "STOPPED" | "CRASHED" | "REMOVED" | "DRAINING" | "CANCELED";
         /** @description Captured service snapshot and desired lifecycle for one deployment. */
         DeploymentSpec: {
             /** @description Build generated for this deployment, when the artifact needs building. */

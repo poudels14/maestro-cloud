@@ -108,7 +108,7 @@ fn target_change_stages_before_retiring_the_active_generation() {
 }
 
 #[test]
-fn temporarily_unready_targets_preserve_the_last_active_generation() {
+fn temporarily_unready_targets_stage_safe_removal_before_cutover() {
     let mut world = World::ready();
     let mut active = plan(world.input()).expect("stage").create_generations[0].clone();
     active.status.phase = TrafficGenerationPhase::Active;
@@ -116,8 +116,9 @@ fn temporarily_unready_targets_preserve_the_last_active_generation() {
     world.generations.push(active.clone());
     world.replicas[0].status.phase = DeploymentPhase::PendingReady;
 
-    let held = plan(world.input()).expect("hold active");
-    assert!(held.create_generations.is_empty());
+    let held = plan(world.input()).expect("stage target removal");
+    assert_eq!(held.create_generations.len(), 1);
+    assert!(held.create_generations[0].spec.targets.is_empty());
     assert!(held.generation_updates.is_empty());
     assert_eq!(
         held.backend_changes[0]
@@ -126,6 +127,53 @@ fn temporarily_unready_targets_preserve_the_last_active_generation() {
             .expect("active generation")
             .generation_id,
         active.meta.id
+    );
+}
+
+#[test]
+fn hard_node_loss_replaces_ready_traffic_with_an_empty_backend() {
+    let mut world = World::ready();
+    let mut active = plan(world.input())
+        .expect("stage live traffic")
+        .create_generations[0]
+        .clone();
+    active.status.phase = TrafficGenerationPhase::Active;
+    active.status.activated_at = Some(Timestamp(1_000));
+    world.generations.push(active.clone());
+    world.deployment.status.phase = DeploymentPhase::Recovering;
+
+    let mut lost_input = world.input();
+    lost_input.live_nodes.clear();
+    let staged = plan(lost_input).expect("stage dead-target removal");
+    assert_eq!(staged.create_generations.len(), 1);
+    assert!(staged.create_generations[0].spec.targets.is_empty());
+    assert_eq!(
+        staged.backend_changes[0]
+            .active
+            .as_ref()
+            .expect("last committed traffic remains until atomic cutover")
+            .generation_id,
+        active.meta.id
+    );
+
+    let empty = staged.create_generations[0].clone();
+    world.generations.push(empty.clone());
+    let mut cutover_input = world.input();
+    cutover_input.live_nodes.clear();
+    let cutover = plan(cutover_input).expect("publish dead-target removal");
+    let published = cutover.backend_changes[0]
+        .active
+        .as_ref()
+        .expect("empty backend generation");
+    assert_eq!(published.generation_id, empty.meta.id);
+    assert!(published.spec.targets.is_empty());
+    assert_eq!(
+        update_phase(&cutover, &active.meta.id),
+        TrafficGenerationPhase::Retired
+    );
+    assert_eq!(
+        update_phase(&cutover, &empty.meta.id),
+        TrafficGenerationPhase::Active
     );
 }
 
@@ -491,6 +539,11 @@ impl World {
             deployments: vec![self.deployment.clone()],
             routes: self.routes.clone(),
             assignments: self.assignments.clone(),
+            live_nodes: self
+                .assignments
+                .iter()
+                .map(|assignment| assignment.spec.node_id.clone())
+                .collect(),
             replicas: self.replicas.clone(),
             traffic_generations: self.generations.clone(),
             blocklists: self.blocklists.clone(),

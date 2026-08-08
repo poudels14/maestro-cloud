@@ -69,9 +69,15 @@ pub(super) fn coordinate_active_deployment(
         .active_deployment_id
         .as_ref()
         .is_some_and(|deployment_id| {
-            desired_statuses
-                .get(deployment_id)
-                .is_none_or(|status| status.phase != DeploymentPhase::Ready)
+            desired_statuses.get(deployment_id).is_none_or(|status| {
+                !matches!(
+                    status.phase,
+                    DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
+                        | DeploymentPhase::Stopped
+                )
+            })
         })
     {
         desired_service.active_deployment_id = None;
@@ -110,8 +116,12 @@ pub(super) fn coordinate_active_deployment(
             DeploymentPhase::Preparing
                 | DeploymentPhase::Building
                 | DeploymentPhase::Publishing
+                | DeploymentPhase::Starting
                 | DeploymentPhase::PendingReady
                 | DeploymentPhase::Retrying
+                | DeploymentPhase::Recovering
+                | DeploymentPhase::Stopping
+                | DeploymentPhase::Stopped
                 | DeploymentPhase::Ready
         ) {
             status.phase = DeploymentPhase::Draining;
@@ -161,8 +171,12 @@ fn retire_superseded_nonserving(
             DeploymentPhase::Preparing
             | DeploymentPhase::Building
             | DeploymentPhase::Publishing
+            | DeploymentPhase::Starting
             | DeploymentPhase::PendingReady
-            | DeploymentPhase::Retrying => {
+            | DeploymentPhase::Retrying
+            | DeploymentPhase::Recovering
+            | DeploymentPhase::Stopping
+            | DeploymentPhase::Stopped => {
                 status.phase = DeploymentPhase::Draining;
                 status.draining_at.get_or_insert(now);
             }
@@ -172,7 +186,6 @@ fn retire_superseded_nonserving(
             }
             DeploymentPhase::Ready
             | DeploymentPhase::Crashed
-            | DeploymentPhase::Terminated
             | DeploymentPhase::Removed
             | DeploymentPhase::Draining
             | DeploymentPhase::Canceled => {}

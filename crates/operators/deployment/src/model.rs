@@ -1,9 +1,10 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use kernel_api::{
     Assignment, Build, BuildId, Deployment, DeploymentId, DeploymentStatus, Generation,
-    IngressRoute, ReplicaStateId, ResourceRevision, Service, ServiceId, ServiceStatus, Timestamp,
-    TrafficGeneration,
+    IngressRoute, NodeId, ReplicaStateId, ReplicaStateStatus, ResourceRevision, Service, ServiceId,
+    ServiceStatus, Timestamp, TrafficGeneration,
 };
 
 /// Timing policy applied by the pure deployment lifecycle planner.
@@ -32,6 +33,8 @@ pub struct DeploymentInput {
     pub builds: Vec<Build>,
     /// Current scheduler placements.
     pub assignments: Vec<Assignment>,
+    /// Nodes whose session-bound liveness records are currently present.
+    pub live_nodes: BTreeSet<NodeId>,
     /// Agent-observed replica states.
     pub replicas: Vec<kernel_api::ReplicaState>,
     /// Ingress-observed traffic generations used as cutover acknowledgements.
@@ -77,6 +80,8 @@ pub struct DeploymentPlan {
     pub delete_replicas: Vec<ReplicaStateId>,
     /// Existing deployment status replacements.
     pub deployment_updates: Vec<ResourceStatusUpdate<DeploymentId, DeploymentStatus>>,
+    /// Replica observations invalidated by control-plane node liveness.
+    pub replica_updates: Vec<ResourceStatusUpdate<ReplicaStateId, ReplicaStateStatus>>,
     /// Existing service status replacements.
     pub service_updates: Vec<ServiceUpdate>,
 }

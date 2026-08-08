@@ -81,6 +81,7 @@ pub struct AssignmentReconcileReport {
 pub(crate) struct ConvergedAssignment {
     pub(crate) handle: WorkloadHandle,
     pub(crate) workload_address: IpAddr,
+    pub(crate) reset_readiness: bool,
     pub(crate) restarted: bool,
     pub(crate) replica_id: Option<ReplicaStateId>,
     pub(crate) resolved_secrets: BTreeMap<String, MaskedSecret>,

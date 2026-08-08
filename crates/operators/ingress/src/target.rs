@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 
 use kernel_api::{
-    Assignment, Deployment, DeploymentId, DeploymentPhase, ReplicaState, Service,
-    TrafficGenerationSpec, TrafficRoute, TrafficTarget, assignment_workload_address,
+    Assignment, AssignmentPhase, Deployment, DeploymentId, DeploymentPhase, NodeId, ReplicaState,
+    Service, TrafficGenerationSpec, TrafficRoute, TrafficTarget, assignment_workload_address,
 };
 
 use crate::IngressPlanError;
@@ -13,6 +13,7 @@ pub(crate) fn desired_spec(
     deployments: &BTreeMap<DeploymentId, Deployment>,
     routes: &[TrafficRoute],
     assignments: &[Assignment],
+    live_nodes: &BTreeSet<NodeId>,
     replicas: &[ReplicaState],
 ) -> Result<Option<TrafficGenerationSpec>, IngressPlanError> {
     let Some(deployment_id) = service.status.active_deployment_id.as_ref() else {
@@ -30,16 +31,19 @@ pub(crate) fn desired_spec(
             deployment_id: deployment.meta.id.clone(),
         });
     }
-    if deployment.status.phase != DeploymentPhase::Ready {
+    if !matches!(
+        deployment.status.phase,
+        DeploymentPhase::Ready
+            | DeploymentPhase::Recovering
+            | DeploymentPhase::Stopping
+            | DeploymentPhase::Stopped
+    ) {
         return Ok(None);
     }
     let targets = if routes.is_empty() {
         Vec::new()
     } else {
-        let Some(assignments) = ready_assignments(service, deployment, assignments, replicas)
-        else {
-            return Ok(None);
-        };
+        let assignments = ready_assignments(service, deployment, assignments, live_nodes, replicas);
         let assignment_count = assignments.len();
         let ports = routes
             .iter()
@@ -78,8 +82,9 @@ fn ready_assignments<'a>(
     service: &Service,
     deployment: &Deployment,
     assignments: &'a [Assignment],
+    live_nodes: &BTreeSet<NodeId>,
     replicas: &[ReplicaState],
-) -> Option<Vec<&'a Assignment>> {
+) -> Vec<&'a Assignment> {
     let count = service
         .status
         .replica_override
@@ -97,16 +102,19 @@ fn ready_assignments<'a>(
             *current = assignment;
         }
     }
-    (slots.len() == usize::try_from(count).unwrap_or(usize::MAX)
-        && slots.values().all(|assignment| {
-            replicas.iter().any(|replica| {
-                replica.meta.deletion_timestamp.is_none()
-                    && replica.spec.service_id == service.meta.id
-                    && replica.spec.deployment_id == deployment.meta.id
-                    && replica.spec.assignment_id == assignment.meta.id
-                    && replica.spec.replica_index == assignment.spec.replica_index
-                    && replica.status.phase == DeploymentPhase::Ready
-            })
-        }))
-    .then(|| slots.into_values().collect())
+    slots
+        .into_values()
+        .filter(|assignment| {
+            assignment.status.phase == AssignmentPhase::Running
+                && live_nodes.contains(&assignment.spec.node_id)
+                && replicas.iter().any(|replica| {
+                    replica.meta.deletion_timestamp.is_none()
+                        && replica.spec.service_id == service.meta.id
+                        && replica.spec.deployment_id == deployment.meta.id
+                        && replica.spec.assignment_id == assignment.meta.id
+                        && replica.spec.replica_index == assignment.spec.replica_index
+                        && replica.status.phase == DeploymentPhase::Ready
+                })
+        })
+        .collect()
 }

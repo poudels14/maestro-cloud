@@ -25,6 +25,7 @@ pub(super) fn input(service: Service, deployments: Vec<Deployment>) -> Deploymen
         deployments,
         builds: Vec::new(),
         assignments: Vec::new(),
+        live_nodes: BTreeSet::new(),
         replicas: Vec::new(),
         traffic_generations: Vec::new(),
     }
@@ -188,6 +189,7 @@ pub(super) fn observe_replica(
     phase: DeploymentPhase,
 ) {
     let assignment = assignment(deployment, &format!("assignment-{}", deployment.meta.id), 1);
+    input.live_nodes.insert(assignment.spec.node_id.clone());
     input.replicas.push(replica(deployment, &assignment, phase));
     input.assignments.push(assignment);
 }

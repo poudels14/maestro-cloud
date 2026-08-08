@@ -6,9 +6,12 @@ const CANCELLABLE_STATUSES = new Set(["QUEUED", "PREPARING", "BUILDING"]);
 const RESTARTABLE_STATUSES = new Set([
   "BUILDING",
   "PUBLISHING",
+  "STARTING",
   "PENDING_READY",
   "RETRYING",
-  "READY"
+  "READY",
+  "RECOVERING",
+  "STOPPED"
 ]);
 
 export function DeploymentMenu(props: {

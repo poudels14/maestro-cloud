@@ -6,7 +6,7 @@ import { STATUS_COLORS, StatusBadge, StatusDot } from "@maestro/kit";
 import type { ServicesApi } from "./api";
 import type { Deployment, ReplicaState } from "./types";
 import {
-  deploymentFailure,
+  deploymentStatusDetail,
   deploymentGitRevision,
   deploymentTitle,
   replicaDisplayName
@@ -33,9 +33,20 @@ type Props = {
 function DeploymentRow(props: Props) {
   const phase = () => props.deployment.status.phase;
   const sourceRevision = () => deploymentGitRevision(props.deployment);
-  const failure = () => deploymentFailure(props.deployment);
+  const statusDetail = () => deploymentStatusDetail(props.deployment);
   const isLive = () =>
-    ["PREPARING", "BUILDING", "PUBLISHING", "PENDING_READY", "RETRYING", "READY"].includes(phase());
+    [
+      "PREPARING",
+      "BUILDING",
+      "PUBLISHING",
+      "STARTING",
+      "PENDING_READY",
+      "RETRYING",
+      "READY",
+      "RECOVERING",
+      "STOPPING",
+      "STOPPED"
+    ].includes(phase());
   const replicas = useQuery(() => ({
     ...deploymentReplicasQuery(props.api, props.deployment),
     enabled: props.showReplicas && isLive()
@@ -82,8 +93,18 @@ function DeploymentRow(props: Props) {
               {props.deployment.spec.service.version}
             </span>
           </div>
-          <Show when={failure()}>
-            {(message) => <p class="mt-1 text-[11px] text-red-500 break-words">{message()}</p>}
+          <Show when={statusDetail()}>
+            {(message) => (
+              <p
+                class={clsx("mt-1 text-[11px] break-words", {
+                  "text-red-500": phase() === "CRASHED",
+                  "text-amber-600": ["RETRYING", "RECOVERING"].includes(phase()),
+                  "text-gray-500": !["CRASHED", "RETRYING", "RECOVERING"].includes(phase())
+                })}
+              >
+                {message()}
+              </p>
+            )}
           </Show>
           <Show when={(replicas.data?.length ?? 0) > 0}>
             <div class="mt-2 space-y-1">

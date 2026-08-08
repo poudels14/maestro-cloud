@@ -5,19 +5,19 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ArtifactTemplate, AssignmentId, Build, BuildId, BuildPhase, BuildSource, BuildTemplate,
-    ClusterId, Deployment, DeploymentId, DeploymentPhase, ExecPolicy, Generation, IngressRoute,
-    IngressRouteId, IngressRouteSpec, IngressRouteStatus, NodeApiAccess, NodeId, NodeInstanceId,
-    Object, ObjectMeta, OwnerReference, Ownership, PlacementConstraint, ReplicaState,
-    ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceId, ResourceKind, ResourceName,
-    ResourceRevision, RolloutState, Service, ServiceId, ServiceSpec, ServiceStatus,
-    TAILSCALE_GATEWAY_SERVICE_ID, Timestamp,
+    ClusterId, ConditionState, ConditionType, Deployment, DeploymentId, DeploymentPhase,
+    ExecPolicy, Generation, IngressRoute, IngressRouteId, IngressRouteSpec, IngressRouteStatus,
+    NodeApiAccess, NodeId, NodeInstanceId, Object, ObjectMeta, OwnerReference, Ownership,
+    PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
+    ResourceId, ResourceKind, ResourceName, ResourceRevision, RolloutState, Service, ServiceId,
+    ServiceSpec, ServiceStatus, TAILSCALE_GATEWAY_SERVICE_ID, Timestamp,
 };
 use kernel_controller::{
     Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
 };
 use kernel_store::{
-    CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
-    Session, SessionBinding, Store,
+    CasOutcome, Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime,
+    PutRequest, Session, SessionBinding, Store,
 };
 
 use crate::snapshot::ResourceSnapshot;
@@ -44,7 +44,7 @@ async fn store_backed_controller_advances_only_from_exact_replica_state()
         .await?;
     world.reconcile(Timestamp(3_000)).await?;
     deployment = world.one::<Deployment>("Deployment").await?;
-    assert_eq!(deployment.status.phase, DeploymentPhase::Publishing);
+    assert_eq!(deployment.status.phase, DeploymentPhase::Starting);
 
     let replica = ready_replica(&deployment, &assignment.meta.id);
     world
@@ -56,6 +56,59 @@ async fn store_backed_controller_advances_only_from_exact_replica_state()
     let service = world.one::<Service>("Service").await?;
     assert_eq!(deployment.status.phase, DeploymentPhase::Ready);
     assert_eq!(deployment.status.ready_at, Some(Timestamp(4_000)));
+    assert_eq!(
+        service.status.active_deployment_id,
+        Some(deployment.meta.id)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn store_backed_controller_marks_active_replica_recovering_when_its_node_is_lost()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(image_service()).await?;
+    world.reconcile(Timestamp(1_000)).await?;
+    world.reconcile(Timestamp(2_000)).await?;
+    let deployment = world.one::<Deployment>("Deployment").await?;
+    let assignment = crate::tests::plan_support::assignment(&deployment, "assignment-1", 1);
+    world
+        .put("Assignment", &assignment.meta.id, &assignment)
+        .await?;
+    world.reconcile(Timestamp(3_000)).await?;
+    let replica = ready_replica(&deployment, &assignment.meta.id);
+    world
+        .put("ReplicaState", &replica.meta.id, &replica)
+        .await?;
+    world.reconcile(Timestamp(4_000)).await?;
+    world.remove_liveness(&assignment.spec.node_id).await?;
+
+    let recovery = world.reconcile(Timestamp(5_000)).await?;
+
+    assert_eq!(
+        (recovery.updated_deployments, recovery.updated_replicas),
+        (1, 1)
+    );
+    let deployment = world.one::<Deployment>("Deployment").await?;
+    assert_eq!(deployment.status.phase, DeploymentPhase::Recovering);
+    let ready = deployment
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready)
+        .ok_or("deployment readiness condition missing")?;
+    assert_eq!(ready.state, ConditionState::Unknown);
+    assert_eq!(ready.reason.0, "NodeUnreachable");
+    let replica = world.one::<ReplicaState>("ReplicaState").await?;
+    assert_eq!(replica.status.phase, DeploymentPhase::Recovering);
+    let runtime = replica
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .ok_or("replica runtime condition missing")?;
+    assert_eq!(runtime.state, ConditionState::Unknown);
+    assert_eq!(runtime.reason.0, "NodeUnreachable");
+    let service = world.one::<Service>("Service").await?;
     assert_eq!(
         service.status.active_deployment_id,
         Some(deployment.meta.id)
@@ -210,7 +263,7 @@ async fn temporarily_unready_active_replica_does_not_block_redeploy()
     let deployments = world.list::<Deployment>("Deployment").await?;
     assert!(deployments.iter().any(|deployment| {
         deployment.spec.service_generation == Generation(1)
-            && deployment.status.phase == DeploymentPhase::PendingReady
+            && deployment.status.phase == DeploymentPhase::Recovering
     }));
     assert!(deployments.iter().any(|deployment| {
         deployment.spec.service_generation == Generation(2)
@@ -570,13 +623,28 @@ impl World {
         id: &Id,
         resource: &impl serde::Serialize,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let value = serde_json::to_vec(resource)?;
+        if kind == "Assignment" {
+            let assignment: kernel_api::Assignment = serde_json::from_slice(&value)?;
+            let _ = self
+                .store
+                .put_cas(PutRequest {
+                    key: self.keys.node_liveness(&assignment.spec.node_id),
+                    value: b"live".to_vec(),
+                    expected: ExpectedVersion::Missing,
+                    session: Some(SessionBinding {
+                        session_id: self._session.id(),
+                    }),
+                })
+                .await?;
+        }
         let outcome = self
             .store
             .put_cas(PutRequest {
                 key: self
                     .keys
                     .resource(&ResourceKind::new(kind)?, &id.clone().into()),
-                value: serde_json::to_vec(resource)?,
+                value,
                 expected: ExpectedVersion::Missing,
                 session: None,
             })
@@ -615,6 +683,18 @@ impl World {
         } else {
             Err(format!("{kind} update conflicted").into())
         }
+    }
+
+    async fn remove_liveness(&self, node_id: &NodeId) -> Result<(), Box<dyn std::error::Error>> {
+        let key = self.keys.node_liveness(node_id);
+        let stored = self.store.get(&key).await?.ok_or("liveness missing")?;
+        self.store
+            .delete_cas(DeleteRequest {
+                key,
+                expected: stored.version,
+            })
+            .await?;
+        Ok(())
     }
 
     async fn list<Resource: serde::de::DeserializeOwned>(

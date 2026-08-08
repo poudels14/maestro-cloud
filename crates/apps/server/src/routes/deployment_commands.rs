@@ -193,9 +193,12 @@ fn mutate_deployment(
                     deployment.status.phase,
                     DeploymentPhase::Building
                         | DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopped
                 )
             {
                 return Err(ApiError::conflict(

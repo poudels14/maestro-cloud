@@ -101,8 +101,12 @@ fn deleting_service_assignments(
                     DeploymentPhase::Preparing
                         | DeploymentPhase::Building
                         | DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
+                        | DeploymentPhase::Stopped
                         | DeploymentPhase::Ready
                 ) && within_grace(now, *deleted_at, deployment_drain_grace)
             }
@@ -314,9 +318,13 @@ fn active_deployment(
         deployment.status.phase,
         DeploymentPhase::Building
             | DeploymentPhase::Publishing
+            | DeploymentPhase::Starting
             | DeploymentPhase::PendingReady
             | DeploymentPhase::Retrying
             | DeploymentPhase::Ready
+            | DeploymentPhase::Recovering
+            | DeploymentPhase::Stopping
+            | DeploymentPhase::Stopped
             | DeploymentPhase::Draining
     ) && (deployment.status.phase != DeploymentPhase::Draining
         || deployment
@@ -333,12 +341,16 @@ fn deployment_order(phase: DeploymentPhase) -> u8 {
     match phase {
         DeploymentPhase::Draining => 0,
         DeploymentPhase::Ready => 1,
-        DeploymentPhase::Retrying => 2,
-        DeploymentPhase::PendingReady => 3,
-        DeploymentPhase::Publishing => 4,
-        DeploymentPhase::Building => 5,
-        DeploymentPhase::Preparing => 6,
-        _ => 7,
+        DeploymentPhase::Recovering => 2,
+        DeploymentPhase::Retrying => 3,
+        DeploymentPhase::PendingReady => 4,
+        DeploymentPhase::Starting => 5,
+        DeploymentPhase::Publishing => 6,
+        DeploymentPhase::Stopping => 7,
+        DeploymentPhase::Stopped => 8,
+        DeploymentPhase::Building => 9,
+        DeploymentPhase::Preparing => 10,
+        _ => 11,
     }
 }
 

@@ -1,4 +1,6 @@
-use kernel_api::{Assignment, ClusterId, DnsRecord, DnsRecordId, ReplicaState, Service};
+use std::collections::BTreeSet;
+
+use kernel_api::{Assignment, ClusterId, DnsRecord, DnsRecordId, NodeId, ReplicaState, Service};
 
 /// Comma-separated short DNS names published for an annotated Service.
 pub const DNS_ALIASES_ANNOTATION: &str = "dns.maestro.dev/aliases";
@@ -21,6 +23,8 @@ pub struct DnsInput {
     pub services: Vec<Service>,
     /// Scheduler-owned addresses for current placements.
     pub assignments: Vec<Assignment>,
+    /// Nodes whose session-bound liveness records are currently present.
+    pub live_nodes: BTreeSet<NodeId>,
     /// Exact readiness observations for assignment slots.
     pub replicas: Vec<ReplicaState>,
     /// Existing authoritative record resources.

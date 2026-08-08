@@ -15,7 +15,7 @@ pub use build::{Build, BuildPhase, BuildSpec, BuildStatus, GitCommit};
 pub use placement::{
     Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus, PlacementHistory,
     PlacementHistorySpec, PlacementHistoryStatus, ReplicaState, ReplicaStateSpec,
-    ReplicaStateStatus, assignment_workload_address,
+    ReplicaStateStatus, WorkloadStopReason, assignment_workload_address,
 };
 
 /// Service annotation containing the immutable Git revision desired by build-watch.
@@ -472,16 +472,22 @@ pub enum DeploymentPhase {
     Building,
     /// Publishing the deployment artifact to assigned nodes before workloads start.
     Publishing,
+    /// Assigned workloads are being created and started.
+    Starting,
     /// Workloads started but have not passed readiness checks.
     PendingReady,
     /// A previously started workload is waiting for a retry attempt.
     Retrying,
     /// Workloads are healthy and may receive traffic.
     Ready,
+    /// A previously ready deployment is restoring lost or deliberately stopped replicas.
+    Recovering,
+    /// Runtime workloads are stopping without accepting new traffic.
+    Stopping,
+    /// Runtime workloads are confirmed stopped but the deployment still has a Run goal.
+    Stopped,
     /// The deployment exhausted a terminal failure path.
     Crashed,
-    /// Runtime workloads have stopped.
-    Terminated,
     /// Persistent deployment state is eligible for deletion.
     Removed,
     /// Traffic is leaving the deployment while requests drain.
@@ -500,32 +506,93 @@ impl DeploymentPhase {
                 self,
                 Self::Preparing
                     | Self::Building
+                    | Self::Starting
                     | Self::PendingReady
                     | Self::Retrying
                     | Self::Ready
+                    | Self::Recovering
+                    | Self::Stopped
+            ),
+            Self::Starting => matches!(
+                self,
+                Self::Building
+                    | Self::Publishing
+                    | Self::Recovering
+                    | Self::Stopped
+                    | Self::Retrying
             ),
             Self::PendingReady => matches!(
                 self,
-                Self::Building | Self::Publishing | Self::Retrying | Self::Ready
+                Self::Building
+                    | Self::Publishing
+                    | Self::Starting
+                    | Self::Retrying
+                    | Self::Ready
+                    | Self::Recovering
+                    | Self::Stopped
             ),
             Self::Retrying => {
-                matches!(self, Self::Publishing | Self::PendingReady | Self::Ready)
+                matches!(
+                    self,
+                    Self::Publishing
+                        | Self::Starting
+                        | Self::PendingReady
+                        | Self::Ready
+                        | Self::Recovering
+                )
             }
             Self::Ready => matches!(
                 self,
-                Self::Building | Self::Publishing | Self::PendingReady | Self::Retrying
+                Self::Building
+                    | Self::Publishing
+                    | Self::Starting
+                    | Self::PendingReady
+                    | Self::Retrying
+                    | Self::Recovering
             ),
-            Self::Crashed => !matches!(self, Self::Crashed | Self::Canceled | Self::Terminated),
+            Self::Recovering => matches!(
+                self,
+                Self::Publishing
+                    | Self::Starting
+                    | Self::PendingReady
+                    | Self::Retrying
+                    | Self::Ready
+                    | Self::Stopping
+                    | Self::Stopped
+            ),
+            Self::Stopping => matches!(
+                self,
+                Self::Publishing
+                    | Self::Starting
+                    | Self::PendingReady
+                    | Self::Retrying
+                    | Self::Ready
+                    | Self::Recovering
+            ),
+            Self::Stopped => matches!(
+                self,
+                Self::Publishing
+                    | Self::Starting
+                    | Self::PendingReady
+                    | Self::Retrying
+                    | Self::Ready
+                    | Self::Recovering
+                    | Self::Stopping
+            ),
+            Self::Crashed => !matches!(self, Self::Crashed | Self::Canceled | Self::Removed),
             Self::Draining => matches!(
                 self,
                 Self::Ready
+                    | Self::Recovering
+                    | Self::Stopping
+                    | Self::Stopped
                     | Self::Retrying
                     | Self::PendingReady
+                    | Self::Starting
                     | Self::Publishing
                     | Self::Building
                     | Self::Preparing
             ),
-            Self::Terminated => !matches!(self, Self::Terminated),
             Self::Queued | Self::Removed | Self::Canceled => true,
         }
     }

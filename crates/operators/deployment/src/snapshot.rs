@@ -4,10 +4,10 @@ use std::fmt::Display;
 use kernel_api::{
     Assignment, AssignmentId, AssignmentSpec, AssignmentStatus, Build, BuildId, BuildSpec,
     BuildStatus, Deployment, DeploymentId, DeploymentSpec, DeploymentStatus, IngressRoute,
-    IngressRouteId, IngressRouteSpec, IngressRouteStatus, Object, ReplicaState, ReplicaStateId,
-    ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, Service, ServiceId,
-    ServiceSpec, ServiceStatus, TrafficGeneration, TrafficGenerationId, TrafficGenerationSpec,
-    TrafficGenerationStatus,
+    IngressRouteId, IngressRouteSpec, IngressRouteStatus, NodeId, Object, ReplicaState,
+    ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName, Service,
+    ServiceId, ServiceSpec, ServiceStatus, TrafficGeneration, TrafficGenerationId,
+    TrafficGenerationSpec, TrafficGenerationStatus,
 };
 use kernel_controller::FencedStore;
 use kernel_store::{Compare, ExpectedVersion, Keyspace, StoredValue};
@@ -23,6 +23,8 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) assignments: BTreeMap<AssignmentId, StoredResource<Assignment>>,
     pub(crate) replicas: BTreeMap<ReplicaStateId, StoredResource<ReplicaState>>,
     pub(crate) traffic: BTreeMap<TrafficGenerationId, StoredResource<TrafficGeneration>>,
+    pub(crate) live_nodes: std::collections::BTreeSet<NodeId>,
+    pub(crate) liveness_compares: Vec<Compare>,
 }
 
 impl ResourceSnapshot {
@@ -58,6 +60,8 @@ impl ResourceSnapshot {
                 TrafficGenerationSpec,
                 TrafficGenerationStatus,
             >(&values, keyspace, "TrafficGeneration")?,
+            live_nodes: Default::default(),
+            liveness_compares: Vec::new(),
         })
     }
 
@@ -86,6 +90,7 @@ impl ResourceSnapshot {
         snapshot
             .traffic
             .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot.load_liveness(store, keyspace).await?;
         Ok(snapshot)
     }
 
@@ -104,13 +109,15 @@ impl ResourceSnapshot {
             deployments: resources(&self.deployments),
             builds: resources(&self.builds),
             assignments: resources(&self.assignments),
+            live_nodes: self.live_nodes.clone(),
             replicas: resources(&self.replicas),
             traffic_generations: resources(&self.traffic),
         }
     }
 
     pub(crate) fn primary_compares(&self) -> Vec<Compare> {
-        self.services
+        let mut compares = self
+            .services
             .values()
             .map(|resource| &resource.stored)
             .chain(
@@ -122,7 +129,38 @@ impl ResourceSnapshot {
                 key: stored.key.clone(),
                 expected: ExpectedVersion::Exact(stored.version),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        compares.extend(self.liveness_compares.clone());
+        compares
+    }
+
+    async fn load_liveness(
+        &mut self,
+        store: &FencedStore,
+        keyspace: &Keyspace,
+    ) -> Result<(), DeploymentError> {
+        let nodes = self
+            .assignments
+            .values()
+            .map(|assignment| assignment.resource.spec.node_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for node_id in nodes {
+            let key = keyspace.node_liveness(&node_id);
+            match store.get(&key).await? {
+                Some(stored) => {
+                    self.live_nodes.insert(node_id);
+                    self.liveness_compares.push(Compare {
+                        key,
+                        expected: ExpectedVersion::Exact(stored.version),
+                    });
+                }
+                None => self.liveness_compares.push(Compare {
+                    key,
+                    expected: ExpectedVersion::Missing,
+                }),
+            }
+        }
+        Ok(())
     }
 }
 

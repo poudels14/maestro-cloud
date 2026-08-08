@@ -98,8 +98,8 @@ pub use workload::{
     HealthCheckSpec, HealthProbe, NodeApiAccess, PlacementConstraint, PlacementHistory,
     PlacementHistorySpec, PlacementHistoryStatus, PreviewPolicy, ReplicaSpread, ReplicaState,
     ReplicaStateSpec, ReplicaStateStatus, RolloutState, SecretMountSpec, Service, ServiceSpec,
-    ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
-    assignment_workload_address, workload_hostname,
+    ServiceStatus, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadStopReason,
+    WorkloadUserSpec, assignment_workload_address, workload_hostname,
 };
 
 mod version;

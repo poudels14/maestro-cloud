@@ -407,15 +407,18 @@ fn convert_build(
         match deployment.status.phase {
             DeploymentPhase::Canceled => BuildPhase::Canceled,
             DeploymentPhase::Crashed
-            | DeploymentPhase::Terminated
+            | DeploymentPhase::Stopping
+            | DeploymentPhase::Stopped
             | DeploymentPhase::Removed
             | DeploymentPhase::Draining => BuildPhase::Failed,
             DeploymentPhase::Queued
             | DeploymentPhase::Preparing
             | DeploymentPhase::Building
             | DeploymentPhase::Publishing
+            | DeploymentPhase::Starting
             | DeploymentPhase::PendingReady
             | DeploymentPhase::Retrying
+            | DeploymentPhase::Recovering
             | DeploymentPhase::Ready => BuildPhase::Queued,
         }
     };
@@ -466,7 +469,7 @@ pub(crate) fn deployment_phase(status: LegacyDeploymentStatus) -> DeploymentPhas
         LegacyDeploymentStatus::PendingReady => DeploymentPhase::PendingReady,
         LegacyDeploymentStatus::Ready => DeploymentPhase::Ready,
         LegacyDeploymentStatus::Crashed => DeploymentPhase::Crashed,
-        LegacyDeploymentStatus::Terminated => DeploymentPhase::Terminated,
+        LegacyDeploymentStatus::Terminated => DeploymentPhase::Removed,
         LegacyDeploymentStatus::Removed => DeploymentPhase::Removed,
         LegacyDeploymentStatus::Draining => DeploymentPhase::Draining,
         LegacyDeploymentStatus::Canceled => DeploymentPhase::Canceled,
@@ -476,9 +479,9 @@ pub(crate) fn deployment_phase(status: LegacyDeploymentStatus) -> DeploymentPhas
 fn deployment_goal(status: LegacyDeploymentStatus) -> DeploymentGoal {
     match status {
         LegacyDeploymentStatus::Canceled => DeploymentGoal::Cancel,
-        LegacyDeploymentStatus::Draining | LegacyDeploymentStatus::Removed => {
-            DeploymentGoal::Remove
-        }
+        LegacyDeploymentStatus::Terminated
+        | LegacyDeploymentStatus::Draining
+        | LegacyDeploymentStatus::Removed => DeploymentGoal::Remove,
         _ => DeploymentGoal::Run,
     }
 }

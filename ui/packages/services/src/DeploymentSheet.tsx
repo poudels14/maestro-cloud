@@ -7,7 +7,7 @@ import { ErrorBanner, formatDateTime, StatusBadge, timeAgo } from "@maestro/kit"
 import { LogViewer, type LogsApi } from "@maestro/logs";
 import type { ServicesApi } from "./api";
 import {
-  deploymentFailure,
+  deploymentStatusDetail,
   deploymentGitRevision,
   deploymentTitle,
   replicaFailure
@@ -162,7 +162,7 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
 
 function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) {
   const deployment = () => props.deployment;
-  const failure = () => deploymentFailure(deployment());
+  const statusDetail = () => deploymentStatusDetail(deployment());
   const replicas = useQuery(() => deploymentReplicasQuery(props.api, deployment()));
   const artifact = () => deployment().spec.service.artifact;
   const environment = () => Object.entries(deployment().spec.service.environment ?? {});
@@ -199,8 +199,20 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
             {(imageDigest) => <CopyRow label="Image" value={imageDigest()} />}
           </Show>
         </div>
-        <Show when={failure()}>
-          {(message) => <p class="mt-2 text-xs text-red-600 break-words">{message()}</p>}
+        <Show when={statusDetail()}>
+          {(message) => (
+            <p
+              class={clsx("mt-2 text-xs break-words", {
+                "text-red-600": deployment().status.phase === "CRASHED",
+                "text-amber-700": ["RETRYING", "RECOVERING"].includes(deployment().status.phase),
+                "text-gray-600": !["CRASHED", "RETRYING", "RECOVERING"].includes(
+                  deployment().status.phase
+                )
+              })}
+            >
+              {message()}
+            </p>
+          )}
         </Show>
       </div>
 
@@ -217,7 +229,19 @@ function DeploymentDetails(props: { api: ServicesApi; deployment: Deployment }) 
                   <ReplicaRow deployment={deployment()} replica={replica} />
                   <Show when={replicaFailure(replica)}>
                     {(error) => (
-                      <p class="mt-1 pl-4 text-[11px] text-red-500 break-words">{error()}</p>
+                      <p
+                        class={clsx("mt-1 pl-4 text-[11px] break-words", {
+                          "text-red-500": replica.status.phase === "CRASHED",
+                          "text-amber-600": ["RETRYING", "RECOVERING"].includes(
+                            replica.status.phase
+                          ),
+                          "text-gray-500": !["CRASHED", "RETRYING", "RECOVERING"].includes(
+                            replica.status.phase
+                          )
+                        })}
+                      >
+                        {error()}
+                      </p>
                     )}
                   </Show>
                 </div>

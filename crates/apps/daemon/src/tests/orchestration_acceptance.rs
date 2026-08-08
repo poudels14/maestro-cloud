@@ -396,11 +396,15 @@ fn project_phase(phase: ResourceDeploymentPhase) -> SnapshotDeploymentPhase {
         ResourceDeploymentPhase::Preparing => SnapshotDeploymentPhase::Building,
         ResourceDeploymentPhase::Building => SnapshotDeploymentPhase::Building,
         ResourceDeploymentPhase::Publishing => SnapshotDeploymentPhase::Publishing,
+        ResourceDeploymentPhase::Starting => SnapshotDeploymentPhase::PendingReady,
         ResourceDeploymentPhase::PendingReady => SnapshotDeploymentPhase::PendingReady,
         ResourceDeploymentPhase::Retrying => SnapshotDeploymentPhase::PendingReady,
         ResourceDeploymentPhase::Ready => SnapshotDeploymentPhase::Ready,
+        ResourceDeploymentPhase::Recovering => SnapshotDeploymentPhase::PendingReady,
+        ResourceDeploymentPhase::Stopping | ResourceDeploymentPhase::Stopped => {
+            SnapshotDeploymentPhase::Terminated
+        }
         ResourceDeploymentPhase::Crashed => SnapshotDeploymentPhase::Crashed,
-        ResourceDeploymentPhase::Terminated => SnapshotDeploymentPhase::Terminated,
         ResourceDeploymentPhase::Removed => SnapshotDeploymentPhase::Removed,
         ResourceDeploymentPhase::Draining => SnapshotDeploymentPhase::Draining,
         ResourceDeploymentPhase::Canceled => SnapshotDeploymentPhase::Canceled,

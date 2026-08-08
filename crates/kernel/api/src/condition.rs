@@ -25,6 +25,8 @@ pub enum ConditionType {
     HealthReady,
     /// An assignment runtime is ready.
     RuntimeReady,
+    /// Runtime resources belonging to a terminal workload have been removed.
+    CleanupComplete,
     /// The node firewall generation is applied.
     FirewallReady,
     /// Legacy data-plane readiness retained during migration.

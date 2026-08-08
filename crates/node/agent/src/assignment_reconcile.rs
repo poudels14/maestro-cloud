@@ -144,8 +144,14 @@ impl AssignmentAgent {
             .iter()
             .filter(|assignment| assignment.meta.deletion_timestamp.is_some())
         {
-            self.update_status(assignment, AssignmentOutcome::Stopped)
-                .await?;
+            self.update_status(
+                assignment,
+                AssignmentOutcome::Stopped {
+                    reason: kernel_api::WorkloadStopReason::AssignmentRemoved,
+                    message: "runtime workload and network reservation are removed",
+                },
+            )
+            .await?;
         }
         Ok((
             report,
@@ -402,10 +408,10 @@ impl AssignmentAgent {
                             &kernel_api::ResourceName::from(replica_id.clone()),
                         ),
                         assignment,
-                        replica_id,
                         converged.handle.workload_id(),
                         &converged.resolved_secrets,
-                        converged.restarted,
+                        converged.reset_readiness,
+                        self.status_clock.now(),
                     )
                     .await?;
                 }

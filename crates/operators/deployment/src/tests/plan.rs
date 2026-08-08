@@ -11,6 +11,15 @@ use kernel_api::{
 use super::plan_support::*;
 use crate::plan;
 
+fn live_assignment_nodes(
+    assignments: &[kernel_api::Assignment],
+) -> std::collections::BTreeSet<kernel_api::NodeId> {
+    assignments
+        .iter()
+        .map(|assignment| assignment.spec.node_id.clone())
+        .collect()
+}
+
 #[test]
 fn creates_one_stable_deployment_per_service_generation() {
     let input = input(service(Generation(7), RolloutState::Active), Vec::new());
@@ -70,6 +79,7 @@ fn system_readiness_uses_one_replica_when_configured_for_zero() {
     let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
     let mut snapshot = input(system, vec![deployment]);
     snapshot.assignments = vec![assignment];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![replica];
 
     let ready = plan(snapshot).expect("apply system replica floor");
@@ -510,6 +520,7 @@ fn successful_build_publishes_digest_without_skipping_assignment_readiness() {
     );
     snapshot.services[0].spec.artifact = build_artifact();
     snapshot.assignments = vec![assigned.clone()];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![replica(&deployment, &assigned, DeploymentPhase::Ready)];
     snapshot.builds = vec![build];
     assert_eq!(
@@ -529,6 +540,7 @@ fn ready_deployment_downgrades_while_its_replica_retries() {
     let mut observed = replica(&deployment, &assignment, DeploymentPhase::Crashed);
     let mut snapshot = input(service.clone(), vec![deployment.clone()]);
     snapshot.assignments = vec![assignment.clone()];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![observed.clone()];
 
     let retrying = plan(snapshot).expect("retry unhealthy workload");
@@ -546,6 +558,7 @@ fn ready_deployment_downgrades_while_its_replica_retries() {
     observed.status.phase = DeploymentPhase::PendingReady;
     let mut snapshot = input(service, vec![deployment]);
     snapshot.assignments = vec![assignment];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![observed];
     assert_eq!(
         plan(snapshot)
@@ -553,8 +566,159 @@ fn ready_deployment_downgrades_while_its_replica_retries() {
             .deployment_updates[0]
             .status
             .phase,
-        DeploymentPhase::PendingReady
+        DeploymentPhase::Recovering
     );
+}
+
+#[test]
+fn hard_node_loss_marks_the_active_deployment_and_replica_recovering() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    let deployment = deployment(&service, DeploymentPhase::Ready);
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
+    let mut snapshot = input(service, vec![deployment.clone()]);
+    snapshot.assignments = vec![assignment];
+    snapshot.replicas = vec![replica.clone()];
+
+    let recovery = plan(snapshot).expect("project hard node loss");
+
+    assert!(recovery.service_updates.is_empty());
+    let deployment_status = &recovery
+        .deployment_updates
+        .iter()
+        .find(|update| update.id == deployment.meta.id)
+        .expect("recovering deployment update")
+        .status;
+    assert_eq!(deployment_status.phase, DeploymentPhase::Recovering);
+    let deployment_ready = deployment_status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready)
+        .expect("deployment readiness condition");
+    assert_eq!(deployment_ready.state, ConditionState::Unknown);
+    assert_eq!(deployment_ready.reason.0, "NodeUnreachable");
+
+    let replica_status = &recovery
+        .replica_updates
+        .iter()
+        .find(|update| update.id == replica.meta.id)
+        .expect("recovering replica update")
+        .status;
+    assert_eq!(replica_status.phase, DeploymentPhase::Recovering);
+    let runtime_ready = replica_status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .expect("replica runtime condition");
+    assert_eq!(runtime_ready.state, ConditionState::Unknown);
+    assert_eq!(runtime_ready.reason.0, "NodeUnreachable");
+}
+
+#[test]
+fn planned_shutdown_stops_then_recovers_the_same_active_deployment() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Ready);
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+    let mut assignment = assignment(&deployment, "assignment-1", 1);
+    assignment.status.phase = kernel_api::AssignmentPhase::Stopped;
+    let mut replica = replica(&deployment, &assignment, DeploymentPhase::Stopped);
+    replica.status.conditions = vec![Condition {
+        condition_type: ConditionType::RuntimeReady,
+        state: ConditionState::False,
+        reason: ConditionReason("DaemonShutdown".to_owned()),
+        message: "workload stopped for daemon shutdown; recovery is required".to_owned(),
+        observed_generation: replica.meta.generation,
+        last_transition_time: Timestamp(39_000),
+    }];
+    let mut stopped_input = input(service.clone(), vec![deployment.clone()]);
+    stopped_input.assignments = vec![assignment.clone()];
+    stopped_input.replicas = vec![replica.clone()];
+
+    let stopped = plan(stopped_input).expect("project planned shutdown");
+
+    assert!(stopped.service_updates.is_empty());
+    let stopped_status = &stopped.deployment_updates[0].status;
+    assert_eq!(stopped_status.phase, DeploymentPhase::Stopped);
+    assert_eq!(
+        stopped_status
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_type == ConditionType::Ready)
+            .map(|condition| condition.reason.0.as_str()),
+        Some("DaemonShutdown")
+    );
+
+    deployment.status = stopped_status.clone();
+    assignment.status.phase = kernel_api::AssignmentPhase::Running;
+    replica.status.phase = DeploymentPhase::PendingReady;
+    let mut starting_input = input(service.clone(), vec![deployment.clone()]);
+    starting_input
+        .live_nodes
+        .insert(assignment.spec.node_id.clone());
+    starting_input.assignments = vec![assignment.clone()];
+    starting_input.replicas = vec![replica.clone()];
+    let recovering = plan(starting_input).expect("recover stopped deployment");
+    assert_eq!(
+        recovering.deployment_updates[0].status.phase,
+        DeploymentPhase::Recovering
+    );
+    assert!(recovering.service_updates.is_empty());
+
+    deployment.status = recovering.deployment_updates[0].status.clone();
+    replica.status.phase = DeploymentPhase::Ready;
+    let mut ready_input = input(service, vec![deployment]);
+    ready_input
+        .live_nodes
+        .insert(assignment.spec.node_id.clone());
+    ready_input.assignments = vec![assignment];
+    ready_input.replicas = vec![replica];
+    let ready = plan(ready_input).expect("finish recovery");
+    assert_eq!(
+        ready.deployment_updates[0].status.phase,
+        DeploymentPhase::Ready
+    );
+    let ready_condition = ready.deployment_updates[0]
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready)
+        .expect("ready condition");
+    assert_eq!(ready_condition.state, ConditionState::True);
+    assert_eq!(ready_condition.reason.0, "ReplicasReady");
+}
+
+#[test]
+fn crashed_deployment_keeps_its_failure_phase_while_cleanup_completes() {
+    let service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Crashed);
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let mut pending_input = input(service.clone(), vec![deployment.clone()]);
+    pending_input.assignments = vec![assignment];
+    pending_input.live_nodes = live_assignment_nodes(&pending_input.assignments);
+
+    let pending = plan(pending_input).expect("project pending cleanup");
+    let pending_status = &pending.deployment_updates[0].status;
+    assert_eq!(pending_status.phase, DeploymentPhase::Crashed);
+    let pending_cleanup = pending_status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::CleanupComplete)
+        .expect("pending cleanup condition");
+    assert_eq!(pending_cleanup.state, ConditionState::False);
+    assert_eq!(pending_cleanup.reason.0, "RuntimeCleanupPending");
+
+    deployment.status = pending_status.clone();
+    let complete = plan(input(service, vec![deployment])).expect("complete cleanup");
+    let complete_status = &complete.deployment_updates[0].status;
+    assert_eq!(complete_status.phase, DeploymentPhase::Crashed);
+    let complete_cleanup = complete_status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::CleanupComplete)
+        .expect("complete cleanup condition");
+    assert_eq!(complete_cleanup.state, ConditionState::True);
+    assert_eq!(complete_cleanup.reason.0, "RuntimeResourcesRemoved");
 }
 
 #[test]
@@ -611,16 +775,18 @@ fn readiness_requires_the_exact_current_assignment() {
     let stale = assignment(&deployment, "assignment-stale", 1);
     let mut snapshot = input(service.clone(), vec![deployment.clone()]);
     snapshot.assignments = vec![stale.clone(), current.clone()];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![replica(&deployment, &stale, DeploymentPhase::Ready)];
     let publishing = plan(snapshot).expect("publishing plan");
     assert_eq!(
         publishing.deployment_updates[0].status.phase,
-        DeploymentPhase::Publishing
+        DeploymentPhase::Starting
     );
 
     deployment.status.phase = DeploymentPhase::Publishing;
     let mut snapshot = input(service.clone(), vec![deployment.clone()]);
     snapshot.assignments = vec![stale.clone(), current.clone()];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![replica(
         &deployment,
         &current,
@@ -635,6 +801,7 @@ fn readiness_requires_the_exact_current_assignment() {
     deployment.status.phase = DeploymentPhase::PendingReady;
     let mut snapshot = input(service, vec![deployment.clone()]);
     snapshot.assignments = vec![stale, current.clone()];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![replica(&deployment, &current, DeploymentPhase::Ready)];
     let ready = plan(snapshot).expect("ready plan");
     assert_eq!(
@@ -663,6 +830,7 @@ fn failed_assignment_crashes_a_pending_deployment_with_its_error() {
     }];
     let mut snapshot = input(service, vec![deployment]);
     snapshot.assignments = vec![failed];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
 
     let result = plan(snapshot).expect("project terminal assignment failure");
     let status = &result.deployment_updates[0].status;
@@ -710,6 +878,7 @@ fn deployment_collects_only_masked_secret_observations() {
     ]));
     let mut snapshot = input(service, vec![deployment]);
     snapshot.assignments = vec![first, second];
+    snapshot.live_nodes = live_assignment_nodes(&snapshot.assignments);
     snapshot.replicas = vec![first_replica, second_replica];
 
     let result = plan(snapshot).expect("collect masked secret observations");
@@ -855,16 +1024,14 @@ fn superseded_pending_deployment_drains_before_any_candidate_is_ready() {
     let result = plan(snapshot).expect("retire superseded pending deployment");
 
     assert_eq!(result.create_deployments.len(), 0);
-    assert_eq!(result.deployment_updates.len(), 1);
-    assert_eq!(result.deployment_updates[0].id, old.meta.id);
-    assert_eq!(
-        result.deployment_updates[0].status.phase,
-        DeploymentPhase::Draining
-    );
-    assert_eq!(
-        result.deployment_updates[0].status.draining_at,
-        Some(Timestamp(40_000))
-    );
+    assert_eq!(result.deployment_updates.len(), 2);
+    let retired = result
+        .deployment_updates
+        .iter()
+        .find(|update| update.id == old.meta.id)
+        .expect("old deployment is retired");
+    assert_eq!(retired.status.phase, DeploymentPhase::Draining);
+    assert_eq!(retired.status.draining_at, Some(Timestamp(40_000)));
 }
 
 #[test]
@@ -1003,6 +1170,7 @@ fn draining_waits_for_grace_and_assignment_removal() {
     let assignment = assignment(&deployment, "assignment-1", 1);
     let mut held = input(service.clone(), vec![deployment.clone()]);
     held.assignments = vec![assignment];
+    held.live_nodes = live_assignment_nodes(&held.assignments);
     assert!(plan(held).expect("held").deployment_updates.is_empty());
 
     let removed = plan(input(service, vec![deployment])).expect("removed");

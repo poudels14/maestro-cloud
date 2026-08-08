@@ -64,13 +64,88 @@ fn annotated_service_publishes_short_address_aliases() {
 }
 
 #[test]
-fn incomplete_readiness_preserves_the_last_published_set() {
+fn missing_readiness_removes_records_for_the_unready_replica() {
     let mut world = World::ready();
     let existing = plan(world.input()).unwrap().create_records;
-    world.records = existing;
+    world.records = existing.clone();
     world.replicas.pop();
     let output = plan(world.input()).expect("held plan");
-    assert_eq!(output, Default::default());
+    let missing_replica = &world.assignments[1];
+    let missing_address = missing_replica
+        .spec
+        .workload_address
+        .expect("missing replica address");
+    let expected_deletions = existing
+        .iter()
+        .filter(|record| match missing_address {
+            IpAddr::V4(address) => record
+                .spec
+                .values
+                .contains(&kernel_api::DnsRecordValue::A(address)),
+            IpAddr::V6(address) => record
+                .spec
+                .values
+                .contains(&kernel_api::DnsRecordValue::Aaaa(address)),
+        })
+        .map(|record| record.meta.id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        output.delete_records.into_iter().collect::<BTreeSet<_>>(),
+        expected_deletions
+    );
+}
+
+#[test]
+fn hard_node_loss_removes_only_records_for_the_unreachable_replica() {
+    let mut world = World::ready();
+    world.records = plan(world.input()).unwrap().create_records;
+    let dead_node = world.assignments[0].spec.node_id.clone();
+    let dead_address = world.assignments[0]
+        .spec
+        .workload_address
+        .expect("dead replica address");
+    let dead_record_ids = world
+        .records
+        .iter()
+        .filter(|record| match dead_address {
+            IpAddr::V4(address) => record
+                .spec
+                .values
+                .contains(&kernel_api::DnsRecordValue::A(address)),
+            IpAddr::V6(address) => record
+                .spec
+                .values
+                .contains(&kernel_api::DnsRecordValue::Aaaa(address)),
+        })
+        .map(|record| record.meta.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut input = world.input();
+    input.live_nodes.remove(&dead_node);
+
+    let output = plan(input).expect("remove unreachable DNS targets");
+
+    assert!(!dead_record_ids.is_empty());
+    assert!(
+        dead_record_ids
+            .iter()
+            .all(|record_id| output.delete_records.contains(record_id))
+    );
+    assert!(output.replace_records.is_empty());
+    assert!(output.create_records.is_empty());
+    let live_replica_id = world
+        .records
+        .iter()
+        .find(|record| {
+            record
+                .spec
+                .name
+                .starts_with("api-1.cluster-1.maestro.internal.")
+        })
+        .expect("live replica record")
+        .meta
+        .id
+        .clone();
+    assert!(!output.delete_records.contains(&live_replica_id));
 }
 
 #[test]
@@ -217,6 +292,11 @@ impl World {
             settings: DnsSettings { ttl_secs: 5 },
             services: vec![self.service.clone()],
             assignments: self.assignments.clone(),
+            live_nodes: self
+                .assignments
+                .iter()
+                .map(|assignment| assignment.spec.node_id.clone())
+                .collect(),
             replicas: self.replicas.clone(),
             records: self.records.clone(),
         }

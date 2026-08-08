@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use kernel_api::{Assignment, Deployment, DeploymentId, DeploymentPhase, ReplicaState, Timestamp};
+use kernel_api::{
+    Assignment, AssignmentPhase, Deployment, DeploymentId, DeploymentPhase, NodeId, ReplicaState,
+    Timestamp,
+};
 
 pub(crate) fn current_slots<'a>(
     deployment_id: &DeploymentId,
@@ -28,12 +31,15 @@ pub(crate) fn all_ready(
     deployment: &Deployment,
     slots: &BTreeMap<u32, &Assignment>,
     replicas: &[ReplicaState],
+    live_nodes: &std::collections::BTreeSet<NodeId>,
     count: u32,
 ) -> bool {
     (0..count).all(|index| {
         slots.get(&index).is_some_and(|assignment| {
-            exact_replica(deployment, assignment, replicas)
-                .is_some_and(|replica| replica.status.phase == DeploymentPhase::Ready)
+            assignment.status.phase == AssignmentPhase::Running
+                && live_nodes.contains(&assignment.spec.node_id)
+                && exact_replica(deployment, assignment, replicas)
+                    .is_some_and(|replica| replica.status.phase == DeploymentPhase::Ready)
         })
     })
 }
@@ -42,17 +48,63 @@ pub(crate) fn all_started(
     deployment: &Deployment,
     slots: &BTreeMap<u32, &Assignment>,
     replicas: &[ReplicaState],
+    live_nodes: &std::collections::BTreeSet<NodeId>,
     count: u32,
 ) -> bool {
     (0..count).all(|index| {
         slots.get(&index).is_some_and(|assignment| {
-            exact_replica(deployment, assignment, replicas).is_some_and(|replica| {
-                matches!(
-                    replica.status.phase,
-                    DeploymentPhase::PendingReady | DeploymentPhase::Ready
-                )
+            assignment.status.phase == AssignmentPhase::Running
+                && live_nodes.contains(&assignment.spec.node_id)
+                && exact_replica(deployment, assignment, replicas).is_some_and(|replica| {
+                    matches!(
+                        replica.status.phase,
+                        DeploymentPhase::PendingReady | DeploymentPhase::Ready
+                    )
+                })
+        })
+    })
+}
+
+pub(crate) fn all_stopped(
+    deployment: &Deployment,
+    slots: &BTreeMap<u32, &Assignment>,
+    replicas: &[ReplicaState],
+    count: u32,
+) -> bool {
+    count > 0
+        && (0..count).all(|index| {
+            slots.get(&index).is_some_and(|assignment| {
+                assignment.status.phase == AssignmentPhase::Stopped
+                    && exact_replica(deployment, assignment, replicas)
+                        .is_some_and(|replica| replica.status.phase == DeploymentPhase::Stopped)
             })
         })
+}
+
+pub(crate) fn any_stopping(
+    deployment: &Deployment,
+    slots: &BTreeMap<u32, &Assignment>,
+    replicas: &[ReplicaState],
+    count: u32,
+) -> bool {
+    (0..count).any(|index| {
+        slots.get(&index).is_some_and(|assignment| {
+            assignment.status.phase == AssignmentPhase::Stopping
+                || exact_replica(deployment, assignment, replicas)
+                    .is_some_and(|replica| replica.status.phase == DeploymentPhase::Stopping)
+        })
+    })
+}
+
+pub(crate) fn any_unreachable(
+    slots: &BTreeMap<u32, &Assignment>,
+    live_nodes: &std::collections::BTreeSet<NodeId>,
+    count: u32,
+) -> bool {
+    (0..count).any(|index| {
+        slots
+            .get(&index)
+            .is_none_or(|assignment| !live_nodes.contains(&assignment.spec.node_id))
     })
 }
 

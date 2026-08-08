@@ -109,6 +109,13 @@ async fn scheduler_holds_transient_node_loss_then_replaces_after_grace()
     let successor = world.assignments().await?.remove(0);
     assert_ne!(successor.meta.id, original.meta.id);
     assert_ne!(successor.spec.node_id, original.spec.node_id);
+    assert_eq!(successor.spec.service_id, original.spec.service_id);
+    assert_eq!(successor.spec.deployment_id, original.spec.deployment_id);
+    assert_eq!(successor.spec.replica_index, original.spec.replica_index);
+    assert_eq!(
+        successor.spec.restart_generation,
+        original.spec.restart_generation
+    );
     assert_eq!(successor.spec.placement_epoch, 2);
     assert_eq!(
         successor.spec.replaces_assignment_id,

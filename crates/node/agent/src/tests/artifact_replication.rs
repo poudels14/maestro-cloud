@@ -254,23 +254,19 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
 {
     let deployments = vec![
         deployment("active", 1, DeploymentPhase::Ready, Some("sha256:active"))?,
+        deployment("older", 2, DeploymentPhase::Stopped, Some("sha256:older"))?,
+        deployment("latest", 3, DeploymentPhase::Stopped, Some("sha256:latest"))?,
         deployment(
-            "older",
-            2,
-            DeploymentPhase::Terminated,
-            Some("sha256:older"),
+            "recovering",
+            4,
+            DeploymentPhase::Recovering,
+            Some("sha256:recovering"),
         )?,
-        deployment(
-            "latest",
-            3,
-            DeploymentPhase::Terminated,
-            Some("sha256:latest"),
-        )?,
-        registry_build_deployment("registry-build", 4, "registry.test/api@sha256:built")?,
-        image_deployment("registry", 5, "registry.test/api@sha256:external")?,
+        registry_build_deployment("registry-build", 5, "registry.test/api@sha256:built")?,
+        image_deployment("registry", 6, "registry.test/api@sha256:external")?,
         deployment(
             "depot-registry-build",
-            6,
+            7,
             DeploymentPhase::Ready,
             Some(
                 "registry.depot.dev/project@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -281,14 +277,18 @@ fn retention_keeps_active_and_latest_registry_free_builds() -> Result<(), Box<dy
         retained_digests(&deployments)?,
         BTreeSet::from([
             ArtifactDigest::new("sha256:active")?,
+            ArtifactDigest::new("sha256:older")?,
             ArtifactDigest::new("sha256:latest")?,
+            ArtifactDigest::new("sha256:recovering")?,
         ])
     );
     assert_eq!(
         preserved_digests(&deployments)?,
         BTreeSet::from([
             ArtifactDigest::new("sha256:active")?,
+            ArtifactDigest::new("sha256:older")?,
             ArtifactDigest::new("sha256:latest")?,
+            ArtifactDigest::new("sha256:recovering")?,
             ArtifactDigest::new("registry.test/api@sha256:built")?,
             ArtifactDigest::new("registry.test/api@sha256:external")?,
             ArtifactDigest::new(

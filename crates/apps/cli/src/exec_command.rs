@@ -159,7 +159,11 @@ pub(crate) fn select_deployment(
     deployments.retain(|deployment| {
         matches!(
             deployment.status.phase,
-            DeploymentPhase::PendingReady | DeploymentPhase::Ready | DeploymentPhase::Draining
+            DeploymentPhase::Starting
+                | DeploymentPhase::PendingReady
+                | DeploymentPhase::Ready
+                | DeploymentPhase::Recovering
+                | DeploymentPhase::Draining
         )
     });
     if let Some(requested) = requested {

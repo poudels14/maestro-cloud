@@ -8,11 +8,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     ArtifactTemplate, Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus,
-    ClusterId, ConditionType, Deployment, DeploymentId, DeploymentPhase, DeploymentSpec,
-    DeploymentStatus, ExecPolicy, Generation, NodeApiAccess, NodeId, ObjectMeta,
-    PlacementConstraint, ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus,
-    ResourceKind, ResourceName, ResourceRevision, SecretMountSpec, SecretValue, ServiceId,
-    ServiceSpec, Timestamp, VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadUserSpec,
+    ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Deployment, DeploymentId,
+    DeploymentPhase, DeploymentSpec, DeploymentStatus, ExecPolicy, Generation, Node, NodeApiAccess,
+    NodeId, NodeInstanceId, NodeRole, NodeSpec, NodeStatus, ObjectMeta, PlacementConstraint,
+    ReplicaState, ReplicaStateId, ReplicaStateSpec, ReplicaStateStatus, ResourceKind, ResourceName,
+    ResourceRevision, SecretMountSpec, SecretValue, ServiceId, ServiceSpec, Timestamp,
+    VolumeAccess, VolumeMountSpec, VolumeSource, WorkloadNetworkMode, WorkloadUserSpec,
 };
 use kernel_store::{
     Clock, DeleteRequest, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
@@ -28,6 +29,8 @@ use tokio::sync::{Notify, watch};
 
 use crate::assignment::host_secret_owner;
 use crate::{AssignmentAgent, AssignmentAgentSettings, NodeApiServices, StatusClock, WorkloadDns};
+
+use super::store_fault::FailFirstListStore;
 
 mod dns;
 #[cfg(unix)]
@@ -488,6 +491,14 @@ async fn system_health_crash_restarts_and_resets_replica_health()
     let mut replica = replica(&assignment);
     replica.status.phase = DeploymentPhase::Crashed;
     replica.status.healthcheck_failures = 3;
+    replica.status.conditions.push(Condition {
+        condition_type: ConditionType::HealthReady,
+        state: ConditionState::False,
+        reason: ConditionReason("UnhealthyThresholdReached".to_owned()),
+        message: "old workload failed its health check".to_owned(),
+        observed_generation: Generation(1),
+        last_transition_time: Timestamp(1_750_000_000_000),
+    });
     put_resource(
         world.store.as_ref(),
         world.replica_key(),
@@ -505,6 +516,13 @@ async fn system_health_crash_restarts_and_resets_replica_health()
     let replica = world.load_replica().await?;
     assert_eq!(replica.status.phase, DeploymentPhase::PendingReady);
     assert_eq!(replica.status.healthcheck_failures, 0);
+    assert!(
+        replica
+            .status
+            .conditions
+            .iter()
+            .all(|condition| condition.condition_type != ConditionType::HealthReady)
+    );
     Ok(())
 }
 
@@ -561,6 +579,143 @@ async fn assignment_run_retries_a_transient_whole_snapshot_failure()
 
     shutdown_tx.send(true)?;
     tokio::time::timeout(Duration::from_secs(1), task).await???;
+    assert!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .is_empty()
+    );
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Stopped);
+    assert!(assignment.status.workload_id.is_none());
+    let assignment_condition = assignment
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .ok_or("assignment stop condition missing")?;
+    assert_eq!(assignment_condition.state, ConditionState::False);
+    assert_eq!(assignment_condition.reason.0, "DaemonShutdown");
+    let replica = world.load_replica().await?;
+    assert_eq!(replica.status.phase, DeploymentPhase::Stopped);
+    assert!(replica.status.workload_id.is_none());
+    let replica_condition = replica
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .ok_or("replica stop condition missing")?;
+    assert_eq!(replica_condition.state, ConditionState::False);
+    assert_eq!(replica_condition.reason.0, "DaemonShutdown");
+
+    let restarted = world.agent().reconcile_once().await?;
+    assert_eq!(restarted.restarted, 1);
+    assert_running(&world).await?;
+    let replica = world.load_replica().await?;
+    assert_eq!(replica.status.phase, DeploymentPhase::PendingReady);
+    assert_eq!(replica.status.healthcheck_failures, 0);
+    assert_eq!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn planned_shutdown_records_node_maintenance_before_stopping_workloads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.agent().reconcile_once().await?;
+    world.seed_maintenance_node().await?;
+
+    world.agent().shutdown_local_workloads().await?;
+
+    let assignment = world.load_assignment().await?;
+    assert_eq!(assignment.status.phase, AssignmentPhase::Stopped);
+    let condition = assignment
+        .status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+        .ok_or("assignment stop condition missing")?;
+    assert_eq!(condition.reason.0, "NodeMaintenance");
+    let replica = world.load_replica().await?;
+    assert_eq!(replica.status.phase, DeploymentPhase::Stopped);
+    assert_eq!(
+        replica
+            .status
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_type == ConditionType::RuntimeReady)
+            .map(|condition| condition.reason.0.as_str()),
+        Some("NodeMaintenance")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn planned_shutdown_records_stopping_when_runtime_inventory_is_unavailable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.agent().reconcile_once().await?;
+    world.runtime.fail_next(
+        FakeRuntimeOperation::List,
+        RuntimeError::Unavailable {
+            message: "injected shutdown inventory outage".to_owned(),
+        },
+    )?;
+
+    assert!(world.agent().shutdown_local_workloads().await.is_err());
+
+    assert_eq!(
+        world.load_assignment().await?.status.phase,
+        AssignmentPhase::Stopping
+    );
+    assert_eq!(
+        world.load_replica().await?.status.phase,
+        DeploymentPhase::Stopping
+    );
+    assert_eq!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn planned_shutdown_still_removes_runtime_workloads_when_store_inventory_is_unavailable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.agent().reconcile_once().await?;
+    let unavailable = Arc::new(FailFirstListStore::new(world.store.clone()));
+
+    assert!(
+        world
+            .agent_with_store(unavailable)
+            .shutdown_local_workloads()
+            .await
+            .is_err()
+    );
+
+    assert!(
+        world
+            .runtime
+            .list(&cluster_id(), &node_id("node-1"))
+            .await?
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -1021,6 +1176,22 @@ impl World {
         self.agent_with_node_api(None)
     }
 
+    fn agent_with_store(&self, store: Arc<dyn Store>) -> AssignmentAgent {
+        self.agent_with_network_and_store(
+            NetworkSpec {
+                name: "maestro-node-1".to_owned(),
+                addressing: NetworkAddressing::Managed {
+                    range: NetworkCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 0)), 24).unwrap(),
+                    gateway: IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1)),
+                },
+                mtu_bytes: 1_420,
+            },
+            Some(IpAddr::V4(Ipv4Addr::new(10, 42, 1, 1))),
+            None,
+            store,
+        )
+    }
+
     fn agent_delegated(&self) -> AssignmentAgent {
         self.agent_with_network(
             NetworkSpec {
@@ -1054,10 +1225,20 @@ impl World {
         dns_server: Option<IpAddr>,
         services: Option<NodeApiServices>,
     ) -> AssignmentAgent {
+        self.agent_with_network_and_store(network_spec, dns_server, services, self.store.clone())
+    }
+
+    fn agent_with_network_and_store(
+        &self,
+        network_spec: NetworkSpec,
+        dns_server: Option<IpAddr>,
+        services: Option<NodeApiServices>,
+        store: Arc<dyn Store>,
+    ) -> AssignmentAgent {
         let runtime: Arc<dyn WorkloadRuntime> = self.runtime.clone();
         let network: Arc<dyn NetworkProvider> = self.network.clone();
         AssignmentAgent::new(
-            self.store.clone(),
+            store,
             runtime,
             network,
             AssignmentAgentSettings {
@@ -1118,6 +1299,48 @@ impl World {
         .await
     }
 
+    async fn seed_maintenance_node(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let node: Node = kernel_api::Object {
+            meta: ObjectMeta {
+                id: node_id("node-1"),
+                labels: BTreeMap::new(),
+                annotations: BTreeMap::new(),
+                revision: ResourceRevision::default(),
+                generation: Generation(1),
+                owner_refs: Vec::new(),
+                finalizers: BTreeSet::new(),
+                deletion_timestamp: None,
+            },
+            spec: NodeSpec {
+                hostname: "node-1.internal".to_owned(),
+                host_address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                role: NodeRole::Worker,
+                workload_network_mode: WorkloadNetworkMode::ClusterRouted,
+                scheduling_labels: BTreeMap::new(),
+            },
+            status: NodeStatus {
+                instance_id: NodeInstanceId::new("instance-1")?,
+                version: "1.0.0".to_owned(),
+                last_seen: Timestamp(1_750_000_000_000),
+                conditions: vec![Condition {
+                    condition_type: ConditionType::Maintenance,
+                    state: ConditionState::True,
+                    reason: ConditionReason("UpgradeRun:upgrade-1".to_owned()),
+                    message: "upgrade is in progress".to_owned(),
+                    observed_generation: Generation(1),
+                    last_transition_time: Timestamp(1_750_000_000_000),
+                }],
+            },
+        };
+        put_resource(
+            self.store.as_ref(),
+            Keyspace::new(&cluster_id())
+                .resource(&ResourceKind::new("Node")?, &ResourceName::new("node-1")?),
+            serde_json::to_vec(&node)?,
+        )
+        .await
+    }
+
     async fn load_assignment(&self) -> Result<Assignment, Box<dyn std::error::Error>> {
         let stored = self
             .store
@@ -1155,7 +1378,7 @@ impl World {
     fn replica_key(&self) -> kernel_store::StoreKey {
         Keyspace::new(&cluster_id()).resource(
             &ResourceKind::new("ReplicaState").unwrap(),
-            &ResourceName::new("replica-1").unwrap(),
+            &ResourceName::new("assignment-1").unwrap(),
         )
     }
 }
@@ -1163,7 +1386,7 @@ impl World {
 fn replica(assignment: &Assignment) -> ReplicaState {
     ReplicaState {
         meta: ObjectMeta {
-            id: ReplicaStateId::new("replica-1").unwrap(),
+            id: ReplicaStateId::new("assignment-1").unwrap(),
             labels: BTreeMap::new(),
             annotations: BTreeMap::new(),
             revision: ResourceRevision::default(),

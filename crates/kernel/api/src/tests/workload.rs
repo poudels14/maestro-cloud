@@ -153,11 +153,14 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
         DeploymentPhase::Preparing,
         DeploymentPhase::Building,
         DeploymentPhase::Publishing,
+        DeploymentPhase::Starting,
         DeploymentPhase::PendingReady,
         DeploymentPhase::Retrying,
         DeploymentPhase::Ready,
+        DeploymentPhase::Recovering,
+        DeploymentPhase::Stopping,
+        DeploymentPhase::Stopped,
         DeploymentPhase::Crashed,
-        DeploymentPhase::Terminated,
         DeploymentPhase::Removed,
         DeploymentPhase::Draining,
         DeploymentPhase::Canceled,
@@ -177,46 +180,94 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                     current,
                     DeploymentPhase::Preparing
                         | DeploymentPhase::Building
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopped
+                ),
+                DeploymentPhase::Starting => matches!(
+                    current,
+                    DeploymentPhase::Building
+                        | DeploymentPhase::Publishing
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopped
+                        | DeploymentPhase::Retrying
                 ),
                 DeploymentPhase::PendingReady => matches!(
                     current,
                     DeploymentPhase::Building
                         | DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Retrying => matches!(
                     current,
                     DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
                 ),
                 DeploymentPhase::Ready => matches!(
                     current,
                     DeploymentPhase::Building
                         | DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
+                        | DeploymentPhase::Recovering
+                ),
+                DeploymentPhase::Recovering => matches!(
+                    current,
+                    DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
+                        | DeploymentPhase::Ready
+                        | DeploymentPhase::Stopping
+                        | DeploymentPhase::Stopped
+                ),
+                DeploymentPhase::Stopping => matches!(
+                    current,
+                    DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
+                        | DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                ),
+                DeploymentPhase::Stopped => matches!(
+                    current,
+                    DeploymentPhase::Publishing
+                        | DeploymentPhase::Starting
+                        | DeploymentPhase::PendingReady
+                        | DeploymentPhase::Retrying
+                        | DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
                 ),
                 DeploymentPhase::Crashed => !matches!(
                     current,
-                    DeploymentPhase::Crashed
-                        | DeploymentPhase::Canceled
-                        | DeploymentPhase::Terminated
+                    DeploymentPhase::Crashed | DeploymentPhase::Canceled | DeploymentPhase::Removed
                 ),
                 DeploymentPhase::Draining => matches!(
                     current,
                     DeploymentPhase::Ready
+                        | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
+                        | DeploymentPhase::Stopped
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
+                        | DeploymentPhase::Starting
                         | DeploymentPhase::Publishing
                         | DeploymentPhase::Building
                         | DeploymentPhase::Preparing
                 ),
-                DeploymentPhase::Terminated => current != DeploymentPhase::Terminated,
                 DeploymentPhase::Queued | DeploymentPhase::Removed | DeploymentPhase::Canceled => {
                     true
                 }

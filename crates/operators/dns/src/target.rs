@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use kernel_api::{
-    AnnotationKey, Assignment, DeploymentPhase, DnsRecordSpec, DnsRecordValue, ReplicaState,
-    Service, assignment_workload_address,
+    AnnotationKey, Assignment, AssignmentPhase, DeploymentPhase, DnsRecordSpec, DnsRecordValue,
+    NodeId, ReplicaState, Service, assignment_workload_address,
 };
 
 use crate::validation::{alias_name, replica_name, service_name};
@@ -14,6 +14,7 @@ pub(crate) fn desired_specs(
     settings: DnsSettings,
     service: &Service,
     assignments: &[Assignment],
+    live_nodes: &BTreeSet<NodeId>,
     replicas: &[ReplicaState],
 ) -> Result<Option<Vec<DnsRecordSpec>>, DnsPlanError> {
     let Some(deployment_id) = service.status.active_deployment_id.as_ref() else {
@@ -47,9 +48,10 @@ pub(crate) fn desired_specs(
             }
         }
     }
-    if slots.len() != usize::try_from(count).unwrap_or(usize::MAX)
-        || !slots.values().all(|assignment| {
-            replicas.iter().any(|replica| {
+    slots.retain(|_, assignment| {
+        assignment.status.phase == AssignmentPhase::Running
+            && live_nodes.contains(&assignment.spec.node_id)
+            && replicas.iter().any(|replica| {
                 replica.meta.deletion_timestamp.is_none()
                     && replica.spec.service_id == service.meta.id
                     && replica.spec.deployment_id == *deployment_id
@@ -57,10 +59,7 @@ pub(crate) fn desired_specs(
                     && replica.spec.replica_index == assignment.spec.replica_index
                     && replica.status.phase == DeploymentPhase::Ready
             })
-        })
-    {
-        return Ok(None);
-    }
+    });
 
     let addressed = slots
         .values()

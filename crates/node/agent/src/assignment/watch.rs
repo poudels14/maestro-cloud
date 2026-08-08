@@ -26,9 +26,7 @@ impl AssignmentAgent {
         let mut runtime_reconnect_at = self.monotonic_clock.now();
         loop {
             if *shutdown.borrow() {
-                #[cfg(unix)]
-                self.node_api.shutdown_all().await?;
-                return Ok(());
+                return self.finish_shutdown().await;
             }
             let reconcile_deadline = self
                 .monotonic_clock
@@ -37,9 +35,7 @@ impl AssignmentAgent {
             let reconcile = tokio::select! {
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
-                        #[cfg(unix)]
-                        self.node_api.shutdown_all().await?;
-                        return Ok(());
+                        return self.finish_shutdown().await;
                     }
                     continue;
                 }
@@ -53,9 +49,7 @@ impl AssignmentAgent {
                 Ok(reconciled) => reconciled,
                 Err(error) if error.retryable() => {
                     if self.wait_for_retry_or_shutdown(&mut shutdown).await {
-                        #[cfg(unix)]
-                        self.node_api.shutdown_all().await?;
-                        return Ok(());
+                        return self.finish_shutdown().await;
                     }
                     continue;
                 }
@@ -75,9 +69,7 @@ impl AssignmentAgent {
                 Ok(events) => events,
                 Err(error) if retryable_store_error(&error) => {
                     if self.wait_for_retry_or_shutdown(&mut shutdown).await {
-                        #[cfg(unix)]
-                        self.node_api.shutdown_all().await?;
-                        return Ok(());
+                        return self.finish_shutdown().await;
                     }
                     continue;
                 }
@@ -107,9 +99,7 @@ impl AssignmentAgent {
                 tokio::select! {
                     changed = shutdown.changed() => {
                         if changed.is_err() || *shutdown.borrow() {
-                            #[cfg(unix)]
-                            self.node_api.shutdown_all().await?;
-                            return Ok(());
+                            return self.finish_shutdown().await;
                         }
                     }
                     event = events.next() => {
@@ -117,9 +107,7 @@ impl AssignmentAgent {
                             Ok(_) => break,
                             Err(error) if retryable_store_error(&error) => {
                                 if self.wait_for_retry_or_shutdown(&mut shutdown).await {
-                                    #[cfg(unix)]
-                                    self.node_api.shutdown_all().await?;
-                                    return Ok(());
+                                    return self.finish_shutdown().await;
                                 }
                                 break;
                             }
@@ -184,5 +172,16 @@ impl AssignmentAgent {
                 () = self.monotonic_clock.sleep_until(retry_at) => return false,
             }
         }
+    }
+
+    async fn finish_shutdown(&self) -> Result<(), AssignmentAgentError> {
+        let workloads = self.shutdown_local_workloads().await;
+        #[cfg(unix)]
+        let node_api = self.node_api.shutdown_all().await;
+        #[cfg(not(unix))]
+        let node_api: Result<(), AssignmentAgentError> = Ok(());
+        workloads?;
+        node_api?;
+        Ok(())
     }
 }

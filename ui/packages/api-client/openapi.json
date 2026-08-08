@@ -186,6 +186,13 @@
             "type": "string"
           },
           {
+            "description": "The workload is being stopped by its owning node agent.",
+            "enum": [
+              "stopping"
+            ],
+            "type": "string"
+          },
+          {
             "description": "The workload is stopping without accepting new traffic.",
             "enum": [
               "draining"
@@ -1091,6 +1098,13 @@
             "type": "string"
           },
           {
+            "description": "Runtime resources belonging to a terminal workload have been removed.",
+            "enum": [
+              "CLEANUP_COMPLETE"
+            ],
+            "type": "string"
+          },
+          {
             "description": "The node firewall generation is applied.",
             "enum": [
               "FIREWALL_READY"
@@ -1274,6 +1288,13 @@
             "type": "string"
           },
           {
+            "description": "Assigned workloads are being created and started.",
+            "enum": [
+              "STARTING"
+            ],
+            "type": "string"
+          },
+          {
             "description": "Workloads started but have not passed readiness checks.",
             "enum": [
               "PENDING_READY"
@@ -1295,16 +1316,30 @@
             "type": "string"
           },
           {
-            "description": "The deployment exhausted a terminal failure path.",
+            "description": "A previously ready deployment is restoring lost or deliberately stopped replicas.",
             "enum": [
-              "CRASHED"
+              "RECOVERING"
             ],
             "type": "string"
           },
           {
-            "description": "Runtime workloads have stopped.",
+            "description": "Runtime workloads are stopping without accepting new traffic.",
             "enum": [
-              "TERMINATED"
+              "STOPPING"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Runtime workloads are confirmed stopped but the deployment still has a Run goal.",
+            "enum": [
+              "STOPPED"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The deployment exhausted a terminal failure path.",
+            "enum": [
+              "CRASHED"
             ],
             "type": "string"
           },

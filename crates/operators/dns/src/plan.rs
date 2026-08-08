@@ -53,6 +53,7 @@ pub fn plan(input: DnsInput) -> Result<DnsPlan, DnsPlanError> {
                 input.settings,
                 service,
                 &assignment_values,
+                &input.live_nodes,
                 &replica_values,
             )?
         };

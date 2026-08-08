@@ -97,6 +97,7 @@ pub fn plan(input: IngressInput) -> Result<IngressPlan, IngressPlanError> {
             &deployments,
             &captured_routes,
             &input.assignments,
+            &input.live_nodes,
             &input.replicas,
         )? {
             converge_desired(

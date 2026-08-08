@@ -20,8 +20,9 @@ fn deployment_selection_prefers_an_active_running_deployment_then_newest()
     let old = deployment("old", DeploymentPhase::Ready, 1_000)?;
     let active = deployment("active", DeploymentPhase::PendingReady, 2_000)?;
     let newest = deployment("newest", DeploymentPhase::Draining, 3_000)?;
+    let recovering = deployment("recovering", DeploymentPhase::Recovering, 3_500)?;
     let crashed = deployment("crashed", DeploymentPhase::Crashed, 4_000)?;
-    let deployments = vec![old, active.clone(), newest.clone(), crashed];
+    let deployments = vec![old, active.clone(), newest, recovering.clone(), crashed];
 
     assert_eq!(
         select_deployment(
@@ -35,7 +36,7 @@ fn deployment_selection_prefers_an_active_running_deployment_then_newest()
     );
     assert_eq!(
         select_deployment(deployments.clone(), None, None)?.meta.id,
-        newest.meta.id
+        recovering.meta.id
     );
     assert!(select_deployment(deployments, Some(&DeploymentId::new("crashed")?), None,).is_err());
     Ok(())

@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 use kernel_api::{
     Assignment, AssignmentId, AssignmentSpec, AssignmentStatus, DnsRecord, DnsRecordId,
-    DnsRecordSpec, DnsRecordStatus, Object, ReplicaState, ReplicaStateId, ReplicaStateSpec,
+    DnsRecordSpec, DnsRecordStatus, NodeId, Object, ReplicaState, ReplicaStateId, ReplicaStateSpec,
     ReplicaStateStatus, ResourceKind, ResourceName, Service, ServiceId, ServiceSpec, ServiceStatus,
 };
 use kernel_controller::FencedStore;
@@ -17,12 +17,14 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) assignments: BTreeMap<AssignmentId, StoredResource<Assignment>>,
     pub(crate) replicas: BTreeMap<ReplicaStateId, StoredResource<ReplicaState>>,
     pub(crate) records: BTreeMap<DnsRecordId, StoredResource<DnsRecord>>,
+    pub(crate) live_nodes: std::collections::BTreeSet<NodeId>,
+    pub(crate) liveness_compares: Vec<Compare>,
 }
 
 impl ResourceSnapshot {
     pub(crate) async fn load(store: &FencedStore, keyspace: &Keyspace) -> Result<Self, DnsError> {
         let values = store.list(&keyspace.resources()).await?.values;
-        Ok(Self {
+        let mut snapshot = Self {
             services: decode_kind::<ServiceId, ServiceSpec, ServiceStatus>(
                 &values, keyspace, "Service",
             )?,
@@ -41,7 +43,11 @@ impl ResourceSnapshot {
                 keyspace,
                 "DnsRecord",
             )?,
-        })
+            live_nodes: Default::default(),
+            liveness_compares: Vec::new(),
+        };
+        snapshot.load_liveness(store, keyspace).await?;
+        Ok(snapshot)
     }
 
     pub(crate) fn input(
@@ -54,18 +60,51 @@ impl ResourceSnapshot {
             settings,
             services: resources(&self.services),
             assignments: resources(&self.assignments),
+            live_nodes: self.live_nodes.clone(),
             replicas: resources(&self.replicas),
             records: resources(&self.records),
         }
     }
 
     pub(crate) fn dependency_compares(&self) -> Vec<Compare> {
-        self.values()
+        let mut compares = self
+            .values()
             .map(|stored| Compare {
                 key: stored.key.clone(),
                 expected: ExpectedVersion::Exact(stored.version),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        compares.extend(self.liveness_compares.clone());
+        compares
+    }
+
+    async fn load_liveness(
+        &mut self,
+        store: &FencedStore,
+        keyspace: &Keyspace,
+    ) -> Result<(), DnsError> {
+        let nodes = self
+            .assignments
+            .values()
+            .map(|assignment| assignment.resource.spec.node_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for node_id in nodes {
+            let key = keyspace.node_liveness(&node_id);
+            match store.get(&key).await? {
+                Some(stored) => {
+                    self.live_nodes.insert(node_id);
+                    self.liveness_compares.push(Compare {
+                        key,
+                        expected: ExpectedVersion::Exact(stored.version),
+                    });
+                }
+                None => self.liveness_compares.push(Compare {
+                    key,
+                    expected: ExpectedVersion::Missing,
+                }),
+            }
+        }
+        Ok(())
     }
 
     fn values(&self) -> impl Iterator<Item = &StoredValue> {

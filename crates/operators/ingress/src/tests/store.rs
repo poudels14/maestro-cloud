@@ -188,7 +188,7 @@ async fn service_snapshot_excludes_unrelated_replica_cardinality()
 
     assert_eq!(snapshot.services.len(), 1);
     assert_eq!(snapshot.replicas.len(), planned.replicas.len());
-    assert_eq!(snapshot.primary_compares().len(), 1);
+    assert_eq!(snapshot.primary_compares().len(), 2);
     assert_eq!(
         world.reconcile(Timestamp(1_000)).await?.created_generations,
         1
@@ -463,13 +463,28 @@ impl StoreWorld {
         id: &Id,
         resource: &impl serde::Serialize,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let value = serde_json::to_vec(resource)?;
+        if kind == "Assignment" {
+            let assignment: kernel_api::Assignment = serde_json::from_slice(&value)?;
+            let _ = self
+                .store
+                .put_cas(PutRequest {
+                    key: self.keys.node_liveness(&assignment.spec.node_id),
+                    value: b"live".to_vec(),
+                    expected: ExpectedVersion::Missing,
+                    session: Some(SessionBinding {
+                        session_id: self._session.id(),
+                    }),
+                })
+                .await?;
+        }
         let outcome = self
             .store
             .put_cas(PutRequest {
                 key: self
                     .keys
                     .resource(&ResourceKind::new(kind)?, &id.clone().into()),
-                value: serde_json::to_vec(resource)?,
+                value,
                 expected: ExpectedVersion::Missing,
                 session: None,
             })

@@ -19,8 +19,11 @@ function deploymentGitRevision(deployment: Deployment): string | null {
   return deployment.status.gitCommit?.revision ?? null;
 }
 
-function deploymentFailure(deployment: Deployment): string | null {
-  const condition = deployment.status.conditions?.find((entry) => entry.status === "false");
+function deploymentStatusDetail(deployment: Deployment): string | null {
+  const conditions = deployment.status.conditions ?? [];
+  const condition =
+    conditions.find((entry) => entry.type === "READY" && entry.status !== "true") ??
+    conditions.find((entry) => entry.status !== "true");
   return condition?.message || condition?.reason || null;
 }
 
@@ -36,7 +39,7 @@ function replicaFailure(replica: ReplicaState): string | null {
 }
 
 export {
-  deploymentFailure,
+  deploymentStatusDetail,
   deploymentGitRevision,
   deploymentTitle,
   replicaDisplayName,

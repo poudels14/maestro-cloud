@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use kernel_api::{
-    ArtifactTemplate, Assignment, AssignmentPhase, AssignmentStatus, ConditionType, Deployment,
-    DeploymentPhase, EnvironmentName, ReplicaState, ResourceKind, ResourceName, SecretMountSpec,
-    SecretValue,
+    ArtifactTemplate, Assignment, AssignmentPhase, AssignmentStatus, ConditionState, ConditionType,
+    Deployment, DeploymentPhase, EnvironmentName, Node, ReplicaState, ResourceKind, ResourceName,
+    SecretMountSpec, SecretValue, WorkloadStopReason,
 };
 use kernel_store::{CasOutcome, Clock, ExpectedVersion, Keyspace, PutRequest, Store};
 use runtime::{
@@ -103,6 +103,7 @@ pub struct AssignmentAgent {
     assignment_kind: ResourceKind,
     deployment_kind: ResourceKind,
     replica_kind: ResourceKind,
+    node_kind: ResourceKind,
     monotonic_clock: Arc<dyn Clock>,
     status_clock: Arc<dyn StatusClock>,
     artifact_replication: Option<Arc<ArtifactReplicationAgent>>,
@@ -150,6 +151,7 @@ impl AssignmentAgent {
             assignment_kind: ResourceKind::new(ASSIGNMENT_KIND)?,
             deployment_kind: ResourceKind::new(DEPLOYMENT_KIND)?,
             replica_kind: ResourceKind::new(REPLICA_STATE_KIND)?,
+            node_kind: ResourceKind::new("Node")?,
             store,
             runtime,
             network,
@@ -337,6 +339,15 @@ impl AssignmentAgent {
             before.state,
             WorkloadState::Created | WorkloadState::Stopped
         );
+        let reset_readiness = needs_start
+            && replica.is_some_and(|replica| {
+                !matches!(replica.status.phase, DeploymentPhase::Publishing)
+            });
+        let resumed = needs_start
+            && matches!(
+                assignment.status.phase,
+                AssignmentPhase::Stopping | AssignmentPhase::Stopped
+            );
         let request = assignment
             .spec
             .workload_address
@@ -354,7 +365,8 @@ impl AssignmentAgent {
             Ok(ConvergedAssignment {
                 handle,
                 workload_address: attachment.address,
-                restarted: retrying,
+                reset_readiness,
+                restarted: retrying || resumed,
                 replica_id: replica.map(|replica| replica.meta.id.clone()),
                 resolved_secrets,
             })
@@ -494,6 +506,174 @@ impl AssignmentAgent {
         #[cfg(unix)]
         self.node_api.cleanup(handle.workload_id()).await?;
         Ok(())
+    }
+
+    pub(crate) async fn shutdown_local_workloads(&self) -> Result<(), AssignmentAgentError> {
+        let mut first_failure: Option<AssignmentAgentError> = None;
+        let assignments = match self
+            .store
+            .list(&self.keyspace.resource_kind(&self.assignment_kind))
+            .await
+        {
+            Ok(snapshot) => {
+                let (assignments, _malformed) = crate::assignment_resource::decode_assignments(
+                    &snapshot.values,
+                    &self.keyspace,
+                    &self.assignment_kind,
+                    &self.settings.node_id,
+                );
+                assignments
+                    .into_iter()
+                    .filter(|assignment| {
+                        assignment.meta.deletion_timestamp.is_none()
+                            && assignment.spec.node_id == self.settings.node_id
+                    })
+                    .map(|assignment| (assignment.meta.id.clone(), assignment))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            }
+            Err(error) => {
+                first_failure = Some(error.into());
+                std::collections::BTreeMap::new()
+            }
+        };
+        let (reason, message) = self.shutdown_reason().await;
+        for assignment in assignments.values() {
+            if let Err(error) = self
+                .record_planned_stop(
+                    assignment,
+                    DeploymentPhase::Stopping,
+                    AssignmentOutcome::Stopping {
+                        reason,
+                        message: &message,
+                    },
+                    reason,
+                    &message,
+                )
+                .await
+                && first_failure.is_none()
+            {
+                first_failure = Some(error);
+            }
+        }
+
+        let network = match self.network.ensure_network(&self.settings.network).await {
+            Ok(network) => network,
+            Err(error) => return Err(first_failure.unwrap_or_else(|| error.into())),
+        };
+        let observed = match self
+            .runtime
+            .list(&self.settings.cluster_id, &self.settings.node_id)
+            .await
+        {
+            Ok(observed) => observed,
+            Err(error) => return Err(first_failure.unwrap_or_else(|| error.into())),
+        };
+        let mut workloads = observed
+            .into_iter()
+            .map(|workload| (workload.metadata.assignment_id.clone(), workload.handle))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        for assignment in assignments.values() {
+            let removed = match workloads.remove(&assignment.meta.id) {
+                Some(handle) => self.remove_workload(&handle, &network).await,
+                None => Ok(()),
+            };
+            if let Err(error) = removed {
+                if first_failure.is_none() {
+                    first_failure = Some(error);
+                }
+                continue;
+            }
+            if let Err(error) = self
+                .record_planned_stop(
+                    assignment,
+                    DeploymentPhase::Stopped,
+                    AssignmentOutcome::Stopped {
+                        reason,
+                        message: &message,
+                    },
+                    reason,
+                    &message,
+                )
+                .await
+                && first_failure.is_none()
+            {
+                first_failure = Some(error);
+            }
+        }
+        for handle in workloads.into_values() {
+            if let Err(error) = self.remove_workload(&handle, &network).await
+                && first_failure.is_none()
+            {
+                first_failure = Some(error);
+            }
+        }
+        match first_failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    async fn record_planned_stop(
+        &self,
+        assignment: &Assignment,
+        phase: DeploymentPhase,
+        outcome: AssignmentOutcome<'_>,
+        reason: WorkloadStopReason,
+        message: &str,
+    ) -> Result<(), AssignmentAgentError> {
+        self.update_status(assignment, outcome).await?;
+        let replica_id = kernel_api::ReplicaStateId::new(assignment.meta.id.as_str())?;
+        let key = self
+            .keyspace
+            .resource(&self.replica_kind, &ResourceName::from(replica_id));
+        if phase == DeploymentPhase::Stopping {
+            crate::assignment_replica::record_stopping(
+                self.store.as_ref(),
+                key,
+                assignment,
+                reason,
+                message,
+                self.status_clock.now(),
+            )
+            .await
+        } else {
+            crate::assignment_replica::record_stopped(
+                self.store.as_ref(),
+                key,
+                assignment,
+                reason,
+                message,
+                self.status_clock.now(),
+            )
+            .await
+        }
+    }
+
+    async fn shutdown_reason(&self) -> (WorkloadStopReason, String) {
+        let key = self.keyspace.resource(
+            &self.node_kind,
+            &ResourceName::from(self.settings.node_id.clone()),
+        );
+        if let Ok(Some(stored)) = self.store.get(&key).await
+            && let Ok(node) = serde_json::from_slice::<Node>(&stored.value)
+            && let Some(maintenance) = node.status.conditions.iter().find(|condition| {
+                condition.condition_type == ConditionType::Maintenance
+                    && condition.state == ConditionState::True
+            })
+        {
+            return (
+                WorkloadStopReason::NodeMaintenance,
+                format!(
+                    "workload stopped for node maintenance; recovery is required: {}",
+                    maintenance.message
+                ),
+            );
+        }
+        (
+            WorkloadStopReason::DaemonShutdown,
+            "workload stopped for daemon shutdown; recovery is required".to_owned(),
+        )
     }
 
     async fn update_status(
@@ -646,6 +826,17 @@ fn trace_assignment_transition(assignment: &Assignment) {
             reason,
             detail,
             "assignment is running"
+        ),
+        AssignmentPhase::Stopping => tracing::info!(
+            target: "maestro::controller",
+            kind = ASSIGNMENT_KIND,
+            resource_id = %assignment.meta.id,
+            service_id = %assignment.spec.service_id,
+            deployment_id = %assignment.spec.deployment_id,
+            node_id = %assignment.spec.node_id,
+            reason,
+            detail,
+            "assignment is stopping"
         ),
         AssignmentPhase::Draining => tracing::info!(
             target: "maestro::controller",

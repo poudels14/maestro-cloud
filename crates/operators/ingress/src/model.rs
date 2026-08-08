@@ -1,8 +1,9 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use kernel_api::{
     Assignment, Deployment, Generation, IngressBlocklist, IngressBlocklistId,
-    IngressBlocklistStatus, IngressRoute, IngressRouteId, IngressRouteStatus, ReplicaState,
+    IngressBlocklistStatus, IngressRoute, IngressRouteId, IngressRouteStatus, NodeId, ReplicaState,
     ResourceRevision, Service, ServiceId, Timestamp, TrafficGeneration, TrafficGenerationId,
     TrafficGenerationSpec, TrafficGenerationStatus,
 };
@@ -31,6 +32,8 @@ pub struct IngressInput {
     pub routes: Vec<IngressRoute>,
     /// Current scheduler placements used to address ready targets.
     pub assignments: Vec<Assignment>,
+    /// Nodes whose session-bound liveness records are currently present.
+    pub live_nodes: BTreeSet<NodeId>,
     /// Exact assignment readiness observations.
     pub replicas: Vec<ReplicaState>,
     /// Existing immutable traffic generations.

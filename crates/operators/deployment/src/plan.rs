@@ -10,7 +10,8 @@ use kernel_api::{
 };
 
 use crate::readiness::{
-    all_ready, all_started, current_slots, drain_elapsed, has_assignments, has_retrying,
+    all_ready, all_started, all_stopped, any_stopping, any_unreachable, current_slots,
+    drain_elapsed, has_assignments, has_retrying,
 };
 use crate::resource::{index, new_build, new_deployment, validate_ownership};
 use crate::{DeploymentInput, DeploymentPlan, ResourceStatusUpdate, ServiceUpdate};
@@ -109,6 +110,7 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
                 deployment,
                 &builds,
                 &input.assignments,
+                &input.live_nodes,
                 &input.replicas,
                 input.now,
                 input.settings.drain_grace,
@@ -181,6 +183,13 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         &input.replicas,
         &mut output.delete_replicas,
     );
+    project_unreachable_replicas(
+        &input.assignments,
+        &input.live_nodes,
+        &input.replicas,
+        input.now,
+        &mut output.replica_updates,
+    );
 
     for (deployment_id, desired) in desired_statuses {
         let deployment = deployments.get(&deployment_id).ok_or_else(|| {
@@ -220,18 +229,84 @@ pub fn plan(input: DeploymentInput) -> Result<DeploymentPlan, DeploymentPlanErro
         .deployment_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
     output
+        .replica_updates
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    output
         .service_updates
         .sort_by(|left, right| left.id.cmp(&right.id));
     Ok(output)
 }
 
+fn project_unreachable_replicas(
+    assignments: &[Assignment],
+    live_nodes: &std::collections::BTreeSet<kernel_api::NodeId>,
+    replicas: &[ReplicaState],
+    now: Timestamp,
+    updates: &mut Vec<
+        ResourceStatusUpdate<kernel_api::ReplicaStateId, kernel_api::ReplicaStateStatus>,
+    >,
+) {
+    let unreachable = assignments
+        .iter()
+        .filter(|assignment| {
+            assignment.meta.deletion_timestamp.is_none()
+                && !live_nodes.contains(&assignment.spec.node_id)
+        })
+        .map(|assignment| (&assignment.meta.id, &assignment.spec.node_id))
+        .collect::<BTreeMap<_, _>>();
+    for (replica, node_id) in replicas.iter().filter_map(|replica| {
+        if replica.meta.deletion_timestamp.is_some()
+            || !matches!(
+                replica.status.phase,
+                DeploymentPhase::Ready
+                    | DeploymentPhase::PendingReady
+                    | DeploymentPhase::Retrying
+                    | DeploymentPhase::Starting
+            )
+        {
+            return None;
+        }
+        unreachable
+            .get(&replica.spec.assignment_id)
+            .map(|node_id| (replica, node_id))
+    }) {
+        let mut status = replica.status.clone();
+        status.phase = DeploymentPhase::Recovering;
+        let reason = ConditionReason("NodeUnreachable".to_owned());
+        let previous = status
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_type == ConditionType::RuntimeReady);
+        let last_transition_time = previous
+            .filter(|condition| {
+                condition.state == ConditionState::Unknown && condition.reason == reason
+            })
+            .map_or(now, |condition| condition.last_transition_time);
+        status
+            .conditions
+            .retain(|condition| condition.condition_type != ConditionType::RuntimeReady);
+        status.conditions.push(Condition {
+            condition_type: ConditionType::RuntimeReady,
+            state: ConditionState::Unknown,
+            reason,
+            message: format!("node `{node_id}` has no active liveness session"),
+            observed_generation: replica.meta.generation,
+            last_transition_time,
+        });
+        if status != replica.status {
+            updates.push(ResourceStatusUpdate {
+                id: replica.meta.id.clone(),
+                observed_revision: replica.meta.revision,
+                status,
+            });
+        }
+    }
+}
+
 fn terminal_system_deployment(phase: DeploymentPhase) -> bool {
     matches!(
         phase,
-        DeploymentPhase::Crashed
-            | DeploymentPhase::Terminated
-            | DeploymentPhase::Removed
-            | DeploymentPhase::Canceled
+        DeploymentPhase::Crashed | DeploymentPhase::Removed | DeploymentPhase::Canceled
     )
 }
 
@@ -302,6 +377,7 @@ fn desired_deployment_status(
     deployment: &Deployment,
     builds: &BTreeMap<BuildId, Build>,
     assignments: &[Assignment],
+    live_nodes: &std::collections::BTreeSet<kernel_api::NodeId>,
     replicas: &[ReplicaState],
     now: Timestamp,
     drain_grace: std::time::Duration,
@@ -373,6 +449,7 @@ fn desired_deployment_status(
                     service,
                     deployment,
                     assignments,
+                    live_nodes,
                     replicas,
                     now,
                     &mut desired,
@@ -380,12 +457,17 @@ fn desired_deployment_status(
             }
         }
         DeploymentPhase::Publishing
+        | DeploymentPhase::Starting
         | DeploymentPhase::PendingReady
         | DeploymentPhase::Retrying
-        | DeploymentPhase::Ready => advance_readiness(
+        | DeploymentPhase::Ready
+        | DeploymentPhase::Recovering
+        | DeploymentPhase::Stopping
+        | DeploymentPhase::Stopped => advance_readiness(
             service,
             deployment,
             assignments,
+            live_nodes,
             replicas,
             now,
             &mut desired,
@@ -399,11 +481,13 @@ fn desired_deployment_status(
                 desired.phase = DeploymentPhase::Removed;
             }
         }
-        DeploymentPhase::Queued
-        | DeploymentPhase::Crashed
-        | DeploymentPhase::Terminated
-        | DeploymentPhase::Removed
-        | DeploymentPhase::Canceled => {}
+        DeploymentPhase::Crashed => crate::goal::set_cleanup_condition(
+            deployment,
+            &mut desired,
+            !has_assignments(&deployment.meta.id, assignments),
+            now,
+        ),
+        DeploymentPhase::Queued | DeploymentPhase::Removed | DeploymentPhase::Canceled => {}
     }
     Ok(desired)
 }
@@ -442,30 +526,174 @@ fn advance_readiness(
     service: &Service,
     deployment: &Deployment,
     assignments: &[Assignment],
+    live_nodes: &std::collections::BTreeSet<kernel_api::NodeId>,
     replicas: &[ReplicaState],
     now: Timestamp,
     desired: &mut DeploymentStatus,
 ) {
     let count = desired_service_replicas(service);
     let slots = current_slots(&deployment.meta.id, assignments, count);
-    if let Some(failed) = slots
-        .values()
-        .find(|assignment| assignment.status.phase == AssignmentPhase::Failed)
-    {
+    if let Some(failed) = slots.values().find(|assignment| {
+        live_nodes.contains(&assignment.spec.node_id)
+            && assignment.status.phase == AssignmentPhase::Failed
+    }) {
         desired.phase = DeploymentPhase::Crashed;
         set_assignment_failure_condition(deployment, failed, now, desired);
-    } else if all_ready(deployment, &slots, replicas, count) {
+    } else if all_ready(deployment, &slots, replicas, live_nodes, count) {
         desired.phase = DeploymentPhase::Ready;
         desired.ready_at.get_or_insert(now);
+        if desired
+            .conditions
+            .iter()
+            .any(|condition| condition.condition_type == ConditionType::Ready)
+        {
+            set_ready_condition(
+                deployment,
+                now,
+                desired,
+                ConditionState::True,
+                "ReplicasReady",
+                format!("all {count} deployment replicas are live and ready"),
+            );
+        }
+    } else if all_stopped(deployment, &slots, replicas, count) {
+        desired.phase = DeploymentPhase::Stopped;
+        let (reason, message) = stopped_reason(deployment, &slots, replicas);
+        set_ready_condition(
+            deployment,
+            now,
+            desired,
+            ConditionState::False,
+            &reason,
+            message,
+        );
+    } else if any_stopping(deployment, &slots, replicas, count) {
+        desired.phase = DeploymentPhase::Stopping;
+        set_ready_condition(
+            deployment,
+            now,
+            desired,
+            ConditionState::False,
+            "WorkloadsStopping",
+            "deployment workloads are stopping".to_owned(),
+        );
+    } else if any_unreachable(&slots, live_nodes, count) {
+        desired.phase = recovering_phase(deployment, desired);
+        set_ready_condition(
+            deployment,
+            now,
+            desired,
+            ConditionState::Unknown,
+            "NodeUnreachable",
+            "one or more replica nodes have no active liveness session".to_owned(),
+        );
     } else if slots.len() != usize::try_from(count).unwrap_or(usize::MAX) {
-        desired.phase = DeploymentPhase::Publishing;
+        desired.phase = recovering_phase(deployment, desired);
+        set_ready_condition(
+            deployment,
+            now,
+            desired,
+            ConditionState::False,
+            "PlacementPending",
+            format!("waiting for scheduler placements for {count} replicas"),
+        );
     } else if has_retrying(deployment, &slots, replicas, count) {
         desired.phase = DeploymentPhase::Retrying;
-    } else if all_started(deployment, &slots, replicas, count) {
-        desired.phase = DeploymentPhase::PendingReady;
+    } else if all_started(deployment, &slots, replicas, live_nodes, count) {
+        desired.phase = if deployment.status.ready_at.is_some() {
+            DeploymentPhase::Recovering
+        } else {
+            DeploymentPhase::PendingReady
+        };
+        set_ready_condition(
+            deployment,
+            now,
+            desired,
+            ConditionState::False,
+            "HealthPending",
+            "workloads are running and waiting for readiness checks".to_owned(),
+        );
     } else {
-        desired.phase = DeploymentPhase::Publishing;
+        desired.phase = if deployment.status.ready_at.is_some() {
+            DeploymentPhase::Recovering
+        } else {
+            DeploymentPhase::Starting
+        };
+        set_ready_condition(
+            deployment,
+            now,
+            desired,
+            ConditionState::False,
+            "WorkloadsStarting",
+            "assigned workloads are being created and started".to_owned(),
+        );
     }
+}
+
+fn recovering_phase(deployment: &Deployment, desired: &DeploymentStatus) -> DeploymentPhase {
+    if deployment.status.ready_at.is_some() || desired.ready_at.is_some() {
+        DeploymentPhase::Recovering
+    } else {
+        DeploymentPhase::Publishing
+    }
+}
+
+fn stopped_reason(
+    deployment: &Deployment,
+    slots: &BTreeMap<u32, &Assignment>,
+    replicas: &[ReplicaState],
+) -> (String, String) {
+    slots
+        .values()
+        .find_map(|assignment| {
+            replicas.iter().find_map(|replica| {
+                (replica.spec.deployment_id == deployment.meta.id
+                    && replica.spec.assignment_id == assignment.meta.id)
+                    .then(|| {
+                        replica.status.conditions.iter().find_map(|condition| {
+                            (condition.condition_type == ConditionType::RuntimeReady
+                                && condition.state == ConditionState::False)
+                                .then(|| (condition.reason.0.clone(), condition.message.clone()))
+                        })
+                    })
+                    .flatten()
+            })
+        })
+        .unwrap_or_else(|| {
+            (
+                "WorkloadsStopped".to_owned(),
+                "deployment workloads are stopped and require recovery".to_owned(),
+            )
+        })
+}
+
+fn set_ready_condition(
+    deployment: &Deployment,
+    now: Timestamp,
+    desired: &mut DeploymentStatus,
+    state: ConditionState,
+    reason: &str,
+    message: String,
+) {
+    let reason = ConditionReason(reason.to_owned());
+    let previous = desired
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready);
+    let last_transition_time = previous
+        .filter(|condition| condition.state == state && condition.reason == reason)
+        .map_or(now, |condition| condition.last_transition_time);
+    desired
+        .conditions
+        .retain(|condition| condition.condition_type != ConditionType::Ready);
+    desired.conditions.push(Condition {
+        condition_type: ConditionType::Ready,
+        state,
+        reason,
+        message,
+        observed_generation: deployment.meta.generation,
+        last_transition_time,
+    });
 }
 
 fn set_assignment_failure_condition(
@@ -487,24 +715,14 @@ fn set_assignment_failure_condition(
         "replica {} on node {}: {detail}",
         assignment.spec.replica_index, assignment.spec.node_id
     );
-    let previous = desired
-        .conditions
-        .iter()
-        .find(|condition| condition.condition_type == ConditionType::Ready);
-    let last_transition_time = previous
-        .filter(|condition| condition.state == ConditionState::False && condition.reason == reason)
-        .map_or(now, |condition| condition.last_transition_time);
-    desired
-        .conditions
-        .retain(|condition| condition.condition_type != ConditionType::Ready);
-    desired.conditions.push(Condition {
-        condition_type: ConditionType::Ready,
-        state: ConditionState::False,
-        reason,
+    set_ready_condition(
+        deployment,
+        now,
+        desired,
+        ConditionState::False,
+        &reason.0,
         message,
-        observed_generation: deployment.meta.generation,
-        last_transition_time,
-    });
+    );
 }
 
 fn ensure_build<'a>(
