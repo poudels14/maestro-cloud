@@ -1,20 +1,23 @@
 use std::ffi::OsString;
+use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use procfs_core::Meminfo;
+use procfs_core::prelude::FromRead;
 use semver::Version;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 64 * 1_024;
 const SYSTEMD_RUN_BINARY: &str = "systemd-run";
-const NIX_CPU_WEIGHT: &str = "CPUWeight=10";
-const NIX_IO_WEIGHT: &str = "IOWeight=10";
-const NIX_MEMORY_HIGH: &str = "MemoryHigh=50%";
-const NIX_MEMORY_MAX: &str = "MemoryMax=70%";
+const NIX_CPU_WEIGHT: &str = "CPUWeight=50";
+const NIX_IO_WEIGHT: &str = "IOWeight=50";
 const NIX_NICE_LEVEL: &str = "10";
+const MEMORY_RESERVE_BYTES: u64 = 1_024 * 1_024 * 1_024;
+const PROC_MEMINFO: &str = "/proc/meminfo";
 
 /// Validated source selected by a staged NixOS boot generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,18 +231,29 @@ pub(crate) trait NixosCommandRunner: Send + Sync {
 
 pub(crate) struct ProcessNixosCommandRunner {
     isolate_resources: bool,
+    memory_high_bytes: Option<u64>,
 }
 
 impl ProcessNixosCommandRunner {
     pub(crate) const fn direct() -> Self {
         Self {
             isolate_resources: false,
+            memory_high_bytes: None,
         }
     }
 
-    pub(crate) const fn isolated() -> Self {
+    pub(crate) fn isolated() -> Self {
         Self {
             isolate_resources: true,
+            memory_high_bytes: host_memory_high_bytes(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn isolated_with_total_memory(total_memory_bytes: u64) -> Self {
+        Self {
+            isolate_resources: true,
+            memory_high_bytes: memory_high_bytes(total_memory_bytes),
         }
     }
 
@@ -261,15 +275,38 @@ impl ProcessNixosCommandRunner {
             OsString::from(NIX_CPU_WEIGHT),
             OsString::from("--property"),
             OsString::from(NIX_IO_WEIGHT),
-            OsString::from("--property"),
-            OsString::from(NIX_MEMORY_HIGH),
-            OsString::from("--property"),
-            OsString::from(NIX_MEMORY_MAX),
-            invocation.executable.clone().into_os_string(),
         ];
+        if let Some(memory_high_bytes) = self.memory_high_bytes {
+            arguments.extend([
+                OsString::from("--property"),
+                OsString::from(format!("MemoryHigh={memory_high_bytes}")),
+            ]);
+        }
+        arguments.push(invocation.executable.clone().into_os_string());
         arguments.extend(invocation.arguments);
         NixosCommand::new(PathBuf::from(SYSTEMD_RUN_BINARY), arguments)
     }
+}
+
+fn host_memory_high_bytes() -> Option<u64> {
+    let memory = File::open(PROC_MEMINFO)
+        .ok()
+        .and_then(|file| Meminfo::from_read(file).ok());
+    let memory_high_bytes = memory.and_then(|memory| memory_high_bytes(memory.mem_total));
+    if memory_high_bytes.is_none() {
+        tracing::warn!(
+            path = PROC_MEMINFO,
+            reserve_bytes = MEMORY_RESERVE_BYTES,
+            "unable to reserve host memory for NixOS upgrade staging"
+        );
+    }
+    memory_high_bytes
+}
+
+fn memory_high_bytes(total_memory_bytes: u64) -> Option<u64> {
+    total_memory_bytes
+        .checked_sub(MEMORY_RESERVE_BYTES)
+        .filter(|memory_high_bytes| *memory_high_bytes > 0)
 }
 
 #[async_trait]

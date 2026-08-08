@@ -139,10 +139,12 @@ fn command<const COUNT: usize>(executable: &str, arguments: [&str; COUNT]) -> Ni
 
 #[test]
 fn production_staging_wraps_nix_in_a_low_priority_systemd_scope() {
-    let invocation = ProcessNixosCommandRunner::isolated().process_invocation(command(
-        "nixos-rebuild",
-        ["boot", "--flake", "/etc/maestro#default"],
-    ));
+    let invocation =
+        ProcessNixosCommandRunner::isolated_with_total_memory(8 * 1_024 * 1_024 * 1_024)
+            .process_invocation(command(
+                "nixos-rebuild",
+                ["boot", "--flake", "/etc/maestro#default"],
+            ));
 
     assert_eq!(invocation.executable, PathBuf::from("systemd-run"));
     assert_eq!(
@@ -154,19 +156,33 @@ fn production_staging_wraps_nix_in_a_low_priority_systemd_scope() {
             "--nice",
             "10",
             "--property",
-            "CPUWeight=10",
+            "CPUWeight=50",
             "--property",
-            "IOWeight=10",
+            "IOWeight=50",
             "--property",
-            "MemoryHigh=50%",
-            "--property",
-            "MemoryMax=70%",
+            "MemoryHigh=7516192768",
             "nixos-rebuild",
             "boot",
             "--flake",
             "/etc/maestro#default",
         ]
         .map(OsString::from)
+    );
+}
+
+#[test]
+fn production_staging_omits_memory_limits_when_the_reserve_cannot_be_preserved() {
+    let invocation = ProcessNixosCommandRunner::isolated_with_total_memory(1_024 * 1_024 * 1_024)
+        .process_invocation(command(
+            "nixos-rebuild",
+            ["boot", "--flake", "/etc/maestro#default"],
+        ));
+
+    assert!(
+        !invocation
+            .arguments
+            .iter()
+            .any(|argument| argument.to_string_lossy().starts_with("Memory"))
     );
 }
 
