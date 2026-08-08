@@ -11,7 +11,7 @@ use kernel_api::{
 };
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
@@ -361,10 +361,9 @@ async fn drive(
     terminal_mode: TerminalMode,
     initial_size: Option<TerminalSize>,
 ) -> Result<Option<i32>, CliError> {
-    let mut stdin = duplicate_file(std::io::stdin(), "standard input")?;
+    let mut stdin = StdinReader::open()?;
     let mut stdout = duplicate_file(std::io::stdout(), "standard output")?;
     let mut stderr = duplicate_file(std::io::stderr(), "standard error")?;
-    let mut input = vec![0_u8; INPUT_BYTES];
     let mut input_open = true;
     let mut last_size = initial_size;
     let mut resize = tokio::time::interval(RESIZE_POLL_INTERVAL);
@@ -372,16 +371,13 @@ async fn drive(
     resize.tick().await;
     loop {
         tokio::select! {
-            read = stdin.read(&mut input), if input_open => {
-                let count = read.map_err(|source| CliError::io("failed to read exec input", source))?;
-                let frame = if count == 0 {
+            read = stdin.read(), if input_open => {
+                let bytes = read.map_err(|source| CliError::io("failed to read exec input", source))?;
+                let frame = if bytes.is_empty() {
                     input_open = false;
                     ExecStreamFrame::CloseStdin
                 } else {
-                    let bytes = input
-                        .get(..count)
-                        .ok_or_else(|| CliError::exec("exec input read exceeded its buffer"))?;
-                    ExecStreamFrame::Stdin(bytes.to_vec())
+                    ExecStreamFrame::Stdin(bytes)
                 };
                 send(&mut socket, frame).await?;
             }
@@ -425,6 +421,51 @@ async fn drive(
                 }
             }
         }
+    }
+}
+
+/// Keeps blocking terminal reads outside Tokio's blocking pool so runtime shutdown never waits for
+/// another keystroke after the remote exec session exits.
+struct StdinReader {
+    receiver: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+}
+
+impl StdinReader {
+    fn open() -> Result<Self, CliError> {
+        Self::from_file(duplicate_std_file(std::io::stdin(), "standard input")?)
+            .map_err(|source| CliError::io("failed to start standard input reader", source))
+    }
+
+    async fn read(&mut self) -> std::io::Result<Vec<u8>> {
+        self.receiver.recv().await.unwrap_or_else(|| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "standard input reader stopped unexpectedly",
+            ))
+        })
+    }
+
+    fn from_file(mut file: std::fs::File) -> std::io::Result<Self> {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        std::thread::Builder::new()
+            .name("maestro-exec-stdin".to_owned())
+            .spawn(move || {
+                loop {
+                    let mut bytes = vec![0_u8; INPUT_BYTES];
+                    let result = std::io::Read::read(&mut file, &mut bytes).map(|count| {
+                        bytes.truncate(count);
+                        bytes
+                    });
+                    let terminal = match &result {
+                        Ok(bytes) => bytes.is_empty(),
+                        Err(_) => true,
+                    };
+                    if sender.blocking_send(result).is_err() || terminal {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self { receiver })
     }
 }
 
@@ -485,12 +526,46 @@ fn duplicate_file(
     file_descriptor: impl std::os::fd::AsFd,
     description: &str,
 ) -> Result<tokio::fs::File, CliError> {
+    Ok(tokio::fs::File::from_std(duplicate_std_file(
+        file_descriptor,
+        description,
+    )?))
+}
+
+fn duplicate_std_file(
+    file_descriptor: impl std::os::fd::AsFd,
+    description: &str,
+) -> Result<std::fs::File, CliError> {
     let duplicated = nix::unistd::dup(file_descriptor).map_err(|error| {
         CliError::io(
             format!("failed to duplicate {description}"),
             std::io::Error::from(error),
         )
     })?;
-    let file = std::fs::File::from(duplicated);
-    Ok(tokio::fs::File::from_std(file))
+    Ok(std::fs::File::from(duplicated))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::OwnedFd;
+    use std::time::Duration;
+
+    use super::StdinReader;
+
+    #[tokio::test]
+    async fn terminal_input_read_is_cancellable() -> Result<(), Box<dyn std::error::Error>> {
+        let (reader, writer) = std::os::unix::net::UnixStream::pair()?;
+        let reader = std::fs::File::from(OwnedFd::from(reader));
+        let mut writer = writer;
+        let mut input = StdinReader::from_file(reader)?;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), input.read())
+                .await
+                .is_err()
+        );
+        std::io::Write::write_all(&mut writer, b"x")?;
+        assert_eq!(input.read().await?, b"x");
+        Ok(())
+    }
 }
