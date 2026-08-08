@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use kernel_api::{
-    Assignment, AssignmentId, ClusterId, InvalidIdentifier, ResourceKind, ResourceName,
+    Assignment, AssignmentId, ClusterId, InvalidIdentifier, ResourceKind, ResourceName, ServiceId,
     UnschedulableReplica,
 };
 use kernel_controller::{ControllerError, FencedStore};
@@ -10,12 +10,21 @@ use kernel_store::{
     Version,
 };
 
+// etcd counts compares and mutations together. FencedStore adds the leadership compare.
+const ETCD_TRANSACTION_OPERATION_LIMIT: usize = 128;
+const FENCED_STORE_COMPARE_COUNT: usize = 1;
+
 /// Atomic assignment changes applied by one successfully fenced scheduler pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct AssignmentWriteReport {
     pub(crate) created: usize,
     pub(crate) deleted: usize,
     pub(crate) conflict: bool,
+}
+
+pub(crate) struct AssignmentWriteFence {
+    pub(crate) scheduler_generation: ExpectedVersion,
+    pub(crate) dependency_compares: Vec<Compare>,
 }
 
 pub(crate) struct AssignmentWriter {
@@ -31,7 +40,7 @@ impl AssignmentWriter {
         })
     }
 
-    /// Applies one all-or-nothing assignment diff while preserving agent-owned status fields.
+    /// Applies one Service's all-or-nothing assignment diff while preserving agent-owned status.
     ///
     /// Cancellation may leave the complete transaction committed. A subsequent resource relist
     /// observes that result and computes an empty diff; partial assignment generations are never
@@ -39,15 +48,17 @@ impl AssignmentWriter {
     pub(crate) async fn apply(
         &self,
         fenced_store: &FencedStore,
+        service_id: &ServiceId,
         current: &[StoredValue],
         desired: &[Assignment],
         observation: &[UnschedulableReplica],
-        scheduler_generation: ExpectedVersion,
-        dependency_compares: Vec<Compare>,
+        fence: AssignmentWriteFence,
     ) -> Result<AssignmentWriteReport, AssignmentWriteError> {
-        let current = self.decode_current(current)?;
-        let desired = self.index_desired(desired)?;
-        let mut compares = dependency_compares;
+        let mut current = self.decode_current(current)?;
+        current.retain(|_, assignment| assignment.resource.spec.service_id == *service_id);
+        let mut desired = self.index_desired(desired)?;
+        desired.retain(|_, assignment| assignment.spec.service_id == *service_id);
+        let mut compares = fence.dependency_compares;
         let mut mutations = Vec::new();
         let mut created = 0_usize;
         let mut deleted = 0_usize;
@@ -95,7 +106,7 @@ impl AssignmentWriter {
         }
         compares.push(Compare {
             key: self.keyspace.scheduler_generation(),
-            expected: scheduler_generation,
+            expected: fence.scheduler_generation,
         });
         let assignments_changed = !mutations.is_empty();
         if assignments_changed {
@@ -105,8 +116,29 @@ impl AssignmentWriter {
                 session: None,
             });
         }
-        self.append_observation(fenced_store, observation, &mut compares, &mut mutations)
-            .await?;
+        self.append_observation(
+            fenced_store,
+            service_id,
+            observation,
+            &mut compares,
+            &mut mutations,
+        )
+        .await?;
+
+        if mutations.is_empty() {
+            return Ok(AssignmentWriteReport::default());
+        }
+        let operations = compares
+            .len()
+            .saturating_add(mutations.len())
+            .saturating_add(FENCED_STORE_COMPARE_COUNT);
+        if operations > ETCD_TRANSACTION_OPERATION_LIMIT {
+            return Err(AssignmentWriteError::AtomicGroupTooLarge {
+                service_id: service_id.clone(),
+                operations,
+                limit: ETCD_TRANSACTION_OPERATION_LIMIT,
+            });
+        }
 
         let outcome = fenced_store
             .txn(Transaction {
@@ -188,17 +220,39 @@ impl AssignmentWriter {
     async fn append_observation(
         &self,
         fenced_store: &FencedStore,
+        service_id: &ServiceId,
         observation: &[UnschedulableReplica],
         compares: &mut Vec<Compare>,
         mutations: &mut Vec<Mutation>,
     ) -> Result<(), AssignmentWriteError> {
         let key = self.keyspace.scheduler_observation();
-        let value = serde_json::to_vec(observation).map_err(|error| {
+        let current = fenced_store.get(&key).await?;
+        let mut merged = match current.as_ref() {
+            Some(stored) => serde_json::from_slice::<Vec<UnschedulableReplica>>(&stored.value)
+                .map_err(|error| AssignmentWriteError::MalformedObservation {
+                    message: error.to_string(),
+                })?,
+            None => Vec::new(),
+        };
+        merged.retain(|failure| failure.service_id != *service_id);
+        merged.extend(
+            observation
+                .iter()
+                .filter(|failure| failure.service_id == *service_id)
+                .cloned(),
+        );
+        merged.sort_by(|left, right| {
+            left.service_id
+                .cmp(&right.service_id)
+                .then_with(|| left.deployment_id.cmp(&right.deployment_id))
+                .then_with(|| left.replica_index.cmp(&right.replica_index))
+        });
+        let value = serde_json::to_vec(&merged).map_err(|error| {
             AssignmentWriteError::SerializeObservation {
                 message: error.to_string(),
             }
         })?;
-        match fenced_store.get(&key).await? {
+        match current {
             Some(stored) if stored.value == value => {}
             Some(stored) => {
                 compares.push(Compare {
@@ -268,4 +322,16 @@ pub enum AssignmentWriteError {
     /// The scheduler observation could not be serialized for persistence.
     #[error("failed to serialize scheduler observation: {message}")]
     SerializeObservation { message: String },
+    /// The existing scheduler observation could not be decoded for a scoped update.
+    #[error("stored scheduler observation is malformed: {message}")]
+    MalformedObservation { message: String },
+    /// One Service's assignment generation cannot fit in one etcd transaction.
+    #[error(
+        "Service `{service_id}` assignment generation requires {operations} operations; limit is {limit}"
+    )]
+    AtomicGroupTooLarge {
+        service_id: ServiceId,
+        operations: usize,
+        limit: usize,
+    },
 }

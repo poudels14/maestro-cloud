@@ -50,6 +50,11 @@ fn rolling_upgrade_drains_retries_restarts_and_advances_one_node_at_a_time() -> 
         waiting.action,
         UpgradePlanAction::Requeue(Duration::from_secs(1))
     );
+    assert!(waiting.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "WorkloadDrainPending"
+            && condition.message == "selected nodes are waiting for workload assignments to drain"
+            && condition.state == ConditionState::False
+    }));
 
     let applying = plan_upgrade(input(waiting.run, &nodes, Vec::new(), 10_000), settings)
         .expect("finish rolling drain");

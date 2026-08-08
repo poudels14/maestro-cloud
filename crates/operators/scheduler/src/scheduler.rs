@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use kernel_api::{ClusterId, InvalidIdentifier, NodeId, Timestamp};
+use kernel_api::{ClusterId, InvalidIdentifier, NodeId, ServiceId, Timestamp};
 use kernel_controller::{ControllerError, FencedStore};
 use kernel_store::{Compare, ExpectedVersion, Keyspace};
 
-use crate::assignment::{AssignmentWriteError, AssignmentWriter};
+use crate::assignment::{AssignmentWriteError, AssignmentWriteFence, AssignmentWriter};
 use crate::model::UnschedulableReplica;
 use crate::projection::project;
 use crate::resource::ResourceSnapshot;
@@ -73,18 +73,50 @@ impl Scheduler {
         })
     }
 
-    /// Reconciles one linearizable resource snapshot under the active leadership fence.
+    /// Reconciles every Service under the active leadership fence.
     ///
-    /// The assignment generation marker is sampled before and after resource projection. A
-    /// concurrent scheduler pass causes this invocation to report a conflict without mutating;
-    /// cancellation during the final transaction can commit only the complete assignment diff.
+    /// Production watch reconciliation calls [`Self::reconcile_service_once`] directly. This
+    /// bounded entry point remains useful for tests and explicit full convergence.
     pub async fn reconcile_once(
         &self,
         fenced_store: &FencedStore,
         now: Timestamp,
     ) -> Result<SchedulerReport, SchedulerError> {
+        let snapshot = ResourceSnapshot::load(fenced_store, &self.keyspace).await?;
+        let service_ids = snapshot.services.keys().cloned().collect::<Vec<_>>();
+        let mut combined = SchedulerReport::default();
+        for service_id in service_ids {
+            let report = self
+                .reconcile_service_once(fenced_store, &service_id, now)
+                .await?;
+            combined.desired = combined.desired.saturating_add(report.desired);
+            combined.created = combined.created.saturating_add(report.created);
+            combined.deleted = combined.deleted.saturating_add(report.deleted);
+            combined.conflict |= report.conflict;
+            combined.unschedulable.extend(report.unschedulable);
+            combined
+                .services_with_assignments
+                .extend(report.services_with_assignments);
+            if combined.conflict {
+                break;
+            }
+        }
+        Ok(combined)
+    }
+
+    /// Reconciles one Service's assignments from one globally consistent placement snapshot.
+    ///
+    /// The assignment generation marker is sampled before and after resource projection. A
+    /// concurrent scheduler pass causes this invocation to report a conflict without mutating;
+    /// cancellation during the final transaction can commit only this Service's complete diff.
+    pub async fn reconcile_service_once(
+        &self,
+        fenced_store: &FencedStore,
+        service_id: &ServiceId,
+        now: Timestamp,
+    ) -> Result<SchedulerReport, SchedulerError> {
         let generation_before = self.scheduler_generation(fenced_store).await?;
-        let mut snapshot = ResourceSnapshot::load(fenced_store, &self.keyspace).await?;
+        let snapshot = ResourceSnapshot::load(fenced_store, &self.keyspace).await?;
         let (live_nodes, liveness_compares) = self.live_nodes(fenced_store, &snapshot).await?;
         let generation_after = self.scheduler_generation(fenced_store).await?;
         if generation_before != generation_after {
@@ -121,9 +153,15 @@ impl Scheduler {
                 .then_with(|| left.deployment_id.cmp(&right.deployment_id))
                 .then_with(|| left.replica_index.cmp(&right.replica_index))
         });
-        snapshot.dependency_compares.extend(liveness_compares);
-        let observation = schedule
+        let mut dependency_compares = snapshot.dependency_compares(service_id);
+        dependency_compares.extend(liveness_compares);
+        let unschedulable = schedule
             .unschedulable
+            .iter()
+            .filter(|failure| failure.service_id == *service_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let observation = unschedulable
             .iter()
             .map(|failure| kernel_api::UnschedulableReplica {
                 service_id: failure.service_id.clone(),
@@ -136,24 +174,32 @@ impl Scheduler {
             .writer
             .apply(
                 fenced_store,
+                service_id,
                 &snapshot.assignment_values,
                 &schedule.assignments,
                 &observation,
-                generation_before,
-                snapshot.dependency_compares,
+                AssignmentWriteFence {
+                    scheduler_generation: generation_before,
+                    dependency_compares,
+                },
             )
             .await?;
         let services_with_assignments = schedule
             .assignments
             .iter()
+            .filter(|assignment| assignment.spec.service_id == *service_id)
             .map(|assignment| assignment.spec.service_id.clone())
             .collect();
         Ok(SchedulerReport {
-            desired: schedule.assignments.len(),
+            desired: schedule
+                .assignments
+                .iter()
+                .filter(|assignment| assignment.spec.service_id == *service_id)
+                .count(),
             created: write.created,
             deleted: write.deleted,
             conflict: write.conflict,
-            unschedulable: schedule.unschedulable,
+            unschedulable,
             services_with_assignments,
         })
     }

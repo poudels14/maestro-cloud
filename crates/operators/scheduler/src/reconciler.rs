@@ -58,11 +58,12 @@ impl SchedulerReconciler {
     async fn converge(
         &self,
         context: &ReconcileContext,
+        service_id: &ServiceId,
         finalizing: Option<&ServiceId>,
     ) -> Result<Action, ReconcileError> {
         let report = self
             .scheduler
-            .reconcile_once(context.store(), self.timestamp_clock.now())
+            .reconcile_service_once(context.store(), service_id, self.timestamp_clock.now())
             .await
             .map_err(classify_error)?;
         if report.conflict || finalizing.is_some_and(|id| report.has_assignments(id)) {
@@ -84,10 +85,10 @@ impl Reconciler for SchedulerReconciler {
 
     async fn reconcile(
         &self,
-        _resource: Object<Self::Id, Self::Spec, Self::Status>,
+        resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context, None).await
+        self.converge(&context, &resource.meta.id, None).await
     }
 
     async fn finalize(
@@ -95,7 +96,8 @@ impl Reconciler for SchedulerReconciler {
         resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context, Some(&resource.meta.id)).await
+        self.converge(&context, &resource.meta.id, Some(&resource.meta.id))
+            .await
     }
 }
 
@@ -130,6 +132,8 @@ fn terminal_reason(error: &SchedulerError) -> &'static str {
             AssignmentWriteError::SerializeObservation { .. } => {
                 "SchedulerObservationSerializationFailed"
             }
+            AssignmentWriteError::MalformedObservation { .. } => "MalformedSchedulerObservation",
+            AssignmentWriteError::AtomicGroupTooLarge { .. } => "SchedulerTransactionTooLarge",
             AssignmentWriteError::Controller(_) => "SchedulerInfrastructureFailed",
         },
         SchedulerError::Controller(_) => "SchedulerInfrastructureFailed",

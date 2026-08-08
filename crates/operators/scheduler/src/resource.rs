@@ -22,7 +22,11 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) assignments: BTreeMap<AssignmentId, Assignment>,
     pub(crate) traffic_generations: BTreeMap<TrafficGenerationId, TrafficGeneration>,
     pub(crate) assignment_values: Vec<StoredValue>,
-    pub(crate) dependency_compares: Vec<Compare>,
+    service_values: BTreeMap<ServiceId, StoredValue>,
+    deployment_values: BTreeMap<DeploymentId, StoredValue>,
+    node_values: BTreeMap<NodeId, StoredValue>,
+    network_values: BTreeMap<NodeNetworkId, StoredValue>,
+    traffic_generation_values: BTreeMap<TrafficGenerationId, StoredValue>,
 }
 
 impl ResourceSnapshot {
@@ -59,18 +63,7 @@ impl ResourceSnapshot {
             TrafficGenerationStatus,
         >(&snapshot.values, keyspace, "TrafficGeneration")?;
 
-        let dependency_compares = services
-            .values
-            .iter()
-            .chain(deployments.values.iter())
-            .chain(nodes.values.iter())
-            .chain(networks.values.iter())
-            .chain(traffic_generations.values.iter())
-            .map(|stored| Compare {
-                key: stored.key.clone(),
-                expected: ExpectedVersion::Exact(stored.version),
-            })
-            .collect();
+        let assignment_values = assignments.values.into_values().collect();
         Ok(Self {
             services: services.resources,
             deployments: deployments.resources,
@@ -78,15 +71,52 @@ impl ResourceSnapshot {
             networks: networks.resources,
             assignments: assignments.resources,
             traffic_generations: traffic_generations.resources,
-            assignment_values: assignments.values,
-            dependency_compares,
+            assignment_values,
+            service_values: services.values,
+            deployment_values: deployments.values,
+            node_values: nodes.values,
+            network_values: networks.values,
+            traffic_generation_values: traffic_generations.values,
         })
+    }
+
+    /// Returns only the resource versions that can change one Service's placement.
+    ///
+    /// Assignment generation serializes scheduler-owned writes cluster-wide. Unrelated Service
+    /// and Deployment history therefore must not consume etcd transaction operations for this
+    /// Service's assignment update.
+    pub(crate) fn dependency_compares(&self, service_id: &ServiceId) -> Vec<Compare> {
+        let mut values = Vec::new();
+        if let Some(service) = self.service_values.get(service_id) {
+            values.push(service);
+        }
+        values.extend(
+            self.deployments
+                .iter()
+                .filter_map(|(deployment_id, deployment)| {
+                    (deployment.spec.service_id == *service_id)
+                        .then(|| self.deployment_values.get(deployment_id))
+                        .flatten()
+                }),
+        );
+        values.extend(self.node_values.values());
+        values.extend(self.network_values.values());
+        values.extend(
+            self.traffic_generations
+                .iter()
+                .filter_map(|(generation_id, generation)| {
+                    (generation.spec.service_id == *service_id)
+                        .then(|| self.traffic_generation_values.get(generation_id))
+                        .flatten()
+                }),
+        );
+        values.into_iter().map(exact).collect()
     }
 }
 
 struct DecodedKind<Id, Spec, Status> {
     resources: BTreeMap<Id, Object<Id, Spec, Status>>,
-    values: Vec<StoredValue>,
+    values: BTreeMap<Id, StoredValue>,
 }
 
 fn decode_kind<Id, Spec, Status>(
@@ -102,7 +132,7 @@ where
     let kind = ResourceKind::new(kind_name)?;
     let prefix = keyspace.resource_kind(&kind);
     let mut resources = BTreeMap::new();
-    let mut matched = Vec::new();
+    let mut matched = BTreeMap::new();
     for stored in values
         .iter()
         .filter(|stored| stored.key.as_str().starts_with(prefix.as_str()))
@@ -129,10 +159,17 @@ where
                 resource_id: resource_id.to_string(),
             });
         }
-        matched.push(stored.clone());
+        matched.insert(resource_id, stored.clone());
     }
     Ok(DecodedKind {
         resources,
         values: matched,
     })
+}
+
+fn exact(stored: &StoredValue) -> Compare {
+    Compare {
+        key: stored.key.clone(),
+        expected: ExpectedVersion::Exact(stored.version),
+    }
 }

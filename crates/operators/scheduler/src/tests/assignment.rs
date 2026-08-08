@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use kernel_api::{
     Assignment, AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, ClusterId,
-    Generation, NodeId, NodeInstanceId, ObjectMeta, ResourceKind, ResourceName, ResourceRevision,
-    ServiceId,
+    DeploymentId, Generation, NodeId, NodeInstanceId, ObjectMeta, ResourceKind, ResourceName,
+    ResourceRevision, ServiceId, UnschedulableReplica,
 };
 use kernel_controller::{FencedStore, LeaderIdentity, LeadershipToken};
 use kernel_store::{
@@ -16,7 +16,7 @@ use kernel_store::{
     SessionBinding, Store,
 };
 
-use crate::assignment::{AssignmentWriteError, AssignmentWriter};
+use crate::assignment::{AssignmentWriteError, AssignmentWriteFence, AssignmentWriter};
 
 #[tokio::test]
 async fn assignment_writer_applies_create_and_delete_as_one_generation()
@@ -32,11 +32,11 @@ async fn assignment_writer_applies_create_and_delete_as_one_generation()
         .writer
         .apply(
             &world.fenced,
+            &ServiceId::new("api")?,
             &current,
             std::slice::from_ref(&replacement),
             &[],
-            generation,
-            Vec::new(),
+            write_fence(generation),
         )
         .await?;
     assert_eq!(
@@ -65,15 +65,68 @@ async fn assignment_writer_preserves_agent_status_for_retained_specs()
         .writer
         .apply(
             &world.fenced,
+            &ServiceId::new("api")?,
             &current,
             &[stale_planner_copy],
             &[],
-            generation,
-            Vec::new(),
+            write_fence(generation),
         )
         .await?;
     assert_eq!(report, Default::default());
     assert_eq!(world.load_assignments().await?, vec![running]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_writer_merges_service_scoped_scheduler_observations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new().await?;
+    let api = ServiceId::new("api")?;
+    let worker = ServiceId::new("worker")?;
+    let api_failure = UnschedulableReplica {
+        service_id: api.clone(),
+        deployment_id: DeploymentId::new("api-deployment")?,
+        replica_index: 0,
+        reason: "api unavailable".to_string(),
+    };
+    world
+        .writer
+        .apply(
+            &world.fenced,
+            &api,
+            &[],
+            &[],
+            std::slice::from_ref(&api_failure),
+            write_fence(world.scheduler_generation().await?),
+        )
+        .await?;
+    let worker_failure = UnschedulableReplica {
+        service_id: worker.clone(),
+        deployment_id: DeploymentId::new("worker-deployment")?,
+        replica_index: 1,
+        reason: "worker unavailable".to_string(),
+    };
+    world
+        .writer
+        .apply(
+            &world.fenced,
+            &worker,
+            &[],
+            &[],
+            std::slice::from_ref(&worker_failure),
+            write_fence(world.scheduler_generation().await?),
+        )
+        .await?;
+
+    let stored = world
+        .store
+        .get(&world.keys.scheduler_observation())
+        .await?
+        .ok_or("scheduler observation missing")?;
+    assert_eq!(
+        serde_json::from_slice::<Vec<UnschedulableReplica>>(&stored.value)?,
+        vec![api_failure, worker_failure]
+    );
     Ok(())
 }
 
@@ -94,11 +147,11 @@ async fn assignment_writer_conflict_commits_no_partial_generation()
         .writer
         .apply(
             &world.fenced,
+            &ServiceId::new("api")?,
             &current,
             &[replacement],
             &[],
-            generation,
-            Vec::new(),
+            write_fence(generation),
         )
         .await?;
     assert!(report.conflict);
@@ -120,11 +173,11 @@ async fn assignment_writer_rejects_identity_collision_and_malformed_ownership()
             .writer
             .apply(
                 &world.fenced,
+                &ServiceId::new("api")?,
                 &current,
                 &[conflicting],
                 &[],
-                generation,
-                Vec::new(),
+                write_fence(generation),
             )
             .await,
         Err(AssignmentWriteError::IdentityCollision { .. })
@@ -144,11 +197,11 @@ async fn assignment_writer_rejects_identity_collision_and_malformed_ownership()
             .writer
             .apply(
                 &world.fenced,
+                &ServiceId::new("api")?,
                 &[malformed],
                 &[],
                 &[],
-                generation,
-                Vec::new(),
+                write_fence(generation),
             )
             .await,
         Err(AssignmentWriteError::ResourceIdentityMismatch { .. })
@@ -289,6 +342,13 @@ fn assignment(id: &str, node: &str, address: [u8; 4]) -> Assignment {
             workload_address: None,
             conditions: Vec::new(),
         },
+    }
+}
+
+fn write_fence(scheduler_generation: ExpectedVersion) -> AssignmentWriteFence {
+    AssignmentWriteFence {
+        scheduler_generation,
+        dependency_compares: Vec::new(),
     }
 }
 

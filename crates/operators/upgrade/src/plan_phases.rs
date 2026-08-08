@@ -212,6 +212,13 @@ pub(crate) fn plan_draining(
             && draining_ids.contains(&assignment.spec.node_id)
     });
     if run.spec.mode == UpgradeMode::Rolling && assignments_remain {
+        set_ready_condition(
+            &mut run,
+            ConditionState::False,
+            "WorkloadDrainPending",
+            "selected nodes are waiting for workload assignments to drain",
+            input.now,
+        );
         return Ok(plan(
             run,
             updates.into_values().collect(),

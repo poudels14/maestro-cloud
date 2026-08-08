@@ -67,6 +67,19 @@ async fn scheduler_scales_one_service_across_three_nodes_atomically()
 }
 
 #[tokio::test]
+async fn service_reconcile_excludes_unrelated_history_from_the_assignment_transaction()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(1).await?;
+    world.seed_unrelated_history(140).await?;
+
+    let report = world.reconcile(Timestamp(1_000)).await?;
+
+    assert_eq!((report.desired, report.created, report.deleted), (1, 1, 0));
+    assert_eq!(world.assignments().await?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn scheduler_keeps_one_system_replica_when_configured_for_zero()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new_for_service(0, ServiceId::new(TAILSCALE_GATEWAY_SERVICE_ID)?).await?;
@@ -241,11 +254,30 @@ impl World {
         Ok(())
     }
 
+    async fn seed_unrelated_history(&self, count: usize) -> Result<(), Box<dyn std::error::Error>> {
+        let history_id = ServiceId::new("history")?;
+        let mut history_service = service(history_id.clone(), 0);
+        history_service.status.active_deployment_id = None;
+        self.put("Service", history_id.as_str(), &history_service)
+            .await?;
+        for index in 0..count {
+            let deployment_id = DeploymentId::new(format!("history-{index}"))?;
+            let mut history = deployment(&history_service);
+            history.meta.id = deployment_id.clone();
+            history.status.phase = DeploymentPhase::Removed;
+            self.put("Deployment", deployment_id.as_str(), &history)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn reconcile(
         &self,
         now: Timestamp,
     ) -> Result<crate::SchedulerReport, SchedulerError> {
-        self.scheduler.reconcile_once(&self.fenced, now).await
+        self.scheduler
+            .reconcile_service_once(&self.fenced, &self.service_id, now)
+            .await
     }
 
     async fn put(
