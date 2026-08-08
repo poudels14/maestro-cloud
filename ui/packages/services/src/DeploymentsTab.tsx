@@ -12,6 +12,7 @@ import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
 import { DeploymentRow } from "./DeploymentRow";
 import type { Deployment, Service, ServiceDetailSearchUpdate } from "./types";
 import { isSystemService } from "./serviceView";
+import { replicaEndpoint } from "./replicaEndpoint";
 
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
@@ -34,12 +35,9 @@ function DeploymentsTab(props: {
   }));
 
   const replicaUrl = (replicaIndex: number) => {
-    const prefix = `${serviceId()}-${replicaIndex}.`;
-    const record = (dnsRecords.data ?? []).find((candidate) =>
-      candidate.spec.name.startsWith(prefix)
-    );
-    if (!record) return null;
-    const hostname = record.spec.name.replace(/\.$/, "");
+    const endpoint = replicaEndpoint(serviceId(), replicaIndex, dnsRecords.data ?? []);
+    if (!endpoint) return null;
+    const hostname = endpoint.hostname;
     const port = props.service.spec.exposedPorts?.[0];
     if (port === undefined || port === 80) return `http://${hostname}`;
     if (port === 443) return `https://${hostname}`;

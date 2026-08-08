@@ -8,6 +8,8 @@ const ssrSafe = <Value>(query: () => Promise<Value>, fallback: Value) =>
 const serviceQueryKeys = {
   all: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
+  assignments: (serviceId: string, deploymentId: string) =>
+    ["deployments", serviceId, deploymentId, "assignments"] as const,
   replicas: (serviceId: string, deploymentId: string) =>
     ["deployments", serviceId, deploymentId, "replicas"] as const,
   dnsRecords: ["dns-records"] as const
@@ -45,7 +47,16 @@ const deploymentReplicasQuery = (api: ServicesApi, deployment: Deployment) => ({
   staleTime: 2_000
 });
 
+const deploymentAssignmentsQuery = (api: ServicesApi, deployment: Deployment) => ({
+  queryKey: serviceQueryKeys.assignments(deployment.spec.serviceId, deployment.meta.id),
+  queryFn: ssrSafe(() => api.listAssignments(deployment), []),
+  refetchInterval: 5_000,
+  refetchOnWindowFocus: true,
+  staleTime: 2_000
+});
+
 export {
+  deploymentAssignmentsQuery,
   deploymentReplicasQuery,
   deploymentsQuery,
   dnsRecordsQuery,

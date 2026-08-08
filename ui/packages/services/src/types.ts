@@ -4,6 +4,7 @@ type Service = ApiSchemas["Service"] & {
   previewResource?: ApiSchemas["Preview"];
 };
 type Deployment = ApiSchemas["Deployment"];
+type Assignment = ApiSchemas["Assignment"];
 type ReplicaState = ApiSchemas["ReplicaState"];
 type DnsRecord = ApiSchemas["DnsRecord"];
 type ServiceDetailSearchUpdate = {
@@ -13,4 +14,4 @@ type ServiceDetailSearchUpdate = {
   tab?: "logs" | "build" | "details" | undefined;
 };
 
-export type { Deployment, DnsRecord, ReplicaState, Service, ServiceDetailSearchUpdate };
+export type { Assignment, Deployment, DnsRecord, ReplicaState, Service, ServiceDetailSearchUpdate };

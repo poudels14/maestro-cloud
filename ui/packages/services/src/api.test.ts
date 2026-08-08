@@ -127,6 +127,24 @@ test("joins preview ownership and sorts deployment reads at the boundary", async
   expect(deployments.map((entry) => entry.meta.id)).toEqual(["deployment/b", "deployment/a"]);
 });
 
+test("scopes replica assignments to the selected service deployment", async () => {
+  const calls: unknown[][] = [];
+  const client = {
+    async listAssignments(...args: unknown[]) {
+      calls.push(args);
+      return [];
+    }
+  } as unknown as MaestroApiClient;
+  const api = createServicesApi(
+    () => client,
+    (error) => error as Error
+  );
+
+  await api.listAssignments(deployment());
+
+  expect(calls).toEqual([["service/a", "deployment/a"]]);
+});
+
 test("maps generated client failures at the services boundary", async () => {
   const client = {
     async listServices() {

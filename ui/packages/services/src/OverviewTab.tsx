@@ -4,9 +4,9 @@ import type { ServicesApi } from "./api";
 import type { Service } from "./types";
 import { isSystemService } from "./serviceView";
 import { deploymentsQuery } from "./queries";
-import { SecretConfig } from "./SecretConfig";
 import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
+import { ReplicaOverview } from "./overview/ReplicaOverview";
 import { VolumesList } from "./overview/VolumesList";
 import { FreezeToggle } from "./overview/FreezeToggle";
 import { buildSecretEntries } from "./secretView";
@@ -79,11 +79,6 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
     return items;
   };
 
-  const envItems = () =>
-    Object.entries(props.service.spec.environment ?? {}).map(([label, value]) => ({
-      label,
-      value
-    }));
   const currentDeployment = () =>
     deployments.data?.find(
       (deployment) => deployment.spec.serviceGeneration === props.service.meta.generation
@@ -108,6 +103,14 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
         </div>
       </Show>
 
+      <Show when={currentDeployment()}>
+        {(deployment) => <ReplicaOverview api={props.api} deployment={deployment()} />}
+      </Show>
+
+      {props.ingress}
+
+      <VolumesList service={props.service} />
+
       <Show when={buildEnvItems().length > 0}>
         <ConfigSection title="Build environment variables" items={buildEnvItems()} />
       </Show>
@@ -118,19 +121,6 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
           <SecretsList entries={buildSecrets()} />
         </div>
       </Show>
-
-      {props.ingress}
-
-      <Show when={envItems().length > 0}>
-        <ConfigSection title="Environment variables" items={envItems()} />
-      </Show>
-
-      <SecretConfig
-        secrets={props.service.spec.secrets}
-        resolvedSecrets={currentDeployment()?.status.resolvedSecrets}
-      />
-
-      <VolumesList service={props.service} />
     </div>
   );
 }

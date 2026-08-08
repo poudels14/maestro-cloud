@@ -2,7 +2,7 @@ import type { MaestroApiClient } from "@maestro/api-client";
 import { createIdempotencyKey } from "@maestro/sdk";
 import { sortDeploymentHistory } from "./deploymentView";
 import { attachPreviewResources } from "./serviceView";
-import type { Deployment, DnsRecord, ReplicaState, Service } from "./types";
+import type { Assignment, Deployment, DnsRecord, ReplicaState, Service } from "./types";
 
 type ServicesErrorMapper = (error: unknown, fallback: string) => Error;
 
@@ -13,6 +13,7 @@ interface ServicesApi {
   setFrozen: (service: Service, frozen: boolean) => Promise<void>;
   setReplicas: (service: Service, replicas: number | null) => Promise<void>;
   listDeployments: (serviceId: string) => Promise<Deployment[]>;
+  listAssignments: (deployment: Deployment) => Promise<Assignment[]>;
   listReplicas: (deployment: Deployment) => Promise<ReplicaState[]>;
   listDnsRecords: () => Promise<DnsRecord[]>;
   restartDeployment: (deployment: Deployment) => Promise<void>;
@@ -103,6 +104,11 @@ function createServicesApi(
       mapped(
         async () => sortDeploymentHistory(await client().listDeployments(serviceId)),
         "Failed to load deployments"
+      ),
+    listAssignments: (deployment) =>
+      mapped(
+        () => client().listAssignments(deployment.spec.serviceId, deployment.meta.id),
+        "Failed to load deployment assignments"
       ),
     listReplicas: (deployment) =>
       mapped(
