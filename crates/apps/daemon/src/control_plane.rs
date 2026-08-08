@@ -127,6 +127,8 @@ pub struct DaemonRoleDependencies<MeshBackendType, FirewallBackendType, BridgeBa
     pub artifact_store: Arc<dyn ArtifactStore>,
     /// Node-local durable store for content-addressed build context uploads.
     pub artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
+    /// Authenticated Git revision resolver shared with explicit redeploy commands.
+    pub build_revisions: Arc<dyn build::BuildRevisionResolver>,
     /// Owned normalized-log storage runtime for this node.
     pub log_store_runtime: Box<dyn LogStoreRuntime>,
     /// Independently checkpointed normalized-log destinations owned by this node.
@@ -183,6 +185,7 @@ pub struct DaemonRoleFactory<MeshBackendType, FirewallBackendType, BridgeBackend
     pub(crate) workload_runtime: Arc<dyn WorkloadRuntime>,
     pub(crate) artifact_store: Arc<dyn ArtifactStore>,
     pub(crate) artifact_archives: Arc<dyn build::ArtifactArchiveStore>,
+    pub(crate) build_revisions: Arc<dyn build::BuildRevisionResolver>,
     pub(crate) value_sources: Option<Arc<dyn ValueSourceResolver>>,
     pub(crate) log_store_runtime: Mutex<Option<Box<dyn LogStoreRuntime>>>,
     pub(crate) log_sinks: Vec<Arc<dyn LogSink>>,
@@ -240,6 +243,7 @@ impl<MeshBackendType, FirewallBackendType, BridgeBackendType>
             workload_runtime: dependencies.workload_runtime,
             artifact_store: dependencies.artifact_store,
             artifact_archives: dependencies.artifact_archives,
+            build_revisions: dependencies.build_revisions,
             value_sources: None,
             log_store_runtime: Mutex::new(Some(dependencies.log_store_runtime)),
             log_sinks: dependencies.log_sinks,

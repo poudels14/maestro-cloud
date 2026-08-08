@@ -344,10 +344,6 @@ impl AssignmentAgent {
                                             Err(failure.with_retry(attempt, retry_at))
                                         }
                                         RetrySchedule::Exhausted { maximum } => {
-                                            self.retries
-                                                .lock()
-                                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                                .clear(&assignment.meta.id);
                                             Err(failure.exhausted(maximum))
                                         }
                                     }

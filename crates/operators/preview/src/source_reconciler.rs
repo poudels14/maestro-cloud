@@ -199,7 +199,7 @@ impl PreviewSourceReconciler {
                     });
                 }
                 Err(error) => {
-                    self.record_failure(&repository.full_name, now, &error)
+                    self.record_failure(&repository.full_name, "pull-request refresh", now, &error)
                         .await;
                 }
             }
@@ -227,7 +227,13 @@ impl PreviewSourceReconciler {
                 .publish_deployment(owner, repository, &deployment)
                 .await
             {
-                self.record_failure(&feedback.repository, now, &error).await;
+                self.record_failure(
+                    &feedback.repository,
+                    "GitHub deployment publication",
+                    now,
+                    &error,
+                )
+                .await;
             }
         }
         Ok(())
@@ -244,6 +250,7 @@ impl PreviewSourceReconciler {
     async fn record_failure(
         &self,
         repository: &str,
+        operation: &'static str,
         now: MonotonicTime,
         error: &PullRequestApiError,
     ) {
@@ -262,12 +269,23 @@ impl PreviewSourceReconciler {
             .saturating_mul(2)
             .min(self.settings.max_backoff)
             .max(self.settings.initial_backoff);
+        let retry_at = now.saturating_add(delay);
         retries.insert(
             repository.to_string(),
             RepositoryRetry {
-                retry_at: now.saturating_add(delay),
+                retry_at,
                 next_delay,
             },
+        );
+        tracing::warn!(
+            target: "maestro::controller",
+            kind = "PreviewSource",
+            repository,
+            operation,
+            reason = "PreviewRepositoryRequestFailed",
+            error = %error,
+            retry_in_ms = delay.as_millis(),
+            "preview repository request failed; retry scheduled"
         );
     }
 }

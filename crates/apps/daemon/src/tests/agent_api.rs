@@ -125,6 +125,10 @@ async fn voter_agent_proxies_exec_to_workload_nodes() -> Result<(), Box<dyn std:
                 directory.path().join("workspaces"),
                 directory.path().join("archives"),
             )?),
+            build_revisions: Arc::new(LocalBuildSourceProvider::new(
+                directory.path().join("revision-workspaces"),
+                directory.path().join("revision-archives"),
+            )?),
             log_store_runtime: Box::new(log_runtime),
             log_sinks: Vec::new(),
             metric_store_runtime: Box::new(metric_runtime),

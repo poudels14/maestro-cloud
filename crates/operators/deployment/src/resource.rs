@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel_api::{
-    ArtifactTemplate, BUILD_WATCH_REVISION_ANNOTATION, Build, BuildId, BuildPhase, BuildSource,
-    BuildSpec, BuildStatus, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase,
-    DeploymentSpec, DeploymentStatus, Generation, IngressRoute, InvalidIdentifier, Object,
-    ObjectMeta, OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service,
-    ServiceId, Timestamp,
+    ArtifactTemplate, BUILD_RESOLVED_GENERATION_ANNOTATION, BUILD_RESOLVED_REVISION_ANNOTATION,
+    BUILD_WATCH_REVISION_ANNOTATION, Build, BuildId, BuildPhase, BuildSource, BuildSpec,
+    BuildStatus, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase, DeploymentSpec,
+    DeploymentStatus, Generation, IngressRoute, InvalidIdentifier, Object, ObjectMeta,
+    OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service, ServiceId,
+    Timestamp,
 };
 use sha2::{Digest, Sha256};
 
@@ -20,7 +21,7 @@ pub(crate) fn new_deployment(
     routes: &[IngressRoute],
     now: Timestamp,
 ) -> Result<Deployment, DeploymentPlanError> {
-    let watched_revision = watched_revision(service);
+    let resolved_revision = resolved_revision(service);
     let generation = service.meta.generation.0.to_string();
     let mut captured_service = service.spec.clone();
     if let (
@@ -35,14 +36,14 @@ pub(crate) fn new_deployment(
                     ..
                 },
         },
-    ) = (watched_revision, &mut captured_service.artifact)
+    ) = (resolved_revision, &mut captured_service.artifact)
     {
         *desired = revision.to_string();
     }
     let environment_resolution =
         crate::environment::resolve(service, routes, &mut captured_service.environment)?;
     let mut identity = vec![cluster_id.as_str(), service.meta.id.as_str(), &generation];
-    if let Some(revision) = watched_revision {
+    if let Some(revision) = resolved_revision {
         identity.push(revision);
     }
     if let Some(host) = environment_resolution.context.ingress_host.as_deref() {
@@ -93,19 +94,33 @@ pub(crate) fn new_deployment(
     })
 }
 
-fn watched_revision(service: &Service) -> Option<&str> {
+fn resolved_revision(service: &Service) -> Option<&str> {
     let ArtifactTemplate::Build { template } = &service.spec.artifact else {
         return None;
     };
-    if !template.watch || !matches!(template.source, BuildSource::Git { .. }) {
+    if !matches!(template.source, BuildSource::Git { .. }) {
         return None;
     }
+    let revision_annotation = if template.watch {
+        BUILD_WATCH_REVISION_ANNOTATION
+    } else {
+        let applies_to_generation = service
+            .meta
+            .annotations
+            .get(&kernel_api::AnnotationKey(
+                BUILD_RESOLVED_GENERATION_ANNOTATION.to_string(),
+            ))
+            .and_then(|generation| generation.parse::<u64>().ok())
+            == Some(service.meta.generation.0);
+        if !applies_to_generation {
+            return None;
+        }
+        BUILD_RESOLVED_REVISION_ANNOTATION
+    };
     service
         .meta
         .annotations
-        .get(&kernel_api::AnnotationKey(
-            BUILD_WATCH_REVISION_ANNOTATION.to_string(),
-        ))
+        .get(&kernel_api::AnnotationKey(revision_annotation.to_string()))
         .map(String::as_str)
         .filter(|revision| !revision.trim().is_empty())
 }

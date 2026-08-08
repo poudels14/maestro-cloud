@@ -21,6 +21,7 @@ pub(crate) struct AppState {
     pub(crate) admission_coordinator: Option<Arc<cluster::AdmissionCoordinator>>,
     pub(crate) store_provider: Option<Arc<dyn cluster::StoreProvider>>,
     pub(crate) artifact_archives: Option<Arc<dyn build::ArtifactArchiveStore>>,
+    pub(crate) build_revisions: Option<Arc<dyn build::BuildRevisionResolver>>,
     pub(crate) artifacts: Option<Arc<dyn runtime::ArtifactStore>>,
     pub(crate) firewall_settings: Option<firewall::FirewallSettings>,
     pub(crate) log_queries: Option<Arc<dyn logs::LogQueryStore>>,

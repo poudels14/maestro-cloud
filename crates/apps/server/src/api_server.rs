@@ -37,6 +37,7 @@ impl ApiServer {
             cluster_config: None,
             launch_config_admin: None,
             artifact_archives: None,
+            build_revisions: None,
             artifacts: None,
             firewall_settings: None,
             log_queries: None,
@@ -109,6 +110,16 @@ impl ApiServer {
         store: Arc<dyn build::ArtifactArchiveStore>,
     ) -> Self {
         self.state.artifact_archives = Some(store);
+        self.rebuild_router();
+        self
+    }
+
+    /// Enables authenticated resolution of the latest Git revision before redeployment.
+    pub fn with_build_revision_resolver(
+        mut self,
+        resolver: Arc<dyn build::BuildRevisionResolver>,
+    ) -> Self {
+        self.state.build_revisions = Some(resolver);
         self.rebuild_router();
         self
     }

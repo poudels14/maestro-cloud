@@ -18,11 +18,15 @@ function OverviewTab(props: { api: ServicesApi; service: Service; ingress: JSX.E
     const value = artifact();
     if (value.type === "image") return [{ label: "Image", value: value.reference }];
     const source = value.source;
+    const preview = props.service.previewResource;
     return [
       ...(source.type === "git"
         ? [
             { label: "Git repository", value: source.repository },
-            { label: "Git revision", value: source.revision }
+            ...(preview?.spec.headReference
+              ? [{ label: "Git branch", value: preview.spec.headReference }]
+              : []),
+            { label: preview ? "Git commit" : "Git revision", value: source.revision }
           ]
         : [{ label: "Upload archive", value: source.archiveId }]),
       { label: "Dockerfile", value: value.dockerfile },

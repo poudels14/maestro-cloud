@@ -20,6 +20,10 @@ pub use placement::{
 
 /// Service annotation containing the immutable Git revision desired by build-watch.
 pub const BUILD_WATCH_REVISION_ANNOTATION: &str = "build.maestro.dev/revision";
+/// Immutable Git revision resolved for one explicit non-watched redeploy.
+pub const BUILD_RESOLVED_REVISION_ANNOTATION: &str = "build.maestro.dev/resolved-revision";
+/// Service generation for which an explicit redeploy resolved the Git revision annotation.
+pub const BUILD_RESOLVED_GENERATION_ANNOTATION: &str = "build.maestro.dev/resolved-generation";
 
 /// Runtime artifact selected for a service deployment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -517,6 +521,7 @@ impl DeploymentPhase {
                 self,
                 Self::Building
                     | Self::Publishing
+                    | Self::PendingReady
                     | Self::Recovering
                     | Self::Stopped
                     | Self::Retrying

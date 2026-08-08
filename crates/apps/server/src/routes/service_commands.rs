@@ -4,10 +4,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, post, put};
 use axum::{Json, Router};
 use kernel_api::{
-    BuiltinKind, CommandRequest, Generation, ResourceKind, ResourceRevision, RolloutState, Service,
-    ServiceCommandResponse, ServiceId, ServiceReplicaOverrideRequest, Timestamp,
+    AnnotationKey, ArtifactTemplate, BUILD_RESOLVED_GENERATION_ANNOTATION,
+    BUILD_RESOLVED_REVISION_ANNOTATION, BUILD_WATCH_REVISION_ANNOTATION, BuildSource, BuiltinKind,
+    CommandRequest, Generation, Ownership, Preview, PreviewId, PreviewPhase, PullRequestState,
+    ResourceKind, ResourceRevision, RolloutState, Service, ServiceCommandResponse, ServiceId,
+    ServiceReplicaOverrideRequest, Timestamp,
 };
-use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction};
+use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, Transaction};
 use serde::Serialize;
 
 use crate::mutation::{MAXIMUM_REQUEST_BYTES, MutationRequest};
@@ -197,9 +200,19 @@ async fn command_with_payload<Payload: Serialize>(
             "Service is not at the expected revision",
         ));
     }
+    let redeploy = matches!(&action, ServiceMutation::Redeploy);
     let write = mutate_service(&mut service, action)?;
+    let related = if redeploy {
+        refresh_git_source(&state, &keys, &mut service).await?
+    } else {
+        None
+    };
     let response = command_response(&service);
-    let mutations = if write {
+    let mut compares = vec![Compare {
+        key: key.clone(),
+        expected: ExpectedVersion::Exact(stored.version),
+    }];
+    let mut mutations = if write {
         vec![Mutation::Put {
             key: key.clone(),
             value: serde_json::to_vec(&service).map_err(|error| {
@@ -210,15 +223,27 @@ async fn command_with_payload<Payload: Serialize>(
     } else {
         Vec::new()
     };
+    if let Some(related) = related {
+        compares.push(Compare {
+            key: related.stored.key.clone(),
+            expected: ExpectedVersion::Exact(related.stored.version),
+        });
+        if let Some(preview) = related.preview {
+            mutations.push(Mutation::Put {
+                key: related.stored.key,
+                value: serde_json::to_vec(&preview).map_err(|error| {
+                    ApiError::internal(format!("failed to encode Preview resource: {error}"))
+                })?,
+                session: None,
+            });
+        }
+    }
     let response = request
         .commit(
             &state,
             response,
             Transaction {
-                compares: vec![Compare {
-                    key,
-                    expected: ExpectedVersion::Exact(stored.version),
-                }],
+                compares,
                 mutations,
             },
             "revisionConflict",
@@ -226,6 +251,161 @@ async fn command_with_payload<Payload: Serialize>(
         )
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn refresh_git_source(
+    state: &AppState,
+    keys: &Keyspace,
+    service: &mut Service,
+) -> Result<Option<RelatedPreview>, ApiError> {
+    let (mut source, github_token, watched) = match &service.spec.artifact {
+        ArtifactTemplate::Build { template } => match &template.source {
+            source @ BuildSource::Git { .. } => (
+                source.clone(),
+                template.secrets.get("GH_TOKEN").cloned(),
+                template.watch,
+            ),
+            BuildSource::Tarball { .. } => return Ok(None),
+        },
+        ArtifactTemplate::Image { .. } => return Ok(None),
+    };
+    let related = load_owned_preview(state, keys, service).await?;
+    if let Some(related) = &related {
+        if related.preview.meta.deletion_timestamp.is_some()
+            || related.preview.status.pull_request_state != PullRequestState::Open
+        {
+            return Err(ApiError::conflict(
+                "previewClosed",
+                "the pull request is closed and cannot be redeployed",
+            ));
+        }
+        let head_reference = related.preview.spec.head_reference.trim();
+        if head_reference.is_empty() {
+            return Err(ApiError::conflict(
+                "previewSourceUnavailable",
+                "the pull request does not have a source branch",
+            ));
+        }
+        let BuildSource::Git { revision, .. } = &mut source else {
+            unreachable!("Git source was selected above");
+        };
+        *revision = head_reference.to_string();
+    }
+    let resolver = state.build_revisions.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("Git revision resolution is not configured on this node")
+    })?;
+    let revision = resolver
+        .resolve_revision(&source, github_token.as_ref())
+        .await
+        .map_err(build_source_error)?
+        .filter(|revision| !revision.trim().is_empty())
+        .ok_or_else(|| ApiError::bad_gateway("Git source did not resolve to a commit"))?;
+    let revision_annotation = if watched {
+        BUILD_WATCH_REVISION_ANNOTATION
+    } else {
+        BUILD_RESOLVED_REVISION_ANNOTATION
+    };
+    service.meta.annotations.insert(
+        AnnotationKey(revision_annotation.to_string()),
+        revision.clone(),
+    );
+    service.meta.annotations.insert(
+        AnnotationKey(BUILD_RESOLVED_GENERATION_ANNOTATION.to_string()),
+        service.meta.generation.0.to_string(),
+    );
+
+    let Some(mut related) = related else {
+        return Ok(None);
+    };
+    if related.preview.spec.head_revision != revision {
+        related.preview.spec.head_revision.clone_from(&revision);
+        related.preview.meta.generation =
+            next_generation(related.preview.meta.generation, "Preview")?;
+        related.preview.status.phase = PreviewPhase::Pending;
+        related.preview.status.teardown_at = None;
+        related.changed = true;
+    }
+    let ArtifactTemplate::Build { template } = &mut service.spec.artifact else {
+        unreachable!("build artifact was selected above");
+    };
+    let BuildSource::Git {
+        revision: captured, ..
+    } = &mut template.source
+    else {
+        unreachable!("Git source was selected above");
+    };
+    if *captured != revision {
+        captured.clone_from(&revision);
+        service.status.active_deployment_id = None;
+    }
+    Ok(Some(related.into_write()))
+}
+
+async fn load_owned_preview(
+    state: &AppState,
+    keys: &Keyspace,
+    service: &Service,
+) -> Result<Option<LoadedPreview>, ApiError> {
+    let preview_owner = service.meta.owner_refs.iter().find(|owner| {
+        owner.ownership == Ownership::Controller && owner.resource.kind.as_str() == "Preview"
+    });
+    let Some(owner) = preview_owner else {
+        return Ok(None);
+    };
+    let preview_id = PreviewId::new(owner.resource.id.to_string())
+        .map_err(|error| ApiError::internal(format!("invalid Preview owner: {error}")))?;
+    let kind = ResourceKind::new(BuiltinKind::Preview.as_str())
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let key = keys.resource(&kind, &preview_id.clone().into());
+    let stored = state
+        .store
+        .get(&key)
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read Preview: {error}")))?
+        .ok_or_else(|| ApiError::conflict("previewMissing", "the owning Preview does not exist"))?;
+    let preview: Preview = resource::decode(&stored, keys, &kind, BuiltinKind::Preview)?;
+    if preview.spec.service_id != service.meta.id {
+        return Err(ApiError::internal(format!(
+            "Preview `{preview_id}` does not own Service `{}`",
+            service.meta.id
+        )));
+    }
+    Ok(Some(LoadedPreview {
+        stored,
+        preview,
+        changed: false,
+    }))
+}
+
+fn build_source_error(error: build::BuildSourceError) -> ApiError {
+    match error {
+        build::BuildSourceError::Unavailable { message } => ApiError::service_unavailable(format!(
+            "failed to resolve the latest Git revision: {message}"
+        )),
+        build::BuildSourceError::Rejected { message } => ApiError::bad_gateway(format!(
+            "failed to resolve the latest Git revision: {message}"
+        )),
+    }
+}
+
+struct LoadedPreview {
+    stored: StoredValue,
+    preview: Preview,
+    changed: bool,
+}
+
+impl LoadedPreview {
+    fn into_write(self) -> RelatedPreview {
+        RelatedPreview {
+            stored: self.stored,
+            preview: self.changed.then_some(self.preview),
+        }
+    }
+}
+
+struct RelatedPreview {
+    stored: StoredValue,
+    preview: Option<Preview>,
 }
 
 fn mutate_service(service: &mut Service, action: ServiceMutation) -> Result<bool, ApiError> {

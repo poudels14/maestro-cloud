@@ -30,6 +30,11 @@ fn retry_tracker_uses_backon_scaling_caps_attempts_and_resets() {
         retries.schedule(assignment.clone(), Some(2), now),
         RetrySchedule::Exhausted { maximum: 2 }
     );
+    assert_eq!(retries.retry_at(&assignment), None);
+    assert_eq!(
+        retries.schedule(assignment.clone(), Some(2), now),
+        RetrySchedule::Exhausted { maximum: 2 }
+    );
 
     retries.clear(&assignment);
     assert_eq!(

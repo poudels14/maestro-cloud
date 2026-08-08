@@ -92,6 +92,7 @@ pub use system_service::{
 pub use value_source::{ExternalValueSource, InvalidExternalValueSource};
 pub use workload::{
     ArtifactTemplate, Assignment, AssignmentPhase, AssignmentSpec, AssignmentStatus,
+    BUILD_RESOLVED_GENERATION_ANNOTATION, BUILD_RESOLVED_REVISION_ANNOTATION,
     BUILD_WATCH_REVISION_ANNOTATION, Build, BuildPhase, BuildSource, BuildSpec, BuildStatus,
     BuildTemplate, CommandSpec, DEFAULT_MAX_RESTART_ATTEMPTS, Deployment, DeploymentGoal,
     DeploymentPhase, DeploymentSpec, DeploymentStatus, DepotBuildConfig, ExecPolicy, GitCommit,

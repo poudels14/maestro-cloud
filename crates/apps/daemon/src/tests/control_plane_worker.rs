@@ -82,6 +82,10 @@ async fn worker_agent_uses_remote_store_without_starting_a_controller()
                 directory.path().join("archive-workspaces"),
                 directory.path().join("archives"),
             )?),
+            build_revisions: Arc::new(LocalBuildSourceProvider::new(
+                directory.path().join("revision-workspaces"),
+                directory.path().join("revision-archives"),
+            )?),
             log_store_runtime: Box::new(InMemoryLogStoreRuntime::new()),
             log_sinks: Vec::new(),
             metric_store_runtime: Box::new(InMemoryMetricStoreRuntime::new()),

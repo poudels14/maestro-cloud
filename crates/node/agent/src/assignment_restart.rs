@@ -62,6 +62,7 @@ impl RetryTracker {
         if let Some(maximum) = maximum
             && state.attempts >= maximum
         {
+            state.retry_at = None;
             return RetrySchedule::Exhausted { maximum };
         }
         state.attempts = state.attempts.saturating_add(1);

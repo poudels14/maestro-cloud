@@ -144,6 +144,10 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
                 directory.path().join("archive-workspaces"),
                 directory.path().join("archives"),
             )?),
+            build_revisions: Arc::new(LocalBuildSourceProvider::new(
+                directory.path().join("revision-workspaces"),
+                directory.path().join("revision-archives"),
+            )?),
             log_store_runtime: Box::new(log_store_runtime),
             log_sinks: vec![delivery_sink.clone()],
             metric_store_runtime: Box::new(metric_store_runtime),

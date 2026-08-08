@@ -250,6 +250,69 @@ fn watched_commit_creates_a_pinned_deployment_in_the_same_service_generation() {
 }
 
 #[test]
+fn explicit_redeploy_commit_pins_a_non_watched_git_service() {
+    let mut service = service(Generation(8), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_RESOLVED_REVISION_ANNOTATION.to_string()),
+        revision.to_string(),
+    );
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_RESOLVED_GENERATION_ANNOTATION.to_string()),
+        "8".to_string(),
+    );
+
+    let deployment = plan(input(service, Vec::new()))
+        .expect("explicit redeploy deployment")
+        .create_deployments
+        .remove(0);
+
+    assert_eq!(deployment.spec.service_generation, Generation(8));
+    let ArtifactTemplate::Build { template } = deployment.spec.service.artifact else {
+        return;
+    };
+    assert!(!template.watch);
+    assert_eq!(
+        template.source,
+        BuildSource::Git {
+            repository: "https://example.test/repo.git".to_string(),
+            revision: revision.to_string(),
+        }
+    );
+}
+
+#[test]
+fn resolved_commit_from_an_older_generation_is_not_reused() {
+    let mut service = service(Generation(9), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_RESOLVED_REVISION_ANNOTATION.to_string()),
+        "0123456789abcdef0123456789abcdef01234567".to_string(),
+    );
+    service.meta.annotations.insert(
+        kernel_api::AnnotationKey(kernel_api::BUILD_RESOLVED_GENERATION_ANNOTATION.to_string()),
+        "8".to_string(),
+    );
+
+    let deployment = plan(input(service, Vec::new()))
+        .expect("new configuration deployment")
+        .create_deployments
+        .remove(0);
+
+    let ArtifactTemplate::Build { template } = deployment.spec.service.artifact else {
+        return;
+    };
+    assert_eq!(
+        template.source,
+        BuildSource::Git {
+            repository: "https://example.test/repo.git".to_string(),
+            revision: "main".to_string(),
+        }
+    );
+}
+
+#[test]
 fn watched_commit_reuses_an_equivalent_migrated_deployment() {
     let mut service = service(Generation(7), RolloutState::Active);
     service.spec.artifact = build_artifact();
@@ -811,6 +874,22 @@ fn readiness_requires_the_exact_current_assignment() {
     assert_eq!(
         ready.deployment_updates[0].status.ready_at,
         Some(Timestamp(40_000))
+    );
+}
+
+#[test]
+fn pending_ready_returns_to_starting_while_its_workload_restarts() {
+    let service = service(Generation(1), RolloutState::Active);
+    let deployment = deployment(&service, DeploymentPhase::PendingReady);
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let mut snapshot = input(service, vec![deployment]);
+    snapshot.live_nodes = live_assignment_nodes(std::slice::from_ref(&assignment));
+    snapshot.assignments = vec![assignment];
+
+    let result = plan(snapshot).expect("return pending deployment to starting");
+    assert_eq!(
+        result.deployment_updates[0].status.phase,
+        DeploymentPhase::Starting
     );
 }
 

@@ -191,6 +191,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                     current,
                     DeploymentPhase::Building
                         | DeploymentPhase::Publishing
+                        | DeploymentPhase::PendingReady
                         | DeploymentPhase::Recovering
                         | DeploymentPhase::Stopped
                         | DeploymentPhase::Retrying
