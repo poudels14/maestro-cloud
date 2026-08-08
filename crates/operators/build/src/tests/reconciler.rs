@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use kernel_api::{
-    Build, BuildId, BuildPhase, Condition, ConditionState, DepotBuildConfig, SecretValue,
+    Build, BuildId, BuildPhase, Condition, ConditionState, DepotBuildConfig, SecretValue, ServiceId,
 };
 use logs::{LogBody, LogOrigin, LogProducer, LogStream};
 use runtime::{
@@ -241,10 +241,12 @@ impl ValueSourceResolver for FixedValueSources {
 }
 
 #[tokio::test]
-async fn registry_build_publishes_a_deployment_unique_immutable_reference() -> TestResult {
+async fn registry_build_uses_the_base_repository_with_a_unique_deployment_tag() -> TestResult {
     let world = TestWorld::new().await?;
     let mut build = queued_build("Dockerfile")?;
+    build.spec.service_id = ServiceId::new("api-pr-42")?;
     build.spec.template.registry = Some("registry.example/team".to_owned());
+    build.spec.template.registry_repository = Some(ServiceId::new("api")?);
     world.seed(&build).await?;
     let source = Arc::new(RecordingSource::successful("commit-abc"));
     let artifacts = Arc::new(RecordingArtifacts::successful()?);

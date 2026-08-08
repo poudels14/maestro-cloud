@@ -358,6 +358,7 @@ async fn convert_build(
         )?,
         watch: build.watch,
         registry,
+        registry_repository: None,
         depot,
         environment: environment.items,
         environment_source: environment.source,

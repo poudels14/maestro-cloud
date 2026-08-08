@@ -56,6 +56,9 @@ pub(crate) fn desired_service(
     }
     *revision = preview.spec.head_revision.clone();
     template.watch = false;
+    if template.registry.is_some() && template.registry_repository.is_none() {
+        template.registry_repository = Some(base.meta.id.clone());
+    }
     spec.name = preview.spec.service_id.to_string();
     spec.preview = None;
     spec.replicas = policy.replicas;

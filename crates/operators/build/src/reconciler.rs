@@ -379,10 +379,15 @@ impl BuildReconciler {
             .registry
             .as_ref()
             .map(|registry| {
+                let repository = build
+                    .spec
+                    .template
+                    .registry_repository
+                    .as_ref()
+                    .unwrap_or(&build.spec.service_id);
                 ArtifactReference::new(format!(
-                    "{}/{service}:{deployment}",
-                    registry.trim_end_matches('/'),
-                    service = build.spec.service_id,
+                    "{registry}/{repository}:{deployment}",
+                    registry = registry.trim_end_matches('/'),
                     deployment = build.spec.deployment_id,
                 ))
             })

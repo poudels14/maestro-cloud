@@ -55,6 +55,12 @@ pub struct BuildTemplate {
     /// replication between workload nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
+    /// Repository name appended to the registry prefix.
+    ///
+    /// Defaults to the requesting service ID. Preview services set this to
+    /// their base service so every preview publishes into the same repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_repository: Option<ServiceId>,
     /// Optional Depot remote-builder project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depot: Option<DepotBuildConfig>,

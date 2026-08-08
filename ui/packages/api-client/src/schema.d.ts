@@ -1345,6 +1345,13 @@ export interface components {
              *     replication between workload nodes.
              */
             registry?: string | null;
+            /**
+             * @description Repository name appended to the registry prefix.
+             *
+             *     Defaults to the requesting service ID. Preview services set this to
+             *     their base service so every preview publishes into the same repository.
+             */
+            registryRepository?: components["schemas"]["ServiceId"] | (null);
             /** @description Secret build variables that are redacted from debug output. */
             secrets?: {
                 [key: string]: components["schemas"]["SecretValue"];
@@ -1497,6 +1504,13 @@ export interface components {
              *     replication between workload nodes.
              */
             registry?: string | null;
+            /**
+             * @description Repository name appended to the registry prefix.
+             *
+             *     Defaults to the requesting service ID. Preview services set this to
+             *     their base service so every preview publishes into the same repository.
+             */
+            registryRepository?: components["schemas"]["ServiceId"] | (null);
             /** @description Secret build variables that are redacted from debug output. */
             secrets?: {
                 [key: string]: components["schemas"]["SecretValue"];

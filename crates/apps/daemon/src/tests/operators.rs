@@ -411,6 +411,7 @@ fn queued_build() -> Result<Build, kernel_api::InvalidIdentifier> {
                 dockerfile: "Dockerfile".to_owned(),
                 watch: false,
                 registry: None,
+                registry_repository: None,
                 depot: None,
                 environment: BTreeMap::new(),
                 environment_source: None,

@@ -281,11 +281,14 @@ explicit destination is supplied with `--push IMAGE`.
 Builds omit `build.registry` by default and are replicated directly between
 Maestro nodes. Set it to a registry prefix such as
 `registry.example/team` to publish a deployment-unique tag and deploy the
-registry's immutable digest. Preview services inherit the base service's
-registry. Depot builds push directly from the remote builder when a registry is
-configured; registry-free Depot builds download and import an image archive.
-Registry credentials remain a node-runtime responsibility. Direct Depot pushes
-use the Docker credential provider available to the Maestro daemon.
+registry's immutable digest. The base service owns the repository: regular and
+preview deployments of `api` both publish as
+`registry.example/team/api:deployment-*`, rather than creating a repository for
+each preview service. Depot builds push directly from the remote builder when a
+registry is configured; registry-free Depot builds download and import an image
+archive. Registry credentials remain a node-runtime responsibility. Direct
+Depot pushes use the Docker credential provider available to the Maestro
+daemon.
 
 Private Amazon ECR registry hosts are authenticated automatically through the
 standard AWS credential chain, including an EC2 instance role. Maestro requests

@@ -94,6 +94,20 @@ expression: document
                 "nullable": true,
                 "type": "string"
               },
+              "registryRepository": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ServiceId"
+                  },
+                  {
+                    "enum": [
+                      null
+                    ],
+                    "nullable": true
+                  }
+                ],
+                "description": "Repository name appended to the registry prefix.\n\nDefaults to the requesting service ID. Preview services set this to\ntheir base service so every preview publishes into the same repository."
+              },
               "secrets": {
                 "additionalProperties": {
                   "$ref": "#/components/schemas/SecretValue"
@@ -522,6 +536,20 @@ expression: document
             "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
             "nullable": true,
             "type": "string"
+          },
+          "registryRepository": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Repository name appended to the registry prefix.\n\nDefaults to the requesting service ID. Preview services set this to\ntheir base service so every preview publishes into the same repository."
           },
           "secrets": {
             "additionalProperties": {
@@ -2105,12 +2133,6 @@ expression: document
             },
             "type": "array"
           },
-          "replicas": {
-            "description": "Desired gateway replica count.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
           "tags": {
             "description": "Tailnet policy tags applied during authentication.",
             "items": {
@@ -2122,7 +2144,6 @@ expression: document
         "required": [
           "advertiseRoutes",
           "dnsNameservers",
-          "replicas",
           "tags",
           "crossClusterDns"
         ],

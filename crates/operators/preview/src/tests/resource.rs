@@ -7,7 +7,11 @@ use super::support::{base_route, base_service, preview};
 #[test]
 fn derived_service_is_stable_pinned_isolated_and_freeze_aware() {
     let preview = preview();
-    let base = base_service();
+    let mut base = base_service();
+    let ArtifactTemplate::Build { template } = &mut base.spec.artifact else {
+        panic!("base service must build an artifact");
+    };
+    template.registry = Some("registry.example/team".to_owned());
 
     let first = desired_service(&preview, &base, None).expect("derive service");
 
@@ -35,6 +39,7 @@ fn derived_service_is_stable_pinned_isolated_and_freeze_aware() {
         return;
     };
     assert!(!template.watch);
+    assert_eq!(template.registry_repository.as_ref(), Some(&base.meta.id));
     assert!(matches!(template.source, BuildSource::Git { .. }));
     let BuildSource::Git { revision, .. } = &template.source else {
         return;

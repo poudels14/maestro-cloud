@@ -125,6 +125,7 @@ fn build_artifact_discriminator_does_not_collide_with_its_source_field() {
             dockerfile: "Dockerfile".to_string(),
             watch: false,
             registry: None,
+            registry_repository: None,
             depot: None,
             environment: BTreeMap::new(),
             environment_source: None,
@@ -286,6 +287,7 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             dockerfile: "../Dockerfile".to_string(),
             watch: false,
             registry: None,
+            registry_repository: None,
             depot: None,
             environment: BTreeMap::new(),
             environment_source: None,
@@ -305,6 +307,7 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
             dockerfile: "Dockerfile".to_string(),
             watch: false,
             registry: Some("registry.example/team/".to_string()),
+            registry_repository: None,
             depot: None,
             environment: BTreeMap::new(),
             environment_source: None,
@@ -318,6 +321,13 @@ fn service_admission_rejects_unsafe_runtime_shapes() {
         unreachable!("fixture is a build")
     };
     template.registry = None;
+    template.registry_repository = Some(ServiceId::new("api").expect("service id"));
+    assert!(spec.validate().is_err());
+
+    let ArtifactTemplate::Build { template } = &mut spec.artifact else {
+        unreachable!("fixture is a build")
+    };
+    template.registry_repository = None;
     template.depot = Some(DepotBuildConfig {
         project: "invalid project".to_owned(),
     });

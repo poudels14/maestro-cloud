@@ -132,6 +132,12 @@ fn validate_artifact(artifact: &ArtifactTemplate) -> Result<(), ServiceSpecError
                     );
                 }
             }
+            if template.registry.is_none() && template.registry_repository.is_some() {
+                return invalid(
+                    "artifact.registryRepository",
+                    "repository requires a registry prefix",
+                );
+            }
             if let Some(depot) = &template.depot {
                 nonempty_text("artifact.depot.project", &depot.project)?;
                 if depot.project.chars().any(char::is_whitespace)

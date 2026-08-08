@@ -149,6 +149,7 @@ impl PreviewCluster for PreviewAcceptanceWorld {
                 dockerfile: "Dockerfile".to_string(),
                 watch: false,
                 registry: None,
+                registry_repository: None,
                 depot: None,
                 environment: BTreeMap::new(),
                 environment_source: None,

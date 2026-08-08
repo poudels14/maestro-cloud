@@ -207,6 +207,7 @@ fn convert_build(
             dockerfile: build.dockerfile.clone(),
             watch: build.watch,
             registry,
+            registry_repository: None,
             depot,
             environment,
             environment_source,

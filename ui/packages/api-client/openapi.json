@@ -107,6 +107,20 @@
                 "nullable": true,
                 "type": "string"
               },
+              "registryRepository": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ServiceId"
+                  },
+                  {
+                    "enum": [
+                      null
+                    ],
+                    "nullable": true
+                  }
+                ],
+                "description": "Repository name appended to the registry prefix.\n\nDefaults to the requesting service ID. Preview services set this to\ntheir base service so every preview publishes into the same repository."
+              },
               "secrets": {
                 "additionalProperties": {
                   "$ref": "#/components/schemas/SecretValue"
@@ -636,6 +650,20 @@
             "description": "Optional registry prefix receiving a deployment-unique immutable build.\n\nAbsence keeps the artifact registry-free and enables Maestro peer\nreplication between workload nodes.",
             "nullable": true,
             "type": "string"
+          },
+          "registryRepository": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Repository name appended to the registry prefix.\n\nDefaults to the requesting service ID. Preview services set this to\ntheir base service so every preview publishes into the same repository."
           },
           "secrets": {
             "additionalProperties": {

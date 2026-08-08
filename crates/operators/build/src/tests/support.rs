@@ -213,6 +213,7 @@ pub(super) fn queued_build(dockerfile: &str) -> TestResult<Build> {
                 dockerfile: dockerfile.to_string(),
                 watch: false,
                 registry: None,
+                registry_repository: None,
                 depot: None,
                 environment: BTreeMap::from([("PROFILE".to_string(), "release".to_string())]),
                 environment_source: None,
