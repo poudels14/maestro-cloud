@@ -14,6 +14,7 @@ use crate::agent_tasks::{AgentTaskInputs, spawn_agent_tasks};
 use crate::artifact_replication::build_artifact_replication_agent;
 use crate::control_plane::{DaemonRoleFactory, role_error};
 use crate::join_activation::activate_joined_member;
+use crate::launch::persist_store_restart;
 use crate::log_delivery::build_sink_workers;
 use crate::metric_delivery::{build_host_metric_sink_workers, build_metric_sink_workers};
 use crate::stats_metric_sampler::StatsMetricSampler;
@@ -75,8 +76,16 @@ where
         .lock()
         .map_err(|_| RoleError::new("controller-log worker lock was poisoned"))?
         .take();
+    let launch_document = match &factory.agent_store {
+        AgentStore::Managed {
+            launch_document, ..
+        } => launch_document.clone(),
+        AgentStore::Remote(_) => None,
+    };
     let (store, store_runtime, joined_member, completion) = match &factory.agent_store {
-        AgentStore::Managed { provider, start } => {
+        AgentStore::Managed {
+            provider, start, ..
+        } => {
             let (runtime, joined_member, completion) = match start {
                 ManagedStoreStart::Normal(start_mode) => {
                     let runtime = provider.start(start_mode.clone()).await;
@@ -148,6 +157,15 @@ where
     {
         return runtimes
             .fail(role_error("activate joined store member", error))
+            .await;
+    }
+    if let Some(launch_document) = launch_document
+        && let Err(error) = persist_store_restart(&launch_document)
+    {
+        return runtimes
+            .fail(RoleError::new(format!(
+                "persist store restart mode: {error}"
+            )))
             .await;
     }
     if let Some((marker, run_id)) = completion

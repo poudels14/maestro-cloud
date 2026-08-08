@@ -57,6 +57,7 @@ use crate::{
 
 mod config;
 
+pub(crate) use config::persist_store_restart;
 pub use config::{
     DaemonLaunchConfig, DaemonLaunchDocument, StoreLaunchMode, load_launch_config,
     load_launch_config_with_fallbacks, load_launch_document,
@@ -188,7 +189,11 @@ async fn launch_daemon_inner(
                 }
             }
         };
-        AgentStore::Managed { provider, start }
+        AgentStore::Managed {
+            provider,
+            start,
+            launch_document: Some(data_directory.join("launch.json")),
+        }
     } else {
         AgentStore::Remote(
             connect_worker_store(

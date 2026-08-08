@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -271,6 +272,59 @@ pub fn load_launch_document(path: &Path) -> Result<DaemonLaunchDocument, DaemonL
     })?;
     document.validate()?;
     Ok(document)
+}
+
+/// Replaces a completed one-shot store initialization with restart semantics.
+///
+/// Recovery markers are cleared only after this durable transition succeeds, so a later daemon
+/// restart cannot replay an obsolete bootstrap or join identity against recovered provider state.
+pub(crate) fn persist_store_restart(path: &Path) -> Result<bool, DaemonLaunchError> {
+    let mut document = load_launch_document(path)?;
+    if matches!(
+        document.store_mode,
+        StoreLaunchMode::Restart | StoreLaunchMode::Client
+    ) {
+        return Ok(false);
+    }
+    document.store_mode = StoreLaunchMode::Restart;
+    let mut encoded = serde_json::to_vec_pretty(&document)
+        .map_err(|error| invalid(format!("failed to encode daemon launch document: {error}")))?;
+    encoded.push(b'\n');
+    let parent = path.parent().ok_or_else(|| {
+        invalid(format!(
+            "daemon launch document `{}` has no parent directory",
+            path.display()
+        ))
+    })?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|source| DaemonLaunchError::Io {
+            action: "create temporary replacement for",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    temporary
+        .write_all(&encoded)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|source| DaemonLaunchError::Io {
+            action: "persist replacement for",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    temporary
+        .persist(path)
+        .map_err(|error| DaemonLaunchError::Io {
+            action: "replace",
+            path: path.to_path_buf(),
+            source: error.error,
+        })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| DaemonLaunchError::Io {
+            action: "sync parent of",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(true)
 }
 
 /// Loads current cluster settings and combines them with node-local bootstrap state.

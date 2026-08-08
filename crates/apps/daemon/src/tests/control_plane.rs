@@ -122,6 +122,7 @@ async fn concrete_roles_establish_mesh_leadership_and_owned_shutdown()
             agent_store: AgentStore::Managed {
                 provider,
                 start: crate::ManagedStoreStart::Normal(StoreStartMode::Bootstrap),
+                launch_document: None,
             },
             mesh_backend: backend,
             firewall_backend: RecordingFirewallBackend {

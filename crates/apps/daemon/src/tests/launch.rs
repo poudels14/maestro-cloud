@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
-#[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
-use cluster::StoreJoinTicket;
 use cluster::{
     CertificateKeyPair, CertificateValidity, ClusterCertificateAuthority, NodeCertificateBundle,
+    StoreJoinTicket,
 };
 use kernel_api::{NodeId, NodeInstanceId, NodeRole, SecretValue};
 
-use crate::launch::{admin_api_settings, api_settings, panel_directory};
+use crate::launch::{admin_api_settings, api_settings, panel_directory, persist_store_restart};
 use crate::{
     DaemonLaunchConfig, DaemonLaunchDocument, DatadogLaunchConfig, DatadogLogsLaunchConfig,
     DatadogMetricsLaunchConfig, DepotLaunchConfig, LogBackupLaunchConfig, NixosUpgradeLaunchConfig,
@@ -84,6 +83,34 @@ fn launch_document_requires_owner_only_permissions() -> Result<(), Box<dyn std::
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
     assert_eq!(load_launch_document(&path)?, config);
+    Ok(())
+}
+
+#[test]
+fn completed_initialization_persists_restart_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    for (name, mode) in [
+        ("bootstrap", StoreLaunchMode::Bootstrap),
+        (
+            "join",
+            StoreLaunchMode::Join {
+                ticket: StoreJoinTicket::from_provider_data(
+                    NodeId::new("master")?,
+                    b"obsolete-provider-ticket",
+                ),
+            },
+        ),
+    ] {
+        let path = directory.path().join(format!("{name}.json"));
+        let original = document("master", NodeRole::Master, mode)?;
+        write_private(&path, &original)?;
+
+        assert!(persist_store_restart(&path)?);
+        let persisted = load_launch_document(&path)?;
+        assert_eq!(persisted.store_mode, StoreLaunchMode::Restart);
+        assert_eq!(persisted.protected_bootstrap, original.protected_bootstrap);
+        assert!(!persist_store_restart(&path)?);
+    }
     Ok(())
 }
 

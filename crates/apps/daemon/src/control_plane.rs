@@ -44,6 +44,8 @@ pub enum AgentStore {
         provider: Arc<dyn StoreProvider>,
         /// Explicit normal start or planned recovery decision for the local member.
         start: ManagedStoreStart,
+        /// Protected launch document promoted to restart mode after successful initialization.
+        launch_document: Option<PathBuf>,
     },
     /// Worker node that connects to an already-running cluster store.
     Remote(Arc<dyn Store>),
