@@ -132,7 +132,6 @@ impl AssignmentAgent {
             || settings.resync_interval.is_zero()
             || settings.restart_backoff_base.is_zero()
             || settings.restart_backoff_max < settings.restart_backoff_base
-            || settings.reconcile_timeout.is_zero()
         {
             return Err(AssignmentAgentError::ZeroDeadline);
         }

@@ -15,6 +15,10 @@ fn containerd_defaults_are_valid_and_explicit() {
         settings.buildkit_address,
         "unix:///run/buildkit/buildkitd.sock"
     );
+    assert_eq!(
+        settings.registry_transfer_timeout,
+        std::time::Duration::from_secs(5 * 60)
+    );
     assert!(settings.max_build_output_bytes > settings.max_build_context_bytes);
 }
 
@@ -58,6 +62,15 @@ fn containerd_settings_reject_relative_empty_and_zero_values() {
 
     let settings = ContainerdRuntimeSettings {
         rpc_timeout: std::time::Duration::ZERO,
+        ..ContainerdRuntimeSettings::default()
+    };
+    assert!(matches!(
+        settings.validate(),
+        Err(RuntimeError::InvalidSpec { .. })
+    ));
+
+    let settings = ContainerdRuntimeSettings {
+        registry_transfer_timeout: std::time::Duration::ZERO,
         ..ContainerdRuntimeSettings::default()
     };
     assert!(matches!(

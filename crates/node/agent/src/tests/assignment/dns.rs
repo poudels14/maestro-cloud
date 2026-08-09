@@ -125,7 +125,6 @@ fn delegated_dns_agent(world: &World, resolver_service_id: ServiceId) -> Assignm
             resync_interval: Duration::from_secs(30),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
-            reconcile_timeout: Duration::from_secs(10),
             secrets_root: world.secrets.path().to_path_buf(),
             node_api_root: world.node_api.path().join("mounts"),
         },

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use containerd::services::v1::Image;
 use containerd::tonic::transport::Endpoint;
@@ -7,7 +9,7 @@ use containerd::tonic::{Code, Status};
 use containerd::types::Descriptor;
 use kernel_api::Timestamp;
 
-use crate::containerd_artifact::{lease_expiration, next_transfer_id};
+use crate::containerd_artifact::{lease_expiration, next_transfer_id, registry_operation_timeout};
 use crate::containerd_artifact_support::{
     MANAGED_ARTIFACT_LABEL, MANAGED_ARTIFACT_VALUE, artifact_request, image_digest,
     operation_error, prune_candidates, reference_prefix, registry_reference, removed_digests,
@@ -181,6 +183,38 @@ fn containerd_transfer_requests_carry_namespace_and_lease_ownership() {
             .unwrap(),
         "lease-1"
     );
+}
+
+#[tokio::test]
+async fn containerd_registry_deadline_cancels_a_stalled_transfer() {
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let canceled = Arc::new(AtomicBool::new(false));
+    let signal = DropSignal(canceled.clone());
+    let operation = async move {
+        let _signal = signal;
+        std::future::pending::<Result<(), ArtifactStoreError>>().await
+    };
+    let result = registry_operation_timeout(
+        Duration::ZERO,
+        "pull",
+        "registry.example/team/app@sha256:abc",
+        operation,
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(ArtifactStoreError::Unavailable { message })
+            if message.contains("registry pull") && message.contains("deadline")
+    ));
+    assert!(canceled.load(Ordering::SeqCst));
 }
 
 #[tokio::test]

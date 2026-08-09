@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use containerd::services::v1::{StreamInit, streaming_client::StreamingClient};
@@ -56,6 +57,7 @@ pub(crate) async fn open_stream(
     namespace: &str,
     stream_id: &str,
     lease_id: Option<&str>,
+    timeout: Option<Duration>,
 ) -> Result<ArtifactDuplex, ArtifactStoreError> {
     let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE);
     sender
@@ -67,8 +69,12 @@ pub(crate) async fn open_stream(
     let outbound = stream::unfold(receiver, |mut receiver| async move {
         receiver.recv().await.map(|message| (message, receiver))
     });
+    let mut request = artifact_request(outbound, namespace, lease_id)?;
+    if let Some(timeout) = timeout {
+        request.set_timeout(timeout);
+    }
     let mut incoming = StreamingClient::new(channel)
-        .stream(artifact_request(outbound, namespace, lease_id)?)
+        .stream(request)
         .await
         .map_err(|error| operation_error("open artifact stream", None, error))?
         .into_inner();

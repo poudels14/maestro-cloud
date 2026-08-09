@@ -28,10 +28,6 @@ impl AssignmentAgent {
             if *shutdown.borrow() {
                 return self.finish_shutdown().await;
             }
-            let reconcile_deadline = self
-                .monotonic_clock
-                .now()
-                .saturating_add(self.settings.reconcile_timeout);
             let reconcile = tokio::select! {
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
@@ -39,11 +35,7 @@ impl AssignmentAgent {
                     }
                     continue;
                 }
-                result = self.reconcile_with_cursor() => Some(result),
-                () = self.monotonic_clock.sleep_until(reconcile_deadline) => None,
-            };
-            let Some(reconcile) = reconcile else {
-                continue;
+                result = self.reconcile_with_cursor() => result,
             };
             let (report, cursor) = match reconcile {
                 Ok(reconciled) => reconciled,

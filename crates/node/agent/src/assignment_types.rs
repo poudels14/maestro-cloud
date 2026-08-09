@@ -41,8 +41,6 @@ pub struct AssignmentAgentSettings {
     pub restart_backoff_base: Duration,
     /// Maximum exponential delay between an exit and its restart attempt.
     pub restart_backoff_max: Duration,
-    /// Maximum duration of one complete store/runtime reconciliation pass.
-    pub reconcile_timeout: Duration,
     /// Volatile host directory containing per-workload secret files.
     pub secrets_root: PathBuf,
     /// Volatile host directory containing per-workload node API credentials and sockets.

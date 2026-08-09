@@ -109,7 +109,6 @@ async fn registry_free_assignment_waits_for_a_verified_local_artifact()
             resync_interval: Duration::from_secs(30),
             restart_backoff_base: Duration::from_secs(5),
             restart_backoff_max: Duration::from_secs(60),
-            reconcile_timeout: Duration::from_secs(10),
             secrets_root: secrets.path().to_path_buf(),
             node_api_root: node_api.path().join("mounts"),
         },

@@ -627,6 +627,49 @@ async fn assignment_run_retries_a_transient_whole_snapshot_failure()
 }
 
 #[tokio::test]
+async fn assignment_run_does_not_restart_an_inflight_runtime_operation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new();
+    world.seed(&deployment(), &assignment()).await?;
+    world.runtime.hang_next(FakeRuntimeOperation::Create)?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let agent = world.agent();
+    let task = tokio::spawn(async move { agent.run(shutdown_rx).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let creates = world
+                .runtime
+                .calls()
+                .unwrap()
+                .into_iter()
+                .filter(|call| call.operation == FakeRuntimeOperation::Create)
+                .count();
+            if creates == 1 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    world.monotonic_clock.advance(Duration::from_secs(60));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    let creates = world
+        .runtime
+        .calls()?
+        .into_iter()
+        .filter(|call| call.operation == FakeRuntimeOperation::Create)
+        .count();
+    assert_eq!(creates, 1);
+
+    shutdown_tx.send(true)?;
+    tokio::time::timeout(Duration::from_secs(1), task).await???;
+    Ok(())
+}
+
+#[tokio::test]
 async fn planned_shutdown_records_node_maintenance_before_stopping_workloads()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new();
@@ -1251,7 +1294,6 @@ impl World {
                 resync_interval: Duration::from_secs(30),
                 restart_backoff_base: Duration::from_secs(5),
                 restart_backoff_max: Duration::from_secs(60),
-                reconcile_timeout: Duration::from_secs(10),
                 secrets_root: self.secrets.path().to_path_buf(),
                 node_api_root: self.node_api.path().join("mounts"),
             },

@@ -123,7 +123,6 @@ pub(crate) fn build_assignment_agent<MeshBackendType, FirewallBackendType, Bridg
             resync_interval: factory.settings.assignment_resync_interval,
             restart_backoff_base: factory.settings.restart_backoff_base,
             restart_backoff_max: factory.settings.restart_backoff_max,
-            reconcile_timeout: factory.settings.assignment_reconcile_timeout,
             secrets_root: factory.volatile_root.join("secrets"),
             node_api_root: factory.volatile_root.join("node-api"),
         },

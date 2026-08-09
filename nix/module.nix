@@ -6,6 +6,18 @@
   ...
 }: let
   cfg = config.services.maestro;
+  containerdVersion = "2.2.4";
+  containerdOverlay = final: previous: {
+    containerd = previous.containerd.overrideAttrs (_old: {
+      version = containerdVersion;
+      src = final.fetchFromGitHub {
+        owner = "containerd";
+        repo = "containerd";
+        tag = "v${containerdVersion}";
+        hash = "sha256-F0lw7zh4V9JlFQGkE4RNT1VLX8WWLgZAAvbP12jnRMw=";
+      };
+    });
+  };
   depotPackage = import ./depot-package.nix {inherit pkgs;};
   userNamespaceHostBase = 1048576;
   userNamespaceRangeSize = 1073741824;
@@ -56,6 +68,8 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    nixpkgs.overlays = [containerdOverlay];
+
     assertions = [
       {
         assertion = cfg.config != "";

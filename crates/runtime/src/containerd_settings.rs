@@ -38,6 +38,8 @@ pub struct ContainerdRuntimeSettings {
     pub log_poll_interval: Duration,
     /// Maximum duration of one containerd metadata or lifecycle RPC.
     pub rpc_timeout: Duration,
+    /// Maximum wall-clock duration of one registry pull or push, including authentication.
+    pub registry_transfer_timeout: Duration,
     /// Deadline for a forced task shutdown to become observable.
     pub kill_timeout: Duration,
     /// Exact registry-host credentials used by native artifact transfers.
@@ -84,12 +86,14 @@ impl ContainerdRuntimeSettings {
         }
         if self.log_poll_interval.is_zero()
             || self.rpc_timeout.is_zero()
+            || self.registry_transfer_timeout.is_zero()
             || self.kill_timeout.is_zero()
             || self.build_timeout.is_zero()
         {
             return Err(RuntimeError::InvalidSpec {
-                message: "containerd polling, kill, and build deadlines must be positive"
-                    .to_owned(),
+                message:
+                    "containerd polling, RPC, registry transfer, kill, and build deadlines must be positive"
+                        .to_owned(),
             });
         }
         if self.max_build_context_bytes == 0
@@ -135,6 +139,7 @@ impl Default for ContainerdRuntimeSettings {
             max_build_output_bytes: 20 * 1_024 * 1_024 * 1_024,
             log_poll_interval: Duration::from_millis(100),
             rpc_timeout: Duration::from_secs(5),
+            registry_transfer_timeout: Duration::from_secs(5 * 60),
             kill_timeout: Duration::from_secs(5),
             registry_credentials: BTreeMap::new(),
         }

@@ -10,6 +10,9 @@
 in
   assert config.virtualisation.containerd.enable;
   assert lib.versionAtLeast pkgs.containerd.version "2.0";
+  assert lib.any (
+    package: lib.getName package == "containerd" && lib.getVersion package == "2.2.4"
+  ) config.environment.systemPackages;
   assert lib.versionAtLeast pkgs.runc.version "1.2";
   assert lib.versionAtLeast config.boot.kernelPackages.kernel.version "6.3";
   assert config.users.users.maestro-userns.isSystemUser;
