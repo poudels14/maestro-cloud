@@ -20,6 +20,34 @@ use crate::{PreviewReconciler, PreviewSettings};
 use super::support::{base_route, base_service, preview};
 
 #[tokio::test]
+async fn failed_preview_recovers_directly_to_its_active_child()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new().await?;
+    world.put("Service", &base_service()).await?;
+    world.put("IngressRoute", &base_route()).await?;
+    world.put("Preview", &preview()).await?;
+
+    world.runtime.reconcile_snapshot().await?;
+    world.runtime.reconcile_snapshot().await?;
+    world
+        .update::<Service>("Service", "api-pr-42", |service| {
+            service.status.active_deployment_id = Some(DeploymentId::new("ready-preview").unwrap());
+        })
+        .await?;
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Active);
+
+    world.delete("IngressRoute", "api-route").await?;
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Failed);
+
+    world.put("IngressRoute", &base_route()).await?;
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(world.preview().await?.status.phase, PreviewPhase::Active);
+    Ok(())
+}
+
+#[tokio::test]
 async fn preview_derives_updates_reopens_and_expires_owned_resources()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new().await?;

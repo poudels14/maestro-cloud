@@ -515,6 +515,7 @@ impl DeploymentPhase {
                     | Self::Retrying
                     | Self::Ready
                     | Self::Recovering
+                    | Self::Stopping
                     | Self::Stopped
             ),
             Self::Starting => matches!(
@@ -523,6 +524,7 @@ impl DeploymentPhase {
                     | Self::Publishing
                     | Self::PendingReady
                     | Self::Recovering
+                    | Self::Stopping
                     | Self::Stopped
                     | Self::Retrying
             ),
@@ -534,6 +536,7 @@ impl DeploymentPhase {
                     | Self::Retrying
                     | Self::Ready
                     | Self::Recovering
+                    | Self::Stopping
                     | Self::Stopped
             ),
             Self::Retrying => {
@@ -544,6 +547,8 @@ impl DeploymentPhase {
                         | Self::PendingReady
                         | Self::Ready
                         | Self::Recovering
+                        | Self::Stopping
+                        | Self::Stopped
                 )
             }
             Self::Ready => matches!(
@@ -554,6 +559,7 @@ impl DeploymentPhase {
                     | Self::PendingReady
                     | Self::Retrying
                     | Self::Recovering
+                    | Self::Stopping
                     | Self::Stopped
             ),
             Self::Recovering => matches!(
@@ -574,6 +580,7 @@ impl DeploymentPhase {
                     | Self::Retrying
                     | Self::Ready
                     | Self::Recovering
+                    | Self::Stopped
             ),
             Self::Stopped => matches!(
                 self,
@@ -599,7 +606,9 @@ impl DeploymentPhase {
                     | Self::Building
                     | Self::Preparing
             ),
-            Self::Queued | Self::Removed | Self::Canceled => true,
+            Self::Removed => matches!(self, Self::Draining | Self::Crashed | Self::Canceled),
+            Self::Canceled => matches!(self, Self::Queued | Self::Preparing | Self::Building),
+            Self::Queued => false,
         }
     }
 }

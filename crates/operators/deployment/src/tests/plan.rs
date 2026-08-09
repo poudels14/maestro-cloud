@@ -791,6 +791,125 @@ fn planned_shutdown_can_recover_directly_to_ready() {
 }
 
 #[test]
+fn interrupted_shutdown_can_recover_directly_to_ready() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Stopping);
+    deployment.status.ready_at = Some(Timestamp(1_000));
+    deployment.status.conditions = vec![Condition {
+        condition_type: ConditionType::Ready,
+        state: ConditionState::False,
+        reason: ConditionReason("WorkloadsStopping".to_owned()),
+        message: "deployment workloads are stopping".to_owned(),
+        observed_generation: deployment.meta.generation,
+        last_transition_time: Timestamp(39_000),
+    }];
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
+    let mut snapshot = input(service, vec![deployment.clone()]);
+    snapshot.live_nodes.insert(assignment.spec.node_id.clone());
+    snapshot.assignments = vec![assignment];
+    snapshot.replicas = vec![replica];
+
+    let recovery = plan(snapshot).expect("recover an interrupted shutdown in one pass");
+
+    let status = &recovery
+        .deployment_updates
+        .iter()
+        .find(|update| update.id == deployment.meta.id)
+        .expect("ready deployment update")
+        .status;
+    assert_eq!(status.phase, DeploymentPhase::Ready);
+    let ready = status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready)
+        .expect("ready condition");
+    assert_eq!(ready.state, ConditionState::True);
+    assert_eq!(ready.reason.0, "ReplicasReady");
+}
+
+#[test]
+fn interrupted_shutdown_accepts_every_observed_runtime_phase() {
+    use kernel_api::AssignmentPhase;
+
+    let observations = [
+        (DeploymentPhase::Publishing, None, None),
+        (
+            DeploymentPhase::Starting,
+            Some(AssignmentPhase::Running),
+            None,
+        ),
+        (
+            DeploymentPhase::PendingReady,
+            Some(AssignmentPhase::Running),
+            Some(DeploymentPhase::PendingReady),
+        ),
+        (
+            DeploymentPhase::Retrying,
+            Some(AssignmentPhase::Running),
+            Some(DeploymentPhase::Crashed),
+        ),
+        (
+            DeploymentPhase::Ready,
+            Some(AssignmentPhase::Running),
+            Some(DeploymentPhase::Ready),
+        ),
+        (
+            DeploymentPhase::Stopping,
+            Some(AssignmentPhase::Stopping),
+            Some(DeploymentPhase::Stopping),
+        ),
+        (
+            DeploymentPhase::Stopped,
+            Some(AssignmentPhase::Stopped),
+            Some(DeploymentPhase::Stopped),
+        ),
+        (
+            DeploymentPhase::Crashed,
+            Some(AssignmentPhase::Failed),
+            None,
+        ),
+    ];
+
+    for current in [DeploymentPhase::Stopping, DeploymentPhase::Stopped] {
+        for (expected, assignment_phase, replica_phase) in observations {
+            let mut service = service(Generation(1), RolloutState::Active);
+            let deployment = deployment(&service, current);
+            service.status.active_deployment_id = Some(deployment.meta.id.clone());
+            let mut snapshot = input(service, vec![deployment.clone()]);
+            if let Some(assignment_phase) = assignment_phase {
+                let mut observed_assignment = assignment(&deployment, "assignment-1", 1);
+                observed_assignment.status.phase = assignment_phase;
+                snapshot
+                    .live_nodes
+                    .insert(observed_assignment.spec.node_id.clone());
+                if let Some(replica_phase) = replica_phase {
+                    snapshot.replicas.push(replica(
+                        &deployment,
+                        &observed_assignment,
+                        replica_phase,
+                    ));
+                }
+                snapshot.assignments.push(observed_assignment);
+            }
+
+            let recovery = plan(snapshot).expect("observed shutdown recovery must be valid");
+            let status = &recovery
+                .deployment_updates
+                .iter()
+                .find(|update| update.id == deployment.meta.id)
+                .expect("shutdown recovery must update the deployment")
+                .status;
+            assert_eq!(
+                status.phase, expected,
+                "unexpected recovery phase from {current:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn crashed_deployment_keeps_its_failure_phase_while_cleanup_completes() {
     let service = service(Generation(1), RolloutState::Active);
     let mut deployment = deployment(&service, DeploymentPhase::Crashed);

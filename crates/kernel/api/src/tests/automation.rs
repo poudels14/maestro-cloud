@@ -35,7 +35,21 @@ fn preview_transition_matrix_is_exhaustive() {
                             | PreviewPhase::Active
                             | PreviewPhase::Expired
                             | PreviewPhase::Failed
-                    ) | (PreviewPhase::Failed, PreviewPhase::Pending)
+                    ) | (
+                        PreviewPhase::Failed,
+                        PreviewPhase::Pending
+                            | PreviewPhase::Active
+                            | PreviewPhase::Closing
+                            | PreviewPhase::Expired
+                    ) | (PreviewPhase::Expired, PreviewPhase::Pending)
+                        | (
+                            PreviewPhase::Canceled,
+                            PreviewPhase::Pending
+                                | PreviewPhase::Active
+                                | PreviewPhase::Closing
+                                | PreviewPhase::Expired
+                                | PreviewPhase::Failed
+                        )
                 );
             assert_eq!(
                 current.can_transition_to(target),

@@ -79,7 +79,14 @@ impl PreviewPhase {
                 ) | (
                     Self::Closing,
                     Self::Pending | Self::Active | Self::Expired | Self::Failed
-                ) | (Self::Failed, Self::Pending)
+                ) | (
+                    Self::Failed,
+                    Self::Pending | Self::Active | Self::Closing | Self::Expired
+                ) | (Self::Expired, Self::Pending)
+                    | (
+                        Self::Canceled,
+                        Self::Pending | Self::Active | Self::Closing | Self::Expired | Self::Failed
+                    )
             )
     }
 }

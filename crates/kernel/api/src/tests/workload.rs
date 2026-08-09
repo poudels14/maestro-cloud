@@ -185,6 +185,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
                         | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Starting => matches!(
@@ -193,6 +194,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::Publishing
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
                         | DeploymentPhase::Stopped
                         | DeploymentPhase::Retrying
                 ),
@@ -204,6 +206,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
                         | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Retrying => matches!(
@@ -213,6 +216,8 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Ready
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
+                        | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Ready => matches!(
                     current,
@@ -222,6 +227,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopping
                         | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Recovering => matches!(
@@ -242,6 +248,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Ready
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Stopped => matches!(
                     current,
@@ -270,11 +277,25 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::Building
                         | DeploymentPhase::Preparing
                 ),
-                DeploymentPhase::Queued | DeploymentPhase::Removed | DeploymentPhase::Canceled => {
-                    true
-                }
+                DeploymentPhase::Removed => matches!(
+                    current,
+                    DeploymentPhase::Draining
+                        | DeploymentPhase::Crashed
+                        | DeploymentPhase::Canceled
+                ),
+                DeploymentPhase::Canceled => matches!(
+                    current,
+                    DeploymentPhase::Queued
+                        | DeploymentPhase::Preparing
+                        | DeploymentPhase::Building
+                ),
+                DeploymentPhase::Queued => false,
             };
-            assert_eq!(current.can_transition_to(target), expected);
+            assert_eq!(
+                current.can_transition_to(target),
+                expected,
+                "{current:?} -> {target:?}"
+            );
         }
     }
 }
