@@ -61,6 +61,12 @@ struct RepositoryRetry {
     next_delay: Duration,
 }
 
+#[derive(Clone)]
+struct CachedRepository {
+    snapshot: RepositoryPullRequests,
+    refresh_at: MonotonicTime,
+}
+
 /// Discovers GitHub pull requests and persists the global Preview resource set.
 pub struct PreviewSourceReconciler {
     api: Arc<dyn PullRequestApi>,
@@ -70,6 +76,7 @@ pub struct PreviewSourceReconciler {
     node_prefix: StorePrefix,
     timestamp_clock: Arc<dyn TimestampClock>,
     monotonic_clock: Arc<dyn Clock>,
+    repositories: Mutex<BTreeMap<String, CachedRepository>>,
     retries: Mutex<BTreeMap<String, RepositoryRetry>>,
     writer: PreviewSourceWriter,
 }
@@ -107,6 +114,7 @@ impl PreviewSourceReconciler {
             keyspace,
             timestamp_clock,
             monotonic_clock,
+            repositories: Mutex::new(BTreeMap::new()),
             retries: Mutex::new(BTreeMap::new()),
         })
     }
@@ -183,7 +191,22 @@ impl PreviewSourceReconciler {
             repository_coordinates(snapshot.services.values().map(|service| &service.resource));
         let mut repositories = Vec::new();
         for repository in coordinates {
+            let cached = self
+                .repositories
+                .lock()
+                .await
+                .get(&repository.full_name)
+                .cloned();
+            if let Some(cached) = &cached
+                && cached.refresh_at > now
+            {
+                repositories.push(cached.snapshot.clone());
+                continue;
+            }
             if !self.repository_available(&repository.full_name, now).await {
+                if let Some(cached) = cached {
+                    repositories.push(cached.snapshot);
+                }
                 continue;
             }
             match self
@@ -193,14 +216,25 @@ impl PreviewSourceReconciler {
             {
                 Ok(pull_requests) => {
                     self.retries.lock().await.remove(&repository.full_name);
-                    repositories.push(RepositoryPullRequests {
+                    let snapshot = RepositoryPullRequests {
                         repository: repository.full_name,
                         pull_requests,
-                    });
+                    };
+                    self.repositories.lock().await.insert(
+                        snapshot.repository.clone(),
+                        CachedRepository {
+                            snapshot: snapshot.clone(),
+                            refresh_at: now.saturating_add(self.settings.poll_interval),
+                        },
+                    );
+                    repositories.push(snapshot);
                 }
                 Err(error) => {
                     self.record_failure(&repository.full_name, "pull-request refresh", now, &error)
                         .await;
+                    if let Some(cached) = cached {
+                        repositories.push(cached.snapshot);
+                    }
                 }
             }
         }

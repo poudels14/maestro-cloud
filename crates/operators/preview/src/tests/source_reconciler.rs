@@ -73,6 +73,7 @@ async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview(
     assert_eq!(created.status.phase, PreviewPhase::Pending);
 
     api.set_open(vec![pull_request("second")]);
+    world.clock.set_millis(60_000);
     world.runtime.reconcile_snapshot().await?;
     let pushed = world.preview().await?;
     assert_eq!(pushed.meta.id, created.meta.id);
@@ -80,16 +81,17 @@ async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview(
     assert_eq!(pushed.spec.head_revision, "second");
 
     api.set_open(Vec::new());
-    world.clock.set_millis(20_000);
+    world.clock.set_millis(120_000);
     world.runtime.reconcile_snapshot().await?;
     let closed = world.preview().await?;
-    assert_eq!(closed.meta.deletion_timestamp, Some(Timestamp(20_000)));
+    assert_eq!(closed.meta.deletion_timestamp, Some(Timestamp(120_000)));
     assert_eq!(
         closed.status.pull_request_state,
         kernel_api::PullRequestState::Closed
     );
 
     api.set_open(vec![pull_request("third")]);
+    world.clock.set_millis(180_000);
     world.runtime.reconcile_snapshot().await?;
     let reopened = world.preview().await?;
     assert_eq!(reopened.meta.deletion_timestamp, None);
@@ -120,6 +122,33 @@ async fn source_reconciler_creates_pushes_closes_and_reopens_one_stable_preview(
     assert_eq!(closing.2.state, PullRequestDeploymentState::Inactive);
     assert_eq!(reopened.2.state, PullRequestDeploymentState::InProgress);
     assert_eq!(reopened.2.head_revision, "third");
+    Ok(())
+}
+
+#[tokio::test]
+async fn repository_snapshot_is_reused_within_its_polling_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let api = Arc::new(FakePullRequests::new(vec![pull_request("first")]));
+    let world = World::new(api.clone()).await?;
+    world.put("Node", &node()).await?;
+    let mut base = base_service();
+    base.status.rollout = RolloutState::Active;
+    world.put("Service", &base).await?;
+
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(api.list_calls(), 1);
+    assert_eq!(world.preview().await?.spec.head_revision, "first");
+
+    api.set_open(vec![pull_request("second")]);
+    world.clock.set_millis(59_999);
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(api.list_calls(), 1);
+    assert_eq!(world.preview().await?.spec.head_revision, "first");
+
+    world.clock.set_millis(60_000);
+    world.runtime.reconcile_snapshot().await?;
+    assert_eq!(api.list_calls(), 2);
+    assert_eq!(world.preview().await?.spec.head_revision, "second");
     Ok(())
 }
 
@@ -171,6 +200,7 @@ async fn failed_deployment_feedback_is_nonfatal_and_retried_from_level_state()
 
     world.clock.set_millis(5_000);
     world.runtime.reconcile_snapshot().await?;
+    assert_eq!(api.list_calls(), 1);
     assert_eq!(api.deployments().len(), 1);
     assert_eq!(
         api.deployments().first().unwrap().2.state,

@@ -138,6 +138,32 @@ fn reports_the_current_revision_as_ready_and_a_changed_revision_as_updating() {
 }
 
 #[test]
+fn a_new_revision_requeues_a_failed_preview() {
+    let base = service("api", "https://github.com/acme/api");
+    let mut current = preview();
+    current.status.phase = PreviewPhase::Failed;
+    let open = pull_request(42, 1_000, PullRequestReadiness::Ready, "acme/api");
+
+    let plan = plan_preview_sources(
+        &[base],
+        &[current],
+        &[repository("acme/api", vec![open.clone()])],
+        Timestamp(2_000),
+        3,
+    )
+    .unwrap();
+
+    let desired = plan.updates.first().unwrap();
+    assert_eq!(desired.meta.generation, Generation(2));
+    assert_eq!(desired.spec.head_revision, open.head_revision);
+    assert_eq!(desired.status.phase, PreviewPhase::Pending);
+    assert_eq!(
+        plan.feedback.first().unwrap().kind,
+        PreviewFeedbackKind::Updating
+    );
+}
+
+#[test]
 fn closes_only_after_a_successful_repository_snapshot() {
     let base = service("api", "https://github.com/acme/api");
     let current = preview();

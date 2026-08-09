@@ -47,6 +47,7 @@ pub struct GithubPullRequestClient {
     api_base: String,
     clock: Arc<dyn GithubEpochClock>,
     deployments: Mutex<HashMap<DeploymentKey, CachedDeployment>>,
+    publications: Mutex<HashMap<DeploymentKey, DesiredDeploymentStatus>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -139,6 +140,7 @@ impl GithubPullRequestClient {
             api_base: api_base.trim_end_matches('/').to_string(),
             clock,
             deployments: Mutex::new(HashMap::new()),
+            publications: Mutex::new(HashMap::new()),
         }
     }
 
@@ -375,14 +377,7 @@ impl PullRequestApi for GithubPullRequestClient {
             environment_url: deployment.environment_url.clone(),
             log_url: deployment.log_url.clone(),
         };
-        if self
-            .deployments
-            .lock()
-            .await
-            .get(&key)
-            .is_some_and(|cached| cached.status == desired)
-            && deployment.state != PullRequestDeploymentState::Success
-        {
+        if self.publications.lock().await.get(&key) == Some(&desired) {
             return Ok(());
         }
 
@@ -433,6 +428,7 @@ impl PullRequestApi for GithubPullRequestClient {
                 .await?;
             }
         }
+        self.publications.lock().await.insert(key, desired);
         Ok(())
     }
 }

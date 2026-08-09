@@ -90,7 +90,7 @@ async fn lists_every_page_and_preserves_pull_request_eligibility_fields()
 }
 
 #[tokio::test]
-async fn creates_a_native_deployment_with_a_ready_environment_url()
+async fn creates_a_native_deployment_once_for_repeated_ready_feedback()
 -> Result<(), Box<dyn std::error::Error>> {
     let transport = Arc::new(FakeTransport::new(vec![
         json_response(200, b"[]".to_vec()),
@@ -115,12 +115,12 @@ async fn creates_a_native_deployment_with_a_ready_environment_url()
     ]));
     let client = client(transport.clone());
 
+    let deployment = deployment(PullRequestDeploymentState::Success);
     client
-        .publish_deployment(
-            "acme",
-            "api",
-            &deployment(PullRequestDeploymentState::Success),
-        )
+        .publish_deployment("acme", "api", &deployment)
+        .await?;
+    client
+        .publish_deployment("acme", "api", &deployment)
         .await?;
 
     let requests = transport.requests();
@@ -282,6 +282,9 @@ async fn a_successful_new_revision_retries_inactivating_the_previous_deployment(
         client.publish_deployment("acme", "api", &deployment).await,
         Err(PullRequestApiError::Unavailable { .. })
     ));
+    client
+        .publish_deployment("acme", "api", &deployment)
+        .await?;
     client
         .publish_deployment("acme", "api", &deployment)
         .await?;
