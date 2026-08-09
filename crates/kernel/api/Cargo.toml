@@ -1,6 +1,6 @@
 [package]
 name = "kernel-api"
-version = "0.6.53"
+version = "0.6.54"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
