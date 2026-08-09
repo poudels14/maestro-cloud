@@ -594,6 +594,58 @@ expression: document
         "description": "Stable identity of a Maestro cluster.",
         "type": "string"
       },
+      "ClusterInfo": {
+        "description": "Operator-facing summary of one cluster's durable node topology.",
+        "properties": {
+          "clusterId": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ClusterId"
+              }
+            ],
+            "description": "Stable identity that namespaces every cluster resource."
+          },
+          "controlPlaneNodeCount": {
+            "description": "Nodes capable of running cluster controllers.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "leaderNodeId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeId"
+              },
+              {
+                "enum": [
+                  null
+                ],
+                "nullable": true
+              }
+            ],
+            "description": "Node currently holding the live controller leadership lease."
+          },
+          "nodeCount": {
+            "description": "Number of declared node resources.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workloadNodeCount": {
+            "description": "Nodes eligible to receive workload assignments.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clusterId",
+          "nodeCount",
+          "controlPlaneNodeCount",
+          "workloadNodeCount"
+        ],
+        "type": "object"
+      },
       "CommandRequest": {
         "additionalProperties": false,
         "description": "Optimistic lifecycle command targeting one exact resource revision.",

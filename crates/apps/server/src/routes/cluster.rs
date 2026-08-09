@@ -6,6 +6,7 @@ use kernel_api::{
     BuiltinKind, ClusterInfo, DeploymentId, Node, NodeId, PlacementHistory, ServiceId,
     UnschedulableReplica,
 };
+use kernel_controller::{LeaderElector, LeadershipObservation, StoreLeaderElector};
 use kernel_store::Keyspace;
 use serde::Deserialize;
 
@@ -82,8 +83,18 @@ async fn list_unschedulable(
 
 async fn info(State(state): State<AppState>) -> Result<Json<ClusterInfo>, ApiError> {
     let nodes: Vec<Node> = resource::list(&state, BuiltinKind::Node).await?;
+    let keys = Keyspace::new(&state.cluster_id);
+    let leader_node_id = match StoreLeaderElector::new(state.store.clone(), keys.leader())
+        .observe()
+        .await
+        .map_err(|error| ApiError::internal(format!("failed to read cluster leader: {error}")))?
+    {
+        LeadershipObservation::Leader(identity) => Some(identity.node_id),
+        LeadershipObservation::Vacant => None,
+    };
     Ok(Json(ClusterInfo {
         cluster_id: state.cluster_id,
+        leader_node_id,
         node_count: count(nodes.iter().map(|_| ())),
         control_plane_node_count: count(
             nodes

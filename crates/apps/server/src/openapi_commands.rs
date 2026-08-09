@@ -4,32 +4,6 @@ use crate::openapi::get_operation;
 
 pub(crate) fn insert_command_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert(
-        "ClusterInfo".to_string(),
-        json!({
-            "type": "object",
-            "required": [
-                "clusterId",
-                "nodeCount",
-                "controlPlaneNodeCount",
-                "workloadNodeCount"
-            ],
-            "properties": {
-                "clusterId": {"$ref": "#/components/schemas/ClusterId"},
-                "nodeCount": {"type": "integer", "format": "uint64", "minimum": 0},
-                "controlPlaneNodeCount": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0
-                },
-                "workloadNodeCount": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0
-                }
-            }
-        }),
-    );
-    schemas.insert(
         "CommandRequest".to_string(),
         json!({
             "type": "object",

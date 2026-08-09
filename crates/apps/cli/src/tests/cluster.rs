@@ -270,6 +270,7 @@ fn api() -> Result<RecordingClusterApi, Box<dyn std::error::Error>> {
     Ok(RecordingClusterApi {
         info: ClusterInfo {
             cluster_id: ClusterId::new("test-cluster")?,
+            leader_node_id: Some(NodeId::new("node-a")?),
             node_count: 2,
             control_plane_node_count: 1,
             workload_node_count: 2,

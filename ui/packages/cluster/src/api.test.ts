@@ -141,6 +141,7 @@ test("selects the newest active upgrade when composing cluster info", async () =
       return {
         clusterId: "cluster-a",
         controlPlaneNodeCount: 1,
+        leaderNodeId: "node-a",
         nodeCount: 1,
         workloadNodeCount: 1
       };
@@ -163,6 +164,7 @@ test("selects the newest active upgrade when composing cluster info", async () =
   const info = await api.getInfo();
 
   expect(info.activeUpgrade?.meta.id).toBe("active");
+  expect(info.leaderNodeId).toBe("node-a");
   expect(info.nodes[0]?.nodeId).toBe("node-a");
 });
 

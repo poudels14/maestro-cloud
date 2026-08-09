@@ -1533,13 +1533,26 @@ export interface components {
         };
         /** @description Stable identity of a Maestro cluster. */
         ClusterId: string;
+        /** @description Operator-facing summary of one cluster's durable node topology. */
         ClusterInfo: {
+            /** @description Stable identity that namespaces every cluster resource. */
             clusterId: components["schemas"]["ClusterId"];
-            /** Format: uint64 */
+            /**
+             * Format: uint64
+             * @description Nodes capable of running cluster controllers.
+             */
             controlPlaneNodeCount: number;
-            /** Format: uint64 */
+            /** @description Node currently holding the live controller leadership lease. */
+            leaderNodeId?: components["schemas"]["NodeId"] | (null);
+            /**
+             * Format: uint64
+             * @description Number of declared node resources.
+             */
             nodeCount: number;
-            /** Format: uint64 */
+            /**
+             * Format: uint64
+             * @description Nodes eligible to receive workload assignments.
+             */
             workloadNodeCount: number;
         };
         ClusterLogCursor: {

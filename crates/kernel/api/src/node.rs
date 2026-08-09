@@ -15,6 +15,8 @@ use crate::{
 pub struct ClusterInfo {
     /// Stable identity that namespaces every cluster resource.
     pub cluster_id: ClusterId,
+    /// Node currently holding the live controller leadership lease.
+    pub leader_node_id: Option<NodeId>,
     /// Number of declared node resources.
     pub node_count: u64,
     /// Nodes capable of running cluster controllers.

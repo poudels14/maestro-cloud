@@ -1,8 +1,9 @@
 use axum::http::StatusCode;
 use kernel_api::{
-    AssignmentId, ClusterInfo, DeploymentId, NodeId, Object, PlacementHistory,
+    AssignmentId, ClusterInfo, DeploymentId, NodeId, NodeInstanceId, Object, PlacementHistory,
     PlacementHistorySpec, PlacementHistoryStatus, ServiceId, Timestamp, UnschedulableReplica,
 };
+use kernel_controller::LeaderIdentity;
 use kernel_store::{CasOutcome, ExpectedVersion, Keyspace, PutRequest, Store};
 
 use crate::{ApiServer, ServerSettings};
@@ -24,11 +25,41 @@ async fn cluster_info_summarizes_node_capabilities() -> Result<(), Box<dyn std::
         decode::<ClusterInfo>(response).await?,
         ClusterInfo {
             cluster_id,
+            leader_node_id: None,
             node_count: 1,
             control_plane_node_count: 1,
             workload_node_count: 1,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cluster_info_reports_the_current_elected_master() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (store, cluster_id) = seeded_store().await?;
+    let leader = LeaderIdentity {
+        node_id: NodeId::new("node-1")?,
+        instance_id: NodeInstanceId::new("instance-1")?,
+    };
+    let outcome = store
+        .put_cas(PutRequest {
+            key: Keyspace::new(&cluster_id).leader(),
+            value: serde_json::to_vec(&leader)?,
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(outcome, CasOutcome::Applied(_)));
+    let server = ApiServer::new(
+        store,
+        cluster_id,
+        ServerSettings::new("127.0.0.1:3000".parse()?, None),
+    )?;
+
+    let info: ClusterInfo = decode(request(&server, "/api/cluster", None).await?).await?;
+
+    assert_eq!(info.leader_node_id, Some(NodeId::new("node-1")?));
     Ok(())
 }
 

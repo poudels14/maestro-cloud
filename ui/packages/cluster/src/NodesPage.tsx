@@ -2,14 +2,15 @@ import { For, Show, createSignal } from "solid-js";
 import { useQuery } from "@maestro/sdk";
 import clsx from "clsx";
 import type { ClusterApi } from "./api";
-import { clusterNodesQuery } from "./queries";
+import { isCurrentMaster } from "./leadership";
+import { clusterInfoQuery } from "./queries";
 import type { ClusterNode } from "./types";
 
 const nodeGridClass =
-  "grid min-w-[46rem] grid-cols-[minmax(10rem,1.6fr)_4.5rem_4.25rem_minmax(7.5rem,1fr)_minmax(7.5rem,1fr)_5.5rem] gap-3";
+  "grid min-w-[49rem] grid-cols-[minmax(13rem,1.8fr)_7rem_4.25rem_minmax(7.5rem,1fr)_minmax(7.5rem,1fr)_5.5rem] gap-3";
 
 function NodesPage(props: { api: ClusterApi }) {
-  const nodes = useQuery(() => clusterNodesQuery(props.api));
+  const cluster = useQuery(() => clusterInfoQuery(props.api, { pollForMaintenance: true }));
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -18,7 +19,7 @@ function NodesPage(props: { api: ClusterApi }) {
     setError(null);
     try {
       await props.api.setNodeDrain(node, drain);
-      await nodes.refetch();
+      await cluster.refetch();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -42,13 +43,13 @@ function NodesPage(props: { api: ClusterApi }) {
             class={`${nodeGridClass} border-b border-gray-200 bg-gray-50 px-4 py-2 text-[11px] font-medium text-gray-500`}
           >
             <span>Node</span>
-            <span>Role</span>
+            <span>Configured role</span>
             <span>Version</span>
             <span>Address</span>
             <span>Workload network</span>
             <span class="text-right">Action</span>
           </div>
-          <For each={nodes.data ?? []}>
+          <For each={cluster.data?.nodes ?? []}>
             {(node) => (
               <div
                 class={`${nodeGridClass} items-center border-b border-gray-100 px-4 py-3 text-xs last:border-b-0`}
@@ -63,6 +64,14 @@ function NodesPage(props: { api: ClusterApi }) {
                       })}
                     />
                     <span class="truncate font-medium text-gray-800">{node.hostname}</span>
+                    <Show when={isCurrentMaster(node.nodeId, cluster.data?.leaderNodeId)}>
+                      <span
+                        class="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-indigo-700"
+                        title="Current elected master"
+                      >
+                        CURRENT MASTER
+                      </span>
+                    </Show>
                   </div>
                   <div class="mt-1 truncate font-mono text-[10px] text-gray-400">{node.nodeId}</div>
                   <Show when={node.state.reason || node.dataPlaneError}>
@@ -107,7 +116,7 @@ function NodesPage(props: { api: ClusterApi }) {
               </div>
             )}
           </For>
-          <Show when={!nodes.isLoading && (nodes.data?.length ?? 0) === 0}>
+          <Show when={!cluster.isLoading && (cluster.data?.nodes.length ?? 0) === 0}>
             <div class="px-4 py-12 text-center text-sm text-gray-400">No cluster nodes found.</div>
           </Show>
         </div>
