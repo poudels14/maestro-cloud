@@ -33,6 +33,11 @@ impl FileStoreRecoveryMarker {
         }
     }
 
+    /// Returns the kernel identity shared by every process in the current host boot.
+    pub fn current_boot_id(&self) -> Result<String, StoreRecoveryMarkerError> {
+        self.boot_id()
+    }
+
     #[cfg(test)]
     pub(crate) fn with_boot_id_path(data_directory: &Path, boot_id_path: PathBuf) -> Self {
         Self {

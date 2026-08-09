@@ -259,6 +259,7 @@ impl World {
                     };
                     let mut staged = command.clone();
                     staged.state = state;
+                    staged.staged_boot_id = Some(format!("boot-{}", staged.node_id));
                     self.replace_command(staged).await?;
                 }
                 if matches!(&outcome, AgentOutcome::Rejected { .. }) {
@@ -414,6 +415,7 @@ fn command_for(
         operation: request.operation,
         target_version: request.target_version.clone(),
         previous_instance_id: target.previous_instance_id.clone(),
+        staged_boot_id: (state != NodeUpgradeCommandState::Requested).then(|| "boot-1".to_owned()),
         store_recovery: request.store_recovery.clone(),
         state,
         failure: None,

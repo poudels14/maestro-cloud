@@ -44,11 +44,11 @@ async fn agent_stages_then_reboots_only_after_collective_release()
         .await?;
     assert_eq!(
         world.agent.reconcile_once().await?,
-        NodeUpgradeAgentAction::RestartAccepted
+        NodeUpgradeAgentAction::RebootRequested
     );
     assert_eq!(
         world.command().await?.state,
-        NodeUpgradeCommandState::Restarting
+        NodeUpgradeCommandState::Released
     );
     assert_eq!(world.rebooter.calls(), 1);
     Ok(())
@@ -71,7 +71,11 @@ async fn restart_operation_skips_nixos_staging_and_reboots_after_release()
         .await?;
     assert_eq!(
         world.agent.reconcile_once().await?,
-        NodeUpgradeAgentAction::RestartAccepted
+        NodeUpgradeAgentAction::RebootRequested
+    );
+    assert_eq!(
+        world.command().await?.state,
+        NodeUpgradeCommandState::Released
     );
     assert_eq!(world.rebooter.calls(), 1);
     Ok(())
@@ -140,7 +144,7 @@ async fn agent_clears_a_canceled_command_without_host_mutation()
 }
 
 #[tokio::test]
-async fn new_daemon_identity_acknowledges_a_released_reboot_without_repeating_it()
+async fn new_daemon_process_in_the_same_boot_reissues_the_reboot()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new(NodeInstanceId::new("instance-node-1-new")?).await?;
     world
@@ -149,9 +153,30 @@ async fn new_daemon_identity_acknowledges_a_released_reboot_without_repeating_it
 
     assert_eq!(
         world.agent.reconcile_once().await?,
-        NodeUpgradeAgentAction::RestartAccepted
+        NodeUpgradeAgentAction::RebootRequested
     );
 
+    assert_eq!(
+        world.command().await?.state,
+        NodeUpgradeCommandState::Released
+    );
+    assert_eq!(world.rebooter.calls(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_boot_identity_acknowledges_the_reboot_without_repeating_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world =
+        World::new_with_boot_id(NodeInstanceId::new("instance-node-1-new")?, "boot-2").await?;
+    world
+        .set_command_state(NodeUpgradeCommandState::Released)
+        .await?;
+
+    assert_eq!(
+        world.agent.reconcile_once().await?,
+        NodeUpgradeAgentAction::RestartObserved
+    );
     assert_eq!(
         world.command().await?.state,
         NodeUpgradeCommandState::Restarting
@@ -240,9 +265,24 @@ impl World {
         Self::with_staging(instance_id, false).await
     }
 
+    async fn new_with_boot_id(
+        instance_id: NodeInstanceId,
+        boot_id: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_staging_and_boot_id(instance_id, true, boot_id).await
+    }
+
     async fn with_staging(
         instance_id: NodeInstanceId,
         staging_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_staging_and_boot_id(instance_id, staging_enabled, "boot-1").await
+    }
+
+    async fn with_staging_and_boot_id(
+        instance_id: NodeInstanceId,
+        staging_enabled: bool,
+        boot_id: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let cluster_id = ClusterId::new("agent-test")?;
         let node_id = NodeId::new("node-1")?;
@@ -272,6 +312,7 @@ impl World {
                 cluster_id,
                 node_id,
                 instance_id,
+                boot_id: boot_id.to_owned(),
                 running_version: Version::new(1, 0, 0),
                 resync_interval: Duration::from_secs(1),
             },
@@ -312,6 +353,14 @@ impl World {
         let stored = self.store.get(&key).await?.ok_or("command missing")?;
         let mut command: NodeUpgradeCommand = serde_json::from_slice(&stored.value)?;
         command.state = state;
+        if matches!(
+            state,
+            NodeUpgradeCommandState::Staged
+                | NodeUpgradeCommandState::Released
+                | NodeUpgradeCommandState::Restarting
+        ) {
+            command.staged_boot_id = Some("boot-1".to_owned());
+        }
         command.failure = None;
         replace(
             &self.store,
@@ -485,6 +534,7 @@ fn command(
         operation: kernel_api::UpgradeOperation::Upgrade,
         target_version: "2.0.0".to_string(),
         previous_instance_id: NodeInstanceId::new("instance-node-1")?,
+        staged_boot_id: (state != NodeUpgradeCommandState::Requested).then(|| "boot-1".to_owned()),
         store_recovery: None,
         state,
         failure: None,

@@ -68,12 +68,17 @@ pub(crate) fn build_node_upgrade_agent<MeshBackendType, FirewallBackendType, Bri
     let Some(dependencies) = factory.node_upgrade.as_ref() else {
         return Ok(None);
     };
+    let boot_id = dependencies
+        .recovery_marker
+        .current_boot_id()
+        .map_err(|error| role_error("read current host boot identity", error))?;
     NodeUpgradeAgent::new(
         store,
         NodeUpgradeAgentSettings {
             cluster_id: plan.cluster().cluster_id.clone(),
             node_id: spec.node_id.clone(),
             instance_id: factory.instance_id().clone(),
+            boot_id,
             running_version: factory.running_version.clone(),
             resync_interval: factory.settings.upgrade_resync_interval,
         },

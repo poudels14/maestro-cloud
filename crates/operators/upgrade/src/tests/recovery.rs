@@ -40,6 +40,7 @@ fn command() -> Result<NodeUpgradeCommand, kernel_api::InvalidIdentifier> {
         operation: UpgradeOperation::Upgrade,
         target_version: "2.0.0".to_owned(),
         previous_instance_id: NodeInstanceId::new("instance-1")?,
+        staged_boot_id: None,
         store_recovery: Some(PlannedStoreRecovery {
             canonical_node_id: node_id.clone(),
             expected_members: [node_id, NodeId::new("node-2")?, NodeId::new("node-3")?]

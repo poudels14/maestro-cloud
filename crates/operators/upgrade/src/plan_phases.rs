@@ -11,7 +11,7 @@ use crate::conditions::{
     MaintenanceAction, has_foreign_maintenance, set_maintenance, set_ready_condition,
 };
 use crate::plan_support::{
-    duration_between, maintenance_order, parse_node_version, plan, selected_nodes,
+    add_duration, duration_between, maintenance_order, parse_node_version, plan, selected_nodes,
     start_next_batch, status_ids, status_indices, transition, transition_statuses,
     validate_live_nodes, validate_quorum,
 };
@@ -433,6 +433,7 @@ pub(crate) fn plan_verification(
             phase: UpgradePhase::Verifying,
         });
     }
+    let mut lagging = Vec::new();
     for index in &verifying {
         let status = run
             .status
@@ -444,15 +445,73 @@ pub(crate) fn plan_verification(
             .ok_or_else(|| UpgradePlanError::NodeMissing {
                 node_id: status.node_id.clone(),
             })?;
-        let version_pending =
-            operation == UpgradeOperation::Upgrade && parse_node_version(node)? < *target;
-        if !input.live_nodes.contains(&status.node_id) || version_pending {
+        if !input.live_nodes.contains(&status.node_id) {
             return Ok(plan(
                 run,
                 Vec::new(),
                 UpgradePlanAction::Requeue(settings.observation_interval),
             ));
         }
+        let version = parse_node_version(node)?;
+        if operation == UpgradeOperation::Upgrade && version < *target {
+            lagging.push((
+                *index,
+                status.node_id.clone(),
+                node.status.instance_id.clone(),
+                node.status.version.clone(),
+            ));
+        }
+    }
+    if !lagging.is_empty() {
+        let summary = lagging
+            .iter()
+            .map(|(_, node_id, _, version)| format!("{node_id} ({version})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if lagging.iter().any(|(index, _, _, _)| {
+            run.status
+                .nodes
+                .get(*index)
+                .is_some_and(|status| status.attempts >= settings.max_attempts)
+        }) {
+            return fail_run(
+                run,
+                nodes,
+                input.now,
+                "UpgradeVerificationRetriesExhausted",
+                format!(
+                    "nodes returned below target {target} after {} attempts: {summary}",
+                    settings.max_attempts
+                ),
+            );
+        }
+        let retry_at = add_duration(input.now, settings.retry_delay);
+        for (index, _, instance_id, version) in &lagging {
+            let status = run
+                .status
+                .nodes
+                .get_mut(*index)
+                .ok_or(UpgradePlanError::CorruptStatusIndex)?;
+            status.phase = transition(status.phase, UpgradePhase::Applying)?;
+            status.previous_instance_id = Some(instance_id.clone());
+            status.observed_version = Some(version.clone());
+            status.retry_at = Some(retry_at);
+        }
+        run.status.phase = transition(run.status.phase, UpgradePhase::Applying)?;
+        set_ready_condition(
+            &mut run,
+            ConditionState::False,
+            "UpgradeVerificationRetry",
+            &format!(
+                "nodes returned below target {target}; restaging after verification: {summary}"
+            ),
+            input.now,
+        );
+        return Ok(plan(
+            run,
+            Vec::new(),
+            UpgradePlanAction::Requeue(settings.retry_delay),
+        ));
     }
     let mut updates = BTreeMap::new();
     for index in &verifying {
@@ -557,8 +616,15 @@ pub(crate) fn fail_run(
     reason: &str,
     message: String,
 ) -> Result<UpgradePlan, UpgradePlanError> {
-    let applying = status_indices(&run, UpgradePhase::Applying);
-    transition_statuses(&mut run, &applying, UpgradePhase::Failed)?;
+    for phase in [
+        UpgradePhase::Draining,
+        UpgradePhase::Applying,
+        UpgradePhase::Restarting,
+        UpgradePhase::Verifying,
+    ] {
+        let active = status_indices(&run, phase);
+        transition_statuses(&mut run, &active, UpgradePhase::Failed)?;
+    }
     let pending = status_indices(&run, UpgradePhase::Pending);
     transition_statuses(&mut run, &pending, UpgradePhase::Canceled)?;
     run.status.phase = transition(run.status.phase, UpgradePhase::Failed)?;

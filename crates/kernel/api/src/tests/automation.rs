@@ -78,7 +78,10 @@ fn upgrade_transition_matrix_is_exhaustive() {
                         UpgradePhase::Verifying | UpgradePhase::Failed
                     ) | (
                         UpgradePhase::Verifying,
-                        UpgradePhase::Draining | UpgradePhase::Completed | UpgradePhase::Failed
+                        UpgradePhase::Draining
+                            | UpgradePhase::Applying
+                            | UpgradePhase::Completed
+                            | UpgradePhase::Failed
                     ) | (
                         UpgradePhase::Failed,
                         UpgradePhase::Pending | UpgradePhase::Canceled

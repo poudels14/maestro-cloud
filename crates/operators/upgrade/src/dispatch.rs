@@ -28,7 +28,7 @@ pub enum NodeUpgradeCommandState {
     Staged,
     /// The active leader atomically released every target in the batch.
     Released,
-    /// The node accepted its reboot and is expected to return with a new identity.
+    /// A daemon running after the reboot observed a different kernel boot identity.
     Restarting,
     /// Node-local staging or reboot policy failed before restart acceptance.
     Failed,
@@ -71,6 +71,9 @@ pub struct NodeUpgradeCommand {
     pub target_version: String,
     /// Daemon identity observed before the operator drained this node.
     pub previous_instance_id: NodeInstanceId,
+    /// Kernel boot identity captured after staging and before collective reboot release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged_boot_id: Option<String>,
     /// Planned recovery shared by the complete control-plane reboot batch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store_recovery: Option<crate::PlannedStoreRecovery>,
@@ -90,6 +93,7 @@ impl NodeUpgradeCommand {
             operation: request.operation,
             target_version: request.target_version.clone(),
             previous_instance_id: target.previous_instance_id.clone(),
+            staged_boot_id: None,
             store_recovery: request.store_recovery.clone(),
             state: NodeUpgradeCommandState::Requested,
             failure: None,

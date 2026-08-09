@@ -242,6 +242,130 @@ fn all_node_mode_rejects_a_quorum_batch_that_omits_a_voter() {
 }
 
 #[test]
+fn wrong_generation_boot_is_reapplied_and_eventually_completes() -> Result<(), String> {
+    let settings = settings(3);
+    let mut nodes = topology_three_voters();
+    let initialized = plan_upgrade(
+        input(run(UpgradeMode::AllNodes), &nodes, Vec::new(), 10_000),
+        settings,
+    )
+    .expect("initialize all-node upgrade");
+    apply_updates(&mut nodes, initialized.node_updates);
+    let applying = plan_upgrade(input(initialized.run, &nodes, Vec::new(), 10_000), settings)
+        .expect("finish all-node drain");
+    let restarting = record_dispatch_outcome(
+        input(applying.run, &nodes, Vec::new(), 10_000),
+        settings,
+        UpgradeDispatchOutcome::Accepted,
+    )
+    .expect("record first accepted dispatch");
+
+    for node_id in ["node-1", "node-2", "node-3"] {
+        restart_node(&mut nodes, node_id);
+    }
+    let verifying = plan_upgrade(input(restarting.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("observe rebooted daemons on the old generation");
+    let retry = plan_upgrade(input(verifying.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("schedule another staging attempt");
+
+    assert_eq!(retry.run.status.phase, UpgradePhase::Applying);
+    assert!(retry.run.status.nodes.iter().all(|status| {
+        status.phase == UpgradePhase::Applying
+            && status.attempts == 1
+            && status.retry_at == Some(Timestamp(16_000))
+    }));
+    assert!(retry.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "UpgradeVerificationRetry"
+            && condition.message.contains("node-1 (1.0.0)")
+            && condition.state == ConditionState::False
+    }));
+
+    let dispatch = plan_upgrade(
+        input(retry.run.clone(), &nodes, Vec::new(), 16_000),
+        settings,
+    )
+    .expect("dispatch second attempt after retry delay");
+    let UpgradePlanAction::Dispatch(request) = dispatch.action else {
+        return Err("verification retry did not emit a dispatch".to_string());
+    };
+    assert!(request.targets.iter().all(|target| {
+        nodes.iter().any(|node| {
+            node.meta.id == target.node_id && node.status.instance_id == target.previous_instance_id
+        })
+    }));
+
+    let restarting = record_dispatch_outcome(
+        input(retry.run, &nodes, Vec::new(), 16_000),
+        settings,
+        UpgradeDispatchOutcome::Accepted,
+    )
+    .expect("record second accepted dispatch");
+    for node_id in ["node-1", "node-2", "node-3"] {
+        upgrade_node(&mut nodes, node_id);
+    }
+    let verifying = plan_upgrade(input(restarting.run, &nodes, Vec::new(), 17_000), settings)
+        .expect("observe daemons on the target generation");
+    let completed = plan_upgrade(input(verifying.run, &nodes, Vec::new(), 17_000), settings)
+        .expect("complete the retried upgrade");
+
+    assert_eq!(completed.run.status.phase, UpgradePhase::Completed);
+    assert!(
+        completed
+            .run
+            .status
+            .nodes
+            .iter()
+            .all(|status| { status.phase == UpgradePhase::Completed && status.attempts == 2 })
+    );
+    apply_updates(&mut nodes, completed.node_updates);
+    assert!(maintained_nodes(&nodes).is_empty());
+    Ok(())
+}
+
+#[test]
+fn wrong_generation_boot_exhaustion_fails_and_releases_maintenance() {
+    let settings = settings(1);
+    let mut nodes = topology_three_voters();
+    let initialized = plan_upgrade(
+        input(run(UpgradeMode::AllNodes), &nodes, Vec::new(), 10_000),
+        settings,
+    )
+    .expect("initialize all-node upgrade");
+    apply_updates(&mut nodes, initialized.node_updates);
+    let applying = plan_upgrade(input(initialized.run, &nodes, Vec::new(), 10_000), settings)
+        .expect("finish all-node drain");
+    let restarting = record_dispatch_outcome(
+        input(applying.run, &nodes, Vec::new(), 10_000),
+        settings,
+        UpgradeDispatchOutcome::Accepted,
+    )
+    .expect("record accepted dispatch");
+    for node_id in ["node-1", "node-2", "node-3"] {
+        restart_node(&mut nodes, node_id);
+    }
+    let verifying = plan_upgrade(input(restarting.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("observe rebooted daemons on the old generation");
+    let failed = plan_upgrade(input(verifying.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("exhaust verification retry budget");
+
+    assert_eq!(failed.run.status.phase, UpgradePhase::Failed);
+    assert!(
+        failed
+            .run
+            .status
+            .nodes
+            .iter()
+            .all(|status| status.phase == UpgradePhase::Failed)
+    );
+    assert!(failed.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "UpgradeVerificationRetriesExhausted"
+            && condition.state == ConditionState::False
+    }));
+    apply_updates(&mut nodes, failed.node_updates);
+    assert!(maintained_nodes(&nodes).is_empty());
+}
+
+#[test]
 fn rolling_restart_selects_satisfied_nodes_and_preserves_their_versions() {
     let settings = settings(2);
     let mut nodes = topology_three_voters();

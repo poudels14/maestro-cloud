@@ -167,7 +167,7 @@ impl UpgradePhase {
                     | (Self::Restarting, Self::Verifying | Self::Failed)
                     | (
                         Self::Verifying,
-                        Self::Draining | Self::Completed | Self::Failed
+                        Self::Draining | Self::Applying | Self::Completed | Self::Failed
                     )
                     | (Self::Failed, Self::Pending | Self::Canceled)
             )

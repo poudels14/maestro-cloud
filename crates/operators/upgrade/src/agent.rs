@@ -29,6 +29,8 @@ pub struct NodeUpgradeAgentSettings {
     pub node_id: NodeId,
     /// Identity of this exact daemon process.
     pub instance_id: NodeInstanceId,
+    /// Kernel identity shared by daemon processes in the current host boot.
+    pub boot_id: String,
     /// Semantic version reported by this daemon process.
     pub running_version: Version,
     /// Level-triggered command resync interval.
@@ -40,6 +42,8 @@ impl NodeUpgradeAgentSettings {
     pub fn validate(self) -> Result<Self, NodeUpgradeAgentSettingsError> {
         if self.resync_interval.is_zero() {
             Err(NodeUpgradeAgentSettingsError::ZeroResyncInterval)
+        } else if self.boot_id.trim().is_empty() {
+            Err(NodeUpgradeAgentSettingsError::EmptyBootId)
         } else {
             Ok(self)
         }
@@ -52,6 +56,9 @@ pub enum NodeUpgradeAgentSettingsError {
     /// A zero resync interval would continuously poll the store.
     #[error("node upgrade agent resync interval must be greater than zero")]
     ZeroResyncInterval,
+    /// A process identity cannot prove that the host crossed a reboot boundary.
+    #[error("node upgrade agent boot identity must not be empty")]
+    EmptyBootId,
 }
 
 /// Result of one bounded node-local command reconciliation pass.
@@ -63,8 +70,10 @@ pub enum NodeUpgradeAgentAction {
     Waiting,
     /// A boot generation was staged and acknowledged without releasing reboot.
     Staged,
-    /// The released reboot was accepted or already observed under a new identity.
-    RestartAccepted,
+    /// The host manager accepted the reboot request; boot completion is not yet proven.
+    RebootRequested,
+    /// A changed kernel boot identity proved that the requested reboot completed.
+    RestartObserved,
     /// A stale or terminal command was removed without host mutation.
     Cleared,
     /// A matchable node-local failure was persisted for the active leader.
@@ -180,7 +189,7 @@ impl NodeUpgradeAgent {
     async fn stage(
         &self,
         stored: StoredValue,
-        command: NodeUpgradeCommand,
+        mut command: NodeUpgradeCommand,
     ) -> Result<NodeUpgradeAgentAction, NodeUpgradeAgentError> {
         let target = (command.operation == UpgradeOperation::Upgrade)
             .then(|| parse_target(&command))
@@ -235,6 +244,7 @@ impl NodeUpgradeAgent {
                 )
                 .await;
         }
+        command.staged_boot_id = Some(self.settings.boot_id.clone());
         self.transition(
             stored,
             command,
@@ -250,7 +260,23 @@ impl NodeUpgradeAgent {
         stored: StoredValue,
         command: NodeUpgradeCommand,
     ) -> Result<NodeUpgradeAgentAction, NodeUpgradeAgentError> {
-        let result = if self.settings.instance_id == command.previous_instance_id {
+        let staged_boot_id = command.staged_boot_id.as_deref().ok_or_else(|| {
+            NodeUpgradeAgentError::MalformedCommand {
+                message: "released command has no staged boot identity".to_string(),
+            }
+        })?;
+        if staged_boot_id != self.settings.boot_id {
+            return self
+                .transition(
+                    stored,
+                    command,
+                    NodeUpgradeCommandState::Restarting,
+                    None,
+                    NodeUpgradeAgentAction::RestartObserved,
+                )
+                .await;
+        }
+        let result = {
             if let Some(marker) = &self.recovery_marker
                 && let Err(error) = marker.release(&self.settings.cluster_id, &command)
             {
@@ -279,20 +305,9 @@ impl NodeUpgradeAgent {
                     .await;
             }
             self.rebooter.reboot().await
-        } else {
-            Ok(())
         };
         match result {
-            Ok(()) => {
-                self.transition(
-                    stored,
-                    command,
-                    NodeUpgradeCommandState::Restarting,
-                    None,
-                    NodeUpgradeAgentAction::RestartAccepted,
-                )
-                .await
-            }
+            Ok(()) => Ok(NodeUpgradeAgentAction::RebootRequested),
             Err(error) => {
                 let mut message = error.to_string();
                 if let Some(marker) = &self.recovery_marker
@@ -439,6 +454,24 @@ fn decode_command(
     if !failure_matches_state {
         return Err(NodeUpgradeAgentError::MalformedCommand {
             message: "command has inconsistent failure state".to_string(),
+        });
+    }
+    let boot_identity_matches_state = match command.state {
+        NodeUpgradeCommandState::Requested => command.staged_boot_id.is_none(),
+        NodeUpgradeCommandState::Staged
+        | NodeUpgradeCommandState::Released
+        | NodeUpgradeCommandState::Restarting => command
+            .staged_boot_id
+            .as_deref()
+            .is_some_and(|boot_id| !boot_id.trim().is_empty()),
+        NodeUpgradeCommandState::Failed => command
+            .staged_boot_id
+            .as_deref()
+            .is_none_or(|boot_id| !boot_id.trim().is_empty()),
+    };
+    if !boot_identity_matches_state {
+        return Err(NodeUpgradeAgentError::MalformedCommand {
+            message: "command has inconsistent staged boot identity".to_string(),
         });
     }
     Ok(command)
