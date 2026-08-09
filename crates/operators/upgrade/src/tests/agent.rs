@@ -215,6 +215,7 @@ async fn agent_collects_restart_command_after_the_run_begins_verification()
     world
         .set_command_state(NodeUpgradeCommandState::Restarting)
         .await?;
+    world.clear_staged_boot_id().await?;
     world.set_run_phase(UpgradePhase::Verifying).await?;
 
     assert_eq!(
@@ -222,6 +223,35 @@ async fn agent_collects_restart_command_after_the_run_begins_verification()
         NodeUpgradeAgentAction::Cleared
     );
     assert!(world.command_optional().await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_command_without_boot_identity_fails_without_stopping_the_agent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(NodeInstanceId::new("instance-node-1")?).await?;
+    world
+        .set_command_state(NodeUpgradeCommandState::Released)
+        .await?;
+    world.clear_staged_boot_id().await?;
+
+    assert_eq!(
+        world.agent.reconcile_once().await?,
+        NodeUpgradeAgentAction::Failed
+    );
+    let command = world.command().await?;
+    assert_eq!(command.state, NodeUpgradeCommandState::Failed);
+    assert_eq!(
+        command.failure,
+        Some(NodeUpgradeCommandFailure::Rejected {
+            message: "command has inconsistent staged boot identity".to_string(),
+        })
+    );
+    assert_eq!(world.rebooter.calls(), 0);
+    assert_eq!(
+        world.agent.reconcile_once().await?,
+        NodeUpgradeAgentAction::Waiting
+    );
     Ok(())
 }
 
@@ -362,6 +392,20 @@ impl World {
             command.staged_boot_id = Some("boot-1".to_owned());
         }
         command.failure = None;
+        replace(
+            &self.store,
+            key,
+            stored.version,
+            serde_json::to_vec(&command)?,
+        )
+        .await
+    }
+
+    async fn clear_staged_boot_id(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let key = self.keys.node_upgrade_command(&NodeId::new("node-1")?);
+        let stored = self.store.get(&key).await?.ok_or("command missing")?;
+        let mut command: NodeUpgradeCommand = serde_json::from_slice(&stored.value)?;
+        command.staged_boot_id = None;
         replace(
             &self.store,
             key,

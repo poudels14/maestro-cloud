@@ -43,6 +43,7 @@ impl NodeUpgradeCommandState {
                 (Self::Requested, Self::Staged | Self::Failed)
                     | (Self::Staged, Self::Released | Self::Failed)
                     | (Self::Released, Self::Restarting | Self::Failed)
+                    | (Self::Restarting, Self::Failed)
             )
     }
 }

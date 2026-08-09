@@ -40,6 +40,9 @@ fn node_upgrade_command_transition_matrix_is_exhaustive() {
                     ) | (
                         NodeUpgradeCommandState::Released,
                         NodeUpgradeCommandState::Restarting | NodeUpgradeCommandState::Failed
+                    ) | (
+                        NodeUpgradeCommandState::Restarting,
+                        NodeUpgradeCommandState::Failed
                     )
                 );
             assert_eq!(

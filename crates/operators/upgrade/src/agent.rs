@@ -130,13 +130,27 @@ impl NodeUpgradeAgent {
         let Some(stored) = self.store.get(&self.command_key).await? else {
             return Ok(NodeUpgradeAgentAction::Idle);
         };
-        let command = decode_command(&stored, &self.settings.node_id)?;
+        let command = match decode_command(&stored, &self.settings.node_id) {
+            Ok(command) => command,
+            Err(NodeUpgradeAgentError::MalformedCommand { message }) => {
+                tracing::error!(
+                    node_id = %self.settings.node_id,
+                    error = %message,
+                    "discarding malformed node upgrade command"
+                );
+                return self.delete(stored).await;
+            }
+            Err(error) => return Err(error),
+        };
         let run = self.load_run(&command).await?;
         if should_clear(&command, run.as_ref()) {
             if let Some(marker) = &self.recovery_marker {
                 marker.clear(&command.run_id)?;
             }
             return self.delete(stored).await;
+        }
+        if let Err(message) = validate_command(&command) {
+            return self.reject_command(stored, command, message).await;
         }
         if !command_is_active(&command, run.as_ref()) {
             return Ok(NodeUpgradeAgentAction::Waiting);
@@ -352,6 +366,29 @@ impl NodeUpgradeAgent {
         .await
     }
 
+    async fn reject_command(
+        &self,
+        stored: StoredValue,
+        mut command: NodeUpgradeCommand,
+        message: String,
+    ) -> Result<NodeUpgradeAgentAction, NodeUpgradeAgentError> {
+        if command
+            .staged_boot_id
+            .as_deref()
+            .is_some_and(|boot_id| boot_id.trim().is_empty())
+        {
+            command.staged_boot_id = None;
+        }
+        self.transition(
+            stored,
+            command,
+            NodeUpgradeCommandState::Failed,
+            Some(NodeUpgradeCommandFailure::Rejected { message }),
+            NodeUpgradeAgentAction::Failed,
+        )
+        .await
+    }
+
     async fn transition(
         &self,
         stored: StoredValue,
@@ -449,12 +486,14 @@ fn decode_command(
             ),
         });
     }
+    Ok(command)
+}
+
+fn validate_command(command: &NodeUpgradeCommand) -> Result<(), String> {
     let failure_matches_state =
         (command.state == NodeUpgradeCommandState::Failed) == command.failure.is_some();
     if !failure_matches_state {
-        return Err(NodeUpgradeAgentError::MalformedCommand {
-            message: "command has inconsistent failure state".to_string(),
-        });
+        return Err("command has inconsistent failure state".to_string());
     }
     let boot_identity_matches_state = match command.state {
         NodeUpgradeCommandState::Requested => command.staged_boot_id.is_none(),
@@ -470,11 +509,15 @@ fn decode_command(
             .is_none_or(|boot_id| !boot_id.trim().is_empty()),
     };
     if !boot_identity_matches_state {
-        return Err(NodeUpgradeAgentError::MalformedCommand {
-            message: "command has inconsistent staged boot identity".to_string(),
-        });
+        return Err("command has inconsistent staged boot identity".to_string());
     }
-    Ok(command)
+    Version::parse(command.target_version.trim()).map_err(|error| {
+        format!(
+            "invalid target version `{}`: {error}",
+            command.target_version
+        )
+    })?;
+    Ok(())
 }
 
 fn command_is_active(command: &NodeUpgradeCommand, run: Option<&UpgradeRun>) -> bool {
