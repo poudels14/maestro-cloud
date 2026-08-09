@@ -554,6 +554,7 @@ impl DeploymentPhase {
                     | Self::PendingReady
                     | Self::Retrying
                     | Self::Recovering
+                    | Self::Stopped
             ),
             Self::Recovering => matches!(
                 self,

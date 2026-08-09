@@ -222,6 +222,7 @@ fn deployment_transition_matrix_matches_the_harvested_lifecycle() {
                         | DeploymentPhase::PendingReady
                         | DeploymentPhase::Retrying
                         | DeploymentPhase::Recovering
+                        | DeploymentPhase::Stopped
                 ),
                 DeploymentPhase::Recovering => matches!(
                     current,

@@ -752,6 +752,45 @@ fn planned_shutdown_stops_then_recovers_the_same_active_deployment() {
 }
 
 #[test]
+fn planned_shutdown_can_recover_directly_to_ready() {
+    let mut service = service(Generation(1), RolloutState::Active);
+    let mut deployment = deployment(&service, DeploymentPhase::Stopped);
+    deployment.status.ready_at = Some(Timestamp(1_000));
+    deployment.status.conditions = vec![Condition {
+        condition_type: ConditionType::Ready,
+        state: ConditionState::False,
+        reason: ConditionReason("DaemonShutdown".to_owned()),
+        message: "deployment workloads stopped during daemon shutdown".to_owned(),
+        observed_generation: deployment.meta.generation,
+        last_transition_time: Timestamp(39_000),
+    }];
+    service.status.active_deployment_id = Some(deployment.meta.id.clone());
+    let assignment = assignment(&deployment, "assignment-1", 1);
+    let replica = replica(&deployment, &assignment, DeploymentPhase::Ready);
+    let mut snapshot = input(service, vec![deployment.clone()]);
+    snapshot.live_nodes.insert(assignment.spec.node_id.clone());
+    snapshot.assignments = vec![assignment];
+    snapshot.replicas = vec![replica];
+
+    let recovery = plan(snapshot).expect("recover a stopped deployment in one pass");
+
+    let status = &recovery
+        .deployment_updates
+        .iter()
+        .find(|update| update.id == deployment.meta.id)
+        .expect("ready deployment update")
+        .status;
+    assert_eq!(status.phase, DeploymentPhase::Ready);
+    let ready = status
+        .conditions
+        .iter()
+        .find(|condition| condition.condition_type == ConditionType::Ready)
+        .expect("ready condition");
+    assert_eq!(ready.state, ConditionState::True);
+    assert_eq!(ready.reason.0, "ReplicasReady");
+}
+
+#[test]
 fn crashed_deployment_keeps_its_failure_phase_while_cleanup_completes() {
     let service = service(Generation(1), RolloutState::Active);
     let mut deployment = deployment(&service, DeploymentPhase::Crashed);
