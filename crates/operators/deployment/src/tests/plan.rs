@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use kernel_api::{
     ArtifactTemplate, Build, BuildPhase, BuildSource, BuildStatus, Condition, ConditionReason,
     ConditionState, ConditionType, DeploymentId, DeploymentPhase, Generation, IngressRouteId,
-    IngressRouteSpec, IngressRouteStatus, Object, OwnerReference, Ownership, ResourceId,
-    ResourceKind, ResourceName, RolloutState, SecretValue, ServiceId, TAILSCALE_GATEWAY_SERVICE_ID,
-    Timestamp, desired_service_replicas,
+    IngressRouteSpec, IngressRouteStatus, MAESTRO_INGRESS_HOST, MAESTRO_INGRESS_PORT, Object,
+    OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, RolloutState, SecretValue,
+    ServiceId, TAILSCALE_GATEWAY_SERVICE_ID, Timestamp, desired_service_replicas,
 };
 
 use super::plan_support::*;
@@ -125,6 +125,68 @@ fn base_service_captures_ingress_context_for_external_templates() {
     assert_eq!(
         deployment.spec.environment_template.ingress_port,
         Some(3000)
+    );
+}
+
+#[test]
+fn ingress_context_is_injected_into_build_environment() {
+    let mut service = service(Generation(7), RolloutState::Active);
+    service.spec.artifact = build_artifact();
+    let ArtifactTemplate::Build { template } = &mut service.spec.artifact else {
+        return;
+    };
+    template.environment.insert(
+        MAESTRO_INGRESS_HOST.to_owned(),
+        "stale.example.test".to_owned(),
+    );
+    template
+        .environment
+        .insert(MAESTRO_INGRESS_PORT.to_owned(), "9999".to_owned());
+    let route = Object {
+        meta: metadata(IngressRouteId::new("api-route").unwrap(), Generation(1)),
+        spec: IngressRouteSpec {
+            service_id: service.meta.id.clone(),
+            hosts: vec!["api-pr-42.preview.example.test".to_owned()],
+            path_prefix: None,
+            target_port: 8080,
+            session_affinity: None,
+        },
+        status: IngressRouteStatus {
+            applied_generation: Generation::default(),
+            conditions: Vec::new(),
+        },
+    };
+    let mut create_input = input(service.clone(), Vec::new());
+    create_input.ingress_routes = vec![route.clone()];
+    let deployment = plan(create_input)
+        .expect("capture ingress-backed build")
+        .create_deployments
+        .remove(0);
+    let ArtifactTemplate::Build { template } = &deployment.spec.service.artifact else {
+        panic!("expected captured build template");
+    };
+    assert_eq!(
+        template.environment.get(MAESTRO_INGRESS_HOST),
+        Some(&"api-pr-42.preview.example.test".to_owned())
+    );
+    assert_eq!(
+        template.environment.get(MAESTRO_INGRESS_PORT),
+        Some(&"8080".to_owned())
+    );
+
+    let mut build_input = input(service, vec![deployment]);
+    build_input.ingress_routes = vec![route];
+    let build = plan(build_input)
+        .expect("create ingress-backed build")
+        .create_builds
+        .remove(0);
+    assert_eq!(
+        build.spec.template.environment.get(MAESTRO_INGRESS_HOST),
+        Some(&"api-pr-42.preview.example.test".to_owned())
+    );
+    assert_eq!(
+        build.spec.template.environment.get(MAESTRO_INGRESS_PORT),
+        Some(&"8080".to_owned())
     );
 }
 

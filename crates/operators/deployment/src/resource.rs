@@ -4,9 +4,9 @@ use kernel_api::{
     ArtifactTemplate, BUILD_RESOLVED_GENERATION_ANNOTATION, BUILD_RESOLVED_REVISION_ANNOTATION,
     BUILD_WATCH_REVISION_ANNOTATION, Build, BuildId, BuildPhase, BuildSource, BuildSpec,
     BuildStatus, Deployment, DeploymentGoal, DeploymentId, DeploymentPhase, DeploymentSpec,
-    DeploymentStatus, Generation, IngressRoute, InvalidIdentifier, Object, ObjectMeta,
-    OwnerReference, Ownership, ResourceId, ResourceKind, ResourceName, Service, ServiceId,
-    Timestamp,
+    DeploymentStatus, Generation, IngressRoute, InvalidIdentifier, MAESTRO_INGRESS_HOST,
+    MAESTRO_INGRESS_PORT, Object, ObjectMeta, OwnerReference, Ownership, ResourceId, ResourceKind,
+    ResourceName, Service, ServiceId, Timestamp,
 };
 use sha2::{Digest, Sha256};
 
@@ -42,6 +42,18 @@ pub(crate) fn new_deployment(
     }
     let environment_resolution =
         crate::environment::resolve(service, routes, &mut captured_service.environment)?;
+    if let ArtifactTemplate::Build { template } = &mut captured_service.artifact {
+        if let Some(ingress_host) = &environment_resolution.context.ingress_host {
+            template
+                .environment
+                .insert(MAESTRO_INGRESS_HOST.to_owned(), ingress_host.clone());
+        }
+        if let Some(ingress_port) = environment_resolution.context.ingress_port {
+            template
+                .environment
+                .insert(MAESTRO_INGRESS_PORT.to_owned(), ingress_port.to_string());
+        }
+    }
     let mut identity = vec![cluster_id.as_str(), service.meta.id.as_str(), &generation];
     if let Some(revision) = resolved_revision {
         identity.push(revision);

@@ -100,6 +100,10 @@ concrete ingress hostname and configured ingress target port. A template may app
 value, as shown above. Resolution fails when a referenced value is unavailable or ambiguous;
 Maestro never guesses which ingress endpoint the application should use.
 
+Ingress-backed image builds also receive `MAESTRO_INGRESS_HOST` and `MAESTRO_INGRESS_PORT` as
+non-secret build arguments. Dockerfiles can consume them by declaring `ARG` for each value;
+preview builds receive the derived PR hostname.
+
 Preview-enabled services must use a `github.com` repository, define ingress, and have a lowercase
 DNS-label service ID. The `-pr-` infix is reserved for Maestro's derived services. Fork PRs and
 draft PRs are not deployed.
