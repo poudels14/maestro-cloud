@@ -40,9 +40,6 @@ pub enum UpgradePlanError {
         value: String,
         message: String,
     },
-    /// No node requires the requested minimum version.
-    #[error("every selected node already meets target version `{target}`")]
-    TargetAlreadySatisfied { target: String },
     /// Pending state unexpectedly contained persisted progress.
     #[error("pending maintenance run already contains node progress")]
     UnexpectedPendingProgress,

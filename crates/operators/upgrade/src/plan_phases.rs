@@ -104,9 +104,16 @@ pub(crate) fn initialize(
         }
     }
     if pending.is_empty() {
-        return Err(UpgradePlanError::TargetAlreadySatisfied {
-            target: target.to_string(),
-        });
+        let mut run = input.run;
+        run.status.phase = transition(run.status.phase, UpgradePhase::Completed)?;
+        set_ready_condition(
+            &mut run,
+            ConditionState::True,
+            "UpgradeAlreadySatisfied",
+            "every selected node already reports the requested version",
+            input.now,
+        );
+        return Ok(plan(run, Vec::new(), UpgradePlanAction::Done));
     }
     validate_quorum(&input.run, &nodes, &pending)?;
     pending.sort_by(|left, right| {

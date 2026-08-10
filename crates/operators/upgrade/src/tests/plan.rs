@@ -16,6 +16,28 @@ use crate::{
 };
 
 #[test]
+fn pending_upgrade_completes_when_its_target_became_satisfied() {
+    let mut nodes = topology_three_voters();
+    for node_id in ["node-1", "node-2", "node-3"] {
+        upgrade_node(&mut nodes, node_id);
+    }
+
+    let completed = plan_upgrade(
+        input(run(UpgradeMode::AllNodes), &nodes, Vec::new(), 10_000),
+        settings(3),
+    )
+    .expect("complete the now-redundant upgrade");
+
+    assert_eq!(completed.run.status.phase, UpgradePhase::Completed);
+    assert!(completed.run.status.nodes.is_empty());
+    assert!(completed.node_updates.is_empty());
+    assert_eq!(completed.action, UpgradePlanAction::Done);
+    assert!(completed.run.status.conditions.iter().any(|condition| {
+        condition.reason.0 == "UpgradeAlreadySatisfied" && condition.state == ConditionState::True
+    }));
+}
+
+#[test]
 fn rolling_upgrade_drains_retries_restarts_and_advances_one_node_at_a_time() -> Result<(), String> {
     let settings = settings(3);
     let mut nodes = topology_with_worker();

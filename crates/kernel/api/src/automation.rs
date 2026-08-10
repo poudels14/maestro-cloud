@@ -162,16 +162,16 @@ impl UpgradePhase {
         self == target
             || matches!(
                 (self, target),
-                (Self::Pending, Self::Draining | Self::Canceled)
-                    | (
-                        Self::Draining,
-                        Self::Applying | Self::Failed | Self::Canceled
-                    )
-                    | (
-                        Self::Applying,
-                        Self::Restarting | Self::Verifying | Self::Failed
-                    )
-                    | (Self::Restarting, Self::Verifying | Self::Failed)
+                (
+                    Self::Pending,
+                    Self::Draining | Self::Completed | Self::Canceled,
+                ) | (
+                    Self::Draining,
+                    Self::Applying | Self::Failed | Self::Canceled
+                ) | (
+                    Self::Applying,
+                    Self::Restarting | Self::Verifying | Self::Failed
+                ) | (Self::Restarting, Self::Verifying | Self::Failed)
                     | (
                         Self::Verifying,
                         Self::Draining | Self::Applying | Self::Completed | Self::Failed
