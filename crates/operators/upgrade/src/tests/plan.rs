@@ -188,18 +188,7 @@ fn all_node_mode_dispatches_and_verifies_one_batch_without_waiting_for_placement
         return Err("all-node applying phase did not dispatch".to_owned());
     };
     assert_eq!(request.targets.len(), 3);
-    let recovery = request
-        .store_recovery
-        .expect("all-voter reboot carries a recovery plan");
-    assert_eq!(recovery.canonical_node_id.as_str(), "node-1");
-    assert_eq!(
-        recovery
-            .expected_members
-            .iter()
-            .map(NodeId::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["node-1", "node-2", "node-3"])
-    );
+    assert_eq!(request.store_recovery, None);
     let restarting = record_dispatch_outcome(
         input(applying.run, &nodes, Vec::new(), 10_000),
         settings,
@@ -319,6 +308,62 @@ fn wrong_generation_boot_is_reapplied_and_eventually_completes() -> Result<(), S
     );
     apply_updates(&mut nodes, completed.node_updates);
     assert!(maintained_nodes(&nodes).is_empty());
+    Ok(())
+}
+
+#[test]
+fn wrong_generation_retry_dispatches_only_the_lagging_node() -> Result<(), String> {
+    let settings = settings(3);
+    let mut nodes = topology_three_voters();
+    let initialized = plan_upgrade(
+        input(run(UpgradeMode::AllNodes), &nodes, Vec::new(), 10_000),
+        settings,
+    )
+    .expect("initialize all-node upgrade");
+    apply_updates(&mut nodes, initialized.node_updates);
+    let applying = plan_upgrade(input(initialized.run, &nodes, Vec::new(), 10_000), settings)
+        .expect("finish all-node drain");
+    let restarting = record_dispatch_outcome(
+        input(applying.run, &nodes, Vec::new(), 10_000),
+        settings,
+        UpgradeDispatchOutcome::Accepted,
+    )
+    .expect("record first accepted dispatch");
+
+    upgrade_node(&mut nodes, "node-1");
+    upgrade_node(&mut nodes, "node-2");
+    restart_node(&mut nodes, "node-3");
+    let verifying = plan_upgrade(input(restarting.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("observe all rebooted daemons");
+    let retry = plan_upgrade(input(verifying.run, &nodes, Vec::new(), 11_000), settings)
+        .expect("schedule the lagging node retry");
+
+    assert_eq!(retry.run.status.phase, UpgradePhase::Applying);
+    assert_eq!(
+        retry
+            .run
+            .status
+            .nodes
+            .iter()
+            .filter(|status| status.phase == UpgradePhase::Applying)
+            .map(|status| status.node_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["node-3"]
+    );
+    let dispatch = plan_upgrade(input(retry.run, &nodes, Vec::new(), 16_000), settings)
+        .expect("dispatch the lagging node retry");
+    let UpgradePlanAction::Dispatch(request) = dispatch.action else {
+        return Err("lagging-node retry did not emit a dispatch".to_owned());
+    };
+    assert_eq!(
+        request
+            .targets
+            .iter()
+            .map(|target| target.node_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["node-3"]
+    );
+    assert_eq!(request.store_recovery, None);
     Ok(())
 }
 

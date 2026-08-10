@@ -16,8 +16,8 @@ use crate::plan_support::{
     validate_live_nodes, validate_quorum,
 };
 use crate::{
-    NodeUpgradeRequest, NodeUpgradeTarget, PlannedStoreRecovery, UpgradeInput, UpgradePlan,
-    UpgradePlanAction, UpgradePlanError, UpgradeSettings,
+    NodeUpgradeRequest, NodeUpgradeTarget, UpgradeInput, UpgradePlan, UpgradePlanAction,
+    UpgradePlanError, UpgradeSettings,
 };
 
 pub(crate) fn initialize(
@@ -308,50 +308,21 @@ pub(crate) fn plan_dispatch(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let store_recovery = planned_store_recovery(&input.run, &nodes, &applying)?;
     let request = NodeUpgradeRequest {
         run_id: input.run.meta.id.clone(),
         operation: input.run.spec.operation,
         target_version: input.run.spec.target_version.clone(),
         targets,
-        store_recovery,
+        // A routine all-node reboot keeps the existing etcd membership intact. Store
+        // reconstruction is an emergency recovery operation and must never be armed
+        // automatically merely because every voter is in the same upgrade batch.
+        store_recovery: None,
     };
     Ok(plan(
         input.run,
         Vec::new(),
         UpgradePlanAction::Dispatch(request),
     ))
-}
-
-fn planned_store_recovery(
-    run: &kernel_api::UpgradeRun,
-    nodes: &BTreeMap<NodeId, Node>,
-    applying: &[usize],
-) -> Result<Option<PlannedStoreRecovery>, UpgradePlanError> {
-    if run.spec.mode != kernel_api::UpgradeMode::AllNodes {
-        return Ok(None);
-    }
-    let expected_members = nodes
-        .values()
-        .filter(|node| node.spec.role.is_control_plane())
-        .map(|node| node.meta.id.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    if expected_members.len() != 3 {
-        return Ok(None);
-    }
-    let applying_nodes = status_ids(run, applying)?;
-    if !expected_members.is_subset(&applying_nodes) {
-        return Ok(None);
-    }
-    let canonical_node_id = nodes
-        .values()
-        .find(|node| node.spec.role == kernel_api::NodeRole::Master)
-        .map(|node| node.meta.id.clone())
-        .ok_or(UpgradePlanError::NoNodes)?;
-    Ok(Some(PlannedStoreRecovery {
-        canonical_node_id,
-        expected_members,
-    }))
 }
 
 pub(crate) fn plan_restart(
