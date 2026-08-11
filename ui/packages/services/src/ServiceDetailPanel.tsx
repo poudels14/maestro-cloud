@@ -105,7 +105,7 @@ function ServiceDetailPanel(props: {
       >
         <div
           class={clsx("mx-auto px-3 sm:px-6", contentMaxWidth(), {
-            "h-full min-h-0": tab() === "logs"
+            "h-full min-h-0 flex flex-col": tab() === "logs"
           })}
         >
           <Show when={props.service.previewResource}>
@@ -138,12 +138,14 @@ function ServiceDetailPanel(props: {
           </Show>
           <Show when={tab() === "metrics"}>{props.renderMetrics()}</Show>
           <Show when={tab() === "logs"}>
-            <LogsTab
-              api={props.api}
-              logsApi={props.logsApi}
-              service={props.service}
-              onSearchChange={props.onSearchChange}
-            />
+            <div class="min-h-0 flex-1">
+              <LogsTab
+                api={props.api}
+                logsApi={props.logsApi}
+                service={props.service}
+                onSearchChange={props.onSearchChange}
+              />
+            </div>
           </Show>
         </div>
       </div>
