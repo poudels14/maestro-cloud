@@ -78,7 +78,9 @@ impl PreviewSourceWriter {
                 session: None,
             });
         }
-        let no_mutations = mutations.is_empty();
+        if mutations.is_empty() {
+            return Ok(PreviewSourceWriteOutcome::Noop);
+        }
         let outcome = store
             .txn(Transaction {
                 compares,
@@ -86,7 +88,6 @@ impl PreviewSourceWriter {
             })
             .await?;
         Ok(match outcome {
-            TransactionOutcome::Applied { .. } if no_mutations => PreviewSourceWriteOutcome::Noop,
             TransactionOutcome::Applied { .. } => PreviewSourceWriteOutcome::Applied,
             TransactionOutcome::Conflict => PreviewSourceWriteOutcome::Conflict,
         })

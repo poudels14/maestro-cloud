@@ -40,6 +40,19 @@ async fn runtime_replays_an_accepted_batch_then_completes_from_node_observations
 }
 
 #[tokio::test]
+async fn all_node_upgrade_ignores_irrelevant_assignment_cardinality()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = World::new(false).await?;
+    world.add_assignments(130).await?;
+
+    world.pass().await?;
+    world.pass().await?;
+
+    assert_eq!(world.run().await?.status.phase, UpgradePhase::Draining);
+    Ok(())
+}
+
+#[tokio::test]
 async fn deletion_finalizer_restores_scheduling_before_collecting_the_run()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = World::new(false).await?;

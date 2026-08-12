@@ -1,6 +1,9 @@
 use kernel_api::{DnsRecord, DnsRecordId, ResourceKind, ResourceName, ResourceRevision};
 use kernel_controller::{ControllerError, FencedStore};
-use kernel_store::{Compare, ExpectedVersion, Keyspace, Mutation, Transaction, TransactionOutcome};
+use kernel_store::{
+    Compare, ExpectedVersion, Keyspace, Mutation, TRANSACTION_OPERATION_LIMIT, Transaction,
+    TransactionOutcome,
+};
 
 use crate::DnsPlan;
 use crate::snapshot::{ResourceSnapshot, StoredResource};
@@ -76,6 +79,16 @@ impl DnsWriter {
                 key: required(&snapshot.records, record_id)?.stored.key.clone(),
             });
         }
+        let operations = compares
+            .len()
+            .saturating_add(mutations.len())
+            .saturating_add(1);
+        if operations > TRANSACTION_OPERATION_LIMIT {
+            return Err(DnsWriteError::AtomicGroupTooLarge {
+                operations,
+                limit: TRANSACTION_OPERATION_LIMIT,
+            });
+        }
         let outcome = store
             .txn(Transaction {
                 compares,
@@ -142,4 +155,7 @@ pub enum DnsWriteError {
     /// A record resource could not be serialized.
     #[error("failed to serialize DnsRecord `{record_id}`: {message}")]
     Serialize { record_id: String, message: String },
+    /// One Service's DNS generation cannot fit in one etcd transaction.
+    #[error("DNS resource generation requires {operations} operations; limit is {limit}")]
+    AtomicGroupTooLarge { operations: usize, limit: usize },
 }

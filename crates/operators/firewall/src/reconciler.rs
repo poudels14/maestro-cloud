@@ -16,6 +16,7 @@ use crate::writer::FirewallWriteError;
 use crate::{FirewallController, FirewallError};
 
 const CONFLICT_RETRY: Duration = Duration::from_millis(100);
+const ACKNOWLEDGEMENT_RETRY: Duration = Duration::from_secs(1);
 
 /// Watch-driven policy reconciler that owns FirewallPolicy finalization.
 pub struct FirewallPolicyReconciler {
@@ -52,19 +53,23 @@ impl FirewallPolicyReconciler {
         )
     }
 
-    async fn converge(&self, context: &ReconcileContext) -> Result<Action, ReconcileError> {
+    async fn converge(
+        &self,
+        context: &ReconcileContext,
+        finalizing: bool,
+    ) -> Result<Action, ReconcileError> {
         let report = self
             .controller
             .reconcile_once(context.store())
             .await
             .map_err(classify_error)?;
-        Ok(
-            if report.conflict || report.desired_state_changed || report.pending_rulesets > 0 {
-                Action::Requeue(CONFLICT_RETRY)
-            } else {
-                Action::Done
-            },
-        )
+        Ok(if report.conflict {
+            Action::Requeue(CONFLICT_RETRY)
+        } else if finalizing && (report.desired_state_changed || report.pending_rulesets > 0) {
+            Action::Requeue(ACKNOWLEDGEMENT_RETRY)
+        } else {
+            Action::Done
+        })
     }
 }
 
@@ -82,7 +87,7 @@ impl Reconciler for FirewallPolicyReconciler {
         _resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context).await
+        self.converge(&context, false).await
     }
 
     async fn finalize(
@@ -90,7 +95,7 @@ impl Reconciler for FirewallPolicyReconciler {
         _resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context).await
+        self.converge(&context, true).await
     }
 }
 
@@ -148,13 +153,11 @@ impl Reconciler for FirewallBaselineReconciler {
             .reconcile_once(context.store())
             .await
             .map_err(classify_error)?;
-        Ok(
-            if report.conflict || report.desired_state_changed || report.pending_rulesets > 0 {
-                Action::Requeue(CONFLICT_RETRY)
-            } else {
-                Action::Done
-            },
-        )
+        Ok(if report.conflict {
+            Action::Requeue(CONFLICT_RETRY)
+        } else {
+            Action::Done
+        })
     }
 }
 

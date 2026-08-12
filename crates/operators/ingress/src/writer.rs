@@ -116,6 +116,10 @@ impl IngressWriter {
             mutations.push(delete(current));
         }
 
+        if mutations.is_empty() {
+            return Ok(IngressWriteReport::default());
+        }
+
         let outcome = store
             .txn(Transaction {
                 compares,

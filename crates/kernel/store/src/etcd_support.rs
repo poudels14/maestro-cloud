@@ -63,7 +63,7 @@ pub(crate) fn validate_transaction(transaction: &Transaction) -> Result<(), Stor
         .len()
         .saturating_add(transaction.mutations.len());
     if operations > crate::TRANSACTION_OPERATION_LIMIT {
-        return Err(StoreError::Contract {
+        return Err(StoreError::Unavailable {
             message: format!(
                 "transaction contains {operations} operations; limit is {}",
                 crate::TRANSACTION_OPERATION_LIMIT

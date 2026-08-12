@@ -7,7 +7,7 @@ use kernel_store::{
 };
 
 use crate::snapshot::UpgradeSnapshot;
-use crate::{UpgradeError, UpgradePlan};
+use crate::{UpgradeError, UpgradePlan, UpgradePlanAction};
 
 pub(crate) struct UpgradeWriter {
     keyspace: Keyspace,
@@ -47,7 +47,7 @@ impl UpgradeWriter {
             key: run_key.clone(),
             expected: ExpectedVersion::Exact(observed_version),
         }];
-        compares.extend(snapshot.dependency_compares());
+        compares.extend(snapshot.dependency_compares(observed_run));
         let mut mutations = Vec::new();
         let mut updated_nodes = BTreeSet::new();
         for desired in &plan.node_updates {
@@ -76,7 +76,9 @@ impl UpgradeWriter {
                 session: None,
             });
         }
-        let no_mutations = mutations.is_empty();
+        if mutations.is_empty() && !matches!(plan.action, UpgradePlanAction::Dispatch(_)) {
+            return Ok(UpgradeWriteOutcome::Noop);
+        }
         let outcome = store
             .txn(Transaction {
                 compares,
@@ -84,7 +86,6 @@ impl UpgradeWriter {
             })
             .await?;
         Ok(match outcome {
-            TransactionOutcome::Applied { .. } if no_mutations => UpgradeWriteOutcome::Noop,
             TransactionOutcome::Applied { .. } => UpgradeWriteOutcome::Applied,
             TransactionOutcome::Conflict => UpgradeWriteOutcome::Conflict,
         })

@@ -23,8 +23,41 @@ pub(crate) struct ResourceSnapshot {
 
 impl ResourceSnapshot {
     pub(crate) async fn load(store: &FencedStore, keyspace: &Keyspace) -> Result<Self, DnsError> {
+        let mut snapshot = Self::load_resources(store, keyspace).await?;
+        snapshot.load_liveness(store, keyspace).await?;
+        Ok(snapshot)
+    }
+
+    pub(crate) async fn load_service(
+        store: &FencedStore,
+        keyspace: &Keyspace,
+        service_id: &ServiceId,
+    ) -> Result<Self, DnsError> {
+        let mut snapshot = Self::load_resources(store, keyspace).await?;
+        snapshot.services.retain(|id, _| id == service_id);
+        snapshot
+            .assignments
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        snapshot
+            .replicas
+            .retain(|_, resource| resource.resource.spec.service_id == *service_id);
+        let mut records = BTreeMap::new();
+        for (id, resource) in snapshot.records {
+            match crate::resource::managed_owner(&resource.resource)? {
+                Some(owner) if owner != *service_id => {}
+                Some(_) | None => {
+                    records.insert(id, resource);
+                }
+            }
+        }
+        snapshot.records = records;
+        snapshot.load_liveness(store, keyspace).await?;
+        Ok(snapshot)
+    }
+
+    async fn load_resources(store: &FencedStore, keyspace: &Keyspace) -> Result<Self, DnsError> {
         let values = store.list(&keyspace.resources()).await?.values;
-        let mut snapshot = Self {
+        Ok(Self {
             services: decode_kind::<ServiceId, ServiceSpec, ServiceStatus>(
                 &values, keyspace, "Service",
             )?,
@@ -45,9 +78,7 @@ impl ResourceSnapshot {
             )?,
             live_nodes: Default::default(),
             liveness_compares: Vec::new(),
-        };
-        snapshot.load_liveness(store, keyspace).await?;
-        Ok(snapshot)
+        })
     }
 
     pub(crate) fn input(
@@ -113,7 +144,12 @@ impl ResourceSnapshot {
             .map(|resource| &resource.stored)
             .chain(self.assignments.values().map(|resource| &resource.stored))
             .chain(self.replicas.values().map(|resource| &resource.stored))
-            .chain(self.records.values().map(|resource| &resource.stored))
+            .chain(
+                self.records
+                    .values()
+                    .filter(|resource| crate::resource::is_managed(&resource.resource))
+                    .map(|resource| &resource.stored),
+            )
     }
 }
 

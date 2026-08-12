@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    ClusterId, Condition, ConditionReason, ConditionState, ConditionType, Generation, Node, NodeId,
+    AssignmentId, AssignmentPhase, AssignmentSpec, AssignmentStatus, ClusterId, Condition,
+    ConditionReason, ConditionState, ConditionType, DeploymentId, Generation, Node, NodeId,
     NodeInstanceId, NodeRole, NodeSpec, NodeStatus, Object, ObjectMeta, ResourceKind, ResourceName,
     ResourceRevision, Timestamp, UpgradeMode, UpgradePhase, UpgradeRun, UpgradeRunId,
     UpgradeRunSpec, UpgradeRunStatus,
@@ -150,6 +151,35 @@ impl World {
 
     pub(super) async fn pass(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.runtime.reconcile_snapshot().await?;
+        Ok(())
+    }
+
+    pub(super) async fn add_assignments(
+        &self,
+        count: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for index in 0..count {
+            let assignment = Object {
+                meta: metadata(AssignmentId::new(format!("assignment-{index}"))?),
+                spec: AssignmentSpec {
+                    service_id: kernel_api::ServiceId::new("api")?,
+                    deployment_id: DeploymentId::new("deployment-1")?,
+                    restart_generation: Generation(1),
+                    replica_index: u32::try_from(index)?,
+                    node_id: NodeId::new("node-1")?,
+                    placement_epoch: 1,
+                    workload_address: None,
+                    replaces_assignment_id: None,
+                },
+                status: AssignmentStatus {
+                    phase: AssignmentPhase::Running,
+                    workload_id: None,
+                    workload_address: None,
+                    conditions: Vec::new(),
+                },
+            };
+            put_resource(&self.store, &self.keys, "Assignment", &assignment).await?;
+        }
         Ok(())
     }
 

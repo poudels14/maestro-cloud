@@ -50,13 +50,41 @@ impl DnsController {
         })
     }
 
-    /// Projects and commits one exact DNS resource snapshot atomically.
+    /// Projects and commits every Service's DNS generation independently.
     pub async fn reconcile_once(&self, store: &FencedStore) -> Result<DnsReport, DnsError> {
         let snapshot = ResourceSnapshot::load(store, &self.keyspace).await?;
+        let service_ids = snapshot.services.keys().cloned().collect::<Vec<_>>();
+        let mut aggregate = DnsReport::default();
+        for service_id in service_ids {
+            aggregate.merge(self.reconcile_service(store, &service_id).await?);
+        }
+        Ok(aggregate)
+    }
+
+    /// Projects and atomically commits one Service's DNS resource generation.
+    pub async fn reconcile_service(
+        &self,
+        store: &FencedStore,
+        service_id: &ServiceId,
+    ) -> Result<DnsReport, DnsError> {
+        let snapshot = ResourceSnapshot::load_service(store, &self.keyspace, service_id).await?;
         let plan = crate::plan(snapshot.input(self.cluster_id.clone(), self.settings))?;
         let services_with_records = services_with_records_after(&snapshot, &plan)?;
         let write = self.writer.apply(store, &snapshot, &plan).await?;
         Ok(report(write, services_with_records))
+    }
+}
+
+impl DnsReport {
+    fn merge(&mut self, report: Self) {
+        self.created_records = self.created_records.saturating_add(report.created_records);
+        self.replaced_records = self
+            .replaced_records
+            .saturating_add(report.replaced_records);
+        self.deleted_records = self.deleted_records.saturating_add(report.deleted_records);
+        self.conflict |= report.conflict;
+        self.services_with_records
+            .extend(report.services_with_records);
     }
 }
 

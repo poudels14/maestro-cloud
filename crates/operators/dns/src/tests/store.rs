@@ -64,7 +64,8 @@ async fn store_controller_atomically_publishes_and_replaces_service_records()
 async fn dependency_conflict_commits_no_partial_record_generation()
 -> Result<(), Box<dyn std::error::Error>> {
     let world = StoreWorld::new().await?;
-    let snapshot = ResourceSnapshot::load(&world.fenced, &world.keys).await?;
+    let service_id = kernel_api::ServiceId::new("api")?;
+    let snapshot = ResourceSnapshot::load_service(&world.fenced, &world.keys, &service_id).await?;
     let plan = crate::plan(snapshot.input(world.cluster_id.clone(), settings()))?;
     world
         .update::<Service>("Service", Some("api"), |_| {})
@@ -75,6 +76,27 @@ async fn dependency_conflict_commits_no_partial_record_generation()
         .await?;
     assert!(report.conflict);
     assert!(world.list::<DnsRecord>("DnsRecord").await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn service_reconciliation_ignores_unrelated_cluster_cardinality()
+-> Result<(), Box<dyn std::error::Error>> {
+    let world = StoreWorld::new().await?;
+    let template = PlannedWorld::ready().service;
+    for index in 0..130 {
+        let mut service = template.clone();
+        service.meta.id = kernel_api::ServiceId::new(format!("unrelated-{index}"))?;
+        world.put("Service", &service.meta.id, &service).await?;
+    }
+
+    let report = world
+        .controller
+        .reconcile_service(&world.fenced, &kernel_api::ServiceId::new("api")?)
+        .await?;
+
+    assert_eq!(report.created_records, 4);
+    assert_eq!(world.list::<DnsRecord>("DnsRecord").await?.len(), 4);
     Ok(())
 }
 

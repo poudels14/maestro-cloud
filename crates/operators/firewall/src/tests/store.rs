@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kernel_api::{
-    FirewallPolicy, NodeFirewall, NodeId, NodeInstanceId, ResourceKind, ResourceName, Timestamp,
+    AssignmentId, FirewallPolicy, NodeFirewall, NodeId, NodeInstanceId, ResourceKind, ResourceName,
+    Timestamp,
 };
 use kernel_controller::{Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig};
 use kernel_store::{
@@ -51,6 +52,25 @@ async fn controller_publishes_rulesets_then_waits_for_every_node_acknowledgement
             Some(acknowledged.bundle_digest.clone())
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_churn_does_not_expand_firewall_transactions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut input = PlannedWorld::standard().input();
+    let assignment = input.assignments.first().cloned().ok_or("assignment")?;
+    for index in 0..130 {
+        let mut assignment = assignment.clone();
+        assignment.meta.id = AssignmentId::new(format!("churn-{index}"))?;
+        input.assignments.push(assignment);
+    }
+    let world = StoreWorld::new(input).await?;
+
+    let report = world.controller.reconcile_once(&world.fenced).await?;
+
+    assert_eq!(report.published_rulesets, 2);
+    assert_eq!(world.list::<NodeFirewall>("NodeFirewall").await?.len(), 2);
     Ok(())
 }
 

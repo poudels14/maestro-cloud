@@ -177,7 +177,7 @@ async fn transaction_rejects_operations_beyond_the_backend_limit() {
         })
         .await
         .expect_err("oversized transaction should be rejected");
-    assert!(matches!(error, StoreError::Contract { .. }));
+    assert!(matches!(error, StoreError::Unavailable { .. }));
     assert!(
         store
             .list(&keys.resource_kind(&a_kind()))

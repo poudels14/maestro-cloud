@@ -75,7 +75,7 @@ impl UpgradeSnapshot {
         }
     }
 
-    pub(crate) fn dependency_compares(&self) -> Vec<Compare> {
+    pub(crate) fn dependency_compares(&self, run: &UpgradeRun) -> Vec<Compare> {
         let mut compares = self
             .nodes
             .values()
@@ -84,10 +84,26 @@ impl UpgradeSnapshot {
                 expected: ExpectedVersion::Exact(stored.stored.version),
             })
             .collect::<Vec<_>>();
-        compares.extend(self.assignments.values().map(|stored| Compare {
-            key: stored.stored.key.clone(),
-            expected: ExpectedVersion::Exact(stored.stored.version),
-        }));
+        if run.spec.mode == kernel_api::UpgradeMode::Rolling
+            && run.status.phase == kernel_api::UpgradePhase::Draining
+        {
+            let draining = run
+                .status
+                .nodes
+                .iter()
+                .filter(|status| status.phase == kernel_api::UpgradePhase::Draining)
+                .map(|status| &status.node_id)
+                .collect::<BTreeSet<_>>();
+            compares.extend(
+                self.assignments
+                    .values()
+                    .filter(|stored| draining.contains(&stored.resource.spec.node_id))
+                    .map(|stored| Compare {
+                        key: stored.stored.key.clone(),
+                        expected: ExpectedVersion::Exact(stored.stored.version),
+                    }),
+            );
+        }
         compares.extend(self.liveness_compares.clone());
         compares
     }

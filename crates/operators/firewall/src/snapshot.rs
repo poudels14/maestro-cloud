@@ -65,7 +65,7 @@ impl ResourceSnapshot {
     }
 
     pub(crate) fn dependency_compares(&self) -> Vec<Compare> {
-        self.values()
+        self.stable_values()
             .map(|stored| Compare {
                 key: stored.key.clone(),
                 expected: ExpectedVersion::Exact(stored.version),
@@ -73,12 +73,16 @@ impl ResourceSnapshot {
             .collect()
     }
 
-    fn values(&self) -> impl Iterator<Item = &StoredValue> {
+    /// Returns the durable policy and node bundle fenced by one publication.
+    ///
+    /// Service and Assignment inputs are deliberately level-triggered instead
+    /// of copied into every transaction. Their high-cardinality churn schedules
+    /// another pass, while fencing the complete workload set would exceed
+    /// etcd's transaction limit during ordinary deployment bursts.
+    fn stable_values(&self) -> impl Iterator<Item = &StoredValue> {
         self.policies
             .values()
             .map(|resource| &resource.stored)
-            .chain(self.services.values().map(|resource| &resource.stored))
-            .chain(self.assignments.values().map(|resource| &resource.stored))
             .chain(self.node_networks.values().map(|resource| &resource.stored))
             .chain(
                 self.node_firewalls

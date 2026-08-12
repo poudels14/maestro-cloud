@@ -19,6 +19,7 @@ pub struct DnsReconciler {
     controller: DnsController,
     service_prefix: StorePrefix,
     trigger_prefix: StorePrefix,
+    record_prefix: StorePrefix,
 }
 
 impl DnsReconciler {
@@ -26,10 +27,12 @@ impl DnsReconciler {
     pub fn new(cluster_id: kernel_api::ClusterId, settings: DnsSettings) -> Result<Self, DnsError> {
         let keyspace = Keyspace::new(&cluster_id);
         let service_kind = ResourceKind::new(<Self as Reconciler>::KIND)?;
+        let record_kind = ResourceKind::new("DnsRecord")?;
         Ok(Self {
             controller: DnsController::new(cluster_id, settings)?,
             service_prefix: keyspace.resource_kind(&service_kind),
             trigger_prefix: keyspace.cluster(),
+            record_prefix: keyspace.resource_kind(&record_kind),
         })
     }
 
@@ -48,19 +51,21 @@ impl DnsReconciler {
             monotonic_clock,
             config,
         )
+        .with_ignored_trigger_prefix(self.record_prefix.clone())
     }
 
     async fn converge(
         &self,
         context: &ReconcileContext,
-        finalizing: Option<&ServiceId>,
+        service_id: &ServiceId,
+        finalizing: bool,
     ) -> Result<Action, ReconcileError> {
         let report = self
             .controller
-            .reconcile_once(context.store())
+            .reconcile_service(context.store(), service_id)
             .await
             .map_err(classify_error)?;
-        if report.conflict || finalizing.is_some_and(|id| report.has_records(id)) {
+        if report.conflict || (finalizing && report.has_records(service_id)) {
             Ok(Action::Requeue(CONFLICT_RETRY))
         } else {
             Ok(Action::Done)
@@ -79,10 +84,10 @@ impl Reconciler for DnsReconciler {
 
     async fn reconcile(
         &self,
-        _resource: Object<Self::Id, Self::Spec, Self::Status>,
+        resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context, None).await
+        self.converge(&context, &resource.meta.id, false).await
     }
 
     async fn finalize(
@@ -90,7 +95,7 @@ impl Reconciler for DnsReconciler {
         resource: Object<Self::Id, Self::Spec, Self::Status>,
         context: ReconcileContext,
     ) -> Result<Action, ReconcileError> {
-        self.converge(&context, Some(&resource.meta.id)).await
+        self.converge(&context, &resource.meta.id, true).await
     }
 }
 

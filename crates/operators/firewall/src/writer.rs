@@ -85,6 +85,15 @@ impl FirewallWriter {
             );
             plan.policy_updates.len()
         };
+        if mutations.is_empty() {
+            return Ok(FirewallWriteReport {
+                published_rulesets,
+                pending_rulesets,
+                desired_state_changed: rulesets_changed,
+                updated_policies,
+                conflict: false,
+            });
+        }
         let outcome = store
             .txn(Transaction {
                 compares,
