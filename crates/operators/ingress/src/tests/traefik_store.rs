@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[tokio::test]
-async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
+async fn store_provider_stages_then_replaces_owned_traefik_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let cluster_id = ClusterId::new("store-traefik")?;
     let clock = Arc::new(TokioClock::new());
@@ -44,6 +44,7 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
     provider
         .stage(&TraefikStage {
             generation_id: TrafficGenerationId::new("old-generation")?,
+            service_prefix: "http/services/old-".to_string(),
             entries: BTreeMap::from([(
                 "http/services/old-main/loadBalancer/servers/0/url".to_string(),
                 "http://172.22.0.2:8080".to_string(),
@@ -101,6 +102,7 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
     let stale = provider
         .stage(&TraefikStage {
             generation_id: TrafficGenerationId::new("stale-generation")?,
+            service_prefix: "http/services/stale".to_string(),
             entries: BTreeMap::from([(
                 "http/services/stale/loadBalancer/passHostHeader".to_string(),
                 "true".to_string(),
@@ -116,6 +118,101 @@ async fn store_provider_stages_then_atomically_replaces_owned_traefik_state()
             .is_empty()
     );
     successor_lease.resign().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn large_provider_replacements_fit_the_store_limit_and_replays_are_noops()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("large-store-traefik")?;
+    let clock = Arc::new(TokioClock::new());
+    let store = Arc::new(InMemoryStore::new(clock));
+    let keys = Keyspace::new(&cluster_id);
+    let (fenced, lease) = campaign(store.clone(), &keys, "leader-1").await?;
+    let provider = StoreTraefikProvider::new(cluster_id, fenced);
+    let services = (0..100)
+        .map(|index| {
+            (
+                format!("http/services/large/loadBalancer/servers/{index}/url"),
+                format!("http://10.42.0.{index}:8080"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let stage = TraefikStage {
+        generation_id: TrafficGenerationId::new("large-generation")?,
+        service_prefix: "http/services/large".to_string(),
+        entries: services,
+    };
+    let routers = (0..100)
+        .map(|index| {
+            (
+                format!("http/routers/large-{index}/rule"),
+                format!("Host(`large-{index}.example.test`)"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let cutover = TraefikCutover {
+        router_prefix: "http/routers/large-".to_string(),
+        routers,
+        remove_prefixes: Vec::new(),
+    };
+
+    provider.stage(&stage).await?;
+    provider.cutover(&cutover).await?;
+    let canonical_before = store.list(&keys.traefik()).await?;
+    let provider_before = store.list(&keys.traefik_provider()).await?;
+    assert_eq!(canonical_before.values.len(), 200);
+    assert_eq!(provider_before.values.len(), 200);
+
+    provider.stage(&stage).await?;
+    provider.cutover(&cutover).await?;
+    assert_eq!(store.list(&keys.traefik()).await?, canonical_before);
+    assert_eq!(store.list(&keys.traefik_provider()).await?, provider_before);
+
+    lease.resign().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_rejects_unrepresentable_atomic_replacements_before_writing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let cluster_id = ClusterId::new("oversized-store-traefik")?;
+    let clock = Arc::new(TokioClock::new());
+    let store = Arc::new(InMemoryStore::new(clock));
+    let keys = Keyspace::new(&cluster_id);
+    let (fenced, lease) = campaign(store.clone(), &keys, "leader-1").await?;
+    let provider = StoreTraefikProvider::new(cluster_id, fenced);
+    let routers = (0..128)
+        .map(|index| {
+            (
+                format!("http/routers/oversized-{index}/rule"),
+                format!("Host(`oversized-{index}.example.test`)"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let error = provider
+        .cutover(&TraefikCutover {
+            router_prefix: "http/routers/oversized-".to_string(),
+            routers,
+            remove_prefixes: Vec::new(),
+        })
+        .await
+        .expect_err("replacement should exceed one fenced transaction");
+    assert_eq!(
+        error.terminal_reason(),
+        Some("TraefikConfigurationTooLarge")
+    );
+    assert!(store.list(&keys.traefik()).await?.values.is_empty());
+    assert!(
+        store
+            .list(&keys.traefik_provider())
+            .await?
+            .values
+            .is_empty()
+    );
+
+    lease.resign().await?;
     Ok(())
 }
 

@@ -23,6 +23,7 @@ pub trait IngressBackend: Send + Sync {
 #[error("ingress backend publication failed: {message}")]
 pub struct IngressBackendError {
     message: String,
+    terminal_reason: Option<&'static str>,
 }
 
 impl IngressBackendError {
@@ -30,11 +31,25 @@ impl IngressBackendError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            terminal_reason: None,
+        }
+    }
+
+    /// Creates a non-retryable backend error caused by desired configuration.
+    pub fn terminal(reason: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            terminal_reason: Some(reason),
         }
     }
 
     /// Returns operator-facing backend failure detail.
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Returns the stable reason when retrying cannot change the outcome.
+    pub fn terminal_reason(&self) -> Option<&'static str> {
+        self.terminal_reason
     }
 }

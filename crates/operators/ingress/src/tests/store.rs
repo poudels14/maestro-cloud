@@ -12,7 +12,8 @@ use kernel_api::{
     Timestamp, TrafficGeneration, TrafficGenerationPhase,
 };
 use kernel_controller::{
-    Backoff, FencedStore, LeaderIdentity, LeadershipToken, RuntimeConfig, TimestampClock,
+    Backoff, FencedStore, LeaderIdentity, LeadershipToken, ReconcileError, RuntimeConfig,
+    TimestampClock,
 };
 use kernel_store::{
     CasOutcome, Clock, ExpectedVersion, InMemoryStore, Keyspace, MonotonicTime, PutRequest,
@@ -23,8 +24,22 @@ use super::plan::World as PlannedWorld;
 use crate::snapshot::ResourceSnapshot;
 use crate::{
     BackendChange, IngressBackend, IngressBackendError, IngressBlocklistChange,
-    IngressBlocklistReconciler, IngressController, IngressReconciler, IngressSettings,
+    IngressBlocklistReconciler, IngressController, IngressError, IngressReconciler,
+    IngressSettings,
 };
+
+#[test]
+fn terminal_backend_capacity_failure_is_not_retried() {
+    let classified =
+        crate::reconciler::classify_error(IngressError::Backend(IngressBackendError::terminal(
+            "TraefikConfigurationTooLarge",
+            "provider transaction exceeds the store limit",
+        )));
+    assert!(matches!(
+        classified,
+        ReconcileError::Terminal { reason, .. } if reason == "TraefikConfigurationTooLarge"
+    ));
+}
 
 #[tokio::test]
 async fn store_controller_stages_then_publishes_and_acknowledges_traffic()

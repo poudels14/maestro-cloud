@@ -23,6 +23,7 @@ pub struct IngressReconciler {
     timestamp_clock: Arc<dyn TimestampClock>,
     service_prefix: StorePrefix,
     trigger_prefix: StorePrefix,
+    backend_prefix: StorePrefix,
 }
 
 /// Watch-driven ingress operator whose primary resource is the singleton blocklist.
@@ -52,6 +53,7 @@ impl IngressReconciler {
             timestamp_clock,
             service_prefix: keyspace.resource_kind(&service_kind),
             trigger_prefix: keyspace.cluster(),
+            backend_prefix: keyspace.traefik(),
         })
     }
 
@@ -70,6 +72,7 @@ impl IngressReconciler {
             monotonic_clock,
             config,
         )
+        .with_ignored_trigger_prefix(self.backend_prefix.clone())
     }
 
     async fn converge(
@@ -214,14 +217,20 @@ fn until(now: Timestamp, deadline: Timestamp) -> Duration {
     Duration::from_millis(u64::try_from(millis).unwrap_or(u64::MAX))
 }
 
-fn classify_error(error: IngressError) -> ReconcileError {
+pub(crate) fn classify_error(error: IngressError) -> ReconcileError {
     match error {
         IngressError::Controller(error) => ReconcileError::Infrastructure(error),
         IngressError::Write(IngressWriteError::Controller(error)) => {
             ReconcileError::Infrastructure(error)
         }
-        IngressError::Backend(error) => ReconcileError::Retryable {
-            message: error.to_string(),
+        IngressError::Backend(error) => match error.terminal_reason() {
+            Some(reason) => ReconcileError::Terminal {
+                reason: reason.to_string(),
+                message: error.to_string(),
+            },
+            None => ReconcileError::Retryable {
+                message: error.to_string(),
+            },
         },
         error => ReconcileError::Terminal {
             reason: terminal_reason(&error).to_string(),

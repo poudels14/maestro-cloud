@@ -58,6 +58,18 @@ pub(crate) fn stored_value(
 }
 
 pub(crate) fn validate_transaction(transaction: &Transaction) -> Result<(), StoreError> {
+    let operations = transaction
+        .compares
+        .len()
+        .saturating_add(transaction.mutations.len());
+    if operations > crate::TRANSACTION_OPERATION_LIMIT {
+        return Err(StoreError::Contract {
+            message: format!(
+                "transaction contains {operations} operations; limit is {}",
+                crate::TRANSACTION_OPERATION_LIMIT
+            ),
+        });
+    }
     let unique_keys = transaction
         .mutations
         .iter()

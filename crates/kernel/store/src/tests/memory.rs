@@ -159,6 +159,36 @@ async fn transaction_is_atomic_and_watch_resumes_after_its_cursor() -> Result<()
 }
 
 #[tokio::test]
+async fn transaction_rejects_operations_beyond_the_backend_limit() {
+    let (store, _) = a_store();
+    let keys = Keyspace::new(&a_cluster());
+    let mutations = (0..=crate::TRANSACTION_OPERATION_LIMIT)
+        .map(|index| Mutation::Put {
+            key: a_key(&keys, &format!("oversized-{index}")),
+            value: Vec::new(),
+            session: None,
+        })
+        .collect();
+
+    let error = store
+        .txn(Transaction {
+            compares: Vec::new(),
+            mutations,
+        })
+        .await
+        .expect_err("oversized transaction should be rejected");
+    assert!(matches!(error, StoreError::Contract { .. }));
+    assert!(
+        store
+            .list(&keys.resource_kind(&a_kind()))
+            .await
+            .expect("list resources")
+            .values
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn session_expiry_deletes_bound_keys_and_wakes_watchers() {
     let (store, clock) = a_store();
     let keys = Keyspace::new(&a_cluster());

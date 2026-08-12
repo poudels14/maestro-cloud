@@ -12,7 +12,7 @@ use crate::{
 };
 
 #[tokio::test]
-async fn traefik_backend_stages_services_before_atomic_router_cutover()
+async fn traefik_backend_stages_services_before_router_cutover()
 -> Result<(), Box<dyn std::error::Error>> {
     let provider = Arc::new(RecordingProvider::default());
     let backend = TraefikBackend::new(ClusterId::new("cluster-1")?, provider.clone());

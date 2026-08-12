@@ -56,6 +56,7 @@ pub struct ControllerRuntime<R> {
     reconciler: Arc<R>,
     resource_prefix: StorePrefix,
     trigger_prefix: StorePrefix,
+    ignored_trigger_prefixes: Vec<StorePrefix>,
     fenced_store: Arc<FencedStore>,
     clock: Arc<dyn Clock>,
     config: RuntimeConfig,
@@ -105,12 +106,23 @@ where
             reconciler,
             resource_prefix,
             trigger_prefix,
+            ignored_trigger_prefixes: Vec::new(),
             fenced_store,
             clock,
             config,
             #[cfg(feature = "test-util")]
             journal: ReconcileJournal::default(),
         }
+    }
+
+    /// Ignores dependency events below a backend-owned subtree.
+    ///
+    /// This is useful when a reconciler's broad dependency watch contains the
+    /// integration state that the reconciler publishes itself. Primary resource
+    /// events must never be ignored.
+    pub fn with_ignored_trigger_prefix(mut self, prefix: StorePrefix) -> Self {
+        self.ignored_trigger_prefixes.push(prefix);
+        self
     }
 
     /// Returns the invocation journal owned by this runtime.
@@ -254,6 +266,17 @@ where
 
     fn schedule_event(&self, queue: &mut WorkQueue, event: WatchEventKind) {
         let now = self.clock.now();
+        let event_key = match &event {
+            WatchEventKind::Put(value) => &value.key,
+            WatchEventKind::Delete { key, .. } => key,
+        };
+        if self
+            .ignored_trigger_prefixes
+            .iter()
+            .any(|prefix| event_key.as_str().starts_with(prefix.as_str()))
+        {
+            return;
+        }
         match event {
             WatchEventKind::Put(value)
                 if value

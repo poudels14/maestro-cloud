@@ -230,17 +230,20 @@ async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
         finalizes: AtomicUsize::new(0),
         terminal: AtomicBool::new(false),
     });
-    let runtime = Arc::new(ControllerRuntime::new_with_trigger_prefix(
-        reconciler.clone(),
-        keys.resource_kind(&kind),
-        keys.resources(),
-        fenced,
-        clock.clone(),
-        RuntimeConfig::new(
-            Duration::from_secs(30),
-            Backoff::new(Duration::from_secs(1), Duration::from_secs(8))?,
-        )?,
-    ));
+    let runtime = Arc::new(
+        ControllerRuntime::new_with_trigger_prefix(
+            reconciler.clone(),
+            keys.resource_kind(&kind),
+            keys.cluster(),
+            fenced,
+            clock.clone(),
+            RuntimeConfig::new(
+                Duration::from_secs(30),
+                Backoff::new(Duration::from_secs(1), Duration::from_secs(8))?,
+            )?,
+        )
+        .with_ignored_trigger_prefix(keys.traefik()),
+    );
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let runtime_task = {
         let runtime = runtime.clone();
@@ -290,6 +293,21 @@ async fn runtime_processes_primary_dependency_and_level_triggered_resyncs()
         .await?;
     assert!(matches!(dependency, CasOutcome::Applied(_)));
     wait_for_count(&reconciler.reconciles, 4).await?;
+
+    let backend_key = keys.traefik_entry("http/routers/toy/rule")?;
+    let backend_write = store
+        .put_cas(PutRequest {
+            key: backend_key,
+            value: b"Host(`ignored.example.test`)".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: None,
+        })
+        .await?;
+    assert!(matches!(backend_write, CasOutcome::Applied(_)));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(reconciler.reconciles.load(Ordering::SeqCst), 4);
 
     clock.advance(Duration::from_secs(30));
     wait_for_count(&reconciler.reconciles, 6).await?;

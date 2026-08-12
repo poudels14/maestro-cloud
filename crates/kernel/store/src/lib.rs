@@ -41,6 +41,12 @@ pub use snapshot::{ClusterSnapshot, SnapshotError, StoreSnapshotExt, Unregistere
 pub use snapshot_normalize::{NormalizedClusterSnapshot, NormalizedUnregisteredResource};
 pub use store::{Session, Store, StoreWatch};
 
+/// Maximum number of compares and mutations accepted in one store transaction.
+///
+/// This matches the etcd cluster contract and is also enforced by the in-memory
+/// implementation so tests exercise production transaction sizing.
+pub const TRANSACTION_OPERATION_LIMIT: usize = 128;
+
 #[cfg(feature = "test-util")]
 pub mod conformance;
 

@@ -1,10 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use kernel_api::ClusterId;
 use kernel_controller::FencedStore;
-use kernel_store::{Keyspace, Mutation, StoreKey, Transaction, TransactionOutcome};
+use kernel_store::{
+    Keyspace, Mutation, StoreKey, StorePrefix, TRANSACTION_OPERATION_LIMIT, Transaction,
+    TransactionOutcome,
+};
 
 use crate::{
     IngressBackendError, TraefikBlocklistConfig, TraefikCutover, TraefikProvider, TraefikStage,
@@ -12,6 +15,24 @@ use crate::{
 
 const PROVIDER_READY_ENTRY: &str = "http/middlewares/maestro.internal-provider-ready/headers/customRequestHeaders/\
      X-Maestro-Provider-Ready";
+const FENCED_STORE_COMPARE_COUNT: usize = 1;
+const MAXIMUM_MUTATIONS_PER_TRANSACTION: usize =
+    TRANSACTION_OPERATION_LIMIT - FENCED_STORE_COMPARE_COUNT;
+
+#[derive(Debug, Clone, Copy)]
+enum Namespace {
+    Canonical,
+    Provider,
+}
+
+impl Namespace {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical mirror",
+            Self::Provider => "live provider",
+        }
+    }
+}
 
 /// Fenced persistence adapter for Traefik's cluster-scoped dynamic provider.
 pub struct StoreTraefikProvider {
@@ -30,19 +51,23 @@ impl StoreTraefikProvider {
 
     /// Creates valid inert provider state so Traefik can watch an otherwise empty root.
     pub async fn ensure_watchable_root(&self) -> Result<(), IngressBackendError> {
-        let key = self
-            .keyspace
-            .traefik_entry(PROVIDER_READY_ENTRY)
-            .map_err(|error| backend_error("provider root validation", error))?;
-        let mutations = self.mirrored_put(key, b"true".to_vec())?;
-        self.commit("provider root initialization", mutations).await
+        self.replace_exact(
+            "provider root initialization",
+            &[PROVIDER_READY_ENTRY.to_string()],
+            &BTreeMap::from([(PROVIDER_READY_ENTRY.to_string(), "true".to_string())]),
+        )
+        .await
     }
 
     async fn commit(
         &self,
         action: &str,
+        namespace: Namespace,
         mutations: Vec<Mutation>,
     ) -> Result<(), IngressBackendError> {
+        if mutations.is_empty() {
+            return Ok(());
+        }
         let outcome = self
             .store
             .txn(Transaction {
@@ -50,28 +75,29 @@ impl StoreTraefikProvider {
                 mutations,
             })
             .await
-            .map_err(|error| backend_error(action, error))?;
+            .map_err(|error| {
+                backend_error(&format!("{action} in the {}", namespace.label()), error)
+            })?;
         if outcome == TransactionOutcome::Conflict {
             Err(IngressBackendError::new(format!(
-                "Traefik {action} conflicted while the leadership fence was active"
+                "Traefik {action} in the {} conflicted while the leadership fence was active",
+                namespace.label()
             )))
         } else {
             Ok(())
         }
     }
 
-    async fn list_owned(&self, relative: &str) -> Result<Vec<StoreKey>, IngressBackendError> {
+    async fn list_owned(
+        &self,
+        namespace: Namespace,
+        relative: &str,
+    ) -> Result<BTreeMap<StoreKey, Vec<u8>>, IngressBackendError> {
         let (parent, _) = relative.rsplit_once('/').ok_or_else(|| {
             IngressBackendError::new("Traefik owned prefix has no parent directory")
         })?;
-        let owned = self
-            .keyspace
-            .traefik_entry(relative)
-            .map_err(|error| backend_error("owned prefix validation", error))?;
-        let parent = self
-            .keyspace
-            .traefik_prefix(parent)
-            .map_err(|error| backend_error("owned parent validation", error))?;
+        let owned = self.entry(namespace, relative)?;
+        let parent = self.prefix(namespace, parent)?;
         Ok(self
             .store
             .list(&parent)
@@ -79,161 +105,147 @@ impl StoreTraefikProvider {
             .map_err(|error| backend_error("list owned Traefik entries", error))?
             .values
             .into_iter()
-            .map(|stored| stored.key)
-            .filter(|key| key.as_str().starts_with(owned.as_str()))
+            .filter(|stored| stored.key.as_str().starts_with(owned.as_str()))
+            .map(|stored| (stored.key, stored.value))
             .collect())
     }
 
-    fn mirrored_put(
+    fn entry(&self, namespace: Namespace, relative: &str) -> Result<StoreKey, IngressBackendError> {
+        match namespace {
+            Namespace::Canonical => self.keyspace.traefik_entry(relative),
+            Namespace::Provider => self.keyspace.traefik_provider_entry(relative),
+        }
+        .map_err(|error| backend_error("provider path validation", error))
+    }
+
+    fn prefix(
         &self,
-        canonical: StoreKey,
-        value: Vec<u8>,
+        namespace: Namespace,
+        relative: &str,
+    ) -> Result<StorePrefix, IngressBackendError> {
+        match namespace {
+            Namespace::Canonical => self.keyspace.traefik_prefix(relative),
+            Namespace::Provider => self.keyspace.traefik_provider_prefix(relative),
+        }
+        .map_err(|error| backend_error("provider prefix validation", error))
+    }
+
+    async fn plan_exact_replacement(
+        &self,
+        namespace: Namespace,
+        owned_prefixes: &[String],
+        desired: &BTreeMap<String, String>,
     ) -> Result<Vec<Mutation>, IngressBackendError> {
-        let provider = self.provider_key(&canonical)?;
-        Ok(vec![
-            Mutation::Put {
-                key: canonical,
-                value: value.clone(),
-                session: None,
-            },
-            Mutation::Put {
-                key: provider,
-                value,
-                session: None,
-            },
-        ])
+        let mut current = BTreeMap::new();
+        for prefix in owned_prefixes {
+            current.extend(self.list_owned(namespace, prefix).await?);
+        }
+        let desired = desired
+            .iter()
+            .map(|(relative, value)| {
+                self.entry(namespace, relative)
+                    .map(|key| (key, value.as_bytes().to_vec()))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let mut mutations = current
+            .keys()
+            .filter(|key| !desired.contains_key(*key))
+            .cloned()
+            .map(|key| Mutation::Delete { key })
+            .collect::<Vec<_>>();
+        mutations.extend(
+            desired
+                .into_iter()
+                .filter(|(key, value)| current.get(key) != Some(value))
+                .map(|(key, value)| Mutation::Put {
+                    key,
+                    value,
+                    session: None,
+                }),
+        );
+        Ok(mutations)
     }
 
-    fn mirrored_delete(&self, canonical: StoreKey) -> Result<Vec<Mutation>, IngressBackendError> {
-        let provider = self.provider_key(&canonical)?;
-        Ok(vec![
-            Mutation::Delete { key: canonical },
-            Mutation::Delete { key: provider },
-        ])
+    fn validate_transaction_size(
+        &self,
+        action: &str,
+        namespace: Namespace,
+        mutations: &[Mutation],
+    ) -> Result<(), IngressBackendError> {
+        if mutations.len() <= MAXIMUM_MUTATIONS_PER_TRANSACTION {
+            Ok(())
+        } else {
+            Err(IngressBackendError::terminal(
+                "TraefikConfigurationTooLarge",
+                format!(
+                    "Traefik {action} requires {} mutations in the {} transaction; maximum is {}",
+                    mutations.len(),
+                    namespace.label(),
+                    MAXIMUM_MUTATIONS_PER_TRANSACTION
+                ),
+            ))
+        }
     }
 
-    fn provider_key(&self, canonical: &StoreKey) -> Result<StoreKey, IngressBackendError> {
-        let relative = canonical
-            .as_str()
-            .strip_prefix(self.keyspace.traefik().as_str())
-            .ok_or_else(|| {
-                IngressBackendError::new(
-                    "canonical Traefik key is outside the cluster provider root",
-                )
-            })?;
-        self.keyspace
-            .traefik_provider_entry(relative)
-            .map_err(|error| backend_error("provider mirror validation", error))
+    async fn replace_exact(
+        &self,
+        action: &str,
+        owned_prefixes: &[String],
+        desired: &BTreeMap<String, String>,
+    ) -> Result<(), IngressBackendError> {
+        if desired
+            .keys()
+            .any(|key| owned_prefixes.iter().all(|prefix| !key.starts_with(prefix)))
+        {
+            return Err(IngressBackendError::new(format!(
+                "Traefik {action} contains an entry outside its owned prefixes"
+            )));
+        }
+        let provider = self
+            .plan_exact_replacement(Namespace::Provider, owned_prefixes, desired)
+            .await?;
+        let canonical = self
+            .plan_exact_replacement(Namespace::Canonical, owned_prefixes, desired)
+            .await?;
+        self.validate_transaction_size(action, Namespace::Provider, &provider)?;
+        self.validate_transaction_size(action, Namespace::Canonical, &canonical)?;
+
+        // Traefik reads the slashless provider namespace. Keep its replacement
+        // atomic, then converge the canonical shadow in a separate transaction
+        // so mirroring does not double the live transaction's operation count.
+        self.commit(action, Namespace::Provider, provider).await?;
+        self.commit(action, Namespace::Canonical, canonical).await
     }
 }
 
 #[async_trait]
 impl TraefikProvider for StoreTraefikProvider {
     async fn stage(&self, stage: &TraefikStage) -> Result<(), IngressBackendError> {
-        let mut mutations = Vec::with_capacity(stage.entries.len() * 2);
-        for (relative, value) in &stage.entries {
-            let key = self
-                .keyspace
-                .traefik_entry(relative)
-                .map_err(|error| backend_error("stage path validation", error))?;
-            mutations.extend(self.mirrored_put(key, value.as_bytes().to_vec())?);
-        }
-        self.commit("generation staging", mutations).await
+        self.replace_exact(
+            "generation staging",
+            std::slice::from_ref(&stage.service_prefix),
+            &stage.entries,
+        )
+        .await
     }
 
     async fn cutover(&self, cutover: &TraefikCutover) -> Result<(), IngressBackendError> {
-        let router_prefix = self
-            .keyspace
-            .traefik_entry(&cutover.router_prefix)
-            .map_err(|error| backend_error("router prefix validation", error))?;
-        let desired = cutover
-            .routers
-            .iter()
-            .map(|(relative, value)| {
-                self.keyspace
-                    .traefik_entry(relative)
-                    .map(|key| (key, value.as_bytes().to_vec()))
-                    .map_err(|error| backend_error("router path validation", error))
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
-        if desired
-            .keys()
-            .any(|key| !key.as_str().starts_with(router_prefix.as_str()))
-        {
-            return Err(IngressBackendError::new(
-                "Traefik cutover contains a router outside its owned prefix",
-            ));
-        }
-
-        let mut deletes = self
-            .list_owned(&cutover.router_prefix)
-            .await?
-            .into_iter()
-            .filter(|key| !desired.contains_key(key))
-            .collect::<BTreeSet<StoreKey>>();
-        for relative in &cutover.remove_prefixes {
-            deletes.extend(self.list_owned(relative).await?);
-        }
-
-        let mut mutations = Vec::with_capacity((deletes.len() + desired.len()) * 2);
-        for key in deletes {
-            mutations.extend(self.mirrored_delete(key)?);
-        }
-        for (key, value) in desired {
-            mutations.extend(self.mirrored_put(key, value)?);
-        }
-        self.commit("router cutover", mutations).await
+        let mut owned = vec![cutover.router_prefix.clone()];
+        owned.extend(cutover.remove_prefixes.iter().cloned());
+        self.replace_exact("router cutover", &owned, &cutover.routers)
+            .await
     }
 
     async fn replace_blocklist(
         &self,
         config: &TraefikBlocklistConfig,
     ) -> Result<(), IngressBackendError> {
-        let owned_prefixes = config
-            .owned_prefixes
-            .iter()
-            .map(|relative| {
-                self.keyspace
-                    .traefik_entry(relative)
-                    .map_err(|error| backend_error("blocklist prefix validation", error))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let desired = config
-            .entries
-            .iter()
-            .map(|(relative, value)| {
-                self.keyspace
-                    .traefik_entry(relative)
-                    .map(|key| (key, value.as_bytes().to_vec()))
-                    .map_err(|error| backend_error("blocklist path validation", error))
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
-        if desired.keys().any(|key| {
-            owned_prefixes
-                .iter()
-                .all(|prefix| !key.as_str().starts_with(prefix.as_str()))
-        }) {
-            return Err(IngressBackendError::new(
-                "Traefik blocklist contains an entry outside its owned prefixes",
-            ));
-        }
-        let mut deletes = BTreeSet::new();
-        for prefix in &config.owned_prefixes {
-            deletes.extend(
-                self.list_owned(prefix)
-                    .await?
-                    .into_iter()
-                    .filter(|key| !desired.contains_key(key)),
-            );
-        }
-        let mut mutations = Vec::with_capacity((deletes.len() + desired.len()) * 2);
-        for key in deletes {
-            mutations.extend(self.mirrored_delete(key)?);
-        }
-        for (key, value) in desired {
-            mutations.extend(self.mirrored_put(key, value)?);
-        }
-        self.commit("blocklist replacement", mutations).await
+        self.replace_exact(
+            "blocklist replacement",
+            &config.owned_prefixes,
+            &config.entries,
+        )
+        .await
     }
 }
 

@@ -6,12 +6,11 @@ use kernel_api::{
 };
 use kernel_controller::{ControllerError, FencedStore};
 use kernel_store::{
-    Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, Transaction, TransactionOutcome,
-    Version,
+    Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, TRANSACTION_OPERATION_LIMIT,
+    Transaction, TransactionOutcome, Version,
 };
 
-// etcd counts compares and mutations together. FencedStore adds the leadership compare.
-const ETCD_TRANSACTION_OPERATION_LIMIT: usize = 128;
+// FencedStore adds the leadership compare to the store operation count.
 const FENCED_STORE_COMPARE_COUNT: usize = 1;
 
 /// Atomic assignment changes applied by one successfully fenced scheduler pass.
@@ -132,11 +131,11 @@ impl AssignmentWriter {
             .len()
             .saturating_add(mutations.len())
             .saturating_add(FENCED_STORE_COMPARE_COUNT);
-        if operations > ETCD_TRANSACTION_OPERATION_LIMIT {
+        if operations > TRANSACTION_OPERATION_LIMIT {
             return Err(AssignmentWriteError::AtomicGroupTooLarge {
                 service_id: service_id.clone(),
                 operations,
-                limit: ETCD_TRANSACTION_OPERATION_LIMIT,
+                limit: TRANSACTION_OPERATION_LIMIT,
             });
         }
 

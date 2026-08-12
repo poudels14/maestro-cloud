@@ -4,16 +4,15 @@ use std::fmt::Display;
 use kernel_api::{Object, ResourceKind, ResourceName, ResourceRevision};
 use kernel_controller::{ControllerError, FencedStore};
 use kernel_store::{
-    Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, Transaction, TransactionOutcome,
+    Compare, ExpectedVersion, Keyspace, Mutation, StoredValue, TRANSACTION_OPERATION_LIMIT,
+    Transaction, TransactionOutcome,
 };
 use serde::Serialize;
 
 use crate::snapshot::{ResourceSnapshot, StoredResource};
 use crate::{DeploymentPlan, ResourceStatusUpdate, ServiceUpdate};
 
-// etcd counts every compare and mutation against one transaction's operation
-// limit. FencedStore contributes one additional leadership compare.
-const ETCD_TRANSACTION_OPERATION_LIMIT: usize = 128;
+// FencedStore contributes one additional leadership compare.
 const FENCED_STORE_COMPARE_COUNT: usize = 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -139,7 +138,7 @@ impl DeploymentWriter {
         if cutover_writes.len() > batch_size {
             return Err(DeploymentWriteError::AtomicGroupTooLarge {
                 operations: transaction_operations(primary.len(), cutover_writes.len(), 2),
-                limit: ETCD_TRANSACTION_OPERATION_LIMIT,
+                limit: TRANSACTION_OPERATION_LIMIT,
             });
         }
         self.apply_write_batches(store, &primary, &cutover_writes, batch_size, &mut report)
@@ -369,12 +368,12 @@ fn transaction_batch_size(
     operations_per_item: usize,
 ) -> Result<usize, DeploymentWriteError> {
     let fixed = primary_compares.saturating_add(FENCED_STORE_COMPARE_COUNT);
-    let available = ETCD_TRANSACTION_OPERATION_LIMIT.saturating_sub(fixed);
+    let available = TRANSACTION_OPERATION_LIMIT.saturating_sub(fixed);
     let capacity = available / operations_per_item;
     if capacity == 0 {
         Err(DeploymentWriteError::AtomicGroupTooLarge {
             operations: fixed.saturating_add(operations_per_item),
-            limit: ETCD_TRANSACTION_OPERATION_LIMIT,
+            limit: TRANSACTION_OPERATION_LIMIT,
         })
     } else {
         Ok(capacity)

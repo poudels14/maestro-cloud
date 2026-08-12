@@ -31,11 +31,13 @@ pub fn traefik_service_router_prefix(service_id: &kernel_api::ServiceId) -> Stri
 pub struct TraefikStage {
     /// Immutable generation being staged.
     pub generation_id: TrafficGenerationId,
+    /// Prefix containing every generation-specific service entry.
+    pub service_prefix: String,
     /// Dynamic-provider key/value entries below the provider root.
     pub entries: BTreeMap<String, String>,
 }
 
-/// Atomic stable-router replacement and obsolete-generation cleanup.
+/// Stable-router replacement and obsolete-generation cleanup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraefikCutover {
     /// Prefix containing every stable router owned by this Service.
@@ -61,7 +63,7 @@ pub trait TraefikProvider: Send + Sync {
     /// Idempotently writes every generation-specific entry.
     async fn stage(&self, stage: &TraefikStage) -> Result<(), IngressBackendError>;
 
-    /// Atomically replaces stable routers and removes explicitly retired prefixes.
+    /// Replaces stable routers and removes explicitly retired prefixes.
     async fn cutover(&self, cutover: &TraefikCutover) -> Result<(), IngressBackendError>;
 
     /// Atomically replaces every reserved blocklist router, service, and middleware entry.
@@ -255,6 +257,7 @@ fn render_active(cluster_id: &ClusterId, active: &PublishedTraffic) -> RenderedA
     RenderedActive {
         stage: TraefikStage {
             generation_id: active.generation_id.clone(),
+            service_prefix: format!("http/services/{generation_prefix}"),
             entries: stage,
         },
         routers,
