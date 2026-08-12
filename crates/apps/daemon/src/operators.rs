@@ -17,6 +17,8 @@ use webhook::WebhookReconciler;
 use crate::operator_leader::OperatorBackends;
 use crate::{OperatorSettings, OperatorSuiteError};
 
+const BUILD_RECONCILE_CONCURRENCY: usize = 4;
+
 /// Invocation counts from one deterministic bounded suite pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OperatorInvocationReport {
@@ -93,7 +95,8 @@ impl OperatorSuite {
             store.clone(),
             monotonic_clock.clone(),
             settings.runtime.clone(),
-        );
+        )
+        .with_max_concurrency(BUILD_RECONCILE_CONCURRENCY)?;
         let build_watch = Arc::new(BuildWatchReconciler::new(
             cluster_id.clone(),
             backends.build_revisions,

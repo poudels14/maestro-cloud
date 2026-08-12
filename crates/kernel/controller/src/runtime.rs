@@ -1,7 +1,10 @@
+use std::collections::BTreeSet;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::future::{BoxFuture, FutureExt};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use kernel_store::{
     Clock, MonotonicTime, StoreError, StoreKey, StorePrefix, StoredValue, WatchCursor,
     WatchEventKind, WatchStart,
@@ -49,6 +52,9 @@ pub enum RuntimeConfigError {
     /// A zero resync interval would cause an unbounded hot loop.
     #[error("controller resync interval must be greater than zero")]
     ZeroResyncInterval,
+    /// A controller must always retain at least one reconciliation worker.
+    #[error("controller maximum concurrency must be greater than zero")]
+    ZeroMaxConcurrency,
 }
 
 /// Watch-driven, level-triggered executor for one typed reconciler.
@@ -60,6 +66,7 @@ pub struct ControllerRuntime<R> {
     fenced_store: Arc<FencedStore>,
     clock: Arc<dyn Clock>,
     config: RuntimeConfig,
+    max_concurrency: usize,
     #[cfg(feature = "test-util")]
     journal: ReconcileJournal,
 }
@@ -89,6 +96,19 @@ where
         )
     }
 
+    /// Allows distinct resource keys to reconcile concurrently while preserving
+    /// strict single-flight execution for each individual key.
+    pub fn with_max_concurrency(
+        mut self,
+        max_concurrency: usize,
+    ) -> Result<Self, RuntimeConfigError> {
+        if max_concurrency == 0 {
+            return Err(RuntimeConfigError::ZeroMaxConcurrency);
+        }
+        self.max_concurrency = max_concurrency;
+        Ok(self)
+    }
+
     /// Binds a typed reconciler to a broader prefix containing dependency events.
     ///
     /// Values under `resource_prefix` remain the only objects passed to the
@@ -110,6 +130,7 @@ where
             fenced_store,
             clock,
             config,
+            max_concurrency: 1,
             #[cfg(feature = "test-util")]
             journal: ReconcileJournal::default(),
         }
@@ -153,9 +174,9 @@ where
 
     /// Runs watch, retry, and resync scheduling until shutdown or fence loss.
     ///
-    /// A watch cursor loss triggers a full linearizable relist. All resource
-    /// processing is serialized by key; this implementation deliberately uses
-    /// one executor, which also bounds total concurrency for a controller.
+    /// A watch cursor loss triggers a full linearizable relist. Resource
+    /// processing is single-flight per key and bounded by the configured
+    /// controller concurrency.
     pub async fn run(&self, mut shutdown: watch::Receiver<bool>) -> Result<(), ControllerError> {
         let mut failure_attempt = 0_u32;
         loop {
@@ -200,12 +221,28 @@ where
             WatchStart::After(trigger_cursor),
         )?;
         let mut resync_at = now.saturating_add(self.config.resync_interval);
+        let mut active = BTreeSet::new();
+        let mut in_flight: FuturesUnordered<BoxFuture<'_, ScheduledResult>> =
+            FuturesUnordered::new();
 
         loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let wake_at = queue.next_deadline().min(resync_at);
+            let now = self.clock.now();
+            while in_flight.len() < self.max_concurrency {
+                let Some((key, attempt)) = queue.take_due_excluding(now, &active) else {
+                    break;
+                };
+                active.insert(key.clone());
+                in_flight.push(self.process_scheduled(key, attempt, now).boxed());
+            }
+            let work_at = if in_flight.len() < self.max_concurrency {
+                queue.next_deadline_excluding(&active)
+            } else {
+                MonotonicTime::from_duration(Duration::MAX)
+            };
+            let wake_at = work_at.min(resync_at);
             tokio::select! {
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
@@ -226,6 +263,16 @@ where
                         Err(error) => return Err(error.into()),
                     }
                 }
+                completed = in_flight.next(), if !in_flight.is_empty() => {
+                    let Some(completed) = completed else {
+                        continue;
+                    };
+                    active.remove(&completed.key);
+                    let result = completed.result?;
+                    if let Some(result) = result {
+                        self.apply_result(&mut queue, completed.key, completed.started_at, result);
+                    }
+                }
                 () = self.clock.sleep_until(wake_at) => {
                     let now = self.clock.now();
                     if now >= resync_at {
@@ -236,9 +283,6 @@ where
                             WatchStart::After(trigger_cursor),
                         )?;
                         resync_at = now.saturating_add(self.config.resync_interval);
-                    }
-                    if let Some((key, attempt)) = queue.take_due(now) {
-                        self.run_scheduled(&mut queue, key, attempt, now).await?;
                     }
                 }
             }
@@ -298,17 +342,42 @@ where
         }
     }
 
-    async fn run_scheduled(
+    async fn process_scheduled(
+        &self,
+        key: StoreKey,
+        attempt: u32,
+        started_at: MonotonicTime,
+    ) -> ScheduledResult {
+        let result = self.process_key(&key, attempt).await;
+        ScheduledResult {
+            key,
+            started_at,
+            result,
+        }
+    }
+
+    async fn process_key(
+        &self,
+        key: &StoreKey,
+        attempt: u32,
+    ) -> Result<Option<ProcessResult>, ControllerError> {
+        let Some(stored) = self.fenced_store.raw_store().get(key).await? else {
+            return Ok(None);
+        };
+        self.process(stored, attempt).await.map(Some)
+    }
+
+    fn apply_result(
         &self,
         queue: &mut WorkQueue,
         key: StoreKey,
-        attempt: u32,
-        now: MonotonicTime,
-    ) -> Result<(), ControllerError> {
-        let Some(stored) = self.fenced_store.raw_store().get(&key).await? else {
-            return Ok(());
-        };
-        match self.process(stored, attempt).await? {
+        started_at: MonotonicTime,
+        result: ProcessResult,
+    ) {
+        if !queue.is_known(&key) || queue.is_scheduled(&key) {
+            return;
+        }
+        match result {
             ProcessResult {
                 action: Some(Action::Done),
                 ..
@@ -318,15 +387,20 @@ where
                 action: Some(Action::Requeue(delay)),
                 next_attempt,
                 ..
-            } => queue.schedule(key, now.saturating_add(delay), next_attempt),
+            } => queue.schedule(key, started_at.saturating_add(delay), next_attempt),
             ProcessResult {
                 action: Some(Action::RequeueAt(deadline)),
                 next_attempt,
                 ..
             } => queue.schedule(key, deadline, next_attempt),
         }
-        Ok(())
     }
+}
+
+struct ScheduledResult {
+    key: StoreKey,
+    started_at: MonotonicTime,
+    result: Result<Option<ProcessResult>, ControllerError>,
 }
 
 fn retryable_runtime_error(error: &ControllerError) -> bool {

@@ -13,6 +13,7 @@ use kernel_store::{
     SessionBinding, Store,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 use super::clock::{ManualClock, NoopClock};
 use super::store_fault::FailFirstListStore;
@@ -74,6 +75,147 @@ impl ToyReconciler {
             Ok(Action::Done)
         }
     }
+}
+
+struct BlockingReconciler {
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+    started: AtomicUsize,
+    releases: Semaphore,
+}
+
+#[async_trait]
+impl Reconciler for BlockingReconciler {
+    type Id = ResourceName;
+    type Spec = ToySpec;
+    type Status = ToyStatus;
+
+    const KIND: &'static str = "ConcurrentToy";
+    const FINALIZER: Option<&'static str> = None;
+
+    async fn reconcile(
+        &self,
+        _resource: Object<Self::Id, Self::Spec, Self::Status>,
+        _context: ReconcileContext,
+    ) -> Result<Action, ReconcileError> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let permit = self
+            .releases
+            .acquire()
+            .await
+            .map_err(|_| ReconcileError::Terminal {
+                reason: "TestStopped".to_string(),
+                message: "test reconciliation semaphore closed".to_string(),
+            })?;
+        permit.forget();
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(Action::Done)
+    }
+}
+
+#[tokio::test]
+async fn runtime_bounds_distinct_key_concurrency_and_keeps_each_key_single_flight()
+-> Result<(), Box<dyn std::error::Error>> {
+    let clock = Arc::new(NoopClock);
+    let store = Arc::new(InMemoryStore::new(clock.clone()));
+    let keys = Keyspace::new(&ClusterId::new("concurrent-runtime")?);
+    let session = store.session(Duration::from_secs(30)).await?;
+    let leader = store
+        .put_cas(PutRequest {
+            key: keys.leader(),
+            value: b"leader".to_vec(),
+            expected: ExpectedVersion::Missing,
+            session: Some(SessionBinding {
+                session_id: session.id(),
+            }),
+        })
+        .await?;
+    let CasOutcome::Applied(leader) = leader else {
+        return Err("leader should be created".into());
+    };
+    let fenced = Arc::new(FencedStore::new(
+        store.clone(),
+        keys.leader(),
+        LeadershipToken::from_campaign(
+            LeaderIdentity {
+                node_id: kernel_api::NodeId::new("node-1")?,
+                instance_id: kernel_api::NodeInstanceId::new("instance-1")?,
+            },
+            session.id(),
+            leader.version,
+        ),
+    ));
+    let kind = ResourceKind::new(BlockingReconciler::KIND)?;
+    let first_key = keys.resource(&kind, &ResourceName::new("first")?);
+    let second_key = keys.resource(&kind, &ResourceName::new("second")?);
+    for (key, name) in [(&first_key, "first"), (&second_key, "second")] {
+        assert!(matches!(
+            store
+                .put_cas(PutRequest {
+                    key: key.clone(),
+                    value: serde_json::to_vec(&toy_resource_named(name, None)?)?,
+                    expected: ExpectedVersion::Missing,
+                    session: None,
+                })
+                .await?,
+            CasOutcome::Applied(_)
+        ));
+    }
+
+    let reconciler = Arc::new(BlockingReconciler {
+        active: AtomicUsize::new(0),
+        max_active: AtomicUsize::new(0),
+        started: AtomicUsize::new(0),
+        releases: Semaphore::new(0),
+    });
+    let runtime = ControllerRuntime::new(
+        reconciler.clone(),
+        keys.resource_kind(&kind),
+        fenced,
+        clock,
+        RuntimeConfig::new(
+            Duration::from_secs(30),
+            Backoff::new(Duration::from_millis(10), Duration::from_secs(1))?,
+        )?,
+    )
+    .with_max_concurrency(2)?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let runtime_task = tokio::spawn(async move { runtime.run(shutdown_rx).await });
+
+    wait_for_count(&reconciler.started, 2).await?;
+    assert_eq!(reconciler.active.load(Ordering::SeqCst), 2);
+    assert_eq!(reconciler.max_active.load(Ordering::SeqCst), 2);
+
+    let first = store
+        .get(&first_key)
+        .await?
+        .ok_or("first resource missing")?;
+    assert!(matches!(
+        store
+            .put_cas(PutRequest {
+                key: first_key,
+                value: serde_json::to_vec(&toy_resource_named("first", None)?)?,
+                expected: ExpectedVersion::Exact(first.version),
+                session: None,
+            })
+            .await?,
+        CasOutcome::Applied(_)
+    ));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(reconciler.started.load(Ordering::SeqCst), 2);
+
+    reconciler.releases.add_permits(2);
+    wait_for_count(&reconciler.started, 3).await?;
+    assert!(reconciler.active.load(Ordering::SeqCst) <= 1);
+    reconciler.releases.add_permits(1);
+    wait_for_count_below(&reconciler.active, 1).await?;
+    shutdown_tx.send_replace(true);
+    runtime_task.await??;
+    Ok(())
 }
 
 #[tokio::test]
@@ -569,6 +711,23 @@ async fn wait_for_count(
     }
     Err(format!(
         "counter did not reach {minimum}; observed {}",
+        counter.load(Ordering::SeqCst)
+    )
+    .into())
+}
+
+async fn wait_for_count_below(
+    counter: &AtomicUsize,
+    maximum: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _ in 0..100 {
+        if counter.load(Ordering::SeqCst) < maximum {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!(
+        "counter did not fall below {maximum}; observed {}",
         counter.load(Ordering::SeqCst)
     )
     .into())

@@ -38,22 +38,34 @@ impl WorkQueue {
         }
     }
 
-    pub(crate) fn next_deadline(&self) -> MonotonicTime {
+    pub(crate) fn next_deadline_excluding(&self, excluded: &BTreeSet<StoreKey>) -> MonotonicTime {
         self.scheduled
-            .values()
-            .map(|scheduled| scheduled.deadline)
+            .iter()
+            .filter(|(key, _)| !excluded.contains(*key))
+            .map(|(_, scheduled)| scheduled.deadline)
             .min()
             .unwrap_or_else(|| MonotonicTime::from_duration(Duration::MAX))
     }
 
-    pub(crate) fn take_due(&mut self, now: MonotonicTime) -> Option<(StoreKey, u32)> {
-        let key = self
-            .scheduled
-            .iter()
-            .find_map(|(key, scheduled)| (scheduled.deadline <= now).then(|| key.clone()))?;
+    pub(crate) fn take_due_excluding(
+        &mut self,
+        now: MonotonicTime,
+        excluded: &BTreeSet<StoreKey>,
+    ) -> Option<(StoreKey, u32)> {
+        let key = self.scheduled.iter().find_map(|(key, scheduled)| {
+            (scheduled.deadline <= now && !excluded.contains(key)).then(|| key.clone())
+        })?;
         self.scheduled
             .remove(&key)
             .map(|scheduled| (key, scheduled.attempt))
+    }
+
+    pub(crate) fn is_known(&self, key: &StoreKey) -> bool {
+        self.known.contains(key)
+    }
+
+    pub(crate) fn is_scheduled(&self, key: &StoreKey) -> bool {
+        self.scheduled.contains_key(key)
     }
 
     pub(crate) fn replace_with(&mut self, values: &[StoredValue], now: MonotonicTime) {
