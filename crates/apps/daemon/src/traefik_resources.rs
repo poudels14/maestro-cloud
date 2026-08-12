@@ -173,6 +173,15 @@ impl TraefikSystemResources {
         BTreeMap::from([(self.service.meta.id.clone(), self.host_ports.clone())])
     }
 
+    pub(crate) fn store_host_access(&self, store_client_port: u16) -> firewall::SystemHostAccess {
+        firewall::SystemHostAccess {
+            service_id: self.service.meta.id.clone(),
+            trusted_source_cidrs: Vec::new(),
+            host_ports: vec![store_client_port],
+            endpoints: Vec::new(),
+        }
+    }
+
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     pub(crate) fn firewall_routes(&self) -> Vec<firewall::HostPortRoute> {
         self.host_ports

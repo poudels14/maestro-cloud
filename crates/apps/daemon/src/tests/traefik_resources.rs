@@ -127,6 +127,15 @@ fn builds_cluster_wide_mtls_ingress_service_and_host_publications()
             vec![publication(80), publication(443)]
         )])
     );
+    assert_eq!(
+        resources.store_host_access(cluster.ports.store_client),
+        firewall::SystemHostAccess {
+            service_id: ServiceId::new(TRAEFIK_SERVICE_ID)?,
+            trusted_source_cidrs: Vec::new(),
+            host_ports: vec![cluster.ports.store_client],
+            endpoints: Vec::new(),
+        }
+    );
     #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
     assert_eq!(
         resources.firewall_routes(),

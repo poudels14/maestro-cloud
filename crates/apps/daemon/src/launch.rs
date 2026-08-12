@@ -323,6 +323,10 @@ async fn launch_daemon_inner(
             .firewall
             .system_services
             .insert(resources.service.meta.id.clone());
+        operator_settings
+            .firewall
+            .system_host_access
+            .push(resources.store_host_access(cluster.ports.store_client));
         #[cfg(all(target_os = "linux", not(feature = "macos-platform")))]
         {
             operator_settings.firewall.host_port_routes = resources.firewall_routes();
