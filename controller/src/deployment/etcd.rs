@@ -3,18 +3,14 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
-use etcd_client::{
-    Client as EtcdClient, Compare, CompareOp, GetOptions, PutOptions, SortOrder, SortTarget, Txn,
-    TxnOp,
-};
+use etcd_client::{Client as EtcdClient, Compare, CompareOp, GetOptions, PutOptions, Txn, TxnOp};
 
 use crate::deployment::ingress_blocklist;
 use crate::deployment::keys::{
-    CLUSTER_FREEZE_KEY, CLUSTER_UPGRADE_KEY, SERVICES_PREFIX, SERVICES_ROOT,
-    deployment_build_env_key, deployment_build_secrets_key, deployment_deploy_env_key,
-    deployment_deploy_secrets_key, deployment_prefix, replica_state_key, replica_states_prefix,
-    service_deployment_history_key, service_deployment_history_prefix,
-    service_history_next_index_key, service_id_from_history_key, service_id_from_info_key,
+    CLUSTER_FREEZE_KEY, CLUSTER_UPGRADE_KEY, SERVICES_ROOT, deployment_build_env_key,
+    deployment_build_secrets_key, deployment_deploy_env_key, deployment_deploy_secrets_key,
+    deployment_prefix, replica_state_key, replica_states_prefix, service_deployment_history_key,
+    service_deployment_history_prefix, service_history_next_index_key, service_id_from_info_key,
     service_info_key, service_prefix, system_restart_request_key, system_upgrade_request_key,
 };
 use crate::deployment::store::{ClusterStore, SystemUpgradeRequest};
@@ -27,7 +23,6 @@ use crate::utils::time::current_time_millis;
 
 const MAX_STATUS_TXN_RETRIES: usize = 8;
 const MAX_TXN_RETRIES: usize = 16;
-const ETCD_MAX_DECODING_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 
 fn is_missing_election_leader(error: &etcd_client::Error) -> bool {
     matches!(
@@ -291,11 +286,35 @@ impl EtcdStateStore {
         let client = self.client.lock().await;
         let mut kv_client = client
             .kv_client()
-            .max_decoding_message_size(ETCD_MAX_DECODING_MESSAGE_SIZE);
+            .max_decoding_message_size(crate::utils::etcd::MAX_DECODING_MESSAGE_SIZE);
         kv_client
             .get(key, options)
             .await
             .map_err(|err| anyhow!("failed etcd get request: {err}"))
+    }
+
+    async fn get_prefix_entries(
+        &self,
+        prefix: impl Into<Vec<u8>>,
+        keys_only: bool,
+        max_results: Option<usize>,
+    ) -> Result<Vec<etcd_client::KeyValue>> {
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_prefix(&client, prefix, keys_only, max_results)
+            .await
+            .map_err(|err| anyhow!("failed paginated etcd prefix request: {err}"))
+    }
+
+    async fn get_range_entries(
+        &self,
+        start_key: Vec<u8>,
+        range_end: Vec<u8>,
+        keys_only: bool,
+    ) -> Result<Vec<etcd_client::KeyValue>> {
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_range(&client, start_key, range_end, keys_only, None)
+            .await
+            .map_err(|err| anyhow!("failed paginated etcd range request: {err}"))
     }
 
     async fn txn(&self, compare: Vec<Compare>, success: Vec<TxnOp>) -> Result<bool> {
@@ -396,9 +415,16 @@ impl EtcdStateStore {
             .map_err(|err| anyhow!("failed to configure traefik ingress: {err}"))?;
 
         if let Some(range_end) = prefix_range_end(servers_prefix.as_bytes()) {
-            let options = GetOptions::new().with_range(range_end).with_keys_only();
-            if let Ok(response) = client.get(servers_prefix.as_bytes(), Some(options)).await {
-                for kv in response.kvs() {
+            if let Ok(entries) = crate::utils::etcd::get_range(
+                &client,
+                servers_prefix.as_bytes().to_vec(),
+                range_end,
+                true,
+                None,
+            )
+            .await
+            {
+                for kv in &entries {
                     let key = String::from_utf8_lossy(kv.key()).to_string();
                     if !new_keys.contains(&key) {
                         let _ = client.delete(kv.key(), None).await;
@@ -450,10 +476,11 @@ impl EtcdStateStore {
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| anyhow!("failed to compute range end for deployment lookup"))?;
-        let options = GetOptions::new().with_range(range_end);
-        let response = self.get(prefix.to_vec(), Some(options)).await?;
+        let entries = self
+            .get_range_entries(prefix.to_vec(), range_end, false)
+            .await?;
 
-        for kv in response.kvs() {
+        for kv in &entries {
             let d = serde_json::from_slice::<ServiceDeployment>(kv.value())
                 .map_err(|err| anyhow!("invalid deployment JSON under `{prefix_key}`: {err}"))?;
             if d.id != deployment.id {
@@ -558,22 +585,20 @@ impl EtcdStateStore {
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| anyhow!("failed to compute range end for replica states prefix"))?;
-        let options = GetOptions::new().with_range(range_end);
-        let response = self.get(prefix.to_vec(), Some(options)).await?;
+        let entries = self
+            .get_range_entries(prefix.to_vec(), range_end, false)
+            .await?;
 
         let mut states = Vec::new();
-        for kv in response.kvs() {
+        for kv in &entries {
             let state = serde_json::from_slice::<ReplicaState>(kv.value())
                 .map_err(|err| anyhow!("invalid replica state JSON: {err}"))?;
             states.push(state);
         }
-        let cluster_response = self
-            .get(
-                b"/maetro/cluster/replica-states/".to_vec(),
-                Some(GetOptions::new().with_prefix()),
-            )
+        let cluster_entries = self
+            .get_prefix_entries("/maetro/cluster/replica-states/", false, None)
             .await?;
-        for kv in cluster_response.kvs() {
+        for kv in &cluster_entries {
             let state = serde_json::from_slice::<ReplicaState>(kv.value())
                 .map_err(|err| anyhow!("invalid scheduled replica state JSON: {err}"))?;
             if state.service_id.as_deref() == Some(service_id)
@@ -710,17 +735,10 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn list_cluster_nodes(&self) -> Result<Vec<crate::cluster::NodeInfo>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(
-                "/maetro/cluster/nodes/",
-                Some(GetOptions::new().with_prefix()),
-            )
+        let entries = self
+            .get_prefix_entries("/maetro/cluster/nodes/", false, None)
             .await?;
-        response
-            .kvs()
+        entries
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()
@@ -759,14 +777,10 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn list_cluster_node_records(&self) -> Result<Vec<crate::cluster::NodeRecord>> {
-        let response = self
-            .get(
-                b"/maetro/cluster/node-records/".to_vec(),
-                Some(GetOptions::new().with_prefix()),
-            )
+        let entries = self
+            .get_prefix_entries("/maetro/cluster/node-records/", false, None)
             .await?;
-        response
-            .kvs()
+        entries
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()
@@ -953,14 +967,10 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn list_cluster_traffic(&self) -> Result<Vec<crate::cluster::TrafficGeneration>> {
-        let response = self
-            .get(
-                b"/maetro/cluster/traffic/".to_vec(),
-                Some(GetOptions::new().with_prefix()),
-            )
+        let entries = self
+            .get_prefix_entries("/maetro/cluster/traffic/", false, None)
             .await?;
-        response
-            .kvs()
+        entries
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()
@@ -972,14 +982,10 @@ impl ClusterStore for EtcdStateStore {
         deployment_id: Option<&str>,
         replica_index: Option<u32>,
     ) -> Result<Vec<crate::cluster::PlacementHistory>> {
-        let response = self
-            .get(
-                b"/maetro/cluster/placements/".to_vec(),
-                Some(GetOptions::new().with_prefix().with_limit(10_000)),
-            )
+        let entries = self
+            .get_prefix_entries("/maetro/cluster/placements/", false, Some(10_000))
             .await?;
-        let mut placements = response
-            .kvs()
+        let mut placements = entries
             .iter()
             .filter_map(|entry| {
                 serde_json::from_slice::<crate::cluster::PlacementHistory>(entry.value()).ok()
@@ -1020,14 +1026,10 @@ impl ClusterStore for EtcdStateStore {
         &self,
     ) -> Result<std::collections::BTreeMap<String, crate::cluster_stats::ControllerStatsSnapshot>>
     {
-        let response = self
-            .get(
-                b"/maetro/cluster/stats/".to_vec(),
-                Some(GetOptions::new().with_prefix()),
-            )
+        let entries = self
+            .get_prefix_entries("/maetro/cluster/stats/", false, None)
             .await?;
-        response
-            .kvs()
+        entries
             .iter()
             .map(|entry| {
                 let node_id = std::str::from_utf8(entry.key())?
@@ -1058,14 +1060,10 @@ impl ClusterStore for EtcdStateStore {
     async fn list_node_disks(
         &self,
     ) -> Result<std::collections::BTreeMap<String, Vec<crate::cluster::NodeDiskInfo>>> {
-        let response = self
-            .get(
-                b"/maetro/cluster/disks/".to_vec(),
-                Some(GetOptions::new().with_prefix()),
-            )
+        let entries = self
+            .get_prefix_entries("/maetro/cluster/disks/", false, None)
             .await?;
-        response
-            .kvs()
+        entries
             .iter()
             .map(|entry| {
                 let node_id = std::str::from_utf8(entry.key())?
@@ -1199,14 +1197,10 @@ impl ClusterStore for EtcdStateStore {
         now_ms: i64,
     ) -> Result<()> {
         let mut client = self.client.lock().await;
-        let records = client
-            .get(
-                "/maetro/cluster/node-records/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
+        let records =
+            crate::utils::etcd::get_prefix(&client, "/maetro/cluster/node-records/", false, None)
+                .await?;
         let parsed_records = records
-            .kvs()
             .iter()
             .map(|entry| {
                 serde_json::from_slice::<crate::cluster::NodeRecord>(entry.value())
@@ -1231,13 +1225,10 @@ impl ClusterStore for EtcdStateStore {
             }
         }
 
-        let states = client
-            .get(
-                "/maetro/cluster/replica-states/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
-        for entry in states.kvs() {
+        let states =
+            crate::utils::etcd::get_prefix(&client, "/maetro/cluster/replica-states/", false, None)
+                .await?;
+        for entry in &states {
             let key = entry.key().to_vec();
             let previous = entry.value().to_vec();
             let mut state: ReplicaState = serde_json::from_slice(&previous)?;
@@ -1263,13 +1254,10 @@ impl ClusterStore for EtcdStateStore {
             }
         }
 
-        let placements = client
-            .get(
-                "/maetro/cluster/placements/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
-        for entry in placements.kvs() {
+        let placements =
+            crate::utils::etcd::get_prefix(&client, "/maetro/cluster/placements/", false, None)
+                .await?;
+        for entry in &placements {
             let placement: crate::cluster::PlacementHistory =
                 serde_json::from_slice(entry.value())?;
             let index_key = format!(
@@ -1312,14 +1300,9 @@ impl ClusterStore for EtcdStateStore {
                 }))?,
             );
         }
-        let existing_voters = client
-            .get(
-                "/maetro/cluster/voters/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
+        let existing_voters =
+            crate::utils::etcd::get_prefix(&client, "/maetro/cluster/voters/", false, None).await?;
         let existing_voter_values = existing_voters
-            .kvs()
             .iter()
             .map(|entry| (entry.key().to_vec(), entry.value().to_vec()))
             .collect::<std::collections::BTreeMap<_, _>>();
@@ -1349,13 +1332,10 @@ impl ClusterStore for EtcdStateStore {
             }
         }
 
-        let receipts = client
-            .get(
-                "/maetro/cluster/requests/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
-        for entry in receipts.kvs() {
+        let receipts =
+            crate::utils::etcd::get_prefix(&client, "/maetro/cluster/requests/", false, None)
+                .await?;
+        for entry in &receipts {
             let receipt: ClusterRequestReceipt = serde_json::from_slice(entry.value())?;
             if now_ms.saturating_sub(receipt.updated_at_ms) < 24 * 60 * 60 * 1000 {
                 continue;
@@ -1375,16 +1355,12 @@ impl ClusterStore for EtcdStateStore {
 
     async fn list_service_ids(&self) -> anyhow::Result<Vec<String>> {
         let prefix_key = format!("{SERVICES_ROOT}/");
-        let prefix = prefix_key.as_bytes();
-        let range_end = prefix_range_end(prefix)
-            .ok_or_else(|| anyhow!("failed to compute range end for services prefix"))?;
-        let options = GetOptions::new()
-            .with_range(range_end)
-            .with_sort(SortTarget::Key, SortOrder::Ascend);
-        let response = self.get(prefix.to_vec(), Some(options)).await?;
+        let entries = self
+            .get_prefix_entries(prefix_key.as_bytes(), true, None)
+            .await?;
 
         let mut ids = HashSet::new();
-        for kv in response.kvs() {
+        for kv in &entries {
             let key = String::from_utf8(kv.key().to_vec())
                 .map_err(|err| anyhow!("service key for `{prefix_key}` is not utf8: {err}"))?;
             if !key.ends_with("/info") {
@@ -1402,49 +1378,40 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn list_queued_deployments(&self) -> anyhow::Result<Vec<QueuedDeployment>> {
-        let prefix_key = format!("{SERVICES_ROOT}/");
-        let prefix = prefix_key.as_bytes();
-        let range_end = prefix_range_end(prefix)
-            .ok_or_else(|| anyhow!("failed to compute range end for services prefix"))?;
-        let options = GetOptions::new().with_range(range_end);
-        let response = self.get(prefix.to_vec(), Some(options)).await?;
-
         let mut queued = Vec::new();
-        for kv in response.kvs() {
-            let key = String::from_utf8(kv.key().to_vec())
-                .map_err(|err| anyhow!("deployment key for `{prefix_key}` is not utf8: {err}"))?;
-            if !key.contains("/deployments/history/") {
-                continue;
+        for service_id in self.list_service_ids().await? {
+            let prefix_key = service_deployment_history_prefix(&service_id);
+            let entries = self
+                .get_prefix_entries(prefix_key.as_bytes(), false, None)
+                .await?;
+            for kv in &entries {
+                let key = String::from_utf8(kv.key().to_vec()).map_err(|err| {
+                    anyhow!("deployment key for `{prefix_key}` is not utf8: {err}")
+                })?;
+                let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
+                    .map_err(|err| anyhow!("invalid deployment JSON at key `{key}`: {err}"))?;
+                if deployment.status != DeploymentStatus::Queued {
+                    continue;
+                }
+
+                let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
+                let mut deployment = deployment;
+                if let Some(secrets) = &mut deployment.config.deploy.secrets
+                    && secrets.items.is_empty()
+                    && !secrets.keys.is_empty()
+                {
+                    let key = deployment_deploy_secrets_key(&service_id, &deployment.id);
+                    secrets.items = self.read_encrypted(&key).await;
+                }
+                self.restore_deployment_data(&service_id, &mut deployment)
+                    .await;
+                queued.push(QueuedDeployment {
+                    service_id: service_id.clone(),
+                    key,
+                    mod_revision,
+                    deployment,
+                });
             }
-
-            let Some(service_id) = service_id_from_history_key(&key) else {
-                continue;
-            };
-
-            let deployment = serde_json::from_slice::<ServiceDeployment>(kv.value())
-                .map_err(|err| anyhow!("invalid deployment JSON at key `{key}`: {err}"))?;
-            if deployment.status != DeploymentStatus::Queued {
-                continue;
-            }
-
-            let mod_revision = decode_mod_revision(kv.mod_revision(), &key)?;
-
-            let mut deployment = deployment;
-            if let Some(secrets) = &mut deployment.config.deploy.secrets
-                && secrets.items.is_empty()
-                && !secrets.keys.is_empty()
-            {
-                let key = deployment_deploy_secrets_key(&service_id, &deployment.id);
-                secrets.items = self.read_encrypted(&key).await;
-            }
-            self.restore_deployment_data(&service_id, &mut deployment)
-                .await;
-            queued.push(QueuedDeployment {
-                service_id,
-                key,
-                mod_revision,
-                deployment,
-            });
         }
 
         queued.sort_by(|a, b| {
@@ -2123,22 +2090,13 @@ impl ClusterStore for EtcdStateStore {
     }
 
     async fn list_service_infos(&self) -> anyhow::Result<Vec<ServiceInfo>> {
-        let prefix = SERVICES_PREFIX.as_bytes();
-        let range_end = prefix_range_end(prefix)
-            .ok_or_else(|| anyhow!("failed to compute range end for services prefix"))?;
-        let options = GetOptions::new()
-            .with_range(range_end)
-            .with_sort(SortTarget::Key, SortOrder::Ascend);
-        let response = self.get(prefix.to_vec(), Some(options)).await?;
-
         let mut infos = Vec::new();
-        for kv in response.kvs() {
-            let key = String::from_utf8(kv.key().to_vec()).map_err(|err| {
-                anyhow!("service key is not utf8 for prefix `{SERVICES_PREFIX}`: {err}")
-            })?;
-            if !key.ends_with("/info") {
+        for service_id in self.list_service_ids().await? {
+            let key = service_info_key(&service_id);
+            let response = self.get(key.as_bytes().to_vec(), None).await?;
+            let Some(kv) = response.kvs().first() else {
                 continue;
-            }
+            };
 
             match serde_json::from_slice::<ServiceInfo>(kv.value()) {
                 Ok(info) => infos.push(info),
@@ -2159,13 +2117,12 @@ impl ClusterStore for EtcdStateStore {
         let prefix = prefix_key.as_bytes();
         let range_end = prefix_range_end(prefix)
             .ok_or_else(|| anyhow!("failed to compute range end for deployments prefix"))?;
-        let options = GetOptions::new()
-            .with_range(range_end)
-            .with_sort(SortTarget::Key, SortOrder::Descend);
-        let response = self.get(prefix.to_vec(), Some(options)).await?;
+        let entries = self
+            .get_range_entries(prefix.to_vec(), range_end, false)
+            .await?;
 
-        let mut deployments = Vec::with_capacity(response.kvs().len());
-        for kv in response.kvs() {
+        let mut deployments = Vec::with_capacity(entries.len());
+        for kv in entries.iter().rev() {
             let deployment =
                 serde_json::from_slice::<ServiceDeployment>(kv.value()).map_err(|err| {
                     anyhow!(
@@ -2830,14 +2787,10 @@ impl ClusterStore for EtcdStateStore {
         let routers_prefix = "traefik/http/routers/";
         let services_prefix = "traefik/http/services/";
 
-        let traffic_response = self
-            .get(
-                b"/maetro/cluster/traffic/".to_vec(),
-                Some(GetOptions::new().with_prefix()),
-            )
+        let traffic_entries = self
+            .get_prefix_entries("/maetro/cluster/traffic/", false, None)
             .await?;
-        let cluster_services = traffic_response
-            .kvs()
+        let cluster_services = traffic_entries
             .iter()
             .filter_map(|entry| {
                 serde_json::from_slice::<crate::cluster::types::TrafficGeneration>(entry.value())
@@ -2848,11 +2801,10 @@ impl ClusterStore for EtcdStateStore {
         let mut routers: HashMap<String, (String, Vec<String>, String)> = HashMap::new();
 
         if let Some(range_end) = prefix_range_end(routers_prefix.as_bytes()) {
-            let options = GetOptions::new().with_range(range_end);
-            let response = self
-                .get(routers_prefix.as_bytes().to_vec(), Some(options))
+            let entries = self
+                .get_range_entries(routers_prefix.as_bytes().to_vec(), range_end, false)
                 .await?;
-            for kv in response.kvs() {
+            for kv in &entries {
                 let key = String::from_utf8_lossy(kv.key()).to_string();
                 let value = String::from_utf8_lossy(kv.value()).to_string();
                 let rest = &key[routers_prefix.len()..];
@@ -2880,11 +2832,10 @@ impl ClusterStore for EtcdStateStore {
         let mut server_map: HashMap<String, Vec<String>> = HashMap::new();
 
         if let Some(range_end) = prefix_range_end(services_prefix.as_bytes()) {
-            let options = GetOptions::new().with_range(range_end);
-            let response = self
-                .get(services_prefix.as_bytes().to_vec(), Some(options))
+            let entries = self
+                .get_range_entries(services_prefix.as_bytes().to_vec(), range_end, false)
                 .await?;
-            for kv in response.kvs() {
+            for kv in &entries {
                 let key = String::from_utf8_lossy(kv.key()).to_string();
                 let value = String::from_utf8_lossy(kv.value()).to_string();
                 let rest = &key[services_prefix.len()..];

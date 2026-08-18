@@ -2,9 +2,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, EventType, GetOptions, TlsOptions, Txn, TxnOp,
-};
+use etcd_client::{Client, Compare, CompareOp, ConnectOptions, EventType, TlsOptions, Txn, TxnOp};
 use tokio::sync::{Mutex, watch};
 
 use crate::{
@@ -124,14 +122,10 @@ impl EtcdAssignmentStore {
 #[async_trait]
 impl AssignmentStore for EtcdAssignmentStore {
     async fn list_all(&self) -> Result<Vec<AssignmentManifest>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(ASSIGNMENTS_PREFIX, Some(GetOptions::new().with_prefix()))
-            .await?;
-        let mut manifests = response
-            .kvs()
+        let client = self.client.lock().await;
+        let entries =
+            crate::utils::etcd::get_prefix(&client, ASSIGNMENTS_PREFIX, false, None).await?;
+        let mut manifests = entries
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect::<Result<Vec<AssignmentManifest>>>()?;
@@ -317,14 +311,9 @@ impl AssignmentStore for EtcdAssignmentStore {
     }
 
     async fn list_replica_states(&self) -> Result<Vec<ReplicaState>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(REPLICA_STATES_PREFIX, Some(GetOptions::new().with_prefix()))
-            .await?;
-        response
-            .kvs()
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_prefix(&client, REPLICA_STATES_PREFIX, false, None)
+            .await?
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()

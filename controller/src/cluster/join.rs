@@ -12,8 +12,8 @@ use chacha20poly1305::{
     aead::{Aead, Generate, KeyInit, Payload},
 };
 use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, GetOptions, MemberAddOptions, PutOptions,
-    TlsOptions, Txn, TxnOp,
+    Client, Compare, CompareOp, ConnectOptions, MemberAddOptions, PutOptions, TlsOptions, Txn,
+    TxnOp,
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -801,13 +801,9 @@ async fn validate_reservations(
         }
     }
     let requested_subnet = crate::cluster::network::Ipv4Cidr::parse(&request.subnet)?;
-    let existing_subnets = client
-        .get(
-            "/maetro/cluster/subnets/",
-            Some(GetOptions::new().with_prefix()),
-        )
-        .await?;
-    for entry in existing_subnets.kvs() {
+    let existing_subnets =
+        crate::utils::etcd::get_prefix(client, "/maetro/cluster/subnets/", false, None).await?;
+    for entry in &existing_subnets {
         let value: serde_json::Value = serde_json::from_slice(entry.value())?;
         if value.get("nodeId").and_then(serde_json::Value::as_str) == Some(request.node_id.as_str())
         {
@@ -936,16 +932,12 @@ async fn authoritative_voters(
     client: &mut Client,
     runtime: &ClusterRuntime,
 ) -> Result<Vec<ClusterNodeEndpoint>> {
-    let reservations = client
-        .get(
-            "/maetro/cluster/control-addresses/",
-            Some(GetOptions::new().with_prefix()),
-        )
-        .await?
-        .kvs()
-        .iter()
-        .map(|entry| serde_json::from_slice::<serde_json::Value>(entry.value()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let reservations =
+        crate::utils::etcd::get_prefix(client, "/maetro/cluster/control-addresses/", false, None)
+            .await?
+            .iter()
+            .map(|entry| serde_json::from_slice::<serde_json::Value>(entry.value()))
+            .collect::<Result<Vec<_>, _>>()?;
     let members = client.member_list().await?;
     let mut voter_endpoints = BTreeSet::new();
     for member in members.members() {

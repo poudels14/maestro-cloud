@@ -251,15 +251,16 @@ async fn load_service_map() -> Result<HashMap<String, crate::cluster::types::Tra
         _ => None,
     };
     let options = tls.map(|tls| etcd_client::ConnectOptions::new().with_tls(tls));
-    let mut client = etcd_client::Client::connect(endpoints, options).await?;
-    let response = client
-        .get(
-            "/maetro/cluster/traefik-service-map/",
-            Some(etcd_client::GetOptions::new().with_prefix()),
-        )
-        .await?;
+    let client = etcd_client::Client::connect(endpoints, options).await?;
+    let entries = crate::utils::etcd::get_prefix(
+        &client,
+        "/maetro/cluster/traefik-service-map/",
+        false,
+        None,
+    )
+    .await?;
     let mut map = HashMap::new();
-    for entry in response.kvs() {
+    for entry in &entries {
         let key = std::str::from_utf8(entry.key())?;
         let Some(label) = key.strip_prefix("/maetro/cluster/traefik-service-map/") else {
             continue;

@@ -7,9 +7,7 @@ use std::{collections::BTreeMap, sync::RwLock};
 
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
-use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, GetOptions, PutOptions, TlsOptions, Txn, TxnOp,
-};
+use etcd_client::{Client, Compare, CompareOp, ConnectOptions, PutOptions, TlsOptions, Txn, TxnOp};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::cluster::types::{LeadershipToken, NodeId, NodeInfo, NodeRecord, NodeState};
@@ -282,17 +280,9 @@ impl NodeRegistry for EtcdNodeRegistry {
     }
 
     async fn list_nodes(&self) -> Result<Vec<NodeInfo>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(
-                "/maetro/cluster/nodes/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
-        response
-            .kvs()
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_prefix(&client, "/maetro/cluster/nodes/", false, None)
+            .await?
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()
@@ -346,13 +336,10 @@ impl NodeRegistry for EtcdNodeRegistry {
             .collect::<HashMap<_, _>>();
         let mut events = Vec::new();
         let mut client = self.client.lock().await;
-        let response = client
-            .get(
-                "/maetro/cluster/node-records/",
-                Some(GetOptions::new().with_prefix()),
-            )
-            .await?;
-        for entry in response.kvs() {
+        let entries =
+            crate::utils::etcd::get_prefix(&client, "/maetro/cluster/node-records/", false, None)
+                .await?;
+        for entry in &entries {
             let mut record: NodeRecord = serde_json::from_slice(entry.value())?;
             let previous = record.clone();
             let node_id = record.last_info.node_id.clone();

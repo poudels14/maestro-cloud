@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
-use etcd_client::{Client, Compare, CompareOp, DeleteOptions, GetOptions, Txn, TxnOp};
+use etcd_client::{Client, Compare, CompareOp, DeleteOptions, Txn, TxnOp};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
@@ -72,15 +72,9 @@ impl PolicyStore for EtcdPolicyStore<'_> {
     }
 
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>> {
-        self.client
-            .lock()
-            .await
-            .get(
-                prefix,
-                Some(GetOptions::new().with_prefix().with_keys_only()),
-            )
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_prefix(&client, prefix, true, None)
             .await?
-            .kvs()
             .iter()
             .map(|entry| {
                 std::str::from_utf8(entry.key())
@@ -120,16 +114,10 @@ impl PolicyStore for EtcdPolicyStore<'_> {
 }
 
 pub async fn read(client: &Arc<Mutex<Client>>) -> Result<Vec<String>> {
-    let response = client
-        .lock()
-        .await
-        .get(
-            INGRESS_BLOCKLIST_PREFIX,
-            Some(GetOptions::new().with_prefix()),
-        )
-        .await?;
-    let mut addresses = response
-        .kvs()
+    let client = client.lock().await;
+    let entries =
+        crate::utils::etcd::get_prefix(&client, INGRESS_BLOCKLIST_PREFIX, false, None).await?;
+    let mut addresses = entries
         .iter()
         .map(|entry| {
             std::str::from_utf8(entry.value())

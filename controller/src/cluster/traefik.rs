@@ -6,8 +6,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use etcd_client::{
-    Client, Compare, CompareOp, ConnectOptions, DeleteOptions, EventType, GetOptions, TlsOptions,
-    Txn, TxnOp,
+    Client, Compare, CompareOp, ConnectOptions, DeleteOptions, EventType, TlsOptions, Txn, TxnOp,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, broadcast, watch};
@@ -67,14 +66,9 @@ impl EtcdTrafficManager {
     }
 
     pub async fn list_traffic(&self) -> Result<Vec<TrafficGeneration>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(TRAFFIC_PREFIX, Some(GetOptions::new().with_prefix()))
-            .await?;
-        response
-            .kvs()
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_prefix(&client, TRAFFIC_PREFIX, false, None)
+            .await?
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()
@@ -381,17 +375,11 @@ impl EtcdTrafficManager {
         }
         let active_prefix = format!("{service_id}-g-{}", active.generation);
         let services_prefix = format!("traefik/http/services/{service_id}-g-");
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(
-                services_prefix.as_str(),
-                Some(GetOptions::new().with_prefix().with_keys_only()),
-            )
-            .await?;
+        let client = self.client.lock().await;
+        let entries = crate::utils::etcd::get_prefix(&client, services_prefix, true, None).await?;
+        drop(client);
         let mut labels = BTreeSet::new();
-        for entry in response.kvs() {
+        for entry in &entries {
             let key = std::str::from_utf8(entry.key())?;
             if let Some(label) = key
                 .strip_prefix("traefik/http/services/")
@@ -436,18 +424,11 @@ impl EtcdTrafficManager {
         service_id: &str,
         exact_service_label: Option<&str>,
     ) -> Result<BTreeSet<String>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(
-                GATEWAY_PREFIX,
-                Some(GetOptions::new().with_prefix().with_keys_only()),
-            )
-            .await?;
+        let client = self.client.lock().await;
+        let entries = crate::utils::etcd::get_prefix(&client, GATEWAY_PREFIX, true, None).await?;
         let generation_prefix = format!("{service_id}-g-");
         let mut prefixes = BTreeSet::new();
-        for entry in response.kvs() {
+        for entry in &entries {
             let key = std::str::from_utf8(entry.key())?;
             let parts = key.split('/').collect::<Vec<_>>();
             if parts.len() < 5 || parts[0] != "maestro-gateway" || parts[2] != "http" {
@@ -469,14 +450,9 @@ impl EtcdTrafficManager {
     }
 
     pub async fn list_dns(&self) -> Result<Vec<DnsRecordSet>> {
-        let response = self
-            .client
-            .lock()
-            .await
-            .get(DNS_PREFIX, Some(GetOptions::new().with_prefix()))
-            .await?;
-        response
-            .kvs()
+        let client = self.client.lock().await;
+        crate::utils::etcd::get_prefix(&client, DNS_PREFIX, false, None)
+            .await?
             .iter()
             .map(|entry| serde_json::from_slice(entry.value()).map_err(Into::into))
             .collect()
