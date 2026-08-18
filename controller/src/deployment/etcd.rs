@@ -27,6 +27,7 @@ use crate::utils::time::current_time_millis;
 
 const MAX_STATUS_TXN_RETRIES: usize = 8;
 const MAX_TXN_RETRIES: usize = 16;
+const ETCD_MAX_DECODING_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 
 fn is_missing_election_leader(error: &etcd_client::Error) -> bool {
     matches!(
@@ -287,8 +288,11 @@ impl EtcdStateStore {
         key: Vec<u8>,
         options: Option<GetOptions>,
     ) -> Result<etcd_client::GetResponse> {
-        let mut client = self.client.lock().await;
-        client
+        let client = self.client.lock().await;
+        let mut kv_client = client
+            .kv_client()
+            .max_decoding_message_size(ETCD_MAX_DECODING_MESSAGE_SIZE);
+        kv_client
             .get(key, options)
             .await
             .map_err(|err| anyhow!("failed etcd get request: {err}"))
