@@ -350,7 +350,10 @@ impl Server {
         let ingestion_auth =
             middleware::from_fn_with_state(self.state.clone(), require_ingestion_token);
         let ingestion = Router::new()
-            .route("/api/logs", post(Self::ingest_logs))
+            .route(
+                "/api/logs",
+                post(Self::ingest_logs).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+            )
             .route("/api/metrics", post(Self::ingest_metrics))
             .route_layer(ingestion_auth);
 
