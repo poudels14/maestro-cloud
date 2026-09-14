@@ -34,7 +34,17 @@
           version = maestroVersion;
           src = ./.;
 
-          cargoLock = {
+          # Change only crate download URLs. extraRegistries also emits a second
+          # crates.io source in Cargo's config, which Cargo rejects as a duplicate.
+          cargoDeps = (rustPlatform.importCargoLock.override {
+            fetchurl = args:
+              pkgs.fetchurl (args // {
+                url = pkgs.lib.replaceStrings
+                  ["https://crates.io/api/v1/crates/"]
+                  ["https://static.crates.io/crates/"]
+                  args.url;
+              });
+          }) {
             lockFile = ./Cargo.lock;
           };
 
