@@ -6,7 +6,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-const CURRENT_FILE: &str = "current.log";
+pub(crate) const CURRENT_FILE: &str = "current.log";
 const MAX_LINE_BYTES: usize = 256 * 1024;
 const LINE_BUFFER: usize = 1024;
 
