@@ -1,0 +1,161 @@
+mod support;
+
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use maestro_control::{ApiState, StoreWriter, router};
+use maestro_core::{DeploymentStatus, ServiceId};
+use serde_json::{Value, json};
+use support::{FakeObserved, LocalWriter};
+use tower::ServiceExt;
+
+fn app() -> (Arc<LocalWriter>, axum::Router) {
+    let writer = Arc::new(LocalWriter::new());
+    let state = Arc::new(ApiState {
+        writer: writer.clone(),
+        observed: Arc::new(FakeObserved::default()),
+    });
+    (writer, router(state))
+}
+
+async fn call(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
+fn services_file(image: &str) -> Value {
+    json!({
+        "services": {
+            "api": { "name": "API", "image": image, "deploy": { "replicas": 2 } },
+            "web": { "name": "Web", "image": "nginx:1.27" }
+        }
+    })
+}
+
+#[tokio::test]
+async fn rollout_previews_then_applies_changes() {
+    let (writer, app) = app();
+
+    let (status, preview) = call(&app, "POST", "/api/rollout", Some(services_file("api:1"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(preview["created"], json!(["api", "web"]));
+    assert_eq!(preview["applied"], false);
+    assert!(writer.state().services().unwrap().is_empty());
+
+    let (_, applied) = call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    assert_eq!(applied["deployments"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        writer
+            .state()
+            .deployments_with_status(DeploymentStatus::Queued)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let (_, second) = call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:2")),
+    )
+    .await;
+    assert_eq!(second["updated"], json!(["api"]));
+    assert_eq!(second["unchanged"], json!(["web"]));
+    assert_eq!(
+        writer
+            .state()
+            .deployments(&ServiceId::from("api"))
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn rejects_invalid_specs() {
+    let (_, app) = app();
+    let (status, body) = call(
+        &app,
+        "PUT",
+        "/api/services/api",
+        Some(json!({ "name": "API", "image": "nginx", "build": { "dockerfile": "Dockerfile" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("either image or build")
+    );
+}
+
+#[tokio::test]
+async fn queues_and_lists_deployments() {
+    let (_, app) = app();
+    let (status, _) = call(&app, "POST", "/api/services/api/deployments", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    call(
+        &app,
+        "PUT",
+        "/api/services/api",
+        Some(json!({ "name": "API", "image": "nginx" })),
+    )
+    .await;
+    let (status, queued) = call(&app, "POST", "/api/services/api/deployments", None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let deployment_id = queued["deploymentId"].as_str().unwrap().to_string();
+    assert!(deployment_id.starts_with('d'));
+
+    let (_, deployments) = call(&app, "GET", "/api/services/api/deployments", None).await;
+    assert_eq!(deployments[0]["id"], deployment_id);
+    assert_eq!(deployments[0]["status"], "queued");
+}
+
+#[tokio::test]
+async fn deleting_service_cancels_its_deployments() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+
+    let (status, _) = call(&app, "DELETE", "/api/services/api", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        writer
+            .state()
+            .service(&ServiceId::from("api"))
+            .unwrap()
+            .is_none()
+    );
+    let (status, _) = call(&app, "DELETE", "/api/services/api", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
