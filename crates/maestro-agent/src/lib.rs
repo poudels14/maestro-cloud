@@ -1,3 +1,4 @@
+mod attach;
 mod build;
 mod dns;
 mod error;
@@ -9,6 +10,7 @@ mod source;
 mod status;
 mod system;
 
+pub use attach::{Attachment, ControlLink, StreamPlanSource};
 pub use build::{BuildKitBuilder, BuildKitSettings, BuildRequest, image_name};
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
 pub use error::AgentError;
