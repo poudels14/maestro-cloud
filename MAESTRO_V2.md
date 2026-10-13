@@ -364,7 +364,7 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 ### Phase 2: single-node parity
 
 - [x] Traefik file-provider ingress (system container, host network) and routing table
-- [ ] In-process DNS (`hickory-dns`) for `*.maestro.internal`
+- [x] In-process DNS (`hickory-proto`) on the bridge gateway for `*.maestro.internal`, upstream forwarding
 - [ ] Builds via BuildKit, build queue, registry push
 - [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
 - [x] API served on `/run/maestro/api.sock` for the admin container

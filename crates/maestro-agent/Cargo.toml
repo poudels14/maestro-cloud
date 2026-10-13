@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 hex = "0.4.3"
+hickory-proto = "0.26.3"
 maestro-core = { version = "0.1.0", path = "../maestro-core" }
 maestro-runtime = { version = "0.1.0", path = "../maestro-runtime" }
 maestro-store = { version = "0.1.0", path = "../maestro-store" }

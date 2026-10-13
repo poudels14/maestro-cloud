@@ -1,3 +1,4 @@
+mod dns;
 mod error;
 mod health;
 mod ingress;
@@ -7,6 +8,7 @@ mod source;
 mod status;
 mod system;
 
+pub use dns::{DnsRecords, DnsServer, internal_names, upstream_resolvers};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};
 pub use ingress::IngressWriter;

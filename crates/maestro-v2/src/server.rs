@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,15 +7,16 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    HealthMonitor, IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard,
-    SystemSupervisor, apply_workload_slice_limits, detect_capacity, system_reserve,
-    traefik_container,
+    DnsRecords, DnsServer, HealthMonitor, IngressWriter, LocalPlanSource, Reconciler,
+    ReconcilerSettings, StatusBoard, SystemSupervisor, apply_workload_slice_limits,
+    detect_capacity, internal_names, system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::{
     ApiState, Deployer, DeployerSettings, ObservedReplicas, RoutingInput, build_routes, router,
 };
 use maestro_core::{
-    ClusterConfig, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaStatus, RouteTable,
+    ClusterConfig, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus,
+    RouteTable,
 };
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::{Consensus, ConsensusSettings, Mutation};
@@ -26,6 +28,7 @@ const RAFT_ADDRESS: &str = "127.0.0.1:7400";
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const ROUTING_RESYNC: Duration = Duration::from_secs(10);
+const DNS_PORT: u16 = 53;
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
@@ -86,6 +89,12 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         tracing::warn!(%error, "workload slice limits were not applied");
     }
     let subnet = first_node_subnet(&config.cluster.cidr)?;
+    let gateway = subnet_gateway(&subnet)?;
+    let host_resolv = std::fs::read_to_string(host_resolv_conf()).unwrap_or_default();
+    let container_resolv =
+        write_container_resolv_conf(&args.data_dir, gateway, &config.cluster.name)?;
+    let dns_records = DnsRecords::default();
+    let dns = DnsServer::new(dns_records.clone(), upstream_resolvers(&host_resolv));
     consensus
         .write(vec![Mutation::PutNode {
             node: NodeRecord {
@@ -119,7 +128,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
                 namespace: CONTAINERD_NAMESPACE.to_string(),
                 snapshotter: "overlayfs".to_string(),
                 state_dir: runtime_dir,
-                resolv_conf: host_resolv_conf(),
+                resolv_conf: container_resolv,
                 log_uri,
             },
             network,
@@ -168,7 +177,8 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         result = reconciler.run() => result?,
         _ = health.run() => {}
         _ = system.run() => {}
-        _ = run_routing(consensus.clone(), routing_board, ingress) => {}
+        _ = dns.run(SocketAddr::new(gateway, DNS_PORT)) => {}
+        _ = run_routing(consensus.clone(), routing_board, ingress, dns_records, config.cluster.name.clone()) => {}
         _ = run_deployer(deployer, leader) => {}
         result = axum::serve(listener, api.clone()) => result?,
         result = axum::serve(socket_listener, api) => result?,
@@ -190,7 +200,13 @@ async fn run_deployer(deployer: Deployer<Consensus, BoardReplicas>, consensus: A
     }
 }
 
-async fn run_routing(consensus: Arc<Consensus>, board: StatusBoard, mut ingress: IngressWriter) {
+async fn run_routing(
+    consensus: Arc<Consensus>,
+    board: StatusBoard,
+    mut ingress: IngressWriter,
+    dns_records: DnsRecords,
+    cluster: String,
+) {
     let mut board_changes = board.subscribe();
     let mut store_changes = consensus.state().subscribe();
     let mut previous = RouteTable::default();
@@ -204,12 +220,57 @@ async fn run_routing(consensus: Arc<Consensus>, board: StatusBoard, mut ingress:
             }
             Err(error) => tracing::warn!(%error, "failed to compute routes"),
         }
+        match dns_names(&consensus, &board, &cluster) {
+            Ok(names) => dns_records.replace(names),
+            Err(error) => tracing::warn!(%error, "failed to compute DNS records"),
+        }
         tokio::select! {
             _ = board_changes.changed() => {}
             _ = store_changes.recv() => {}
             _ = tokio::time::sleep(ROUTING_RESYNC) => {}
         }
     }
+}
+
+fn dns_names(
+    consensus: &Consensus,
+    board: &StatusBoard,
+    cluster: &str,
+) -> anyhow::Result<HashMap<String, Vec<IpAddr>>> {
+    let state = consensus.state();
+    let healthy = state
+        .nodes()?
+        .iter()
+        .map(|node| state.assignments(node.id))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .filter_map(|assignment| {
+            let status = board.get(&assignment.replica_id)?;
+            let ip = status
+                .ip
+                .filter(|_| status.phase == ReplicaPhase::Healthy)?;
+            Some((assignment, ip))
+        })
+        .collect::<Vec<_>>();
+    let names = healthy
+        .iter()
+        .flat_map(|(assignment, ip)| {
+            let replica_names = internal_names(cluster, assignment.replica_id.as_str());
+            let service_names = internal_names(cluster, assignment.service_id.as_str());
+            replica_names
+                .into_iter()
+                .chain(service_names)
+                .map(move |name| (name, *ip))
+        })
+        .fold(
+            HashMap::<String, Vec<IpAddr>>::new(),
+            |mut names, (name, ip)| {
+                names.entry(name).or_default().push(ip);
+                names
+            },
+        );
+    Ok(names)
 }
 
 fn route_table(
@@ -283,6 +344,29 @@ fn cni_dirs() -> Vec<PathBuf> {
         Some(paths) => std::env::split_paths(&paths).collect(),
         None => DEFAULT_CNI_DIRS.iter().map(PathBuf::from).collect(),
     }
+}
+
+fn subnet_gateway(subnet: &str) -> anyhow::Result<IpAddr> {
+    let network = subnet
+        .split_once('/')
+        .map(|(network, _)| network)
+        .context("node subnet must be a CIDR")?
+        .parse::<std::net::Ipv4Addr>()?;
+    let [first, second, third, _] = network.octets();
+    Ok(IpAddr::from([first, second, third, 1]))
+}
+
+fn write_container_resolv_conf(
+    data_dir: &Path,
+    gateway: IpAddr,
+    cluster: &str,
+) -> anyhow::Result<PathBuf> {
+    let path = data_dir.join("resolv.conf");
+    std::fs::write(
+        &path,
+        format!("nameserver {gateway}\nsearch {cluster}.maestro.internal maestro.internal\n"),
+    )?;
+    Ok(path)
 }
 
 fn host_resolv_conf() -> PathBuf {
