@@ -148,6 +148,14 @@ impl Consensus {
         &self.state
     }
 
+    pub fn state_handle(&self) -> Arc<StateMachine> {
+        self.state.clone()
+    }
+
+    pub fn is_leader(&self) -> bool {
+        self.raft.metrics().borrow().current_leader == Some(self.settings.node_id.0)
+    }
+
     pub async fn shutdown(&self) -> Result<(), ConsensusError> {
         self.raft.shutdown().await.map_err(raft_error)
     }
