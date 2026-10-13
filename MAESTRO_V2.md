@@ -203,8 +203,9 @@ maestro-builds.slice     CPUWeight=50, MemoryMax=<build cap>, 1–2 concurrent b
 
 - Container stdout/stderr use containerd's `binary://` log URI pointing at
   `maestro log-driver`, which the containerd shim runs as a child. It writes
-  size-rotated local files and forwards lines to the telemetry socket, so logs keep
-  flowing while the agent restarts or upgrades.
+  size-rotated JSON-lines files per container. The telemetry process tails those files
+  with checkpointed offsets, so logs keep flowing while the agent or telemetry restarts
+  or upgrades.
 - Telemetry keeps one store: DuckDB with Parquet rollover (the v1 query language,
   search, and traffic analytics carry over). The SQLite spool is removed; sink
   cursors live in DuckDB.
@@ -365,7 +366,9 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 - [x] Traefik file-provider ingress (system container, host network) and routing table
 - [ ] In-process DNS (`hickory-dns`) for `*.maestro.internal`
 - [ ] Builds via BuildKit, build queue, registry push
-- [ ] Telemetry process, `maestro log-driver`, query API
+- [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
+- [x] API served on `/run/maestro/api.sock` for the admin container
+- [ ] Telemetry process tailing driver files into DuckDB, query API
 - [ ] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
 - [ ] Secrets encryption, external secret providers, JWT auth, CLI contexts
 

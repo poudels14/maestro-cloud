@@ -20,6 +20,7 @@ use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::{Consensus, ConsensusSettings, Mutation};
 
 use crate::identity::NodeIdentity;
+use crate::log_driver;
 
 const RAFT_ADDRESS: &str = "127.0.0.1:7400";
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,6 +38,8 @@ pub struct AgentArgs {
     config: Option<String>,
     #[arg(long, default_value = "127.0.0.1:3000")]
     listen: SocketAddr,
+    #[arg(long, default_value = "/run/maestro/api.sock")]
+    api_socket: PathBuf,
     #[arg(long, default_value = "/run/containerd/containerd.sock")]
     containerd_socket: PathBuf,
 }
@@ -101,6 +104,13 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         .await?;
 
     let runtime_dir = args.data_dir.join("runtime");
+    let log_uri = match log_driver::ensure_binary_link() {
+        Some(binary) => Some(log_driver::uri(&binary, &args.data_dir.join("logs"))),
+        None => {
+            tracing::warn!("maestro-log-driver link is missing; container logs go to plain files");
+            None
+        }
+    };
     let network = CniNetwork::bridge(BRIDGE_NAME, &subnet, cni_dirs(), &args.data_dir.join("cni"));
     let runtime = Arc::new(
         ContainerdRuntime::connect(
@@ -110,6 +120,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
                 snapshotter: "overlayfs".to_string(),
                 state_dir: runtime_dir,
                 resolv_conf: host_resolv_conf(),
+                log_uri,
             },
             network,
         )
@@ -148,6 +159,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .with_context(|| format!("failed to listen on {}", args.listen))?;
+    let socket_listener = bind_api_socket(&args.api_socket)?;
     tracing::info!(node = %identity.name, listen = %args.listen, %subnet, "maestro agent started");
 
     let leader = consensus.clone();
@@ -158,7 +170,8 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         _ = system.run() => {}
         _ = run_routing(consensus.clone(), routing_board, ingress) => {}
         _ = run_deployer(deployer, leader) => {}
-        result = axum::serve(listener, api) => result?,
+        result = axum::serve(listener, api.clone()) => result?,
+        result = axum::serve(socket_listener, api) => result?,
         _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
     }
     consensus.shutdown().await?;
@@ -236,6 +249,18 @@ async fn open_consensus(data_dir: &Path, identity: &NodeIdentity) -> anyhow::Res
         data_dir: data_dir.join("raft"),
     })
     .await?)
+}
+
+fn bind_api_socket(path: &Path) -> anyhow::Result<tokio::net::UnixListener> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error)?,
+        _ => {}
+    }
+    tokio::net::UnixListener::bind(path)
+        .with_context(|| format!("failed to bind API socket {}", path.display()))
 }
 
 fn first_node_subnet(cluster_cidr: &str) -> anyhow::Result<String> {

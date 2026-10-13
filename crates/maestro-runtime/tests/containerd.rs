@@ -34,6 +34,7 @@ async fn runtime(state_dir: &std::path::Path) -> ContainerdRuntime {
             snapshotter: "overlayfs".to_string(),
             state_dir: state_dir.to_path_buf(),
             resolv_conf: PathBuf::from("/etc/resolv.conf"),
+            log_uri: None,
         },
         network,
     )

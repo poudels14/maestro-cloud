@@ -3071,6 +3071,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "maestro-telemetry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "maestro-v2"
 version = "0.1.0"
 dependencies = [
@@ -3082,6 +3094,7 @@ dependencies = [
  "maestro-core",
  "maestro-runtime",
  "maestro-store",
+ "maestro-telemetry",
  "rand 0.10.3",
  "reqwest",
  "serde_json",

@@ -1,6 +1,7 @@
 mod client;
 mod dev;
 mod identity;
+mod log_driver;
 mod server;
 
 use std::path::PathBuf;
@@ -61,6 +62,13 @@ enum ServerCommand {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    match log_driver::invoked_as_log_driver() {
+        true => log_driver::run().await,
+        false => run_cli().await,
+    }
+}
+
+async fn run_cli() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),

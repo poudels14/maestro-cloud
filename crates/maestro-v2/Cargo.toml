@@ -12,6 +12,7 @@ maestro-control = { version = "0.1.0", path = "../maestro-control" }
 maestro-core = { version = "0.1.0", path = "../maestro-core" }
 maestro-runtime = { version = "0.1.0", path = "../maestro-runtime" }
 maestro-store = { version = "0.1.0", path = "../maestro-store" }
+maestro-telemetry = { version = "0.1.0", path = "../maestro-telemetry" }
 rand = "0.10.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde_json = "1.0.154"

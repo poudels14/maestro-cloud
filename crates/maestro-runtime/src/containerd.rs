@@ -57,6 +57,7 @@ pub struct ContainerdSettings {
     pub snapshotter: String,
     pub state_dir: PathBuf,
     pub resolv_conf: PathBuf,
+    pub log_uri: Option<String>,
 }
 
 pub struct ContainerdRuntime {
@@ -265,12 +266,19 @@ impl ContainerdRuntime {
             .await?;
         let log_dir = self.settings.state_dir.join("logs").join(&spec.id);
         tokio::fs::create_dir_all(&log_dir).await?;
+        let (stdout, stderr) = match &self.settings.log_uri {
+            Some(uri) => (uri.clone(), uri.clone()),
+            None => (
+                file_uri(&log_dir.join("stdout.log")),
+                file_uri(&log_dir.join("stderr.log")),
+            ),
+        };
         let pid = TasksClient::new(self.channel.clone())
             .create(self.request(CreateTaskRequest {
                 container_id: spec.id.clone(),
                 rootfs: mounts,
-                stdout: file_uri(&log_dir.join("stdout.log")),
-                stderr: file_uri(&log_dir.join("stderr.log")),
+                stdout,
+                stderr,
                 ..Default::default()
             }))
             .await?
