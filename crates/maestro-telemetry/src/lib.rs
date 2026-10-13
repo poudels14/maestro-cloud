@@ -2,6 +2,7 @@ mod error;
 mod log_driver;
 mod parse;
 mod resolver;
+mod retention;
 mod search;
 mod store;
 mod tailer;
