@@ -7,16 +7,18 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    DnsRecords, DnsServer, HealthMonitor, IngressWriter, LocalPlanSource, Reconciler,
-    ReconcilerSettings, StatusBoard, SystemSupervisor, apply_workload_slice_limits,
-    detect_capacity, internal_names, system_reserve, traefik_container, upstream_resolvers,
+    BuildKitBuilder, BuildKitSettings, BuildRequest, DnsRecords, DnsServer, HealthMonitor,
+    IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard, SystemSupervisor,
+    apply_workload_slice_limits, detect_capacity, internal_names, system_reserve,
+    traefik_container, upstream_resolvers,
 };
 use maestro_control::{
-    ApiState, Deployer, DeployerSettings, ObservedReplicas, RoutingInput, build_routes, router,
+    ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, RoutingInput,
+    build_routes, router,
 };
 use maestro_core::{
-    ClusterConfig, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus,
-    RouteTable,
+    ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase,
+    ReplicaStatus, RouteTable,
 };
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
@@ -29,6 +31,7 @@ const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const ROUTING_RESYNC: Duration = Duration::from_secs(10);
 const DNS_PORT: u16 = 53;
+const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
@@ -48,6 +51,40 @@ pub struct AgentArgs {
 }
 
 struct BoardReplicas(StatusBoard);
+
+struct SealedSpecBuilder {
+    builder: BuildKitBuilder,
+    key: Arc<SecretKey>,
+}
+
+impl ImageBuilder for SealedSpecBuilder {
+    async fn build(&self, deployment: Deployment) -> Result<String, String> {
+        let spec = self
+            .key
+            .open_spec(&deployment.spec)
+            .map_err(|error| error.to_string())?;
+        let build = spec
+            .build
+            .ok_or_else(|| "deployment has no build configuration".to_string())?;
+        match (&build.env.source, &build.secrets.source) {
+            (None, None) => {
+                let request = BuildRequest {
+                    deployment_id: deployment.id.to_string(),
+                    service_id: deployment.service_id.to_string(),
+                    repo: build.repo,
+                    branch: build.branch,
+                    context_dir: None,
+                    dockerfile: build.dockerfile,
+                    registry: build.registry,
+                    build_args: build.env.items,
+                    secrets: build.secrets.items,
+                };
+                self.builder.build(&request).await
+            }
+            _ => Err("external secret sources are not supported yet".to_string()),
+        }
+    }
+}
 
 impl ObservedReplicas for BoardReplicas {
     fn replica(&self, replica_id: &ReplicaId) -> Option<ReplicaStatus> {
@@ -161,9 +198,20 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     );
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
     let observed = Arc::new(BoardReplicas(board.clone()));
+    let builder = Arc::new(SealedSpecBuilder {
+        builder: BuildKitBuilder::new(BuildKitSettings {
+            buildctl: PathBuf::from("buildctl"),
+            address: BUILDKIT_ADDRESS.to_string(),
+            work_dir: args.data_dir.join("builds/work"),
+            log_dir: args.data_dir.join("builds/logs"),
+            git_token: None,
+        }),
+        key: key.clone(),
+    });
     let deployer = Deployer::new(
         consensus.clone(),
         observed.clone(),
+        builder,
         DeployerSettings {
             defaults: config.defaults.resources.clone(),
             ..DeployerSettings::default()
@@ -197,7 +245,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_deployer(deployer: Deployer<Consensus, BoardReplicas>, consensus: Arc<Consensus>) {
+async fn run_deployer(
+    deployer: Deployer<Consensus, BoardReplicas, SealedSpecBuilder>,
+    consensus: Arc<Consensus>,
+) {
     let mut ticker = tokio::time::interval(DEPLOYER_INTERVAL);
     loop {
         ticker.tick().await;

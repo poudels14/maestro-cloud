@@ -365,7 +365,8 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 
 - [x] Traefik file-provider ingress (system container, host network) and routing table
 - [x] In-process DNS (`hickory-proto`) on the bridge gateway for `*.maestro.internal`, upstream forwarding
-- [ ] Builds via BuildKit, build queue, registry push
+- [x] Builds via BuildKit (`buildctl`, containerd worker in the `maestro` namespace, `maestro-builds.slice`), bounded build queue, registry push
+- [ ] Build sources: GitHub token from config, local context upload (`maestro up`), external secret sources (`aws-secret://`)
 - [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
 - [x] API served on `/run/maestro/api.sock` for the admin container
 - [ ] Telemetry process tailing driver files into DuckDB, query API

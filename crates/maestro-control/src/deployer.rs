@@ -1,16 +1,24 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use maestro_core::{
-    Assignment, Deployment, DeploymentStatus, NodeId, ReplicaId, ReplicaPhase, ReplicaStatus,
-    ResourceDefaults, ServiceId,
+    Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, ReplicaId, ReplicaPhase,
+    ReplicaStatus, ResourceDefaults, ServiceId,
 };
 use maestro_store::Mutation;
 
 use crate::error::ControlError;
 use crate::scheduler::{self, PlacementRequest};
 use crate::writer::StoreWriter;
+
+const SUPERSEDABLE_STATUSES: [DeploymentStatus; 4] = [
+    DeploymentStatus::Queued,
+    DeploymentStatus::Building,
+    DeploymentStatus::Deploying,
+    DeploymentStatus::Ready,
+];
 
 const ACTIVE_STATUSES: [DeploymentStatus; 3] = [
     DeploymentStatus::Deploying,
@@ -24,32 +32,47 @@ pub trait ObservedReplicas: Send + Sync + 'static {
     fn replicas(&self) -> Vec<ReplicaStatus>;
 }
 
+pub trait ImageBuilder: Send + Sync + 'static {
+    fn build(&self, deployment: Deployment) -> impl Future<Output = Result<String, String>> + Send;
+}
+
 #[derive(Clone)]
 pub struct DeployerSettings {
     pub defaults: ResourceDefaults,
     pub deploy_timeout: Duration,
     pub drain_grace: Duration,
     pub history_limit: usize,
+    pub max_concurrent_builds: usize,
     pub clock: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
-pub struct Deployer<W: StoreWriter, O: ObservedReplicas> {
+pub struct Deployer<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> {
     writer: Arc<W>,
     observed: Arc<O>,
+    builder: Arc<B>,
+    active_builds: Arc<Mutex<HashSet<DeploymentId>>>,
     settings: DeployerSettings,
 }
 
-impl<W: StoreWriter, O: ObservedReplicas> Deployer<W, O> {
-    pub fn new(writer: Arc<W>, observed: Arc<O>, settings: DeployerSettings) -> Self {
+impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
+    pub fn new(
+        writer: Arc<W>,
+        observed: Arc<O>,
+        builder: Arc<B>,
+        settings: DeployerSettings,
+    ) -> Self {
         Self {
             writer,
             observed,
+            builder,
+            active_builds: Arc::default(),
             settings,
         }
     }
 
     pub async fn tick(&self) -> Result<(), ControlError> {
         self.start_queued().await?;
+        self.run_builds().await?;
         self.place_deploying().await?;
         self.settle_deploying().await?;
         self.drain_superseded().await?;
@@ -76,6 +99,99 @@ impl<W: StoreWriter, O: ObservedReplicas> Deployer<W, O> {
             })
             .collect::<Vec<_>>();
         self.write(mutations).await
+    }
+
+    async fn run_builds(&self) -> Result<(), ControlError> {
+        let state = self.state();
+        let mut waiting = [DeploymentStatus::Building, DeploymentStatus::Queued]
+            .iter()
+            .map(|status| state.deployments_with_status(*status))
+            .collect::<Result<Vec<_>, _>>()?
+            .concat()
+            .into_iter()
+            .filter(|deployment| deployment.spec.build.is_some())
+            .filter(|deployment| !self.is_building(&deployment.id))
+            .collect::<Vec<_>>();
+        waiting.sort_by_key(|deployment| {
+            (
+                deployment.status != DeploymentStatus::Building,
+                deployment.created_at_ms,
+            )
+        });
+        let capacity = self
+            .settings
+            .max_concurrent_builds
+            .saturating_sub(self.lock_builds().len());
+        for deployment in waiting.into_iter().take(capacity) {
+            if deployment.status == DeploymentStatus::Queued {
+                let now = self.now();
+                self.write(vec![status_change(
+                    &deployment,
+                    DeploymentStatus::Building,
+                    None,
+                    None,
+                    now,
+                )])
+                .await?;
+            }
+            self.spawn_build(deployment);
+        }
+        Ok(())
+    }
+
+    fn spawn_build(&self, deployment: Deployment) {
+        self.lock_builds().insert(deployment.id.clone());
+        let writer = self.writer.clone();
+        let builder = self.builder.clone();
+        let active_builds = self.active_builds.clone();
+        let clock = self.settings.clock.clone();
+        tokio::spawn(async move {
+            let result = builder.build(deployment.clone()).await;
+            let (status, image, failure) = match result {
+                Ok(image) => (DeploymentStatus::Deploying, Some(image), None),
+                Err(reason) => (
+                    DeploymentStatus::Failed,
+                    None,
+                    Some(format!("build failed: {reason}")),
+                ),
+            };
+            let still_building = writer
+                .state()
+                .deployment(&deployment.service_id, &deployment.id)
+                .ok()
+                .flatten()
+                .is_some_and(|current| current.status == DeploymentStatus::Building);
+            let written = match still_building {
+                true => writer
+                    .write(vec![status_change(
+                        &deployment,
+                        status,
+                        image,
+                        failure,
+                        clock(),
+                    )])
+                    .await
+                    .map(|_| ()),
+                false => Ok(()),
+            };
+            if let Err(error) = written {
+                tracing::warn!(deployment = %deployment.id, %error, "failed to record build result");
+            }
+            active_builds
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&deployment.id);
+        });
+    }
+
+    fn is_building(&self, deployment_id: &DeploymentId) -> bool {
+        self.lock_builds().contains(deployment_id)
+    }
+
+    fn lock_builds(&self) -> std::sync::MutexGuard<'_, HashSet<DeploymentId>> {
+        self.active_builds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     async fn place_deploying(&self) -> Result<(), ControlError> {
@@ -204,29 +320,36 @@ impl<W: StoreWriter, O: ObservedReplicas> Deployer<W, O> {
 
     async fn drain_superseded(&self) -> Result<(), ControlError> {
         let now = self.now();
-        let ready = self
-            .state()
+        let state = self.state();
+        let newest_ready = state
             .deployments_with_status(DeploymentStatus::Ready)?
             .into_iter()
             .fold(
-                BTreeMap::<ServiceId, Vec<Deployment>>::new(),
-                |mut by_service, deployment| {
-                    by_service
-                        .entry(deployment.service_id.clone())
-                        .or_default()
-                        .push(deployment);
-                    by_service
+                BTreeMap::<ServiceId, u64>::new(),
+                |mut newest, deployment| {
+                    let created = newest.entry(deployment.service_id.clone()).or_default();
+                    *created = (*created).max(deployment.created_at_ms);
+                    newest
                 },
             );
-        let mutations = ready
-            .into_values()
-            .flat_map(|mut deployments| {
-                deployments.sort_by_key(|deployment| deployment.created_at_ms);
-                deployments.pop();
-                deployments
+        let candidates = SUPERSEDABLE_STATUSES
+            .iter()
+            .map(|status| state.deployments_with_status(*status))
+            .collect::<Result<Vec<_>, _>>()?
+            .concat();
+        let mutations = candidates
+            .iter()
+            .filter(|deployment| {
+                newest_ready
+                    .get(&deployment.service_id)
+                    .is_some_and(|newest| deployment.created_at_ms < *newest)
             })
             .map(|deployment| {
-                status_change(&deployment, DeploymentStatus::Draining, None, None, now)
+                let next = match deployment.status {
+                    DeploymentStatus::Ready => DeploymentStatus::Draining,
+                    _ => DeploymentStatus::Cancelled,
+                };
+                status_change(deployment, next, None, None, now)
             })
             .collect::<Vec<_>>();
         self.write(mutations).await
@@ -315,6 +438,7 @@ impl Default for DeployerSettings {
             deploy_timeout: Duration::from_secs(600),
             drain_grace: Duration::from_secs(5),
             history_limit: 20,
+            max_concurrent_builds: 2,
             clock: Arc::new(unix_millis),
         }
     }

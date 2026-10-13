@@ -1,3 +1,4 @@
+mod build;
 mod dns;
 mod error;
 mod health;
@@ -8,6 +9,7 @@ mod source;
 mod status;
 mod system;
 
+pub use build::{BuildKitBuilder, BuildKitSettings, BuildRequest, image_name};
 pub use dns::{DnsRecords, DnsServer, internal_names, upstream_resolvers};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};

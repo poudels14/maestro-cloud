@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use maestro_control::{ObservedReplicas, StoreWriter};
+use maestro_control::{ImageBuilder, ObservedReplicas, StoreWriter};
 use maestro_core::{
-    ByteSize, DeploySpec, Millicores, NodeCapacity, NodeId, NodeRecord, NodeRole, NodeState,
-    ReplicaId, ReplicaPhase, ReplicaStatus, ServiceSpec,
+    BuildSpec, ByteSize, DeploySpec, Deployment, Millicores, NodeCapacity, NodeId, NodeRecord,
+    NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, ServiceSpec,
 };
 use maestro_store::{ConsensusError, Mutation, StateMachine};
 use tempfile::TempDir;
@@ -129,6 +129,76 @@ pub fn image_service(replicas: u32) -> ServiceSpec {
         name: "API".to_string(),
         image: Some("nginx:1.27".to_string()),
         build: None,
+        deploy: DeploySpec {
+            replicas,
+            ..DeploySpec::default()
+        },
+        ingress: None,
+    }
+}
+
+pub struct FakeBuilder {
+    pub started: Mutex<Vec<String>>,
+    failures: Mutex<Vec<String>>,
+    gate: tokio::sync::Semaphore,
+}
+
+impl Default for FakeBuilder {
+    fn default() -> Self {
+        Self {
+            started: Mutex::default(),
+            failures: Mutex::default(),
+            gate: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+impl FakeBuilder {
+    pub fn fail(&self, deployment: &str) {
+        self.failures.lock().unwrap().push(deployment.to_string());
+    }
+
+    pub fn release(&self, builds: usize) {
+        self.gate.add_permits(builds);
+    }
+
+    pub fn started(&self) -> Vec<String> {
+        self.started.lock().unwrap().clone()
+    }
+}
+
+impl ImageBuilder for FakeBuilder {
+    async fn build(&self, deployment: Deployment) -> Result<String, String> {
+        self.started.lock().unwrap().push(deployment.id.to_string());
+        self.gate.acquire().await.unwrap().forget();
+        match self
+            .failures
+            .lock()
+            .unwrap()
+            .contains(&deployment.id.to_string())
+        {
+            true => Err("dockerfile not found".to_string()),
+            false => Ok(format!(
+                "maestro.local/{}:{}",
+                deployment.service_id, deployment.id
+            )),
+        }
+    }
+}
+
+pub fn build_service(replicas: u32) -> ServiceSpec {
+    ServiceSpec {
+        name: "API".to_string(),
+        image: None,
+        build: Some(BuildSpec {
+            repo: Some("https://github.com/acme/api.git".to_string()),
+            branch: Some("main".to_string()),
+            dockerfile: "Dockerfile".to_string(),
+            watch: false,
+            registry: None,
+            env: Default::default(),
+            secrets: Default::default(),
+        }),
         deploy: DeploySpec {
             replicas,
             ..DeploySpec::default()

@@ -38,7 +38,22 @@ provision:
       [Slice]
       CPUWeight=50
       SLICE
+      mkdir -p /etc/buildkit /etc/systemd/system/buildkit.service.d
+      cat > /etc/buildkit/buildkitd.toml <<'TOML'
+      [worker.oci]
+        enabled = false
+
+      [worker.containerd]
+        enabled = true
+        namespace = "maestro"
+        snapshotter = "overlayfs"
+      TOML
+      cat > /etc/systemd/system/buildkit.service.d/maestro.conf <<'UNIT'
+      [Service]
+      Slice=maestro-builds.slice
+      UNIT
       systemctl daemon-reload
+      systemctl restart buildkit.service || true
   - mode: user
     script: |
       #!/bin/bash

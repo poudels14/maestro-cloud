@@ -6,13 +6,16 @@ use std::time::Duration;
 use maestro_control::{Deployer, DeployerSettings, StoreWriter};
 use maestro_core::{Deployment, DeploymentId, DeploymentStatus, NodeId, ReplicaPhase, ServiceId};
 use maestro_store::Mutation;
-use support::{FakeClock, FakeObserved, LocalWriter, clock, image_service, node};
+use support::{
+    FakeBuilder, FakeClock, FakeObserved, LocalWriter, build_service, clock, image_service, node,
+};
 
 struct Harness {
     writer: Arc<LocalWriter>,
     observed: Arc<FakeObserved>,
+    builder: Arc<FakeBuilder>,
     clock: Arc<FakeClock>,
-    deployer: Deployer<LocalWriter, FakeObserved>,
+    deployer: Deployer<LocalWriter, FakeObserved, FakeBuilder>,
 }
 
 fn harness(nodes: Vec<maestro_core::NodeRecord>) -> Harness {
@@ -29,17 +32,22 @@ fn harness(nodes: Vec<maestro_core::NodeRecord>) -> Harness {
         .map(|node| Mutation::PutNode { node })
         .collect::<Vec<_>>();
     writer.state().apply(&mutations).unwrap();
-    let deployer = Deployer::new(writer.clone(), observed.clone(), settings);
+    let builder = Arc::new(FakeBuilder::default());
+    let deployer = Deployer::new(writer.clone(), observed.clone(), builder.clone(), settings);
     Harness {
         writer,
         observed,
+        builder,
         clock,
         deployer,
     }
 }
 
 fn queue(harness: &Harness, deployment_id: &str, replicas: u32) {
-    let spec = image_service(replicas);
+    queue_spec(harness, deployment_id, image_service(replicas));
+}
+
+fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::ServiceSpec) {
     harness
         .writer
         .state()
@@ -193,4 +201,121 @@ async fn unschedulable_deployment_fails_without_partial_placement() {
     assert_eq!(deployment.status, DeploymentStatus::Failed);
     assert!(deployment.failure.unwrap().starts_with("unschedulable"));
     assert!(assigned_replicas(&harness).is_empty());
+}
+
+async fn settle() {
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn builds_images_before_deploying() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue_spec(&harness, "d1", build_service(1));
+
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Building);
+    assert_eq!(harness.builder.started(), ["d1"]);
+
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+    assert_eq!(harness.builder.started(), ["d1"]);
+
+    harness.builder.release(1);
+    settle().await;
+    let deployment = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(deployment.status, DeploymentStatus::Deploying);
+    assert_eq!(deployment.image.as_deref(), Some("maestro.local/api:d1"));
+
+    harness.deployer.tick().await.unwrap();
+    let node_assignments = harness.writer.state().assignments(NodeId(1)).unwrap();
+    assert_eq!(node_assignments[0].image, "maestro.local/api:d1");
+}
+
+#[tokio::test]
+async fn failed_builds_fail_the_deployment() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    harness.builder.fail("d1");
+    queue_spec(&harness, "d1", build_service(1));
+    harness.deployer.tick().await.unwrap();
+    harness.builder.release(1);
+    settle().await;
+
+    let deployment = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(deployment.status, DeploymentStatus::Failed);
+    assert_eq!(
+        deployment.failure.as_deref(),
+        Some("build failed: dockerfile not found")
+    );
+}
+
+#[tokio::test]
+async fn limits_concurrent_builds() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue_spec(&harness, "d1", build_service(1));
+    harness.clock.advance(1);
+    queue_spec(&harness, "d2", build_service(1));
+    harness.clock.advance(1);
+    queue_spec(&harness, "d3", build_service(1));
+
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+    assert_eq!(harness.builder.started(), ["d1", "d2"]);
+    assert_eq!(status(&harness, "d3"), DeploymentStatus::Queued);
+
+    harness.builder.release(1);
+    settle().await;
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+    assert_eq!(harness.builder.started().len(), 3);
+}
+
+#[tokio::test]
+async fn newer_ready_deployment_cancels_older_in_flight_ones() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue(&harness, "d1", 1);
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Restarting);
+
+    harness.clock.advance(1_000);
+    queue(&harness, "d2", 1);
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d2-0", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+
+    assert_eq!(status(&harness, "d2"), DeploymentStatus::Ready);
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Cancelled);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d2-0"]);
+}
+
+#[tokio::test]
+async fn cancelled_build_result_is_ignored() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue_spec(&harness, "d1", build_service(1));
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+
+    harness.clock.advance(1_000);
+    queue(&harness, "d2", 1);
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d2-0", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Cancelled);
+
+    harness.builder.release(1);
+    settle().await;
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Cancelled);
 }

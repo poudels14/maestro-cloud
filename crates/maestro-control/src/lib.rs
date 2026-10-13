@@ -6,7 +6,7 @@ mod scheduler;
 mod writer;
 
 pub use api::{ApiState, router};
-pub use deployer::{Deployer, DeployerSettings, ObservedReplicas};
+pub use deployer::{Deployer, DeployerSettings, ImageBuilder, ObservedReplicas};
 pub use error::ControlError;
 pub use routing::{RoutingInput, build_routes};
 pub use scheduler::{Placement, PlacementRequest, place};
