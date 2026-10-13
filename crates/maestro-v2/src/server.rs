@@ -6,30 +6,32 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    ADMIN_CONTAINER_ID, BuildKitBuilder, BuildKitSettings, BuildRequest, DnsRecords, DnsServer,
-    HealthMonitor, IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard,
+    ADMIN_CONTAINER_ID, Attachment, BuildKitBuilder, BuildKitSettings, BuildRequest, DnsRecords,
+    DnsServer, HealthMonitor, IngressWriter, Reconciler, ReconcilerSettings, StatusBoard,
     SystemSupervisor, admin_container, apply_workload_slice_limits, detect_capacity,
     system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::{
-    ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, cluster_dns,
-    cluster_routes, require_token, router,
+    AgentHub, ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, require_token, router,
+    run_publisher,
 };
-use maestro_core::{
-    ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaStatus,
-    RouteTable,
-};
+use maestro_core::{ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState};
+use maestro_proto::pb::cluster_server::ClusterServer;
+use maestro_proto::{ClusterCa, NodeCredentials};
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
 
+use crate::cluster_service::ClusterService;
+use crate::control_link::GrpcControlLink;
 use crate::identity::NodeIdentity;
 use crate::log_driver;
 use crate::unix_http;
 
-const RAFT_ADDRESS: &str = "127.0.0.1:7400";
+const DEFAULT_ADVERTISE: &str = "127.0.0.1:7400";
+const DEFAULT_CLUSTER: &str = "maestro";
+const NODE_EXPIRY: Duration = Duration::from_secs(30);
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
-const ROUTING_RESYNC: Duration = Duration::from_secs(10);
 const DNS_PORT: u16 = 53;
 const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
 const ADMIN_DOCKERFILE: &str = "Dockerfile.admin";
@@ -54,9 +56,11 @@ pub struct AgentArgs {
     admin_source: Option<PathBuf>,
     #[arg(long, default_value = "/run/maestro/telemetry.sock")]
     telemetry_socket: PathBuf,
+    #[arg(long, default_value = "127.0.0.1:7400")]
+    grpc_listen: SocketAddr,
+    #[arg(long, default_value = DEFAULT_ADVERTISE)]
+    advertise: String,
 }
-
-struct BoardReplicas(StatusBoard);
 
 struct SealedSpecBuilder {
     builder: BuildKitBuilder,
@@ -93,21 +97,19 @@ impl ImageBuilder for SealedSpecBuilder {
     }
 }
 
-impl ObservedReplicas for BoardReplicas {
-    fn replica(&self, replica_id: &ReplicaId) -> Option<ReplicaStatus> {
-        self.0.get(replica_id)
-    }
-
-    fn replicas(&self) -> Vec<ReplicaStatus> {
-        self.0.snapshot()
-    }
-}
-
 pub async fn init(data_dir: &Path) -> anyhow::Result<()> {
     let identity = NodeIdentity::create(data_dir)?;
     SecretKey::load_or_create(&encryption_key_path(data_dir))?;
     api_secret(data_dir)?;
-    let consensus = open_consensus(data_dir, &identity).await?;
+    let pki_dir = data_dir.join("pki");
+    if !pki_dir.join("node").exists() {
+        let ca = ClusterCa::generate(DEFAULT_CLUSTER)?;
+        ca.save(&pki_dir)?;
+        ca.issue_node(identity.id.0, &[])?
+            .save(&pki_dir.join("node"))?;
+    }
+    let credentials = NodeCredentials::load(&pki_dir.join("node"))?;
+    let consensus = open_consensus(data_dir, &identity, DEFAULT_ADVERTISE, credentials).await?;
     consensus.bootstrap_single_voter().await?;
     consensus.wait_until_leader(LEADER_TIMEOUT).await?;
     consensus.shutdown().await?;
@@ -129,7 +131,16 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let key = Arc::new(SecretKey::load_or_create(&encryption_key_path(
         &args.data_dir,
     ))?);
-    let consensus = Arc::new(open_consensus(&args.data_dir, &identity).await?);
+    let credentials = NodeCredentials::load(&args.data_dir.join("pki").join("node"))?;
+    let consensus = Arc::new(
+        open_consensus(
+            &args.data_dir,
+            &identity,
+            &args.advertise,
+            credentials.clone(),
+        )
+        .await?,
+    );
     consensus.wait_until_leader(LEADER_TIMEOUT).await?;
 
     let capacity = detect_capacity()?;
@@ -142,15 +153,13 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let host_resolv = std::fs::read_to_string(host_resolv_conf()).unwrap_or_default();
     let container_resolv =
         write_container_resolv_conf(&args.data_dir, gateway, &config.cluster.name)?;
-    let dns_records = DnsRecords::default();
-    let dns = DnsServer::new(dns_records.clone(), upstream_resolvers(&host_resolv));
     consensus
         .write(vec![Mutation::PutNode {
             node: NodeRecord {
                 id: identity.id,
                 name: identity.name.clone(),
                 role: NodeRole::Voter,
-                endpoint: RAFT_ADDRESS.to_string(),
+                endpoint: args.advertise.clone(),
                 subnet: Some(subnet.clone()),
                 runs_workloads: true,
                 capacity,
@@ -192,20 +201,40 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             &config.ingress.ports,
         )],
     );
+    let dns_records = DnsRecords::default();
+    let dns = DnsServer::new(dns_records.clone(), upstream_resolvers(&host_resolv));
     let board = StatusBoard::new();
-    let source = Arc::new(LocalPlanSource::new(
-        consensus.state_handle(),
-        key.clone(),
+    let (attachment, source) = Attachment::new(
+        GrpcControlLink::new(credentials.clone()),
         identity.id,
-    ));
+        vec![args.advertise.clone()],
+        board.clone(),
+        ingress,
+        dns_records,
+    );
     let reconciler = Reconciler::new(
         runtime.clone(),
-        source,
+        Arc::new(source),
         board.clone(),
         ReconcilerSettings::default(),
     );
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
-    let observed = Arc::new(BoardReplicas(board.clone()));
+    let hub = AgentHub::new(NODE_EXPIRY);
+    let observed = Arc::new(hub.clone());
+    let publisher = run_publisher(
+        hub.clone(),
+        consensus.state_handle(),
+        key.clone(),
+        config.cluster.name.clone(),
+    );
+    let grpc = tonic::transport::Server::builder()
+        .tls_config(credentials.server_tls())?
+        .add_service(consensus.raft_service())
+        .add_service(ClusterServer::new(ClusterService::new(
+            consensus.clone(),
+            hub,
+        )))
+        .serve(args.grpc_listen);
     let buildkit = BuildKitSettings {
         buildctl: PathBuf::from("buildctl"),
         address: BUILDKIT_ADDRESS.to_string(),
@@ -252,14 +281,15 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     tracing::info!(node = %identity.name, listen = %args.listen, %subnet, "maestro agent started");
 
     let leader = consensus.clone();
-    let routing_board = board.clone();
     tokio::select! {
         result = reconciler.run() => result?,
         _ = health.run() => {}
         _ = system.run() => {}
         _ = admin => {}
         _ = dns.run(SocketAddr::new(gateway, DNS_PORT)) => {}
-        _ = run_routing(consensus.clone(), routing_board, ingress, dns_records, config.cluster.name.clone()) => {}
+        _ = attachment.run() => {}
+        _ = publisher => {}
+        result = grpc => result?,
         _ = run_deployer(deployer, leader) => {}
         result = axum::serve(listener, authenticated_api) => result?,
         result = axum::serve(socket_listener, api) => result?,
@@ -270,7 +300,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
 }
 
 async fn run_deployer(
-    deployer: Deployer<Consensus, BoardReplicas, SealedSpecBuilder>,
+    deployer: Deployer<Consensus, AgentHub, SealedSpecBuilder>,
     consensus: Arc<Consensus>,
 ) {
     let mut ticker = tokio::time::interval(DEPLOYER_INTERVAL);
@@ -324,43 +354,15 @@ async fn run_admin(
     }
 }
 
-async fn run_routing(
-    consensus: Arc<Consensus>,
-    board: StatusBoard,
-    mut ingress: IngressWriter,
-    dns_records: DnsRecords,
-    cluster: String,
-) {
-    let mut board_changes = board.subscribe();
-    let mut store_changes = consensus.state().subscribe();
-    let mut previous = RouteTable::default();
-    loop {
-        let observed = |replica_id: &ReplicaId| board.get(replica_id);
-        match cluster_routes(consensus.state(), &observed, &previous) {
-            Ok(table) => {
-                if let Err(error) = ingress.write(&table).await {
-                    tracing::warn!(%error, "failed to write ingress config");
-                }
-                previous = table;
-            }
-            Err(error) => tracing::warn!(%error, "failed to compute routes"),
-        }
-        match cluster_dns(consensus.state(), &observed, &cluster) {
-            Ok(names) => dns_records.replace(names.into_iter().collect()),
-            Err(error) => tracing::warn!(%error, "failed to compute DNS records"),
-        }
-        tokio::select! {
-            _ = board_changes.changed() => {}
-            _ = store_changes.recv() => {}
-            _ = tokio::time::sleep(ROUTING_RESYNC) => {}
-        }
-    }
-}
-
-async fn open_consensus(data_dir: &Path, identity: &NodeIdentity) -> anyhow::Result<Consensus> {
+async fn open_consensus(
+    data_dir: &Path,
+    identity: &NodeIdentity,
+    advertise: &str,
+    credentials: NodeCredentials,
+) -> anyhow::Result<Consensus> {
     Ok(Consensus::open(
-        ConsensusSettings::new(identity.id, RAFT_ADDRESS, data_dir.join("raft")),
-        None,
+        ConsensusSettings::new(identity.id, advertise, data_dir.join("raft")),
+        Some(credentials),
     )
     .await?)
 }

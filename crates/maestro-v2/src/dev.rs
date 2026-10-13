@@ -126,9 +126,10 @@ async fn install_agent(source: &Path) -> anyhow::Result<()> {
         r#"set -euo pipefail
 source "$HOME/.cargo/env"
 cd {source}
-CARGO_TARGET_DIR="$HOME/target" cargo build --locked -p maestro-v2
+CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_TARGET_DIR="$HOME/target" cargo build --locked -p maestro-v2
 sudo install -m 0755 "$HOME/target/debug/maestro-v2" /usr/local/bin/maestro-v2
-[ -f /var/lib/maestro/node.json ] || sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro
+sudo systemctl stop maestro.service 2>/dev/null || true
+sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro
 sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'
 {unit}UNIT
 sudo tee /etc/systemd/system/maestro-telemetry.service > /dev/null <<'UNIT'

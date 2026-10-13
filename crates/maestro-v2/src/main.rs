@@ -1,6 +1,8 @@
 mod agent_resolver;
 mod client;
+mod cluster_service;
 mod contexts;
+mod control_link;
 mod dev;
 mod identity;
 mod log_driver;
