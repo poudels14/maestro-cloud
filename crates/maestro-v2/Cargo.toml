@@ -7,6 +7,9 @@ edition = "2024"
 anyhow = "1.0.104"
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 maestro-agent = { version = "0.1.0", path = "../maestro-agent" }
 maestro-control = { version = "0.1.0", path = "../maestro-control" }
 maestro-core = { version = "0.1.0", path = "../maestro-core" }

@@ -1,9 +1,11 @@
-use std::net::SocketAddr;
+use std::collections::BTreeMap;
+use std::net::{IpAddr, SocketAddr};
 
 use maestro_core::{
     Assignment, Backend, Deployment, DeploymentStatus, ReplicaId, ReplicaPhase, ReplicaStatus,
-    RouteTable, ServiceId, ServiceRoute, ServiceSpec,
+    RouteTable, ServiceId, ServiceRoute, ServiceSpec, internal_names,
 };
+use maestro_store::{StateMachine, StoreError};
 
 const ROUTED_STATUSES: [DeploymentStatus; 2] =
     [DeploymentStatus::Deploying, DeploymentStatus::Ready];
@@ -13,6 +15,59 @@ pub struct RoutingInput<'a> {
     pub deployments: &'a [Deployment],
     pub assignments: &'a [Assignment],
     pub observed: &'a dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+}
+
+pub fn cluster_routes(
+    state: &StateMachine,
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+    previous: &RouteTable,
+) -> Result<RouteTable, StoreError> {
+    let services = state.services()?;
+    let deployments = services
+        .iter()
+        .map(|(service_id, _)| state.deployments(service_id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
+    let assignments = all_assignments(state)?;
+    Ok(build_routes(
+        &RoutingInput {
+            services: &services,
+            deployments: &deployments,
+            assignments: &assignments,
+            observed,
+        },
+        previous,
+    ))
+}
+
+pub fn cluster_dns(
+    state: &StateMachine,
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+    cluster: &str,
+) -> Result<BTreeMap<String, Vec<IpAddr>>, StoreError> {
+    let names = all_assignments(state)?
+        .iter()
+        .filter_map(|assignment| {
+            let status = observed(&assignment.replica_id)?;
+            let ip = status
+                .ip
+                .filter(|_| status.phase == ReplicaPhase::Healthy)?;
+            Some((assignment.clone(), ip))
+        })
+        .flat_map(|(assignment, ip)| {
+            internal_names(cluster, assignment.replica_id.as_str())
+                .into_iter()
+                .chain(internal_names(cluster, assignment.service_id.as_str()))
+                .map(move |name| (name, ip))
+        })
+        .fold(
+            BTreeMap::<String, Vec<IpAddr>>::new(),
+            |mut names, (name, ip)| {
+                names.entry(name).or_default().push(ip);
+                names
+            },
+        );
+    Ok(names)
 }
 
 pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
@@ -64,6 +119,15 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
         })
         .collect();
     RouteTable { routes }
+}
+
+fn all_assignments(state: &StateMachine) -> Result<Vec<Assignment>, StoreError> {
+    Ok(state
+        .nodes()?
+        .iter()
+        .map(|node| state.assignments(node.id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat())
 }
 
 #[cfg(test)]

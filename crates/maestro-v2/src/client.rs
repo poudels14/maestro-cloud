@@ -120,6 +120,39 @@ pub async fn nodes(endpoint: &Endpoint) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn logs(
+    endpoint: &Endpoint,
+    service: Option<&str>,
+    query: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<()> {
+    let combined = service
+        .map(|service| format!("service:{service}"))
+        .into_iter()
+        .chain(query.map(str::to_string))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let page = request(
+        endpoint
+            .get("/api/logs")
+            .query(&[("query", combined), ("limit", limit.to_string())]),
+    )
+    .await?;
+    let mut records = page["records"].as_array().cloned().unwrap_or_default();
+    records.reverse();
+    records.iter().for_each(|record| {
+        println!(
+            "{} {:<16} {:<20} {:<6} {}",
+            text(&record["ts"]),
+            text(&record["serviceId"]),
+            text(&record["replicaId"]),
+            text(&record["stream"]),
+            text(&record["line"]),
+        );
+    });
+    Ok(())
+}
+
 async fn request(builder: reqwest::RequestBuilder) -> anyhow::Result<Value> {
     let response = builder
         .send()

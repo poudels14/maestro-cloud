@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{ReplicaId, ServiceId};
 
+const INTERNAL_SUFFIX: &str = "maestro.internal";
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteTable {
@@ -23,4 +25,11 @@ pub struct ServiceRoute {
 pub struct Backend {
     pub replica_id: ReplicaId,
     pub address: SocketAddr,
+}
+
+pub fn internal_names(cluster: &str, label: &str) -> [String; 2] {
+    [
+        format!("{label}.{INTERNAL_SUFFIX}"),
+        format!("{label}.{cluster}.{INTERNAL_SUFFIX}"),
+    ]
 }

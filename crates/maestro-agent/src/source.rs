@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use maestro_core::{NodeId, ReplicaPlan};
-use maestro_store::{Change, ChangeKey, SecretKey, StateMachine};
+use maestro_store::{Change, ChangeKey, SecretKey, StateMachine, replica_plans};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::error::AgentError;
@@ -42,21 +42,7 @@ impl LocalPlanSource {
 
 impl PlanSource for LocalPlanSource {
     async fn plans(&self) -> Result<Vec<ReplicaPlan>, AgentError> {
-        self.state
-            .assignments(self.node_id)?
-            .iter()
-            .filter_map(|assignment| {
-                let deployment = self
-                    .state
-                    .deployment(&assignment.service_id, &assignment.deployment_id)
-                    .map_err(AgentError::from)
-                    .transpose()?;
-                Some(deployment.and_then(|deployment| {
-                    let spec = self.key.open_spec(&deployment.spec)?;
-                    Ok(ReplicaPlan::new(assignment, &spec))
-                }))
-            })
-            .collect()
+        Ok(replica_plans(&self.state, &self.key, self.node_id)?)
     }
 
     async fn changed(&self) {

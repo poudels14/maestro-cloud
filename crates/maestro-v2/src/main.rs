@@ -1,9 +1,11 @@
+mod agent_resolver;
 mod client;
 mod contexts;
 mod dev;
 mod identity;
 mod log_driver;
 mod server;
+mod unix_http;
 
 use std::path::PathBuf;
 
@@ -40,6 +42,8 @@ enum Command {
         data_dir: PathBuf,
         #[arg(long, default_value = "/run/maestro/telemetry.sock")]
         socket: PathBuf,
+        #[arg(long, default_value = "/run/maestro/api.sock")]
+        api_socket: PathBuf,
     },
     Rollout {
         #[arg(short, long, default_value = "maestro.services.jsonc")]
@@ -53,6 +57,14 @@ enum Command {
     },
     Replicas,
     Nodes,
+    Logs {
+        #[arg(long)]
+        service: Option<String>,
+        #[arg(short, long)]
+        query: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 100)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -104,11 +116,13 @@ async fn run_cli() -> anyhow::Result<()> {
             log_dir,
             data_dir,
             socket,
+            api_socket,
         } => {
             let settings = TelemetrySettings {
                 log_dir,
                 data_dir,
                 socket,
+                resolver: agent_resolver::AgentReplicaResolver::spawn(api_socket),
                 ..TelemetrySettings::default()
             };
             Ok(maestro_telemetry::run(settings).await?)
@@ -122,5 +136,13 @@ async fn run_cli() -> anyhow::Result<()> {
         }
         Command::Replicas => client::replicas(&contexts::resolve(cli.api, cli.token)?).await,
         Command::Nodes => client::nodes(&contexts::resolve(cli.api, cli.token)?).await,
+        Command::Logs {
+            service,
+            query,
+            limit,
+        } => {
+            let endpoint = contexts::resolve(cli.api, cli.token)?;
+            client::logs(&endpoint, service.as_deref(), query.as_deref(), limit).await
+        }
     }
 }

@@ -11,6 +11,7 @@ impl Tailer {
         let now = SystemTime::now();
         let expired = replica_dirs(&self.log_dir)?
             .into_iter()
+            .filter(|(replica_id, _)| !self.resolver.is_live(replica_id))
             .filter(|(replica_id, directory)| {
                 is_expired(directory, self.checkpoints.get(replica_id), idle_after, now)
                     .unwrap_or_else(|error| {

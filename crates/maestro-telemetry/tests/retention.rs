@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use maestro_telemetry::{DeploymentFromReplicaId, LogRecord, LogStore, Stream, Tailer};
+use maestro_telemetry::{
+    DeploymentFromReplicaId, LogRecord, LogStore, ReplicaIdentity, ReplicaResolver, Stream, Tailer,
+};
 
 const IDLE_AFTER: Duration = Duration::from_secs(3600);
 
@@ -14,17 +16,28 @@ struct Harness {
     tailer: Tailer,
 }
 
+struct LiveReplicas(Vec<String>);
+
+impl ReplicaResolver for LiveReplicas {
+    fn resolve(&self, replica_id: &str) -> ReplicaIdentity {
+        DeploymentFromReplicaId.resolve(replica_id)
+    }
+
+    fn is_live(&self, replica_id: &str) -> bool {
+        self.0.iter().any(|live| live == replica_id)
+    }
+}
+
 impl Harness {
     fn new() -> Self {
+        Self::with_resolver(Arc::new(DeploymentFromReplicaId))
+    }
+
+    fn with_resolver(resolver: Arc<dyn ReplicaResolver>) -> Self {
         let root = tempfile::tempdir().unwrap();
         let log_dir = root.path().join("logs");
         let store = Arc::new(LogStore::open(&root.path().join("telemetry")).unwrap());
-        let tailer = Tailer::new(
-            log_dir.clone(),
-            store.clone(),
-            Arc::new(DeploymentFromReplicaId),
-        )
-        .unwrap();
+        let tailer = Tailer::new(log_dir.clone(), store.clone(), resolver).unwrap();
         Self {
             _root: root,
             log_dir,
@@ -142,4 +155,19 @@ fn removes_idle_empty_dirs() {
     age(&directory, IDLE_AFTER * 2);
 
     assert_eq!(harness.tailer.sweep_idle(IDLE_AFTER).unwrap(), ["dep1-0"]);
+}
+
+#[test]
+fn keeps_dirs_of_live_replicas_even_when_idle() {
+    let mut harness = Harness::with_resolver(Arc::new(LiveReplicas(vec!["dep1-0".to_string()])));
+    let live = harness.container("dep1-0");
+    let gone = harness.container("dep0-0");
+    write_lines(&live, "current.log", &["quiet"]);
+    write_lines(&gone, "current.log", &["done"]);
+    harness.tailer.poll().unwrap();
+    age(&live, IDLE_AFTER * 2);
+    age(&gone, IDLE_AFTER * 2);
+
+    assert_eq!(harness.tailer.sweep_idle(IDLE_AFTER).unwrap(), ["dep0-0"]);
+    assert!(live.exists());
 }

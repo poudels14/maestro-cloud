@@ -15,7 +15,7 @@ pub struct Tailer {
     pub(crate) log_dir: PathBuf,
     pub(crate) store: Arc<LogStore>,
     pub(crate) checkpoints: HashMap<String, TailCheckpoint>,
-    resolver: Arc<dyn ReplicaResolver>,
+    pub(crate) resolver: Arc<dyn ReplicaResolver>,
 }
 
 #[derive(Debug)]

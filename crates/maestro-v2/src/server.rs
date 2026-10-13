@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,21 +9,22 @@ use maestro_agent::{
     ADMIN_CONTAINER_ID, BuildKitBuilder, BuildKitSettings, BuildRequest, DnsRecords, DnsServer,
     HealthMonitor, IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard,
     SystemSupervisor, admin_container, apply_workload_slice_limits, detect_capacity,
-    internal_names, system_reserve, traefik_container, upstream_resolvers,
+    system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::{
-    ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, RoutingInput,
-    build_routes, require_token, router,
+    ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, cluster_dns,
+    cluster_routes, require_token, router,
 };
 use maestro_core::{
-    ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase,
-    ReplicaStatus, RouteTable,
+    ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaStatus,
+    RouteTable,
 };
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
 
 use crate::identity::NodeIdentity;
 use crate::log_driver;
+use crate::unix_http;
 
 const RAFT_ADDRESS: &str = "127.0.0.1:7400";
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -52,6 +52,8 @@ pub struct AgentArgs {
     containerd_socket: PathBuf,
     #[arg(long)]
     admin_source: Option<PathBuf>,
+    #[arg(long, default_value = "/run/maestro/telemetry.sock")]
+    telemetry_socket: PathBuf,
 }
 
 struct BoardReplicas(StatusBoard);
@@ -230,11 +232,15 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             ..DeployerSettings::default()
         },
     );
+    let logs = axum::Router::new()
+        .route("/api/logs", axum::routing::get(proxy_logs))
+        .with_state(Arc::new(args.telemetry_socket.clone()));
     let api = router(Arc::new(ApiState {
         writer: consensus.clone(),
         observed,
         key,
-    }));
+    }))
+    .merge(logs);
     let auth = Arc::new(ApiAuth::new(&api_secret(&args.data_dir)?));
     let authenticated_api = api
         .clone()
@@ -329,7 +335,8 @@ async fn run_routing(
     let mut store_changes = consensus.state().subscribe();
     let mut previous = RouteTable::default();
     loop {
-        match route_table(&consensus, &board, &previous) {
+        let observed = |replica_id: &ReplicaId| board.get(replica_id);
+        match cluster_routes(consensus.state(), &observed, &previous) {
             Ok(table) => {
                 if let Err(error) = ingress.write(&table).await {
                     tracing::warn!(%error, "failed to write ingress config");
@@ -338,8 +345,8 @@ async fn run_routing(
             }
             Err(error) => tracing::warn!(%error, "failed to compute routes"),
         }
-        match dns_names(&consensus, &board, &cluster) {
-            Ok(names) => dns_records.replace(names),
+        match cluster_dns(consensus.state(), &observed, &cluster) {
+            Ok(names) => dns_records.replace(names.into_iter().collect()),
             Err(error) => tracing::warn!(%error, "failed to compute DNS records"),
         }
         tokio::select! {
@@ -348,77 +355,6 @@ async fn run_routing(
             _ = tokio::time::sleep(ROUTING_RESYNC) => {}
         }
     }
-}
-
-fn dns_names(
-    consensus: &Consensus,
-    board: &StatusBoard,
-    cluster: &str,
-) -> anyhow::Result<HashMap<String, Vec<IpAddr>>> {
-    let state = consensus.state();
-    let healthy = state
-        .nodes()?
-        .iter()
-        .map(|node| state.assignments(node.id))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .filter_map(|assignment| {
-            let status = board.get(&assignment.replica_id)?;
-            let ip = status
-                .ip
-                .filter(|_| status.phase == ReplicaPhase::Healthy)?;
-            Some((assignment, ip))
-        })
-        .collect::<Vec<_>>();
-    let names = healthy
-        .iter()
-        .flat_map(|(assignment, ip)| {
-            let replica_names = internal_names(cluster, assignment.replica_id.as_str());
-            let service_names = internal_names(cluster, assignment.service_id.as_str());
-            replica_names
-                .into_iter()
-                .chain(service_names)
-                .map(move |name| (name, *ip))
-        })
-        .fold(
-            HashMap::<String, Vec<IpAddr>>::new(),
-            |mut names, (name, ip)| {
-                names.entry(name).or_default().push(ip);
-                names
-            },
-        );
-    Ok(names)
-}
-
-fn route_table(
-    consensus: &Consensus,
-    board: &StatusBoard,
-    previous: &RouteTable,
-) -> anyhow::Result<RouteTable> {
-    let state = consensus.state();
-    let services = state.services()?;
-    let deployments = services
-        .iter()
-        .map(|(service_id, _)| state.deployments(service_id))
-        .collect::<Result<Vec<_>, _>>()?
-        .concat();
-    let assignments = state
-        .nodes()?
-        .iter()
-        .map(|node| state.assignments(node.id))
-        .collect::<Result<Vec<_>, _>>()?
-        .concat();
-    let observed = |replica_id: &ReplicaId| board.get(replica_id);
-    Ok(build_routes(
-        &RoutingInput {
-            services: &services,
-            deployments: &deployments,
-            assignments: &assignments,
-            observed: &observed,
-        },
-        previous,
-    ))
 }
 
 async fn open_consensus(data_dir: &Path, identity: &NodeIdentity) -> anyhow::Result<Consensus> {
@@ -461,6 +397,27 @@ fn cni_dirs() -> Vec<PathBuf> {
     match std::env::var_os("CNI_PATH") {
         Some(paths) => std::env::split_paths(&paths).collect(),
         None => DEFAULT_CNI_DIRS.iter().map(PathBuf::from).collect(),
+    }
+}
+
+async fn proxy_logs(
+    axum::extract::State(socket): axum::extract::State<Arc<PathBuf>>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = format!("/logs?{}", query.unwrap_or_default());
+    match unix_http::get(&socket, &path).await {
+        Ok((status, body)) => (
+            status,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response(),
+        Err(error) => (
+            axum::http::StatusCode::BAD_GATEWAY,
+            axum::Json(serde_json::json!({ "error": format!("telemetry unavailable: {error}") })),
+        )
+            .into_response(),
     }
 }
 

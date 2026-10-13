@@ -10,6 +10,10 @@ pub struct ReplicaIdentity {
 
 pub trait ReplicaResolver: Send + Sync {
     fn resolve(&self, replica_id: &str) -> ReplicaIdentity;
+
+    fn is_live(&self, _replica_id: &str) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

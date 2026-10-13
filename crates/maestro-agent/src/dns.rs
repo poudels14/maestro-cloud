@@ -153,13 +153,6 @@ impl DnsServer {
     }
 }
 
-pub fn internal_names(cluster: &str, label: &str) -> [String; 2] {
-    [
-        format!("{label}.{INTERNAL_SUFFIX}"),
-        format!("{label}.{cluster}.{INTERNAL_SUFFIX}"),
-    ]
-}
-
 pub fn upstream_resolvers(resolv_conf: &str) -> Vec<SocketAddr> {
     resolv_conf
         .lines()

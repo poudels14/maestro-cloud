@@ -24,6 +24,20 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 "#;
+const TELEMETRY_UNIT: &str = r#"[Unit]
+Description=Maestro telemetry (dev)
+After=maestro.service
+
+[Service]
+Slice=maestro-system.slice
+MemoryMax=1G
+ExecStart=/usr/local/bin/maestro-v2 telemetry
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+"#;
 
 #[derive(Subcommand)]
 pub enum DevCommand {
@@ -117,12 +131,15 @@ sudo install -m 0755 "$HOME/target/debug/maestro-v2" /usr/local/bin/maestro-v2
 [ -f /var/lib/maestro/node.json ] || sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro
 sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'
 {unit}UNIT
+sudo tee /etc/systemd/system/maestro-telemetry.service > /dev/null <<'UNIT'
+{telemetry_unit}UNIT
 sudo systemctl daemon-reload
-sudo systemctl enable --now maestro.service
-sudo systemctl restart maestro.service
+sudo systemctl enable --now maestro.service maestro-telemetry.service
+sudo systemctl restart maestro.service maestro-telemetry.service
 "#,
         source = shell_quote(&source.to_string_lossy()),
         unit = UNIT.replace("{source}", &source.to_string_lossy()),
+        telemetry_unit = TELEMETRY_UNIT,
     );
     limactl(&["shell", VM_NAME, "--", "bash", "-lc", &script])
         .await
@@ -130,16 +147,21 @@ sudo systemctl restart maestro.service
 }
 
 async fn wait_for_api() -> anyhow::Result<()> {
-    for _ in 0..API_WAIT_ATTEMPTS {
-        let healthy = reqwest::get(format!("{API_URL}/api/health"))
+    let mut attempts = 0;
+    let mut healthy = false;
+    while !healthy && attempts < API_WAIT_ATTEMPTS {
+        healthy = reqwest::get(format!("{API_URL}/api/health"))
             .await
             .is_ok_and(|response| response.status().is_success());
-        if healthy {
-            return Ok(());
+        if !healthy {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        attempts += 1;
     }
-    anyhow::bail!("the maestro API did not become healthy at {API_URL}")
+    match healthy {
+        true => Ok(()),
+        false => anyhow::bail!("the maestro API did not become healthy at {API_URL}"),
+    }
 }
 
 async fn vm_status() -> anyhow::Result<Option<String>> {
