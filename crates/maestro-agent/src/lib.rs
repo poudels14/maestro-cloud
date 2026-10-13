@@ -9,6 +9,7 @@ mod reconciler;
 mod source;
 mod status;
 mod system;
+mod wireguard;
 
 pub use attach::{Attachment, ControlLink, StreamPlanSource};
 pub use build::{BuildKitBuilder, BuildKitSettings, BuildRequest, image_name};
@@ -21,3 +22,8 @@ pub use reconciler::{Reconciler, ReconcilerSettings};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
 pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};
+pub use wireguard::{
+    CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,
+    DEFAULT_LISTEN_PORT as WIREGUARD_PORT, HostCommandRunner, MeshConfig, MeshPeer, NodeKey,
+    WireGuardMesh, load_or_generate_key, public_key,
+};
