@@ -8,4 +8,6 @@ pub enum AgentError {
     Runtime(#[from] RuntimeError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error("{0}")]
+    Host(String),
 }

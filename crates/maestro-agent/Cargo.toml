@@ -11,7 +11,7 @@ maestro-store = { version = "0.1.0", path = "../maestro-store" }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["sync", "time", "net", "io-util", "rt", "macros"] }
+tokio = { version = "1.53.2", features = ["sync", "time", "net", "io-util", "rt", "macros", "process"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
