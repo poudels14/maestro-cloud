@@ -1,0 +1,17 @@
+[package]
+name = "maestro-store"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+maestro-core = { version = "0.1.0", path = "../maestro-core" }
+openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }
+redb = "4.3.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.53.2", features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time"] }
