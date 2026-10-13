@@ -3,8 +3,10 @@ mod client;
 mod cluster_service;
 mod contexts;
 mod control_link;
+mod control_plane;
 mod dev;
 mod identity;
+mod join;
 mod log_driver;
 mod server;
 mod unix_http;
@@ -37,6 +39,7 @@ enum Command {
     #[command(subcommand)]
     Token(TokenCommand),
     Agent(server::AgentArgs),
+    Join(join::JoinArgs),
     Telemetry {
         #[arg(long, default_value = "/var/lib/maestro/logs")]
         log_dir: PathBuf,
@@ -71,7 +74,8 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ServerCommand {
-    Init {
+    Init(server::InitArgs),
+    JoinToken {
         #[arg(long, default_value = "/var/lib/maestro")]
         data_dir: PathBuf,
     },
@@ -105,7 +109,9 @@ async fn run_cli() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
     match cli.command {
-        Command::Server(ServerCommand::Init { data_dir }) => server::init(&data_dir).await,
+        Command::Server(ServerCommand::Init(args)) => server::init(args).await,
+        Command::Server(ServerCommand::JoinToken { data_dir }) => join::create_token(&data_dir),
+        Command::Join(args) => join::join(args).await,
         Command::Dev(command) => dev::run(command).await,
         Command::Context(command) => contexts::run(command),
         Command::Token(TokenCommand::Create {

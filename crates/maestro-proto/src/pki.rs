@@ -71,6 +71,14 @@ impl ClusterCa {
         })
     }
 
+    pub fn from_pem(cert_pem: String, key_pem: String) -> Self {
+        Self { cert_pem, key_pem }
+    }
+
+    pub fn key_pem(&self) -> &str {
+        &self.key_pem
+    }
+
     pub fn save(&self, directory: &Path) -> Result<(), PkiError> {
         std::fs::create_dir_all(directory)?;
         std::fs::write(directory.join(CA_CERT_FILE), &self.cert_pem)?;

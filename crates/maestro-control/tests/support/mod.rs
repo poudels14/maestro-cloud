@@ -121,6 +121,7 @@ pub fn node(id: u64, cores: u32, memory_gib: u64) -> NodeRecord {
         },
         labels: Default::default(),
         state: NodeState::Active,
+        wireguard: None,
     }
 }
 

@@ -79,6 +79,7 @@ fn node(id: u64) -> NodeRecord {
         },
         labels: Default::default(),
         state: NodeState::Active,
+        wireguard: None,
     }
 }
 

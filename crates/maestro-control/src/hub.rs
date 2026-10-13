@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use maestro_core::{ControlMessage, NodeId, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable};
-use maestro_store::{SecretKey, StateMachine, replica_plans};
+use maestro_core::{
+    ControlMessage, MeshPeer, NodeId, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable,
+};
+use maestro_store::{SecretKey, StateMachine, StoreError, replica_plans};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
@@ -33,6 +35,7 @@ struct AgentLink {
     sender: mpsc::Sender<ControlMessage>,
     last_plans: Option<ControlMessage>,
     last_routes: Option<ControlMessage>,
+    last_mesh: Option<ControlMessage>,
 }
 
 struct NodeReplicas {
@@ -68,6 +71,7 @@ impl AgentHub {
                     sender,
                     last_plans: None,
                     last_routes: None,
+                    last_mesh: None,
                 },
             );
             if let Some(replicas) = state.replicas.get_mut(&node_id) {
@@ -131,6 +135,7 @@ impl AgentHub {
                 let slot = match message {
                     ControlMessage::Plans { .. } => &mut link.last_plans,
                     ControlMessage::Routes { .. } => &mut link.last_routes,
+                    ControlMessage::Mesh { .. } => &mut link.last_mesh,
                     ControlMessage::NotLeader { .. } => &mut link.last_routes,
                 };
                 let unchanged = slot.as_ref() == Some(&message);
@@ -223,6 +228,12 @@ pub async fn run_publisher(
                         dns: dns.clone(),
                     };
                     hub.publish(node_id, message).await;
+                    match mesh_peers(&state, node_id) {
+                        Ok(peers) => hub.publish(node_id, ControlMessage::Mesh { peers }).await,
+                        Err(error) => {
+                            tracing::warn!(%node_id, %error, "failed to build mesh peers")
+                        }
+                    }
                 }
                 previous_routes = table;
             }
@@ -234,6 +245,23 @@ pub async fn run_publisher(
             _ = tokio::time::sleep(PUBLISH_RESYNC) => {}
         }
     }
+}
+
+fn mesh_peers(state: &StateMachine, node_id: NodeId) -> Result<Vec<MeshPeer>, StoreError> {
+    Ok(state
+        .nodes()?
+        .into_iter()
+        .filter(|node| node.id != node_id && node.state != NodeState::Removed)
+        .filter_map(|node| {
+            let wireguard = node.wireguard?;
+            Some(MeshPeer {
+                node_id: node.id,
+                public_key: wireguard.public_key,
+                endpoint: wireguard.endpoint,
+                subnet: node.subnet?,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]

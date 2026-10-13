@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use maestro_core::MeshPeer;
+
 use crate::error::AgentError;
 
 pub use command::{CommandOutput, CommandRunner, HostCommandRunner};
@@ -27,14 +29,6 @@ pub struct MeshConfig {
     pub cluster_cidr: String,
     pub bridge: String,
     pub peers: Vec<MeshPeer>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MeshPeer {
-    pub node_id: u64,
-    pub public_key: String,
-    pub endpoint: SocketAddr,
-    pub subnet: String,
 }
 
 pub struct WireGuardMesh<R: CommandRunner = HostCommandRunner> {

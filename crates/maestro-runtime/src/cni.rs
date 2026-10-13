@@ -37,7 +37,7 @@ impl CniNetwork {
                 "type": "bridge",
                 "bridge": bridge_name,
                 "isGateway": true,
-                "ipMasq": true,
+                "ipMasq": false,
                 "hairpinMode": true,
                 "ipam": {
                     "type": "host-local",

@@ -24,7 +24,7 @@ provision:
       #!/bin/bash
       set -eux
       apt-get update
-      apt-get install -y build-essential pkg-config protobuf-compiler cmake
+      apt-get install -y build-essential pkg-config protobuf-compiler cmake wireguard-tools nftables
       mkdir -p /etc/systemd/system
       cat > /etc/systemd/system/maestro-system.slice <<'SLICE'
       [Slice]

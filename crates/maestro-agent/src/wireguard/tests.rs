@@ -386,7 +386,7 @@ fn fixture(peers: Vec<MeshPeer>) -> (TempDir, MeshConfig) {
 
 fn peer(node_id: u64, public_key: &str, endpoint: &str) -> MeshPeer {
     MeshPeer {
-        node_id,
+        node_id: maestro_core::NodeId(node_id),
         public_key: public_key.to_string(),
         endpoint: endpoint.parse().unwrap(),
         subnet: format!("10.200.{node_id}.0/24"),

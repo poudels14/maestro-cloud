@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,15 @@ pub struct NodeRecord {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
     pub state: NodeState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wireguard: Option<WireGuardInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireGuardInfo {
+    pub public_key: String,
+    pub endpoint: SocketAddr,
 }
 
 impl NodeRecord {

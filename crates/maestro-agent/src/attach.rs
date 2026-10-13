@@ -9,6 +9,7 @@ use crate::error::AgentError;
 use crate::ingress::IngressWriter;
 use crate::source::PlanSource;
 use crate::status::StatusBoard;
+use crate::wireguard::{MeshConfig, WireGuardMesh};
 
 const HEARTBEAT: Duration = Duration::from_secs(5);
 const RECONNECT_MIN: Duration = Duration::from_millis(500);
@@ -37,6 +38,7 @@ pub struct Attachment<L: ControlLink> {
     initialized: watch::Sender<bool>,
     ingress: IngressWriter,
     dns: DnsRecords,
+    mesh: Option<(WireGuardMesh, MeshConfig)>,
 }
 
 enum SessionEnd {
@@ -52,6 +54,7 @@ impl<L: ControlLink> Attachment<L> {
         board: StatusBoard,
         ingress: IngressWriter,
         dns: DnsRecords,
+        mesh: Option<(WireGuardMesh, MeshConfig)>,
     ) -> (Self, StreamPlanSource) {
         let (plans, plans_receiver) = watch::channel(Vec::new());
         let (initialized, initialized_receiver) = watch::channel(false);
@@ -64,6 +67,7 @@ impl<L: ControlLink> Attachment<L> {
             initialized,
             ingress,
             dns,
+            mesh,
         };
         let source = StreamPlanSource {
             plans: plans_receiver,
@@ -156,6 +160,17 @@ impl<L: ControlLink> Attachment<L> {
                     tracing::warn!(%error, "failed to write ingress config");
                 }
                 self.dns.replace(dns.into_iter().collect());
+            }
+            ControlMessage::Mesh { peers } => {
+                if let Some((mesh, template)) = &self.mesh {
+                    let config = MeshConfig {
+                        peers,
+                        ..template.clone()
+                    };
+                    if let Err(error) = mesh.apply(&config).await {
+                        tracing::warn!(%error, "failed to apply the WireGuard mesh");
+                    }
+                }
             }
             ControlMessage::NotLeader { .. } => {}
         }
@@ -266,6 +281,7 @@ mod tests {
             StatusBoard::new(),
             IngressWriter::new(directory.path().to_path_buf(), &[80]),
             dns.clone(),
+            None,
         );
         (attachment, source, dns, directory)
     }

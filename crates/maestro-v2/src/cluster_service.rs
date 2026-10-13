@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use maestro_control::AgentHub;
-use maestro_core::{AgentMessage, ControlMessage};
+use maestro_core::{AgentMessage, ClusterSettings, ControlMessage, JoinRequest};
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::cluster_server::Cluster;
 use maestro_store::Consensus;
@@ -11,6 +11,8 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::join::JoinAuthority;
+
 const OUTBOUND_BUFFER: usize = 64;
 
 type EnvelopeStream = Pin<Box<dyn Stream<Item = Result<Envelope, Status>> + Send>>;
@@ -18,11 +20,23 @@ type EnvelopeStream = Pin<Box<dyn Stream<Item = Result<Envelope, Status>> + Send
 pub struct ClusterService {
     consensus: Arc<Consensus>,
     hub: AgentHub,
+    authority: Arc<JoinAuthority>,
+    cluster: ClusterSettings,
 }
 
 impl ClusterService {
-    pub fn new(consensus: Arc<Consensus>, hub: AgentHub) -> Self {
-        Self { consensus, hub }
+    pub fn new(
+        consensus: Arc<Consensus>,
+        hub: AgentHub,
+        authority: Arc<JoinAuthority>,
+        cluster: ClusterSettings,
+    ) -> Self {
+        Self {
+            consensus,
+            hub,
+            authority,
+            cluster,
+        }
     }
 }
 
@@ -30,8 +44,13 @@ impl ClusterService {
 impl Cluster for ClusterService {
     type AttachStream = EnvelopeStream;
 
-    async fn join(&self, _request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
-        Err(Status::unimplemented("joining is not available yet"))
+    async fn join(&self, request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
+        let join_request: JoinRequest = decode(request.get_ref())?;
+        let response = self
+            .authority
+            .admit(&self.consensus, &self.cluster, join_request)
+            .await?;
+        Ok(Response::new(encode(&response)?))
     }
 
     async fn attach(

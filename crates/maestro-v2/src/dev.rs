@@ -129,7 +129,7 @@ cd {source}
 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_TARGET_DIR="$HOME/target" cargo build --locked -p maestro-v2
 sudo install -m 0755 "$HOME/target/debug/maestro-v2" /usr/local/bin/maestro-v2
 sudo systemctl stop maestro.service 2>/dev/null || true
-sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro
+sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro --advertise 127.0.0.1:7400
 sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'
 {unit}UNIT
 sudo tee /etc/systemd/system/maestro-telemetry.service > /dev/null <<'UNIT'

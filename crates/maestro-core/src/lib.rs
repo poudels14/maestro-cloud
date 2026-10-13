@@ -14,8 +14,10 @@ pub use config::{
 };
 pub use deployment::{Assignment, Deployment, DeploymentStatus, HealthcheckPlan, ReplicaPlan};
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
-pub use node::{NodeRecord, NodeRole, NodeState};
-pub use protocol::{AgentMessage, ControlMessage};
+pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo};
+pub use protocol::{
+    AgentMessage, ControlMessage, JoinRequest, JoinResponse, MeshPeer, VoterSecrets,
+};
 pub use resources::{
     ByteSize, EffectiveResources, MemoryLimit, Millicores, NodeCapacity, OomPriority,
     ResolvedRequest, ResourceDefaults, ResourceError, ResourceRequest, ResourceSpec,

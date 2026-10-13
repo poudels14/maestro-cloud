@@ -193,6 +193,7 @@ mod tests {
             },
             labels: Default::default(),
             state: NodeState::Active,
+            wireguard: None,
         }
     }
 
