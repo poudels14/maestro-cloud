@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::spec::{ContainerFiles, ContainerSpec, ImageConfig, RuntimeError};
+use crate::spec::{ContainerFiles, ContainerSpec, ImageConfig, NetworkMode, RuntimeError};
 
 const CPU_PERIOD_MICROS: u64 = 100_000;
 const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -83,18 +83,24 @@ pub fn build_spec(
                 "pids": { "limit": limits.pids },
             },
             "cgroupsPath": format!("{}:maestro:{}", container.cgroup_parent, container.id),
-            "namespaces": [
-                { "type": "pid" },
-                { "type": "ipc" },
-                { "type": "uts" },
-                { "type": "mount" },
-                { "type": "network" },
-                { "type": "cgroup" },
-            ],
+            "namespaces": namespaces(container.network),
             "maskedPaths": MASKED_PATHS,
             "readonlyPaths": READONLY_PATHS,
         },
     }))
+}
+
+fn namespaces(network: NetworkMode) -> Vec<Value> {
+    let shared = ["pid", "ipc", "uts", "mount", "cgroup"];
+    let network_namespace = match network {
+        NetworkMode::Bridge => Some("network"),
+        NetworkMode::Host => None,
+    };
+    shared
+        .into_iter()
+        .chain(network_namespace)
+        .map(|kind| json!({ "type": kind }))
+        .collect()
 }
 
 fn process_args(container: &ContainerSpec, image: &ImageConfig) -> Vec<String> {
@@ -224,6 +230,7 @@ mod tests {
                 destination: "/var/lib/api".to_string(),
                 read_only: true,
             }],
+            network: NetworkMode::Bridge,
         }
     }
 
@@ -316,6 +323,23 @@ mod tests {
             .find(|mount| mount["destination"] == "/var/lib/api")
             .unwrap();
         assert_eq!(user["options"], json!(["rbind", "rprivate", "ro"]));
+    }
+
+    #[test]
+    fn host_network_shares_the_host_namespace() {
+        let mut host = container();
+        let bridged = build_spec(&host, &image(), &files()).unwrap();
+        host.network = NetworkMode::Host;
+        let shared = build_spec(&host, &image(), &files()).unwrap();
+        let has_network = |spec: &Value| {
+            spec["linux"]["namespaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|namespace| namespace["type"] == "network")
+        };
+        assert!(has_network(&bridged));
+        assert!(!has_network(&shared));
     }
 
     #[test]

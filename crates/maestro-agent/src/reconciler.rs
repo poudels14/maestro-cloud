@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use maestro_core::{ReplicaId, ReplicaPhase, ReplicaPlan, ReplicaStatus};
 use maestro_runtime::{
-    ContainerLimits, ContainerSpec, ContainerState, ContainerStatus, Runtime, RuntimeEvent,
+    ContainerLimits, ContainerSpec, ContainerState, ContainerStatus, NetworkMode, Runtime,
+    RuntimeEvent,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
@@ -313,6 +314,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             },
             cgroup_parent: self.settings.cgroup_parent.clone(),
             mounts: Vec::new(),
+            network: NetworkMode::Bridge,
         }
     }
 }

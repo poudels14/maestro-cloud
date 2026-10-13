@@ -61,34 +61,33 @@ impl CniNetwork {
         container_id: &str,
         netns_path: &str,
     ) -> Result<Option<IpAddr>, RuntimeError> {
+        tokio::fs::create_dir_all(&self.cache_dir).await?;
         let mut previous = Value::Null;
         for plugin in &self.plugins {
             previous = self
                 .invoke(CniCommand::Add, plugin, container_id, netns_path, &previous)
                 .await?;
+            tokio::fs::write(
+                self.cache_path(container_id),
+                serde_json::to_vec(&previous)?,
+            )
+            .await?;
         }
-        tokio::fs::create_dir_all(&self.cache_dir).await?;
-        tokio::fs::write(
-            self.cache_path(container_id),
-            serde_json::to_vec(&previous)?,
-        )
-        .await?;
         Ok(first_ip(&previous))
     }
 
     pub async fn del(&self, container_id: &str, netns_path: &str) -> Result<(), RuntimeError> {
-        let cached = match tokio::fs::read(self.cache_path(container_id)).await {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
-            Err(error) => Err(error)?,
-        };
-        for plugin in self.plugins.iter().rev() {
-            self.invoke(CniCommand::Del, plugin, container_id, netns_path, &cached)
-                .await?;
-        }
-        match tokio::fs::remove_file(self.cache_path(container_id)).await {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-            _ => Ok(()),
+        match tokio::fs::read(self.cache_path(container_id)).await {
+            Ok(bytes) => {
+                let cached: Value = serde_json::from_slice(&bytes)?;
+                for plugin in self.plugins.iter().rev() {
+                    self.invoke(CniCommand::Del, plugin, container_id, netns_path, &cached)
+                        .await?;
+                }
+                Ok(tokio::fs::remove_file(self.cache_path(container_id)).await?)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
         }
     }
 

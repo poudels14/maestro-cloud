@@ -7,7 +7,7 @@ use std::time::Duration;
 use maestro_core::{ByteSize, Millicores};
 use maestro_runtime::{
     CniNetwork, ContainerLimits, ContainerSpec, ContainerState, ContainerdRuntime,
-    ContainerdSettings, Runtime, RuntimeEvent,
+    ContainerdSettings, NetworkMode, Runtime, RuntimeEvent,
 };
 
 const IMAGE: &str = "busybox:1.36";
@@ -57,6 +57,7 @@ fn container(id: &str, args: &[&str], memory: ByteSize) -> ContainerSpec {
         },
         cgroup_parent: "maestro-workloads.slice".to_string(),
         mounts: vec![],
+        network: NetworkMode::Bridge,
     }
 }
 

@@ -30,8 +30,8 @@ use crate::cni::CniNetwork;
 use crate::oci;
 use crate::reference;
 use crate::spec::{
-    ContainerFiles, ContainerSpec, ContainerState, ContainerStatus, ImageConfig, Runtime,
-    RuntimeError, RuntimeEvent, StartedContainer,
+    ContainerFiles, ContainerSpec, ContainerState, ContainerStatus, ImageConfig, NetworkMode,
+    Runtime, RuntimeError, RuntimeEvent, StartedContainer,
 };
 
 const NAMESPACE_HEADER: &str = "containerd-namespace";
@@ -276,10 +276,14 @@ impl ContainerdRuntime {
             .await?
             .into_inner()
             .pid;
-        let ip = self
-            .network
-            .add(&spec.id, &format!("/proc/{pid}/ns/net"))
-            .await?;
+        let ip = match spec.network {
+            NetworkMode::Bridge => {
+                self.network
+                    .add(&spec.id, &format!("/proc/{pid}/ns/net"))
+                    .await?
+            }
+            NetworkMode::Host => None,
+        };
         write_hosts(&files.hosts, &spec.id, ip).await?;
         TasksClient::new(self.channel.clone())
             .start(self.request(StartRequest {

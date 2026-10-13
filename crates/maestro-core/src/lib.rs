@@ -3,6 +3,7 @@ mod deployment;
 mod ids;
 mod node;
 mod resources;
+mod routing;
 mod service;
 mod status;
 
@@ -17,6 +18,7 @@ pub use resources::{
     ByteSize, EffectiveResources, MemoryLimit, Millicores, NodeCapacity, OomPriority,
     ResolvedRequest, ResourceDefaults, ResourceError, ResourceRequest, ResourceSpec,
 };
+pub use routing::{Backend, RouteTable, ServiceRoute};
 pub use service::{
     BuildSpec, Command, DeploySpec, EnvSpec, IngressSpec, ServiceSpec, ServicesFile, SpecError,
 };

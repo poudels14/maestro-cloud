@@ -14,5 +14,5 @@ pub use oci::build_spec;
 pub use reference::normalize as normalize_image_reference;
 pub use spec::{
     BindMount, ContainerFiles, ContainerLimits, ContainerSpec, ContainerState, ContainerStatus,
-    ImageConfig, Runtime, RuntimeError, RuntimeEvent, StartedContainer,
+    ImageConfig, NetworkMode, Runtime, RuntimeError, RuntimeEvent, StartedContainer,
 };

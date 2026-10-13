@@ -20,6 +20,14 @@ pub struct ContainerSpec {
     pub limits: ContainerLimits,
     pub cgroup_parent: String,
     pub mounts: Vec<BindMount>,
+    pub network: NetworkMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NetworkMode {
+    #[default]
+    Bridge,
+    Host,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

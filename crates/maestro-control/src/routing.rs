@@ -1,34 +1,12 @@
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use maestro_core::{
-    Assignment, Deployment, DeploymentStatus, ReplicaId, ReplicaPhase, ReplicaStatus, ServiceId,
-    ServiceSpec,
+    Assignment, Backend, Deployment, DeploymentStatus, ReplicaId, ReplicaPhase, ReplicaStatus,
+    RouteTable, ServiceId, ServiceRoute, ServiceSpec,
 };
-use serde::{Deserialize, Serialize};
 
 const ROUTED_STATUSES: [DeploymentStatus; 2] =
     [DeploymentStatus::Deploying, DeploymentStatus::Ready];
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RouteTable {
-    pub routes: BTreeMap<ServiceId, ServiceRoute>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceRoute {
-    pub hosts: Vec<String>,
-    pub backends: Vec<Backend>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Backend {
-    pub replica_id: ReplicaId,
-    pub address: SocketAddr,
-}
 
 pub struct RoutingInput<'a> {
     pub services: &'a [(ServiceId, ServiceSpec)],
