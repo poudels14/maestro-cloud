@@ -1,0 +1,371 @@
+use std::path::Path;
+
+use maestro_telemetry::{
+    LogQuery, LogRecord, LogStore, ReplicaIdentity, StoredLog, Stream, TailCheckpoint,
+};
+
+const OLD_TS: u64 = 1_700_000_000_000;
+const OLD_PARTITION: &str = "date=2023-11-14";
+
+fn record(ts: u64, line: &str) -> LogRecord {
+    LogRecord {
+        ts,
+        stream: Stream::Stdout,
+        line: line.to_string(),
+    }
+}
+
+fn identity(service_id: &str, deployment_id: &str) -> ReplicaIdentity {
+    ReplicaIdentity {
+        service_id: Some(service_id.to_string()),
+        deployment_id: Some(deployment_id.to_string()),
+    }
+}
+
+fn ingest(store: &LogStore, replica_id: &str, identity: &ReplicaIdentity, records: &[LogRecord]) {
+    store
+        .ingest(
+            replica_id,
+            identity,
+            records,
+            TailCheckpoint {
+                inode: 1,
+                offset: records.len() as u64,
+            },
+        )
+        .unwrap();
+}
+
+async fn search(store: &LogStore, query: &str) -> Vec<StoredLog> {
+    store
+        .read_logs(LogQuery {
+            search: Some(query.parse().unwrap()),
+            before: None,
+            limit: 100,
+        })
+        .await
+        .unwrap()
+}
+
+fn lines(logs: &[StoredLog]) -> Vec<&str> {
+    logs.iter().map(|log| log.line.as_str()).collect()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn parquet_files(directory: &Path) -> Vec<String> {
+    let mut names = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|name| name.ends_with(".parquet"))
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn reads_newest_first_with_identity_and_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let api = identity("api", "dep1");
+    ingest(
+        &store,
+        "dep1-0",
+        &api,
+        &(0..5)
+            .map(|index| record(now_ms(), &format!("line {index}")))
+            .collect::<Vec<_>>(),
+    );
+
+    let first_page = store
+        .read_logs(LogQuery {
+            search: None,
+            before: None,
+            limit: 2,
+        })
+        .await
+        .unwrap();
+    assert_eq!(lines(&first_page), ["line 4", "line 3"]);
+    assert_eq!(first_page[0].service_id.as_deref(), Some("api"));
+    assert_eq!(first_page[0].deployment_id.as_deref(), Some("dep1"));
+    assert_eq!(first_page[0].replica_id, "dep1-0");
+    assert_eq!(first_page[0].stream, "stdout");
+
+    let second_page = store
+        .read_logs(LogQuery {
+            search: None,
+            before: Some(first_page[1].seq),
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(lines(&second_page), ["line 2", "line 1", "line 0"]);
+}
+
+#[tokio::test]
+async fn ingest_persists_checkpoints_atomically() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    store
+        .ingest(
+            "dep1-0",
+            &ReplicaIdentity::default(),
+            &[record(now_ms(), "hello")],
+            TailCheckpoint {
+                inode: 42,
+                offset: 128,
+            },
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = LogStore::open(directory.path()).unwrap();
+    assert_eq!(
+        reopened.checkpoints().unwrap().get("dep1-0"),
+        Some(&TailCheckpoint {
+            inode: 42,
+            offset: 128
+        })
+    );
+    reopened.forget_checkpoint("dep1-0").unwrap();
+    assert!(reopened.checkpoints().unwrap().is_empty());
+    let logs = reopened
+        .read_logs(LogQuery {
+            limit: 10,
+            ..LogQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(lines(&logs), ["hello"]);
+    assert_eq!(logs[0].service_id, None);
+}
+
+#[tokio::test]
+async fn query_language_filters_fields_text_and_attributes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let now = now_ms();
+    ingest(
+        &store,
+        "dep1-0",
+        &identity("api", "dep1"),
+        &[
+            record(
+                now,
+                r#"{"level":"error","msg":"upstream request failed","DownstreamStatus":503,"user":{"id":"u1"}}"#,
+            ),
+            record(
+                now,
+                r#"{"level":"info","msg":"request ok","http.status_code":200,"duration_ms":12}"#,
+            ),
+            record(
+                now,
+                r#"{"level":"warn","msg":"slow request","http":{"status_code":429},"duration_ms":900}"#,
+            ),
+            record(now, "plain health check"),
+        ],
+    );
+    store
+        .ingest(
+            "dep2-0",
+            &identity("worker", "dep2"),
+            &[LogRecord {
+                ts: now,
+                stream: Stream::Stderr,
+                line: "2026-03-15T20:28:36Z ERR worker crashed".to_string(),
+            }],
+            TailCheckpoint {
+                inode: 2,
+                offset: 1,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        lines(&search(&store, "level:error").await),
+        [
+            "2026-03-15T20:28:36Z ERR worker crashed",
+            r#"{"level":"error","msg":"upstream request failed","DownstreamStatus":503,"user":{"id":"u1"}}"#,
+        ]
+    );
+    assert_eq!(search(&store, "service:api").await.len(), 4);
+    assert_eq!(search(&store, "service:work*").await.len(), 1);
+    assert_eq!(search(&store, "deployment:dep2").await.len(), 1);
+    assert_eq!(search(&store, "replica:dep1-0").await.len(), 4);
+    assert_eq!(search(&store, "source:dep2-0 stream:stderr").await.len(), 1);
+    assert_eq!(search(&store, "REQUEST").await.len(), 3);
+    assert_eq!(search(&store, r#""health check""#).await.len(), 1);
+    assert_eq!(search(&store, "message:*crashed").await.len(), 1);
+    assert_eq!(search(&store, "request -failed").await.len(), 2);
+    assert_eq!(search(&store, "request AND NOT slow").await.len(), 2);
+    assert_eq!(search(&store, "crashed OR \"request ok\"").await.len(), 2);
+    assert_eq!(
+        search(&store, "@http.status_code:[500 TO 599]").await.len(),
+        1
+    );
+    assert_eq!(search(&store, "@http.status_code:429").await.len(), 1);
+    assert_eq!(search(&store, "@http.status_code:>=200").await.len(), 3);
+    assert_eq!(search(&store, "@duration_ms:>100").await.len(), 1);
+    assert_eq!(search(&store, "@duration_ms:<=12").await.len(), 1);
+    assert_eq!(search(&store, "@user.id:u1").await.len(), 1);
+    assert_eq!(search(&store, "@user.id:*").await.len(), 1);
+    assert_eq!(
+        search(&store, "(level:warn OR level:error) service:api")
+            .await
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn rollover_keeps_old_logs_queryable_from_parquet() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    ingest(
+        &store,
+        "dep1-0",
+        &identity("api", "dep1"),
+        &[record(
+            OLD_TS,
+            r#"{"level":"error","msg":"cold failure","DownstreamStatus":"503"}"#,
+        )],
+    );
+    assert_eq!(store.rollover().await.unwrap(), 1);
+    let partition = directory.path().join("parts").join(OLD_PARTITION);
+    assert!(partition.join("manifest.json").exists());
+    assert_eq!(parquet_files(&partition), ["part-1-1.parquet"]);
+
+    ingest(
+        &store,
+        "dep1-0",
+        &identity("api", "dep1"),
+        &[record(
+            now_ms(),
+            r#"{"level":"info","msg":"hot success","http.response.status_code":200}"#,
+        )],
+    );
+    let failures = search(&store, "failure AND @http.status_code:[500 TO 599]").await;
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].service_id.as_deref(), Some("api"));
+    let everything = store
+        .read_logs(LogQuery {
+            limit: 10,
+            ..LogQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(everything.len(), 2);
+    assert!(everything[0].seq > everything[1].seq);
+}
+
+#[tokio::test]
+async fn rollover_exports_late_arrivals_as_additional_parts() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let api = identity("api", "dep1");
+    ingest(&store, "dep1-0", &api, &[record(OLD_TS, "first")]);
+    store.rollover().await.unwrap();
+    ingest(&store, "dep1-0", &api, &[record(OLD_TS, "late")]);
+    store.rollover().await.unwrap();
+
+    let logs = store
+        .read_logs(LogQuery {
+            limit: 10,
+            ..LogQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(lines(&logs), ["late", "first"]);
+    assert_eq!(
+        parquet_files(&directory.path().join("parts").join(OLD_PARTITION)),
+        ["part-1-1.parquet", "part-2-2.parquet"]
+    );
+}
+
+#[tokio::test]
+async fn rollover_replaces_an_uncommitted_export() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let api = identity("api", "dep1");
+    ingest(&store, "dep1-0", &api, &[record(OLD_TS, "first")]);
+    let partition = directory.path().join("parts").join(OLD_PARTITION);
+    std::fs::create_dir_all(&partition).unwrap();
+    let orphan = partition.join("part-1-1.parquet");
+    duckdb::Connection::open_in_memory()
+        .unwrap()
+        .execute_batch(&format!(
+            "COPY (SELECT 1::BIGINT AS seq) TO '{}' (FORMAT PARQUET)",
+            orphan.display()
+        ))
+        .unwrap();
+    ingest(&store, "dep1-0", &api, &[record(OLD_TS, "late")]);
+
+    assert_eq!(store.rollover().await.unwrap(), 2);
+    assert!(!orphan.exists());
+    assert_eq!(parquet_files(&partition), ["part-1-2.parquet"]);
+    let logs = store
+        .read_logs(LogQuery {
+            limit: 10,
+            ..LogQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(lines(&logs), ["late", "first"]);
+}
+
+#[tokio::test]
+async fn rollover_and_ingest_can_run_concurrently_without_losing_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(LogStore::open(directory.path()).unwrap());
+    let api = identity("api", "dep1");
+    let old_records = (0..200)
+        .map(|index| record(OLD_TS, &format!("old-{index}")))
+        .collect::<Vec<_>>();
+    ingest(&store, "dep1-0", &api, &old_records);
+
+    let ingesting = {
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || {
+            ingest(&store, "dep1-0", &api, &[record(now_ms(), "current")])
+        })
+    };
+    let (rolled, ingested) = tokio::join!(store.rollover(), ingesting);
+    assert_eq!(rolled.unwrap(), 200);
+    ingested.unwrap();
+
+    let logs = store
+        .read_logs(LogQuery {
+            limit: 500,
+            ..LogQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(logs.len(), 201);
+    assert_eq!(logs.iter().filter(|log| log.line == "current").count(), 1);
+}
+
+#[tokio::test]
+async fn reopen_cleans_stale_temp_exports() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    ingest(
+        &store,
+        "dep1-0",
+        &identity("api", "dep1"),
+        &[record(OLD_TS, "cold")],
+    );
+    store.rollover().await.unwrap();
+    drop(store);
+    let partition = directory.path().join("parts").join(OLD_PARTITION);
+    let stale = partition.join("part-9-9.parquet.tmp-1234");
+    std::fs::write(&stale, b"partial").unwrap();
+
+    let reopened = LogStore::open(directory.path()).unwrap();
+    assert!(!stale.exists());
+    assert_eq!(search(&reopened, "cold").await.len(), 1);
+}

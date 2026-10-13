@@ -94,6 +94,15 @@ async fn read_lines(
     }
 }
 
+impl Stream {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
 impl RotatingFile {
     async fn open(directory: PathBuf, settings: LogDriverSettings) -> std::io::Result<Self> {
         tokio::fs::create_dir_all(&directory).await?;
