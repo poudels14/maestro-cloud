@@ -43,9 +43,18 @@ isolation that keeps nodes alive when workloads misbehave.
 | `maestro agent` (systemd, `maestro-system.slice`) | all | containerd client, CNI networking, replica supervisor, health checks, DNS, Traefik file-provider writer, egress firewall. On voters also: Raft + redb store, API, scheduler, deploy reconciler, build queue |
 | `maestro telemetry` (systemd, `maestro-system.slice`, own `MemoryMax`) | all | Log/metrics ingest, DuckDB store, query API, Parquet rollover, S3 backup, Datadog sink |
 | Traefik (container, `maestro-system.slice`) | workload nodes | Public ingress and the cross-node mTLS gateway, configured by file provider |
+| Admin UI (container, `maestro-system.slice`) | voters | TanStack Start UI reachable from the tailnet; API access only via the mounted Unix socket |
 | `buildkitd` (systemd, `maestro-builds.slice`) | build-capable nodes | Image builds |
 
-Both Maestro units are the same binary. No image is built at startup.
+Both Maestro units are the same binary.
+
+The admin UI stays a TanStack Start app in its own system container
+(`maestro-admin:<version>`, `maestro-system.slice`) so it is reachable from the tailnet
+while the controller API is not. It talks to the API only through the agent's Unix
+socket (`/run/maestro/api.sock`), which is bind-mounted into the admin container; the
+API's TCP listener stays on `127.0.0.1:3000` for the local CLI. The admin image is built
+on the node with BuildKit only when the tag for the running version is missing, then
+cached. No other image is built at startup.
 
 ### Node roles
 
@@ -192,8 +201,10 @@ maestro-builds.slice     CPUWeight=50, MemoryMax=<build cap>, 1–2 concurrent b
 
 ## Telemetry
 
-- Agents collect container stdout/stderr through containerd task IO and forward
-  them to the local telemetry process over a Unix socket.
+- Container stdout/stderr use containerd's `binary://` log URI pointing at
+  `maestro log-driver`, which the containerd shim runs as a child. It writes
+  size-rotated local files and forwards lines to the telemetry socket, so logs keep
+  flowing while the agent restarts or upgrades.
 - Telemetry keeps one store: DuckDB with Parquet rollover (the v1 query language,
   search, and traffic analytics carry over). The SQLite spool is removed; sink
   cursors live in DuckDB.
@@ -353,7 +364,8 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 
 - [ ] Traefik file-provider ingress, routing table, `hickory-dns`
 - [ ] Builds via BuildKit, build queue, registry push
-- [ ] Telemetry process, log collection, query API, UI embedded as static assets (SPA)
+- [ ] Telemetry process, `maestro log-driver`, query API
+- [ ] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
 - [ ] Secrets encryption, external secret providers, JWT auth, CLI contexts
 
 ### Phase 3: multi-node
@@ -373,5 +385,3 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 ## Open items
 
 - Node instance sizes, to tune the default system reserve.
-- Whether the UI keeps TanStack Start or becomes a plain Vite SPA (it must be static
-  to be embedded in the binary).
