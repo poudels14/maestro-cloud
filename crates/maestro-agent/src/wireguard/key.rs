@@ -22,7 +22,7 @@ pub async fn load_or_generate_key(directory: &Path) -> Result<NodeKey, AgentErro
     let private_key = match tokio::fs::read_to_string(&private_key_path).await {
         Ok(contents) => contents.trim().to_string(),
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            let generated = STANDARD.encode(StaticSecret::random().to_bytes());
+            let generated = STANDARD.encode(clamp(StaticSecret::random().to_bytes()));
             write_private_key(directory, &private_key_path, &generated).await?;
             generated
         }
@@ -68,6 +68,12 @@ async fn write_private_key(
         .map_err(|error| key_error(path, error))
 }
 
+fn clamp(mut bytes: [u8; KEY_LENGTH]) -> [u8; KEY_LENGTH] {
+    bytes[0] &= 248;
+    bytes[KEY_LENGTH - 1] = (bytes[KEY_LENGTH - 1] & 127) | 64;
+    bytes
+}
+
 fn key_error(path: &Path, error: std::io::Error) -> AgentError {
     AgentError::Host(format!("WireGuard key file {}: {error}", path.display()))
 }
@@ -108,6 +114,9 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         let stored = std::fs::read_to_string(&generated.private_key_path).unwrap();
+        let stored_bytes = STANDARD.decode(stored.trim()).unwrap();
+        assert_eq!(stored_bytes[0] & 7, 0);
+        assert_eq!(stored_bytes[KEY_LENGTH - 1] & 192, 64);
         assert_eq!(public_key(&stored).unwrap(), generated.public_key);
         let reloaded = load_or_generate_key(&key_directory).await.unwrap();
         assert_eq!(reloaded, generated);
