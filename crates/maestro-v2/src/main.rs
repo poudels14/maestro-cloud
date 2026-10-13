@@ -1,4 +1,5 @@
 mod client;
+mod dev;
 mod identity;
 mod server;
 
@@ -20,6 +21,8 @@ struct Cli {
 enum Command {
     #[command(subcommand)]
     Server(ServerCommand),
+    #[command(subcommand)]
+    Dev(dev::DevCommand),
     Agent(server::AgentArgs),
     Rollout {
         #[arg(short, long, default_value = "maestro.services.jsonc")]
@@ -65,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     match Cli::parse().command {
         Command::Server(ServerCommand::Init { data_dir }) => server::init(&data_dir).await,
+        Command::Dev(command) => dev::run(command).await,
         Command::Agent(args) => server::run_agent(args).await,
         Command::Rollout { file, apply, api } => client::rollout(&api, &file, apply).await,
         Command::Services { api } => client::services(&api).await,

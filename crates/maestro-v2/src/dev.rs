@@ -1,0 +1,138 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
+use clap::Subcommand;
+use tokio::process::Command;
+
+const VM_NAME: &str = "maestro-dev";
+const TEMPLATE: &str = include_str!("../../../dev/lima/maestro-dev.yaml");
+const API_URL: &str = "http://127.0.0.1:3000";
+const UNIT: &str = r#"[Unit]
+Description=Maestro agent (dev)
+After=containerd.service
+Requires=containerd.service
+
+[Service]
+Slice=maestro-system.slice
+ExecStart=/usr/local/bin/maestro-v2 agent --data-dir /var/lib/maestro --listen 127.0.0.1:3000
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+"#;
+
+#[derive(Subcommand)]
+pub enum DevCommand {
+    Up {
+        #[arg(long, default_value = ".")]
+        source: PathBuf,
+    },
+    Reload {
+        #[arg(long, default_value = ".")]
+        source: PathBuf,
+    },
+    Down,
+    Status,
+}
+
+pub async fn run(command: DevCommand) -> anyhow::Result<()> {
+    match command {
+        DevCommand::Up { source } => {
+            ensure_vm().await?;
+            install_agent(&source).await?;
+            println!("maestro is running; API at {API_URL}");
+            Ok(())
+        }
+        DevCommand::Reload { source } => {
+            install_agent(&source).await?;
+            println!("maestro agent reloaded");
+            Ok(())
+        }
+        DevCommand::Down => limactl(&["stop", VM_NAME]).await.map(|_| ()),
+        DevCommand::Status => {
+            println!(
+                "vm: {}",
+                vm_status().await?.unwrap_or_else(|| "missing".to_string())
+            );
+            let api = match reqwest::get(format!("{API_URL}/api/health")).await {
+                Ok(response) if response.status().is_success() => "healthy",
+                _ => "unreachable",
+            };
+            println!("api: {api} ({API_URL})");
+            Ok(())
+        }
+    }
+}
+
+async fn ensure_vm() -> anyhow::Result<()> {
+    match vm_status().await?.as_deref() {
+        Some("Running") => Ok(()),
+        Some(_) => limactl(&["start", VM_NAME]).await.map(|_| ()),
+        None => {
+            let template_path = std::env::temp_dir().join("maestro-dev.yaml");
+            std::fs::write(&template_path, TEMPLATE)?;
+            let template = template_path.to_string_lossy().to_string();
+            println!("creating the {VM_NAME} VM (first run downloads an Ubuntu image)...");
+            limactl(&["start", "--name", VM_NAME, "--tty=false", &template])
+                .await
+                .map(|_| ())
+        }
+    }
+}
+
+async fn install_agent(source: &Path) -> anyhow::Result<()> {
+    let source = std::fs::canonicalize(source)
+        .with_context(|| format!("source directory {} not found", source.display()))?;
+    anyhow::ensure!(
+        source.join("crates/maestro-v2").is_dir(),
+        "{} is not the maestro repository root; pass --source",
+        source.display()
+    );
+    let script = format!(
+        r#"set -euo pipefail
+source "$HOME/.cargo/env"
+cd {source}
+CARGO_TARGET_DIR="$HOME/target" cargo build --locked -p maestro-v2
+sudo install -m 0755 "$HOME/target/debug/maestro-v2" /usr/local/bin/maestro-v2
+[ -f /var/lib/maestro/node.json ] || sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro
+sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'
+{UNIT}UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable --now maestro.service
+sudo systemctl restart maestro.service
+"#,
+        source = shell_quote(&source.to_string_lossy()),
+    );
+    limactl(&["shell", VM_NAME, "--", "bash", "-lc", &script])
+        .await
+        .map(|_| ())
+}
+
+async fn vm_status() -> anyhow::Result<Option<String>> {
+    let output = limactl(&["list", "--format", "{{.Status}}", VM_NAME]).await;
+    Ok(output
+        .ok()
+        .map(|status| status.trim().to_string())
+        .filter(|status| !status.is_empty()))
+}
+
+async fn limactl(args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new("limactl")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .await
+        .context("limactl is required for `maestro dev`; install it with `brew install lima`")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "limactl {} failed",
+        args.first().unwrap_or(&"")
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}

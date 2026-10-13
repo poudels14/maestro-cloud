@@ -339,11 +339,15 @@ The v1 `controller/` crate stays untouched until v2 reaches parity, then is remo
 - [x] `maestro-core`: cluster config loading (`maestro.jsonc`, `$extends` for files; `aws-secret://` in phase 2)
 - [x] `maestro-store`: redb state machine, mutations, indexes, subscriptions
 - [x] `maestro-store`: openraft integration (single voter), snapshots, log compaction
-- [ ] `maestro-runtime`: containerd images/containers/tasks/events, CNI bridge, OCI limits, slices
-- [ ] `maestro-agent`: assignment reconcile loop, supervisor, health checks
-- [ ] `maestro-control`: services/deployments API, deploy reconciler, request-based scheduler
-- [ ] `maestro dev` with Lima on macOS
-- Milestone: deploy an image-based service locally on macOS with limits enforced.
+- [x] `maestro-runtime`: containerd images/containers/tasks/events, CNI bridge, OCI limits, slices
+- [x] `maestro-agent`: assignment reconcile loop, supervisor, health checks
+- [x] `maestro-control`: services/deployments API, deploy reconciler, request-based scheduler
+- [x] `maestro dev` with Lima on macOS (`maestro-v2 dev up|reload|down|status`)
+- [x] Milestone: deploy an image-based service locally on macOS with limits enforced.
+- [ ] Named image users (`USER node`) need `/etc/passwd` lookup from the image rootfs
+- [ ] Private registry credentials for pulls (Transfer API auth stream)
+
+The v2 binary is `maestro-v2` until v1 is removed, so both can build in one workspace.
 
 ### Phase 2: single-node parity
 
