@@ -4,16 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64 = "0.22"
 hex = "0.4.3"
 hickory-proto = "0.26.3"
 maestro-core = { version = "0.1.0", path = "../maestro-core" }
 maestro-runtime = { version = "0.1.0", path = "../maestro-runtime" }
 maestro-store = { version = "0.1.0", path = "../maestro-store" }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["sync", "time", "net", "io-util", "rt", "macros", "process"] }
 tracing = "0.1.44"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
 
 [dev-dependencies]
 maestro-runtime = { path = "../maestro-runtime", features = ["fake"] }

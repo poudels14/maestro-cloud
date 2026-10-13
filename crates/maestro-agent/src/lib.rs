@@ -8,6 +8,7 @@ mod reconciler;
 mod source;
 mod status;
 mod system;
+mod wireguard;
 
 pub use build::{BuildKitBuilder, BuildKitSettings, BuildRequest, image_name};
 pub use dns::{DnsRecords, DnsServer, internal_names, upstream_resolvers};
@@ -19,3 +20,6 @@ pub use reconciler::{Reconciler, ReconcilerSettings};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
 pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};
+pub use wireguard::{
+    CommandOutput, CommandRunner, HostCommandRunner, NodeKey, load_or_generate_key, public_key,
+};
