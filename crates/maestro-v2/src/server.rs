@@ -13,8 +13,8 @@ use maestro_agent::{
     internal_names, system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::{
-    ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, RoutingInput,
-    build_routes, router,
+    ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, RoutingInput,
+    build_routes, require_token, router,
 };
 use maestro_core::{
     ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase,
@@ -104,6 +104,7 @@ impl ObservedReplicas for BoardReplicas {
 pub async fn init(data_dir: &Path) -> anyhow::Result<()> {
     let identity = NodeIdentity::create(data_dir)?;
     SecretKey::load_or_create(&encryption_key_path(data_dir))?;
+    api_secret(data_dir)?;
     let consensus = open_consensus(data_dir, &identity).await?;
     consensus.bootstrap_single_voter().await?;
     consensus.wait_until_leader(LEADER_TIMEOUT).await?;
@@ -234,6 +235,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         observed,
         key,
     }));
+    let auth = Arc::new(ApiAuth::new(&api_secret(&args.data_dir)?));
+    let authenticated_api = api
+        .clone()
+        .layer(axum::middleware::from_fn_with_state(auth, require_token));
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .with_context(|| format!("failed to listen on {}", args.listen))?;
@@ -250,7 +255,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         _ = dns.run(SocketAddr::new(gateway, DNS_PORT)) => {}
         _ = run_routing(consensus.clone(), routing_board, ingress, dns_records, config.cluster.name.clone()) => {}
         _ = run_deployer(deployer, leader) => {}
-        result = axum::serve(listener, api.clone()) => result?,
+        result = axum::serve(listener, authenticated_api) => result?,
         result = axum::serve(socket_listener, api) => result?,
         _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
     }
@@ -456,6 +461,36 @@ fn cni_dirs() -> Vec<PathBuf> {
     match std::env::var_os("CNI_PATH") {
         Some(paths) => std::env::split_paths(&paths).collect(),
         None => DEFAULT_CNI_DIRS.iter().map(PathBuf::from).collect(),
+    }
+}
+
+pub fn create_token(data_dir: &Path, subject: &str, ttl_days: u64) -> anyhow::Result<()> {
+    let auth = ApiAuth::new(&api_secret(data_dir)?);
+    println!(
+        "{}",
+        auth.issue(subject, Duration::from_secs(ttl_days * 24 * 60 * 60))
+    );
+    Ok(())
+}
+
+fn api_secret(data_dir: &Path) -> anyhow::Result<Vec<u8>> {
+    let path = data_dir.join("keys").join("api.key");
+    match std::fs::read(&path) {
+        Ok(secret) => Ok(secret),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let secret = rand::random::<[u8; 32]>().to_vec();
+            std::fs::create_dir_all(data_dir.join("keys"))?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)?
+                .write_all(&secret)?;
+            Ok(secret)
+        }
+        Err(error) => Err(error.into()),
     }
 }
 

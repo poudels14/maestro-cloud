@@ -4,13 +4,35 @@ use anyhow::Context;
 use maestro_core::ServicesFile;
 use serde_json::Value;
 
-pub async fn rollout(api: &str, file: &Path, apply: bool) -> anyhow::Result<()> {
+pub struct Endpoint {
+    pub api: String,
+    pub token: Option<String>,
+}
+
+impl Endpoint {
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authorize(reqwest::Client::new().get(format!("{}{path}", self.api)))
+    }
+
+    fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authorize(reqwest::Client::new().post(format!("{}{path}", self.api)))
+    }
+
+    fn authorize(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(token) => builder.bearer_auth(token),
+            None => builder,
+        }
+    }
+}
+
+pub async fn rollout(endpoint: &Endpoint, file: &Path, apply: bool) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read {}", file.display()))?;
     let services = ServicesFile::parse(&text)?;
     let plan = request(
-        reqwest::Client::new()
-            .post(format!("{api}/api/rollout?apply={apply}"))
+        endpoint
+            .post(&format!("/api/rollout?apply={apply}"))
             .json(&services),
     )
     .await?;
@@ -25,8 +47,8 @@ pub async fn rollout(api: &str, file: &Path, apply: bool) -> anyhow::Result<()> 
     Ok(())
 }
 
-pub async fn services(api: &str) -> anyhow::Result<()> {
-    let services = request(reqwest::Client::new().get(format!("{api}/api/services"))).await?;
+pub async fn services(endpoint: &Endpoint) -> anyhow::Result<()> {
+    let services = request(endpoint.get("/api/services")).await?;
     println!(
         "{:<24} {:<20} {:<12} IMAGE",
         "SERVICE", "DEPLOYMENT", "STATUS"
@@ -48,16 +70,14 @@ pub async fn services(api: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn deploy(api: &str, service: &str) -> anyhow::Result<()> {
-    let queued =
-        request(reqwest::Client::new().post(format!("{api}/api/services/{service}/deployments")))
-            .await?;
+pub async fn deploy(endpoint: &Endpoint, service: &str) -> anyhow::Result<()> {
+    let queued = request(endpoint.post(&format!("/api/services/{service}/deployments"))).await?;
     println!("queued deployment {}", text(&queued["deploymentId"]));
     Ok(())
 }
 
-pub async fn replicas(api: &str) -> anyhow::Result<()> {
-    let replicas = request(reqwest::Client::new().get(format!("{api}/api/replicas"))).await?;
+pub async fn replicas(endpoint: &Endpoint) -> anyhow::Result<()> {
+    let replicas = request(endpoint.get("/api/replicas")).await?;
     println!(
         "{:<28} {:<16} {:<12} {:<16} {:<9} LAST ERROR",
         "REPLICA", "SERVICE", "PHASE", "IP", "RESTARTS"
@@ -80,8 +100,8 @@ pub async fn replicas(api: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn nodes(api: &str) -> anyhow::Result<()> {
-    let nodes = request(reqwest::Client::new().get(format!("{api}/api/nodes"))).await?;
+pub async fn nodes(endpoint: &Endpoint) -> anyhow::Result<()> {
+    let nodes = request(endpoint.get("/api/nodes")).await?;
     println!(
         "{:<20} {:<8} {:<16} {:<8} {:<10} STATE",
         "NODE", "ROLE", "SUBNET", "CPU", "MEMORY"

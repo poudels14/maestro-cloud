@@ -4,9 +4,12 @@ use anyhow::Context;
 use clap::Subcommand;
 use tokio::process::Command;
 
+use crate::contexts;
+
 const VM_NAME: &str = "maestro-dev";
 const TEMPLATE: &str = include_str!("../../../dev/lima/maestro-dev.yaml");
 const API_URL: &str = "http://127.0.0.1:3000";
+const API_WAIT_ATTEMPTS: u32 = 60;
 const UNIT: &str = r#"[Unit]
 Description=Maestro agent (dev)
 After=containerd.service
@@ -41,7 +44,23 @@ pub async fn run(command: DevCommand) -> anyhow::Result<()> {
         DevCommand::Up { source } => {
             ensure_vm().await?;
             install_agent(&source).await?;
-            println!("maestro is running; API at {API_URL}");
+            let token = limactl(&[
+                "shell",
+                VM_NAME,
+                "--",
+                "sudo",
+                "/usr/local/bin/maestro-v2",
+                "token",
+                "create",
+                "--data-dir",
+                "/var/lib/maestro",
+                "--subject",
+                "dev",
+            ])
+            .await?;
+            contexts::save("dev", API_URL, Some(token.trim().to_string()))?;
+            wait_for_api().await?;
+            println!("maestro is running; API at {API_URL} (context: dev)");
             Ok(())
         }
         DevCommand::Reload { source } => {
@@ -108,6 +127,19 @@ sudo systemctl restart maestro.service
     limactl(&["shell", VM_NAME, "--", "bash", "-lc", &script])
         .await
         .map(|_| ())
+}
+
+async fn wait_for_api() -> anyhow::Result<()> {
+    for _ in 0..API_WAIT_ATTEMPTS {
+        let healthy = reqwest::get(format!("{API_URL}/api/health"))
+            .await
+            .is_ok_and(|response| response.status().is_success());
+        if healthy {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    anyhow::bail!("the maestro API did not become healthy at {API_URL}")
 }
 
 async fn vm_status() -> anyhow::Result<Option<String>> {

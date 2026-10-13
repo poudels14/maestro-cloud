@@ -3102,6 +3102,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
+ "jsonwebtoken",
  "maestro-core",
  "maestro-store",
  "nanoid 0.5.0",

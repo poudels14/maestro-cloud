@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["aws_lc_rs"] }
 maestro-core = { version = "0.1.0", path = "../maestro-core" }
 maestro-store = { version = "0.1.0", path = "../maestro-store" }
 nanoid = "0.5.0"

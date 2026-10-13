@@ -1,4 +1,5 @@
 mod client;
+mod contexts;
 mod dev;
 mod identity;
 mod log_driver;
@@ -9,11 +10,13 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_API: &str = "http://127.0.0.1:3000";
-
 #[derive(Parser)]
 #[command(name = "maestro-v2", about = "Maestro v2 deployment system")]
 struct Cli {
+    #[arg(long, global = true, env = "MAESTRO_API")]
+    api: Option<String>,
+    #[arg(long, global = true, env = "MAESTRO_TOKEN", hide_env_values = true)]
+    token: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -24,32 +27,23 @@ enum Command {
     Server(ServerCommand),
     #[command(subcommand)]
     Dev(dev::DevCommand),
+    #[command(subcommand)]
+    Context(contexts::ContextCommand),
+    #[command(subcommand)]
+    Token(TokenCommand),
     Agent(server::AgentArgs),
     Rollout {
         #[arg(short, long, default_value = "maestro.services.jsonc")]
         file: PathBuf,
         #[arg(long)]
         apply: bool,
-        #[arg(long, env = "MAESTRO_API", default_value = DEFAULT_API)]
-        api: String,
     },
-    Services {
-        #[arg(long, env = "MAESTRO_API", default_value = DEFAULT_API)]
-        api: String,
-    },
+    Services,
     Deploy {
         service: String,
-        #[arg(long, env = "MAESTRO_API", default_value = DEFAULT_API)]
-        api: String,
     },
-    Replicas {
-        #[arg(long, env = "MAESTRO_API", default_value = DEFAULT_API)]
-        api: String,
-    },
-    Nodes {
-        #[arg(long, env = "MAESTRO_API", default_value = DEFAULT_API)]
-        api: String,
-    },
+    Replicas,
+    Nodes,
 }
 
 #[derive(Subcommand)]
@@ -57,6 +51,18 @@ enum ServerCommand {
     Init {
         #[arg(long, default_value = "/var/lib/maestro")]
         data_dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenCommand {
+    Create {
+        #[arg(long, default_value = "/var/lib/maestro")]
+        data_dir: PathBuf,
+        #[arg(long, default_value = "cli")]
+        subject: String,
+        #[arg(long, default_value_t = 30)]
+        ttl_days: u64,
     },
 }
 
@@ -74,14 +80,25 @@ async fn run_cli() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    match cli.command {
         Command::Server(ServerCommand::Init { data_dir }) => server::init(&data_dir).await,
         Command::Dev(command) => dev::run(command).await,
+        Command::Context(command) => contexts::run(command),
+        Command::Token(TokenCommand::Create {
+            data_dir,
+            subject,
+            ttl_days,
+        }) => server::create_token(&data_dir, &subject, ttl_days),
         Command::Agent(args) => server::run_agent(args).await,
-        Command::Rollout { file, apply, api } => client::rollout(&api, &file, apply).await,
-        Command::Services { api } => client::services(&api).await,
-        Command::Deploy { service, api } => client::deploy(&api, &service).await,
-        Command::Replicas { api } => client::replicas(&api).await,
-        Command::Nodes { api } => client::nodes(&api).await,
+        Command::Rollout { file, apply } => {
+            client::rollout(&contexts::resolve(cli.api, cli.token)?, &file, apply).await
+        }
+        Command::Services => client::services(&contexts::resolve(cli.api, cli.token)?).await,
+        Command::Deploy { service } => {
+            client::deploy(&contexts::resolve(cli.api, cli.token)?, &service).await
+        }
+        Command::Replicas => client::replicas(&contexts::resolve(cli.api, cli.token)?).await,
+        Command::Nodes => client::nodes(&contexts::resolve(cli.api, cli.token)?).await,
     }
 }

@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod deployer;
 mod error;
 mod routing;
@@ -6,6 +7,7 @@ mod scheduler;
 mod writer;
 
 pub use api::{ApiState, router};
+pub use auth::{ApiAuth, require_token};
 pub use deployer::{Deployer, DeployerSettings, ImageBuilder, ObservedReplicas};
 pub use error::ControlError;
 pub use routing::{RoutingInput, build_routes};

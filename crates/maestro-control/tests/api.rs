@@ -196,3 +196,31 @@ async fn seals_env_values_and_masks_responses() {
     let (_, again) = call(&app, "POST", "/api/rollout", Some(file)).await;
     assert_eq!(again["unchanged"], json!(["api"]));
 }
+
+#[tokio::test]
+async fn token_middleware_guards_everything_but_health() {
+    use std::time::Duration;
+
+    use maestro_control::{ApiAuth, require_token};
+
+    let (_, app) = app();
+    let auth = Arc::new(ApiAuth::new(b"cluster-secret-for-tests-0000000"));
+    let guarded = app.layer(axum::middleware::from_fn_with_state(
+        auth.clone(),
+        require_token,
+    ));
+
+    let (status, _) = call(&guarded, "GET", "/api/health", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(&guarded, "GET", "/api/services", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let token = auth.issue("cli", Duration::from_secs(60));
+    let request = Request::builder()
+        .uri("/api/services")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = guarded.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
