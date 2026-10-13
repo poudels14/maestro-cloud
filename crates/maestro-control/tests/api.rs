@@ -16,6 +16,7 @@ fn app() -> (Arc<LocalWriter>, axum::Router) {
     let state = Arc::new(ApiState {
         writer: writer.clone(),
         observed: Arc::new(FakeObserved::default()),
+        key: Arc::new(maestro_store::SecretKey::from_bytes(&[3u8; 32])),
     });
     (writer, router(state))
 }
@@ -158,4 +159,40 @@ async fn deleting_service_cancels_its_deployments() {
     );
     let (status, _) = call(&app, "DELETE", "/api/services/api", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn seals_env_values_and_masks_responses() {
+    let (writer, app) = app();
+    let file = json!({
+        "services": {
+            "api": {
+                "name": "API",
+                "image": "api:1",
+                "deploy": { "env": { "items": { "DB_PASSWORD": "hunter2" } } }
+            }
+        }
+    });
+    call(&app, "POST", "/api/rollout?apply=true", Some(file.clone())).await;
+
+    let stored = writer
+        .state()
+        .service(&ServiceId::from("api"))
+        .unwrap()
+        .unwrap();
+    let sealed = &stored.deploy.env.items["DB_PASSWORD"];
+    assert!(sealed.starts_with("enc:v1:"));
+
+    let (_, services) = call(&app, "GET", "/api/services", None).await;
+    assert_eq!(
+        services[0]["spec"]["deploy"]["env"]["items"]["DB_PASSWORD"],
+        "********"
+    );
+    assert_eq!(
+        services[0]["latestDeployment"]["spec"]["deploy"]["env"]["items"]["DB_PASSWORD"],
+        "********"
+    );
+
+    let (_, again) = call(&app, "POST", "/api/rollout", Some(file)).await;
+    assert_eq!(again["unchanged"], json!(["api"]));
 }

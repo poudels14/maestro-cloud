@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use maestro_core::{NodeId, ReplicaPlan};
-use maestro_store::{Change, ChangeKey, StateMachine};
+use maestro_store::{Change, ChangeKey, SecretKey, StateMachine};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::error::AgentError;
@@ -15,15 +15,17 @@ pub trait PlanSource: Send + Sync + 'static {
 
 pub struct LocalPlanSource {
     state: Arc<StateMachine>,
+    key: Arc<SecretKey>,
     node_id: NodeId,
     changes: Mutex<broadcast::Receiver<Change>>,
 }
 
 impl LocalPlanSource {
-    pub fn new(state: Arc<StateMachine>, node_id: NodeId) -> Self {
+    pub fn new(state: Arc<StateMachine>, key: Arc<SecretKey>, node_id: NodeId) -> Self {
         let changes = Mutex::new(state.subscribe());
         Self {
             state,
+            key,
             node_id,
             changes,
         }
@@ -44,15 +46,17 @@ impl PlanSource for LocalPlanSource {
             .assignments(self.node_id)?
             .iter()
             .filter_map(|assignment| {
-                self.state
+                let deployment = self
+                    .state
                     .deployment(&assignment.service_id, &assignment.deployment_id)
-                    .map(|deployment| {
-                        deployment.map(|deployment| ReplicaPlan::new(assignment, &deployment.spec))
-                    })
-                    .transpose()
+                    .map_err(AgentError::from)
+                    .transpose()?;
+                Some(deployment.and_then(|deployment| {
+                    let spec = self.key.open_spec(&deployment.spec)?;
+                    Ok(ReplicaPlan::new(assignment, &spec))
+                }))
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(AgentError::from)
+            .collect()
     }
 
     async fn changed(&self) {

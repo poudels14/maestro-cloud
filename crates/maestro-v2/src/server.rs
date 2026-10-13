@@ -19,7 +19,7 @@ use maestro_core::{
     RouteTable,
 };
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
-use maestro_store::{Consensus, ConsensusSettings, Mutation};
+use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
 
 use crate::identity::NodeIdentity;
 use crate::log_driver;
@@ -61,6 +61,7 @@ impl ObservedReplicas for BoardReplicas {
 
 pub async fn init(data_dir: &Path) -> anyhow::Result<()> {
     let identity = NodeIdentity::create(data_dir)?;
+    SecretKey::load_or_create(&encryption_key_path(data_dir))?;
     let consensus = open_consensus(data_dir, &identity).await?;
     consensus.bootstrap_single_voter().await?;
     consensus.wait_until_leader(LEADER_TIMEOUT).await?;
@@ -80,6 +81,9 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         None => ClusterConfig::default(),
     };
     let identity = NodeIdentity::load(&args.data_dir)?;
+    let key = Arc::new(SecretKey::load_or_create(&encryption_key_path(
+        &args.data_dir,
+    ))?);
     let consensus = Arc::new(open_consensus(&args.data_dir, &identity).await?);
     consensus.wait_until_leader(LEADER_TIMEOUT).await?;
 
@@ -144,7 +148,11 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         )],
     );
     let board = StatusBoard::new();
-    let source = Arc::new(LocalPlanSource::new(consensus.state_handle(), identity.id));
+    let source = Arc::new(LocalPlanSource::new(
+        consensus.state_handle(),
+        key.clone(),
+        identity.id,
+    ));
     let reconciler = Reconciler::new(
         runtime.clone(),
         source,
@@ -164,6 +172,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let api = router(Arc::new(ApiState {
         writer: consensus.clone(),
         observed,
+        key,
     }));
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
@@ -344,6 +353,10 @@ fn cni_dirs() -> Vec<PathBuf> {
         Some(paths) => std::env::split_paths(&paths).collect(),
         None => DEFAULT_CNI_DIRS.iter().map(PathBuf::from).collect(),
     }
+}
+
+fn encryption_key_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("keys").join("encryption.key")
 }
 
 fn subnet_gateway(subnet: &str) -> anyhow::Result<IpAddr> {

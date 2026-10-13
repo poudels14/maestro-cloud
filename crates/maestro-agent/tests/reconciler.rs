@@ -59,7 +59,7 @@ fn harness(max_restarts: Option<u32>) -> Harness {
     let board = StatusBoard::new();
     let reconciler = Reconciler::new(
         runtime.clone(),
-        Arc::new(LocalPlanSource::new(state.clone(), NODE)),
+        Arc::new(LocalPlanSource::new(state.clone(), test_key(), NODE)),
         board.clone(),
         ReconcilerSettings::default(),
     );
@@ -70,6 +70,10 @@ fn harness(max_restarts: Option<u32>) -> Harness {
         board,
         reconciler,
     }
+}
+
+fn test_key() -> Arc<maestro_store::SecretKey> {
+    Arc::new(maestro_store::SecretKey::from_bytes(&[5u8; 32]))
 }
 
 fn assignment(replica: &str, cpu: u32) -> Assignment {
@@ -237,7 +241,11 @@ async fn adopts_running_replicas_after_agent_restart() {
     let restarted_board = StatusBoard::new();
     let mut restarted = Reconciler::new(
         harness.runtime.clone(),
-        Arc::new(LocalPlanSource::new(harness.state.clone(), NODE)),
+        Arc::new(LocalPlanSource::new(
+            harness.state.clone(),
+            test_key(),
+            NODE,
+        )),
         restarted_board.clone(),
         ReconcilerSettings::default(),
     );

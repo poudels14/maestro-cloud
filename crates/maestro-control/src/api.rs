@@ -9,7 +9,7 @@ use maestro_core::{
     Deployment, DeploymentId, DeploymentStatus, NodeRecord, ReplicaStatus, ServiceId, ServiceSpec,
     ServicesFile, SpecError,
 };
-use maestro_store::{ConsensusError, Mutation};
+use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -25,6 +25,7 @@ const DEPLOYMENT_ID_ALPHABET: [char; 36] = [
 pub struct ApiState<W: StoreWriter, O: ObservedReplicas> {
     pub writer: Arc<W>,
     pub observed: Arc<O>,
+    pub key: Arc<SecretKey>,
 }
 
 #[derive(Serialize)]
@@ -91,10 +92,11 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
             let latest_deployment = store
                 .deployments(&id)?
                 .into_iter()
-                .max_by_key(|deployment| deployment.created_at_ms);
+                .max_by_key(|deployment| deployment.created_at_ms)
+                .map(masked_deployment);
             Ok(ServiceSummary {
                 id,
-                spec,
+                spec: mask_spec(&spec),
                 latest_deployment,
             })
         })
@@ -109,9 +111,10 @@ async fn put_service<W: StoreWriter, O: ObservedReplicas>(
 ) -> Result<Json<serde_json::Value>, ControlError> {
     let id = ServiceId::new(service_id);
     spec.validate(&id)?;
+    let sealed = state.key.seal_spec(&spec);
     let version = state
         .writer
-        .write(vec![Mutation::PutService { id, spec }])
+        .write(vec![Mutation::PutService { id, spec: sealed }])
         .await?;
     Ok(Json(json!({ "version": version })))
 }
@@ -170,7 +173,9 @@ async fn list_deployments<W: StoreWriter, O: ObservedReplicas>(
         .state()
         .deployments(&ServiceId::new(service_id))?;
     deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at_ms));
-    Ok(Json(deployments))
+    Ok(Json(
+        deployments.into_iter().map(masked_deployment).collect(),
+    ))
 }
 
 async fn queue_deployment<W: StoreWriter, O: ObservedReplicas>(
@@ -203,7 +208,13 @@ async fn rollout<W: StoreWriter, O: ObservedReplicas>(
     file.services
         .iter()
         .try_for_each(|(id, spec)| spec.validate(id))?;
-    let existing = state.writer.state().services()?;
+    let existing = state
+        .writer
+        .state()
+        .services()?
+        .into_iter()
+        .map(|(id, spec)| Ok((id, state.key.open_spec(&spec)?)))
+        .collect::<Result<Vec<_>, ControlError>>()?;
     let mut plan = RolloutPlan {
         unmanaged: existing
             .iter()
@@ -236,12 +247,13 @@ async fn rollout<W: StoreWriter, O: ObservedReplicas>(
         let mutations = changed
             .into_iter()
             .flat_map(|(id, spec)| {
-                let deployment = new_deployment(id, spec.clone());
+                let sealed = state.key.seal_spec(spec);
+                let deployment = new_deployment(id, sealed.clone());
                 plan.deployments.push(deployment.id.clone());
                 [
                     Mutation::PutService {
                         id: id.clone(),
-                        spec: spec.clone(),
+                        spec: sealed,
                     },
                     Mutation::CreateDeployment { deployment },
                 ]
@@ -272,12 +284,20 @@ impl IntoResponse for ControlError {
                 StatusCode::BAD_REQUEST
             }
             ControlError::NotFound(_) => StatusCode::NOT_FOUND,
+            ControlError::Secret(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ControlError::Consensus(ConsensusError::Rejected(_)) => StatusCode::CONFLICT,
             ControlError::Store(_) | ControlError::Consensus(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
+    }
+}
+
+fn masked_deployment(deployment: Deployment) -> Deployment {
+    Deployment {
+        spec: mask_spec(&deployment.spec),
+        ..deployment
     }
 }
 

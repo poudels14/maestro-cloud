@@ -3145,8 +3145,11 @@ dependencies = [
 name = "maestro-store"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "base64",
  "maestro-core",
  "openraft",
+ "rand 0.10.3",
  "redb",
  "serde",
  "serde_json",
