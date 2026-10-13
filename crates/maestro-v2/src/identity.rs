@@ -18,7 +18,7 @@ impl NodeIdentity {
             true => Self::load(data_dir),
             false => {
                 let identity = Self {
-                    id: NodeId(rand::random::<u64>() >> 1),
+                    id: NodeId(rand::random::<u64>() >> 11),
                     name: hostname(),
                 };
                 std::fs::create_dir_all(data_dir)?;

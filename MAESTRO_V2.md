@@ -370,7 +370,8 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 - [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
 - [x] API served on `/run/maestro/api.sock` for the admin container
 - [ ] Telemetry process tailing driver files into DuckDB, query API
-- [ ] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
+- [x] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
+- [ ] Port the admin UI from v1 API endpoints to the v2 API
 - [ ] Secrets encryption, external secret providers, JWT auth, CLI contexts
 
 ### Phase 3: multi-node

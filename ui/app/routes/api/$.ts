@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { Readable } from "node:stream";
 
 function base64Url(value: string): string {
   return Buffer.from(value).toString("base64url");
@@ -36,13 +38,59 @@ async function proxy(request: Request): Promise<Response> {
   if (hasBody && !headers.has("idempotency-key")) {
     headers.set("idempotency-key", randomUUID());
   }
-  const response = await fetch(target, {
-    method: request.method,
-    headers,
-    body: hasBody ? request.body : undefined,
-    ...(hasBody ? { duplex: "half" } : {})
-  } as RequestInit);
-  return response;
+  const apiSocket = process.env.MAESTRO_API_SOCKET;
+  if (apiSocket) {
+    return socketFetch(
+      apiSocket,
+      url.pathname + url.search,
+      request.method,
+      headers,
+      hasBody ? request.body : null
+    );
+  } else {
+    return fetch(target, {
+      method: request.method,
+      headers,
+      body: hasBody ? request.body : undefined,
+      ...(hasBody ? { duplex: "half" } : {})
+    } as RequestInit);
+  }
+}
+
+function socketFetch(
+  socketPath: string,
+  path: string,
+  method: string,
+  headers: Headers,
+  body: ReadableStream<Uint8Array> | null
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const upstream = httpRequest(
+      { socketPath, path, method, headers: Object.fromEntries(headers.entries()) },
+      (incoming) => {
+        const responseHeaders = new Headers();
+        Object.entries(incoming.headers).forEach(([name, value]) => {
+          if (Array.isArray(value)) {
+            value.forEach((item) => responseHeaders.append(name, item));
+          } else if (value !== undefined) {
+            responseHeaders.set(name, value);
+          }
+        });
+        resolve(
+          new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, {
+            status: incoming.statusCode ?? 502,
+            headers: responseHeaders
+          })
+        );
+      }
+    );
+    upstream.on("error", reject);
+    if (body) {
+      Readable.fromWeb(body as never).pipe(upstream);
+    } else {
+      upstream.end();
+    }
+  });
 }
 
 export const Route = createFileRoute("/api/$")({

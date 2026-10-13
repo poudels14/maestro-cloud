@@ -6,3 +6,6 @@ controller/default.etcd
 ui/node_modules
 ui/.vinxi
 ui/.output
+target
+.pnpm-store
+crates/*/target

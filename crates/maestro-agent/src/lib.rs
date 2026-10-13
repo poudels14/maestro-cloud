@@ -18,4 +18,4 @@ pub use node::{apply_workload_slice_limits, detect_capacity, system_reserve};
 pub use reconciler::{Reconciler, ReconcilerSettings};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
-pub use system::{SystemSupervisor, traefik_container};
+pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};

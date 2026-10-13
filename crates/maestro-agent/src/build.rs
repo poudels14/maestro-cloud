@@ -25,6 +25,7 @@ pub struct BuildRequest {
     pub context_dir: Option<PathBuf>,
     pub dockerfile: String,
     pub registry: Option<String>,
+    pub image: Option<String>,
     pub build_args: BTreeMap<String, String>,
     pub secrets: BTreeMap<String, String>,
 }
@@ -132,12 +133,14 @@ impl BuildKitBuilder {
 
 pub fn image_name(request: &BuildRequest) -> String {
     let registry = request.registry.as_deref().unwrap_or(LOCAL_REGISTRY);
-    format!(
-        "{}/{}:{}",
-        registry.trim_end_matches('/'),
-        request.service_id,
-        request.deployment_id
-    )
+    request.image.clone().unwrap_or_else(|| {
+        format!(
+            "{}/{}:{}",
+            registry.trim_end_matches('/'),
+            request.service_id,
+            request.deployment_id
+        )
+    })
 }
 
 fn buildctl_args(
@@ -217,6 +220,7 @@ mod tests {
             context_dir: None,
             dockerfile: "docker/Dockerfile.prod".to_string(),
             registry: None,
+            image: None,
             build_args: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
             secrets: BTreeMap::from([("NPM_TOKEN".to_string(), "secret".to_string())]),
         }
@@ -237,7 +241,10 @@ mod tests {
         assert!(joined.contains("--opt build-arg:RUST_LOG=info"));
         assert!(joined.contains("--secret id=NPM_TOKEN,env=NPM_TOKEN"));
         assert!(!joined.contains("secret,"));
-        assert!(joined.ends_with("--output type=image,name=maestro.local/api:d1,unpack=true,push=false"));
+        assert!(
+            joined
+                .ends_with("--output type=image,name=maestro.local/api:d1,unpack=true,push=false")
+        );
     }
 
     #[test]

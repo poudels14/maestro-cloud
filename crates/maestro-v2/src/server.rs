@@ -7,10 +7,10 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    BuildKitBuilder, BuildKitSettings, BuildRequest, DnsRecords, DnsServer, HealthMonitor,
-    IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard, SystemSupervisor,
-    apply_workload_slice_limits, detect_capacity, internal_names, system_reserve,
-    traefik_container, upstream_resolvers,
+    ADMIN_CONTAINER_ID, BuildKitBuilder, BuildKitSettings, BuildRequest, DnsRecords, DnsServer,
+    HealthMonitor, IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard,
+    SystemSupervisor, admin_container, apply_workload_slice_limits, detect_capacity,
+    internal_names, system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::{
     ApiState, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas, RoutingInput,
@@ -20,7 +20,7 @@ use maestro_core::{
     ClusterConfig, Deployment, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase,
     ReplicaStatus, RouteTable,
 };
-use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
+use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
 
 use crate::identity::NodeIdentity;
@@ -32,6 +32,8 @@ const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const ROUTING_RESYNC: Duration = Duration::from_secs(10);
 const DNS_PORT: u16 = 53;
 const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
+const ADMIN_DOCKERFILE: &str = "Dockerfile.admin";
+const ADMIN_BUILD_RETRY: Duration = Duration::from_secs(60);
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
@@ -48,6 +50,8 @@ pub struct AgentArgs {
     api_socket: PathBuf,
     #[arg(long, default_value = "/run/containerd/containerd.sock")]
     containerd_socket: PathBuf,
+    #[arg(long)]
+    admin_source: Option<PathBuf>,
 }
 
 struct BoardReplicas(StatusBoard);
@@ -76,6 +80,7 @@ impl ImageBuilder for SealedSpecBuilder {
                     context_dir: None,
                     dockerfile: build.dockerfile,
                     registry: build.registry,
+                    image: None,
                     build_args: build.env.items,
                     secrets: build.secrets.items,
                 };
@@ -198,14 +203,21 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     );
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
     let observed = Arc::new(BoardReplicas(board.clone()));
+    let buildkit = BuildKitSettings {
+        buildctl: PathBuf::from("buildctl"),
+        address: BUILDKIT_ADDRESS.to_string(),
+        work_dir: args.data_dir.join("builds/work"),
+        log_dir: args.data_dir.join("builds/logs"),
+        git_token: None,
+    };
+    let admin = run_admin(
+        runtime.clone(),
+        BuildKitBuilder::new(buildkit.clone()),
+        args.admin_source.clone(),
+        args.api_socket.clone(),
+    );
     let builder = Arc::new(SealedSpecBuilder {
-        builder: BuildKitBuilder::new(BuildKitSettings {
-            buildctl: PathBuf::from("buildctl"),
-            address: BUILDKIT_ADDRESS.to_string(),
-            work_dir: args.data_dir.join("builds/work"),
-            log_dir: args.data_dir.join("builds/logs"),
-            git_token: None,
-        }),
+        builder: BuildKitBuilder::new(buildkit),
         key: key.clone(),
     });
     let deployer = Deployer::new(
@@ -234,6 +246,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         result = reconciler.run() => result?,
         _ = health.run() => {}
         _ = system.run() => {}
+        _ = admin => {}
         _ = dns.run(SocketAddr::new(gateway, DNS_PORT)) => {}
         _ = run_routing(consensus.clone(), routing_board, ingress, dns_records, config.cluster.name.clone()) => {}
         _ = run_deployer(deployer, leader) => {}
@@ -256,6 +269,46 @@ async fn run_deployer(
             && let Err(error) = deployer.tick().await
         {
             tracing::warn!(%error, "deployer tick failed");
+        }
+    }
+}
+
+async fn run_admin(
+    runtime: Arc<ContainerdRuntime>,
+    builder: BuildKitBuilder,
+    source: Option<PathBuf>,
+    api_socket: PathBuf,
+) {
+    match source {
+        None => {
+            tracing::info!("admin UI disabled; pass --admin-source to enable it");
+            std::future::pending::<()>().await
+        }
+        Some(source) => {
+            let version = env!("CARGO_PKG_VERSION");
+            let image = format!("maestro.local/maestro-admin:{version}");
+            while runtime.pull(&image).await.is_err() {
+                tracing::info!(%image, "building the admin UI image");
+                let request = BuildRequest {
+                    deployment_id: format!("maestro-admin-{version}"),
+                    service_id: ADMIN_CONTAINER_ID.to_string(),
+                    repo: None,
+                    branch: None,
+                    context_dir: Some(source.clone()),
+                    dockerfile: ADMIN_DOCKERFILE.to_string(),
+                    registry: None,
+                    image: Some(image.clone()),
+                    build_args: Default::default(),
+                    secrets: Default::default(),
+                };
+                if let Err(error) = builder.build(&request).await {
+                    tracing::warn!(%error, "admin UI image build failed; retrying");
+                    tokio::time::sleep(ADMIN_BUILD_RETRY).await;
+                }
+            }
+            SystemSupervisor::new(runtime, vec![admin_container(&image, &api_socket)])
+                .run()
+                .await
         }
     }
 }

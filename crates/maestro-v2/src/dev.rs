@@ -14,7 +14,7 @@ Requires=containerd.service
 
 [Service]
 Slice=maestro-system.slice
-ExecStart=/usr/local/bin/maestro-v2 agent --data-dir /var/lib/maestro --listen 127.0.0.1:3000
+ExecStart=/usr/local/bin/maestro-v2 agent --data-dir /var/lib/maestro --listen 127.0.0.1:3000 --admin-source {source}
 Restart=always
 RestartSec=2
 
@@ -97,12 +97,13 @@ CARGO_TARGET_DIR="$HOME/target" cargo build --locked -p maestro-v2
 sudo install -m 0755 "$HOME/target/debug/maestro-v2" /usr/local/bin/maestro-v2
 [ -f /var/lib/maestro/node.json ] || sudo /usr/local/bin/maestro-v2 server init --data-dir /var/lib/maestro
 sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'
-{UNIT}UNIT
+{unit}UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now maestro.service
 sudo systemctl restart maestro.service
 "#,
         source = shell_quote(&source.to_string_lossy()),
+        unit = UNIT.replace("{source}", &source.to_string_lossy()),
     );
     limactl(&["shell", VM_NAME, "--", "bash", "-lc", &script])
         .await

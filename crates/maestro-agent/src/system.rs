@@ -17,6 +17,8 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 const TRAEFIK_IMAGE: &str = "traefik:v3.6";
 const TRAEFIK_CONFIG_MOUNT: &str = "/etc/maestro-traefik";
 const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
+const ADMIN_API_SOCKET: &str = "/run/maestro/api.sock";
+pub const ADMIN_CONTAINER_ID: &str = "maestro-admin";
 
 pub struct SystemSupervisor<R: Runtime> {
     runtime: Arc<R>,
@@ -114,9 +116,51 @@ pub fn traefik_container(config_dir: &Path, ports: &[u16]) -> ContainerSpec {
     }
 }
 
+pub fn admin_container(image: &str, api_socket: &Path) -> ContainerSpec {
+    ContainerSpec {
+        id: ADMIN_CONTAINER_ID.to_string(),
+        image: image.to_string(),
+        entrypoint: None,
+        args: None,
+        env: BTreeMap::from([
+            ("PORT".to_string(), "80".to_string()),
+            (
+                "MAESTRO_API_SOCKET".to_string(),
+                ADMIN_API_SOCKET.to_string(),
+            ),
+        ]),
+        labels: BTreeMap::from([(SYSTEM_LABEL.to_string(), "admin".to_string())]),
+        limits: ContainerLimits {
+            cpu: Millicores::new(1000),
+            memory: ByteSize::new(512 << 20),
+            pids: 1024,
+            oom_score_adj: SYSTEM_OOM_SCORE_ADJ,
+        },
+        cgroup_parent: SYSTEM_SLICE.to_string(),
+        mounts: vec![BindMount {
+            source: api_socket.to_path_buf(),
+            destination: ADMIN_API_SOCKET.to_string(),
+            read_only: false,
+        }],
+        network: NetworkMode::Bridge,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_only_mounts_the_api_socket() {
+        let spec = admin_container(
+            "maestro.local/maestro-admin:0.1.0",
+            Path::new("/run/maestro/api.sock"),
+        );
+        assert_eq!(spec.network, NetworkMode::Bridge);
+        assert_eq!(spec.mounts.len(), 1);
+        assert_eq!(spec.mounts[0].destination, ADMIN_API_SOCKET);
+        assert_eq!(spec.env["MAESTRO_API_SOCKET"], ADMIN_API_SOCKET);
+    }
 
     #[test]
     fn traefik_listens_on_configured_ports_in_system_slice() {
