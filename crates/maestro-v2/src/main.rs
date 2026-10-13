@@ -8,6 +8,7 @@ mod server;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use maestro_telemetry::TelemetrySettings;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -32,6 +33,14 @@ enum Command {
     #[command(subcommand)]
     Token(TokenCommand),
     Agent(server::AgentArgs),
+    Telemetry {
+        #[arg(long, default_value = "/var/lib/maestro/logs")]
+        log_dir: PathBuf,
+        #[arg(long, default_value = "/var/lib/maestro/telemetry")]
+        data_dir: PathBuf,
+        #[arg(long, default_value = "/run/maestro/telemetry.sock")]
+        socket: PathBuf,
+    },
     Rollout {
         #[arg(short, long, default_value = "maestro.services.jsonc")]
         file: PathBuf,
@@ -91,6 +100,19 @@ async fn run_cli() -> anyhow::Result<()> {
             ttl_days,
         }) => server::create_token(&data_dir, &subject, ttl_days),
         Command::Agent(args) => server::run_agent(args).await,
+        Command::Telemetry {
+            log_dir,
+            data_dir,
+            socket,
+        } => {
+            let settings = TelemetrySettings {
+                log_dir,
+                data_dir,
+                socket,
+                ..TelemetrySettings::default()
+            };
+            Ok(maestro_telemetry::run(settings).await?)
+        }
         Command::Rollout { file, apply } => {
             client::rollout(&contexts::resolve(cli.api, cli.token)?, &file, apply).await
         }
