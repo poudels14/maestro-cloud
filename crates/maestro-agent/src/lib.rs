@@ -21,5 +21,7 @@ pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
 pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};
 pub use wireguard::{
-    CommandOutput, CommandRunner, HostCommandRunner, NodeKey, load_or_generate_key, public_key,
+    CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,
+    DEFAULT_LISTEN_PORT as WIREGUARD_PORT, HostCommandRunner, MeshConfig, MeshPeer, NodeKey,
+    WireGuardMesh, load_or_generate_key, public_key,
 };
