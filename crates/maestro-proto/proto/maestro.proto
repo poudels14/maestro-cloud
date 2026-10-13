@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package maestro.v1;
+
+// Payloads are JSON-encoded Rust types shared through maestro-core and maestro-store,
+// so the protobuf schema stays a thin transport envelope.
+message Envelope {
+  bytes json = 1;
+}
+
+service Raft {
+  rpc AppendEntries(Envelope) returns (Envelope);
+  rpc Vote(Envelope) returns (Envelope);
+  rpc InstallSnapshot(Envelope) returns (Envelope);
+}
+
+service Cluster {
+  rpc Join(Envelope) returns (Envelope);
+  rpc Attach(stream Envelope) returns (stream Envelope);
+}

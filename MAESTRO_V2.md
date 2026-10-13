@@ -42,7 +42,7 @@ isolation that keeps nodes alive when workloads misbehave.
 |---|---|---|
 | `maestro agent` (systemd, `maestro-system.slice`) | all | containerd client, CNI networking, replica supervisor, health checks, DNS, Traefik file-provider writer, egress firewall. On voters also: Raft + redb store, API, scheduler, deploy reconciler, build queue |
 | `maestro telemetry` (systemd, `maestro-system.slice`, own `MemoryMax`) | all | Log/metrics ingest, DuckDB store, query API, Parquet rollover, S3 backup, Datadog sink |
-| Traefik (container, `maestro-system.slice`) | workload nodes | Public ingress and the cross-node mTLS gateway, configured by file provider |
+| Traefik (container, `maestro-system.slice`) | workload nodes | Public ingress, configured by file provider |
 | Admin UI (container, `maestro-system.slice`) | voters | TanStack Start UI reachable from the tailnet; API access only via the mounted Unix socket |
 | `buildkitd` (systemd, `maestro-builds.slice`) | build-capable nodes | Image builds |
 
@@ -180,14 +180,19 @@ maestro-builds.slice     CPUWeight=50, MemoryMax=<build cap>, 1–2 concurrent b
 - One cluster CIDR (default `10.200.0.0/16`); each node is auto-allocated a `/24` at
   join through a `AllocateSubnet` command. No per-node subnet configuration.
 - Fixed default ports: `7400` (internal gRPC + Raft), `3000` (API/UI), `80/443`
-  (ingress), `7443` (gateway). No random ports.
+  (ingress), `51820/udp` (WireGuard mesh). No random ports.
 - DNS: in-process `hickory-dns` server on each node answering
   `*.<cluster>.maestro.internal` from the agent's routing table; everything else is
   forwarded to the host resolvers. Replaces CoreDNS and the Python proxy.
 - Ingress: Traefik with the file provider. The agent atomically writes the dynamic
   config from its routing table. Traefik never talks to the store.
-- Cross-node traffic: the destination node's Traefik gateway with cluster-CA mTLS,
-  as in v1.
+- Cross-node traffic: a kernel WireGuard mesh. Each node has a `maestro-wg` interface;
+  at join the control plane records the node's WireGuard public key and endpoint, and
+  every agent configures peers and routes the other nodes' `/24` container subnets over
+  the mesh. This gives a flat, encrypted L3 network for any protocol, so DNS keeps
+  returning replica IPs and Traefik load-balances directly to remote replicas. Nodes
+  need one UDP port (default `51820`) open between them; no EC2 source/dest-check
+  changes are required. The v1 per-node Traefik gateway is not carried over.
 - Tailscale and Cloudflare tunnels remain optional add-ons, phase 4.
 
 ## Builds
@@ -378,7 +383,7 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 
 - [ ] Raft over gRPC, join tokens, voter add/remove, leader redirect
 - [ ] Agent stream protocol, observed state, failover grace
-- [ ] Cross-node gateway, subnet allocation, routing deltas
+- [ ] WireGuard mesh between nodes, subnet allocation, routing deltas
 - [ ] Drain, remove, rolling upgrades, NixOS module with slices
 - [ ] Scale test: 3 voters + simulated 1000 agents
 
