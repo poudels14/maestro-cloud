@@ -422,11 +422,10 @@ fn route_table(
 }
 
 async fn open_consensus(data_dir: &Path, identity: &NodeIdentity) -> anyhow::Result<Consensus> {
-    Ok(Consensus::open(ConsensusSettings {
-        node_id: identity.id,
-        address: RAFT_ADDRESS.to_string(),
-        data_dir: data_dir.join("raft"),
-    })
+    Ok(Consensus::open(
+        ConsensusSettings::new(identity.id, RAFT_ADDRESS, data_dir.join("raft")),
+        None,
+    )
     .await?)
 }
 

@@ -9,11 +9,10 @@ use maestro_store::{Consensus, ConsensusError, ConsensusSettings, Mutation};
 const LEADER_TIMEOUT: Duration = Duration::from_secs(10);
 
 async fn start(data_dir: &Path) -> Consensus {
-    let consensus = Consensus::open(ConsensusSettings {
-        node_id: NodeId(1),
-        address: "127.0.0.1:7400".to_string(),
-        data_dir: data_dir.to_path_buf(),
-    })
+    let consensus = Consensus::open(
+        ConsensusSettings::new(NodeId(1), "127.0.0.1:7400", data_dir),
+        None,
+    )
     .await
     .unwrap();
     consensus.bootstrap_single_voter().await.unwrap();
