@@ -5,6 +5,8 @@ vmType: vz
 cpus: 4
 memory: 8GiB
 disk: 60GiB
+networks:
+  - lima: user-v2
 mounts:
   - location: "~"
     writable: false

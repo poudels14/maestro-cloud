@@ -1,0 +1,53 @@
+minimumLimaVersion: 2.0.0
+base:
+  - template:_images/ubuntu-lts
+vmType: vz
+cpus: 2
+memory: 4GiB
+disk: 20GiB
+networks:
+  - lima: user-v2
+mounts:
+  - location: "~"
+    writable: false
+  - location: "/tmp/lima"
+    writable: true
+containerd:
+  system: true
+  user: false
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      apt-get update
+      apt-get install -y build-essential pkg-config protobuf-compiler cmake wireguard-tools nftables
+      mkdir -p /etc/systemd/system
+      cat > /etc/systemd/system/maestro-system.slice <<'SLICE'
+      [Slice]
+      CPUWeight=1000
+      SLICE
+      cat > /etc/systemd/system/maestro-workloads.slice <<'SLICE'
+      [Slice]
+      CPUWeight=100
+      SLICE
+      cat > /etc/systemd/system/maestro-builds.slice <<'SLICE'
+      [Slice]
+      CPUWeight=50
+      SLICE
+      mkdir -p /etc/buildkit /etc/systemd/system/buildkit.service.d
+      cat > /etc/buildkit/buildkitd.toml <<'TOML'
+      [worker.oci]
+        enabled = false
+
+      [worker.containerd]
+        enabled = true
+        namespace = "maestro"
+        snapshotter = "overlayfs"
+      TOML
+      cat > /etc/systemd/system/buildkit.service.d/maestro.conf <<'UNIT'
+      [Service]
+      Slice=maestro-builds.slice
+      UNIT
+      systemctl daemon-reload
+      systemctl restart buildkit.service || true
