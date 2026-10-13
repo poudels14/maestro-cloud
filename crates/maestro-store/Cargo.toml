@@ -7,14 +7,17 @@ edition = "2024"
 aes-gcm = "0.10.3"
 base64 = "0.22"
 maestro-core = { version = "0.1.0", path = "../maestro-core" }
+maestro-proto = { version = "0.1.0", path = "../maestro-proto" }
 openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }
 rand = "0.10.3"
 redb = "4.3.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["sync"] }
+tokio = { version = "1.53.2", features = ["sync", "time"] }
+tonic = { version = "0.14.6", features = ["tls-ring"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.53.2", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio-stream = { version = "0.1.19", features = ["net"] }
