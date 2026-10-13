@@ -1,0 +1,46 @@
+minimumLimaVersion: 2.0.0
+base:
+  - template:_images/ubuntu-lts
+vmType: vz
+cpus: 4
+memory: 8GiB
+disk: 60GiB
+mounts:
+  - location: "~"
+    writable: false
+  - location: "/tmp/lima"
+    writable: true
+containerd:
+  system: true
+  user: false
+portForwards:
+  - guestPortRange: [3000, 3000]
+    hostPortRange: [3000, 3000]
+  - guestPort: 80
+    hostPort: 8080
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      apt-get update
+      apt-get install -y build-essential pkg-config protobuf-compiler cmake
+      mkdir -p /etc/systemd/system
+      cat > /etc/systemd/system/maestro-system.slice <<'SLICE'
+      [Slice]
+      CPUWeight=1000
+      SLICE
+      cat > /etc/systemd/system/maestro-workloads.slice <<'SLICE'
+      [Slice]
+      CPUWeight=100
+      SLICE
+      cat > /etc/systemd/system/maestro-builds.slice <<'SLICE'
+      [Slice]
+      CPUWeight=50
+      SLICE
+      systemctl daemon-reload
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux
+      command -v rustup || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.0
