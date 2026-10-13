@@ -18,6 +18,8 @@ pub struct RouteTable {
 pub struct ServiceRoute {
     pub hosts: Vec<String>,
     pub backends: Vec<Backend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

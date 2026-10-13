@@ -30,6 +30,10 @@ pub trait ObservedReplicas: Send + Sync + 'static {
     fn replica(&self, replica_id: &ReplicaId) -> Option<ReplicaStatus>;
 
     fn replicas(&self) -> Vec<ReplicaStatus>;
+
+    fn node_available(&self, _node_id: NodeId) -> bool {
+        true
+    }
 }
 
 pub trait ImageBuilder: Send + Sync + 'static {
@@ -73,6 +77,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
     pub async fn tick(&self) -> Result<(), ControlError> {
         self.start_queued().await?;
         self.run_builds().await?;
+        self.reschedule_lost().await?;
         self.place_deploying().await?;
         self.settle_deploying().await?;
         self.drain_superseded().await?;
@@ -269,24 +274,120 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         Ok(())
     }
 
+    async fn reschedule_lost(&self) -> Result<(), ControlError> {
+        let nodes = self.state().nodes()?;
+        let lost_nodes = nodes
+            .iter()
+            .filter(|node| !self.observed.node_available(node.id))
+            .map(|node| node.id)
+            .collect::<Vec<_>>();
+        let existing = self.all_assignments()?;
+        let active = [DeploymentStatus::Deploying, DeploymentStatus::Ready]
+            .iter()
+            .map(|status| self.state().deployments_with_status(*status))
+            .collect::<Result<Vec<_>, _>>()?
+            .concat();
+        let stranded = existing
+            .iter()
+            .filter(|(node_id, _)| lost_nodes.contains(node_id))
+            .flat_map(|(_, assignments)| assignments.iter())
+            .filter(|assignment| {
+                active
+                    .iter()
+                    .any(|deployment| deployment.id == assignment.deployment_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !stranded.is_empty() {
+            let mut next_index = existing.values().flatten().fold(
+                BTreeMap::<DeploymentId, u32>::new(),
+                |mut next, assignment| {
+                    let index = next.entry(assignment.deployment_id.clone()).or_default();
+                    *index = (*index).max(assignment.index + 1);
+                    next
+                },
+            );
+            let requests = stranded
+                .iter()
+                .filter_map(|assignment| {
+                    let deployment = active
+                        .iter()
+                        .find(|deployment| deployment.id == assignment.deployment_id)?;
+                    let index = next_index.entry(deployment.id.clone()).or_default();
+                    let request = PlacementRequest {
+                        replica_id: ReplicaId::for_deployment(&deployment.id, *index),
+                        service_id: deployment.service_id.clone(),
+                        deployment_id: deployment.id.clone(),
+                        index: *index,
+                        image: assignment.image.clone(),
+                        resources: deployment.spec.deploy.resources.clone(),
+                    };
+                    *index += 1;
+                    Some(request)
+                })
+                .collect::<Vec<_>>();
+            let healthy_nodes = nodes
+                .into_iter()
+                .filter(|node| !lost_nodes.contains(&node.id))
+                .collect::<Vec<_>>();
+            let surviving = existing
+                .iter()
+                .filter(|(node_id, _)| !lost_nodes.contains(node_id))
+                .flat_map(|(_, assignments)| assignments.iter().cloned())
+                .collect::<Vec<_>>();
+            let placement = scheduler::place(
+                &healthy_nodes,
+                &surviving,
+                &requests,
+                &self.settings.defaults,
+            );
+            placement.unschedulable.iter().for_each(|(replica_id, reason)| {
+                tracing::warn!(%replica_id, %reason, "cannot reschedule a replica from a lost node");
+            });
+            let mut next = existing;
+            next.iter_mut()
+                .filter(|(node_id, _)| lost_nodes.contains(node_id))
+                .for_each(|(_, assignments)| {
+                    assignments.retain(|assignment| !stranded.contains(assignment))
+                });
+            placement.assignments.into_iter().for_each(|assignment| {
+                next.entry(assignment.node_id).or_default().push(assignment)
+            });
+            let mutations = next
+                .into_iter()
+                .map(|(node_id, assignments)| Mutation::SetNodeAssignments {
+                    node_id,
+                    assignments,
+                })
+                .collect();
+            self.write(mutations).await?;
+        }
+        Ok(())
+    }
+
     async fn settle_deploying(&self) -> Result<(), ControlError> {
         let now = self.now();
         let timeout_ms = self.settings.deploy_timeout.as_millis() as u64;
+        let assignments = self.all_assignments()?;
         let mutations = self
             .state()
             .deployments_with_status(DeploymentStatus::Deploying)?
             .into_iter()
             .filter_map(|deployment| {
-                let phases = (0..deployment.spec.deploy.replicas)
-                    .map(|index| {
+                let phases = assignments
+                    .values()
+                    .flatten()
+                    .filter(|assignment| assignment.deployment_id == deployment.id)
+                    .map(|assignment| {
                         self.observed
-                            .replica(&ReplicaId::for_deployment(&deployment.id, index))
+                            .replica(&assignment.replica_id)
                             .map(|status| status.phase)
                     })
                     .collect::<Vec<_>>();
-                let all_healthy = phases
-                    .iter()
-                    .all(|phase| *phase == Some(ReplicaPhase::Healthy));
+                let all_healthy = phases.len() as u32 == deployment.spec.deploy.replicas
+                    && phases
+                        .iter()
+                        .all(|phase| *phase == Some(ReplicaPhase::Healthy));
                 let any_failed = phases.contains(&Some(ReplicaPhase::Failed));
                 let timed_out = now.saturating_sub(deployment.updated_at_ms) > timeout_ms;
                 match (all_healthy, any_failed, timed_out) {

@@ -3,8 +3,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
-use crate::deployment::ReplicaPlan;
 use crate::config::ClusterSettings;
+use crate::deployment::ReplicaPlan;
 use crate::ids::NodeId;
 use crate::node::{NodeRole, WireGuardInfo};
 use crate::resources::NodeCapacity;

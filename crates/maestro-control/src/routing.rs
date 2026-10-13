@@ -114,6 +114,7 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
                 ServiceRoute {
                     hosts,
                     backends: held.unwrap_or(backends),
+                    health_path: spec.deploy.healthcheck_path.clone(),
                 },
             ))
         })

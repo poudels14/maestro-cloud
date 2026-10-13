@@ -4,6 +4,13 @@ use maestro_core::{RouteTable, ServiceId};
 use serde_json::{Map, Value, json};
 
 const CONFIG_FILE: &str = "routes.yaml";
+const RETRY_MIDDLEWARE: &str = "maestro-retry";
+const SERVERS_TRANSPORT: &str = "maestro-transport";
+const RETRY_ATTEMPTS: u32 = 3;
+const RETRY_INTERVAL: &str = "50ms";
+const DIAL_TIMEOUT: &str = "1s";
+const HEALTH_INTERVAL: &str = "2s";
+const HEALTH_TIMEOUT: &str = "1s";
 
 pub struct IngressWriter {
     directory: PathBuf,
@@ -63,6 +70,7 @@ fn render(table: &RouteTable, entry_points: &[String]) -> Value {
                 "rule": rule,
                 "service": service_name(service_id),
                 "entryPoints": entry_points,
+                "middlewares": [RETRY_MIDDLEWARE],
             });
             (service_name(service_id), router)
         })
@@ -75,13 +83,38 @@ fn render(table: &RouteTable, entry_points: &[String]) -> Value {
                 .iter()
                 .map(|backend| json!({ "url": format!("http://{}", backend.address) }))
                 .collect::<Vec<_>>();
-            let service = json!({ "loadBalancer": { "servers": servers, "passHostHeader": true } });
-            (service_name(service_id), service)
+            let mut load_balancer = json!({
+                "servers": servers,
+                "passHostHeader": true,
+                "serversTransport": SERVERS_TRANSPORT,
+            });
+            if let Some(path) = &route.health_path {
+                load_balancer["healthCheck"] = json!({
+                    "path": path,
+                    "interval": HEALTH_INTERVAL,
+                    "timeout": HEALTH_TIMEOUT,
+                });
+            }
+            (
+                service_name(service_id),
+                json!({ "loadBalancer": load_balancer }),
+            )
         })
         .collect::<Map<_, _>>();
     match routers.is_empty() {
         true => json!({}),
-        false => json!({ "http": { "routers": routers, "services": services } }),
+        false => json!({
+            "http": {
+                "routers": routers,
+                "services": services,
+                "middlewares": {
+                    RETRY_MIDDLEWARE: { "retry": { "attempts": RETRY_ATTEMPTS, "initialInterval": RETRY_INTERVAL } },
+                },
+                "serversTransports": {
+                    SERVERS_TRANSPORT: { "forwardingTimeouts": { "dialTimeout": DIAL_TIMEOUT } },
+                },
+            }
+        }),
     }
 }
 
@@ -103,6 +136,7 @@ mod tests {
                 (
                     ServiceId::from("web"),
                     ServiceRoute {
+                        health_path: Some("/health".to_string()),
                         hosts: vec!["web.example.com".to_string(), "www.example.com".to_string()],
                         backends: vec![
                             Backend {
@@ -119,6 +153,7 @@ mod tests {
                 (
                     ServiceId::from("idle"),
                     ServiceRoute {
+                        health_path: None,
                         hosts: vec!["idle.example.com".to_string()],
                         backends: vec![],
                     },
@@ -141,6 +176,14 @@ mod tests {
             json!([{ "url": "http://10.200.1.2:8080" }, { "url": "http://10.200.1.3:8080" }])
         );
         assert!(config["http"]["routers"].get("svc-idle").is_none());
+        assert_eq!(router["middlewares"], json!(["maestro-retry"]));
+        let load_balancer = &config["http"]["services"]["svc-web"]["loadBalancer"];
+        assert_eq!(load_balancer["healthCheck"]["path"], "/health");
+        assert_eq!(load_balancer["serversTransport"], "maestro-transport");
+        assert_eq!(
+            config["http"]["serversTransports"]["maestro-transport"]["forwardingTimeouts"]["dialTimeout"],
+            "1s"
+        );
     }
 
     #[tokio::test]

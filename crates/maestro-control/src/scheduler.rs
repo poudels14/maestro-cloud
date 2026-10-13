@@ -25,7 +25,7 @@ struct NodeLoad<'a> {
     node: &'a NodeRecord,
     free_cpu: Millicores,
     free_memory: ByteSize,
-    replicas_by_service: HashMap<ServiceId, usize>,
+    replicas_by_deployment: HashMap<DeploymentId, usize>,
 }
 
 pub fn place(
@@ -75,11 +75,11 @@ fn place_one(
         .filter(|(load, resources)| load.fits(&resources.request))
         .min_by(|(left, _), (right, _)| {
             let left_key = (
-                left.service_replicas(&request.service_id),
+                left.deployment_replicas(&request.deployment_id),
                 left.utilization_permille(),
             );
             let right_key = (
-                right.service_replicas(&request.service_id),
+                right.deployment_replicas(&request.deployment_id),
                 right.utilization_permille(),
             );
             left_key
@@ -90,7 +90,7 @@ fn place_one(
     match (best, resolve_error) {
         (Some((node_id, resources)), _) => {
             if let Some(load) = loads.get_mut(&node_id) {
-                load.reserve(&request.service_id, &resources.request);
+                load.reserve(&request.deployment_id, &resources.request);
             }
             Ok(Assignment {
                 replica_id: request.replica_id.clone(),
@@ -122,10 +122,10 @@ impl<'a> NodeLoad<'a> {
             .iter()
             .map(|assignment| assignment.resources.request.memory.bytes())
             .sum::<u64>();
-        let replicas_by_service = on_node.iter().fold(
+        let replicas_by_deployment = on_node.iter().fold(
             HashMap::new(),
-            |mut counts: HashMap<ServiceId, usize>, assignment| {
-                *counts.entry(assignment.service_id.clone()).or_default() += 1;
+            |mut counts: HashMap<DeploymentId, usize>, assignment| {
+                *counts.entry(assignment.deployment_id.clone()).or_default() += 1;
                 counts
             },
         );
@@ -136,7 +136,7 @@ impl<'a> NodeLoad<'a> {
             free_memory: allocatable
                 .memory
                 .saturating_sub(ByteSize::new(used_memory)),
-            replicas_by_service,
+            replicas_by_deployment,
         }
     }
 
@@ -144,18 +144,18 @@ impl<'a> NodeLoad<'a> {
         request.cpu <= self.free_cpu && request.memory <= self.free_memory
     }
 
-    fn reserve(&mut self, service_id: &ServiceId, request: &maestro_core::ResolvedRequest) {
+    fn reserve(&mut self, deployment_id: &DeploymentId, request: &maestro_core::ResolvedRequest) {
         self.free_cpu = self.free_cpu.saturating_sub(request.cpu);
         self.free_memory = self.free_memory.saturating_sub(request.memory);
         *self
-            .replicas_by_service
-            .entry(service_id.clone())
+            .replicas_by_deployment
+            .entry(deployment_id.clone())
             .or_default() += 1;
     }
 
-    fn service_replicas(&self, service_id: &ServiceId) -> usize {
-        self.replicas_by_service
-            .get(service_id)
+    fn deployment_replicas(&self, deployment_id: &DeploymentId) -> usize {
+        self.replicas_by_deployment
+            .get(deployment_id)
             .copied()
             .unwrap_or_default()
     }
@@ -287,6 +287,27 @@ mod tests {
             placement.unschedulable[0].1,
             "insufficient cpu or memory on every node"
         );
+    }
+
+    #[test]
+    fn spreads_a_new_deployment_regardless_of_draining_replicas() {
+        let nodes = [node(1, 8, 32), node(2, 8, 32)];
+        let draining = (0..4)
+            .map(|index| Assignment {
+                replica_id: ReplicaId::from(format!("old-{index}").as_str()),
+                ..existing(1, "api", 250, 1)
+            })
+            .collect::<Vec<_>>();
+        let requests = (0..4)
+            .map(|index| request("api", index, None))
+            .collect::<Vec<_>>();
+        let placement = place(&nodes, &draining, &requests, &ResourceDefaults::default());
+        let on_first = placement
+            .assignments
+            .iter()
+            .filter(|assignment| assignment.node_id == NodeId(1))
+            .count();
+        assert_eq!(on_first, 2);
     }
 
     #[test]

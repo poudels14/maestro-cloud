@@ -20,6 +20,7 @@ pub struct LocalWriter {
 #[derive(Default)]
 pub struct FakeObserved {
     phases: Mutex<HashMap<ReplicaId, ReplicaPhase>>,
+    lost_nodes: Mutex<Vec<NodeId>>,
 }
 
 pub struct FakeClock(pub AtomicU64);
@@ -51,6 +52,10 @@ impl StoreWriter for LocalWriter {
 }
 
 impl FakeObserved {
+    pub fn lose_node(&self, node_id: NodeId) {
+        self.lost_nodes.lock().unwrap().push(node_id);
+    }
+
     pub fn set(&self, replica: &str, phase: ReplicaPhase) {
         self.phases
             .lock()
@@ -60,6 +65,10 @@ impl FakeObserved {
 }
 
 impl ObservedReplicas for FakeObserved {
+    fn node_available(&self, node_id: NodeId) -> bool {
+        !self.lost_nodes.lock().unwrap().contains(&node_id)
+    }
+
     fn replicas(&self) -> Vec<ReplicaStatus> {
         let ids = self
             .phases

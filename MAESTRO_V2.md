@@ -381,9 +381,12 @@ The v2 binary is `maestro-v2` until v1 is removed, so both can build in one work
 
 ### Phase 3: multi-node
 
-- [ ] Raft over gRPC, join tokens, voter add/remove, leader redirect
-- [ ] Agent stream protocol, observed state, failover grace
-- [ ] WireGuard mesh between nodes, subnet allocation, routing deltas
+- [x] Raft over gRPC (mTLS), join tokens, voter add (learner then promote), leader redirect
+- [ ] Voter removal and end-to-end 3-voter join test on VMs
+- [x] Agent stream protocol (Attach), hub-aggregated observed state, node expiry and leader startup grace
+- [x] Reschedule replicas from lost nodes; Traefik retries, dial timeouts, and active health checks
+- [x] WireGuard mesh between nodes, subnet allocation at join, agent-owned NAT
+- [ ] Routing deltas instead of full tables (needed before ~100 nodes)
 - [ ] Drain, remove, rolling upgrades, NixOS module with slices
 - [ ] Scale test: 3 voters + simulated 1000 agents
 

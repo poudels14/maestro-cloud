@@ -319,3 +319,48 @@ async fn cancelled_build_result_is_ignored() {
     settle().await;
     assert_eq!(status(&harness, "d1"), DeploymentStatus::Cancelled);
 }
+
+#[tokio::test]
+async fn reschedules_replicas_from_lost_nodes() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    queue(&harness, "d1", 2);
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.observed.set("d1-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+    let lost = harness.writer.state().assignments(NodeId(2)).unwrap();
+    assert_eq!(lost.len(), 1);
+
+    harness.observed.lose_node(NodeId(2));
+    harness.deployer.tick().await.unwrap();
+
+    assert!(
+        harness
+            .writer
+            .state()
+            .assignments(NodeId(2))
+            .unwrap()
+            .is_empty()
+    );
+    let survivors = harness.writer.state().assignments(NodeId(1)).unwrap();
+    assert_eq!(survivors.len(), 2);
+    assert!(survivors.iter().any(|assignment| assignment.index == 2));
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+}
+
+#[tokio::test]
+async fn deploying_counts_actual_assignments_after_rescheduling() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    queue(&harness, "d1", 2);
+    harness.deployer.tick().await.unwrap();
+    harness.observed.lose_node(NodeId(2));
+    harness.deployer.tick().await.unwrap();
+    let replicas = assigned_replicas(&harness);
+    assert_eq!(replicas.len(), 2);
+    replicas
+        .iter()
+        .for_each(|replica| harness.observed.set(replica, ReplicaPhase::Healthy));
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+}

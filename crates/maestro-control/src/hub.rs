@@ -21,6 +21,7 @@ pub struct AgentHub {
     inner: Arc<Mutex<HubState>>,
     changes: Arc<watch::Sender<u64>>,
     node_expiry: Duration,
+    started_at: Instant,
 }
 
 #[derive(Default)]
@@ -55,6 +56,7 @@ impl AgentHub {
             inner: Arc::default(),
             changes: Arc::new(changes),
             node_expiry,
+            started_at: Instant::now(),
         }
     }
 
@@ -187,6 +189,19 @@ impl AgentHub {
 }
 
 impl ObservedReplicas for AgentHub {
+    fn node_available(&self, node_id: NodeId) -> bool {
+        let now = Instant::now();
+        let state = self.lock();
+        let connected = state.links.contains_key(&node_id);
+        let recently_seen = state.replicas.get(&node_id).is_some_and(|replicas| {
+            replicas
+                .disconnected_at
+                .is_none_or(|since| now.duration_since(since) < self.node_expiry)
+        });
+        let in_grace = now.duration_since(self.started_at) < self.node_expiry;
+        connected || recently_seen || in_grace
+    }
+
     fn replica(&self, replica_id: &ReplicaId) -> Option<ReplicaStatus> {
         self.statuses()
             .into_iter()
@@ -307,6 +322,23 @@ mod tests {
             hub.replica(&replica_id).unwrap().phase,
             ReplicaPhase::Healthy
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reports_node_availability_with_startup_grace() {
+        let hub = AgentHub::new(Duration::from_secs(30));
+        assert!(hub.node_available(NodeId(9)));
+        let session = hub.register(NodeId(1));
+        hub.record_replicas(NodeId(1), vec![]);
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert!(!hub.node_available(NodeId(9)));
+        assert!(hub.node_available(NodeId(1)));
+
+        hub.unregister(NodeId(1), session.session);
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(hub.node_available(NodeId(1)));
+        tokio::time::advance(Duration::from_secs(25)).await;
+        assert!(!hub.node_available(NodeId(1)));
     }
 
     #[tokio::test]
