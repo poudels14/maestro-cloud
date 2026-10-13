@@ -78,6 +78,7 @@ pub struct ContainerStatus {
     pub id: String,
     pub labels: BTreeMap<String, String>,
     pub state: ContainerState,
+    pub ip: Option<IpAddr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

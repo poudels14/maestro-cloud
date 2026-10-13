@@ -6,11 +6,16 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    HealthMonitor, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard,
-    apply_workload_slice_limits, detect_capacity, system_reserve,
+    HealthMonitor, IngressWriter, LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard,
+    SystemSupervisor, apply_workload_slice_limits, detect_capacity, system_reserve,
+    traefik_container,
 };
-use maestro_control::{ApiState, Deployer, DeployerSettings, ObservedReplicas, router};
-use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaStatus};
+use maestro_control::{
+    ApiState, Deployer, DeployerSettings, ObservedReplicas, RoutingInput, build_routes, router,
+};
+use maestro_core::{
+    ClusterConfig, NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaStatus, RouteTable,
+};
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::{Consensus, ConsensusSettings, Mutation};
 
@@ -19,6 +24,7 @@ use crate::identity::NodeIdentity;
 const RAFT_ADDRESS: &str = "127.0.0.1:7400";
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
+const ROUTING_RESYNC: Duration = Duration::from_secs(10);
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
@@ -109,16 +115,24 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         )
         .await?,
     );
+    let ingress = IngressWriter::new(args.data_dir.join("traefik"), &config.ingress.ports);
+    let system = SystemSupervisor::new(
+        runtime.clone(),
+        vec![traefik_container(
+            ingress.directory(),
+            &config.ingress.ports,
+        )],
+    );
     let board = StatusBoard::new();
     let source = Arc::new(LocalPlanSource::new(consensus.state_handle(), identity.id));
     let reconciler = Reconciler::new(
-        runtime,
+        runtime.clone(),
         source,
         board.clone(),
         ReconcilerSettings::default(),
     );
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
-    let observed = Arc::new(BoardReplicas(board));
+    let observed = Arc::new(BoardReplicas(board.clone()));
     let deployer = Deployer::new(
         consensus.clone(),
         observed.clone(),
@@ -137,9 +151,12 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     tracing::info!(node = %identity.name, listen = %args.listen, %subnet, "maestro agent started");
 
     let leader = consensus.clone();
+    let routing_board = board.clone();
     tokio::select! {
         result = reconciler.run() => result?,
         _ = health.run() => {}
+        _ = system.run() => {}
+        _ = run_routing(consensus.clone(), routing_board, ingress) => {}
         _ = run_deployer(deployer, leader) => {}
         result = axum::serve(listener, api) => result?,
         _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
@@ -158,6 +175,58 @@ async fn run_deployer(deployer: Deployer<Consensus, BoardReplicas>, consensus: A
             tracing::warn!(%error, "deployer tick failed");
         }
     }
+}
+
+async fn run_routing(consensus: Arc<Consensus>, board: StatusBoard, mut ingress: IngressWriter) {
+    let mut board_changes = board.subscribe();
+    let mut store_changes = consensus.state().subscribe();
+    let mut previous = RouteTable::default();
+    loop {
+        match route_table(&consensus, &board, &previous) {
+            Ok(table) => {
+                if let Err(error) = ingress.write(&table).await {
+                    tracing::warn!(%error, "failed to write ingress config");
+                }
+                previous = table;
+            }
+            Err(error) => tracing::warn!(%error, "failed to compute routes"),
+        }
+        tokio::select! {
+            _ = board_changes.changed() => {}
+            _ = store_changes.recv() => {}
+            _ = tokio::time::sleep(ROUTING_RESYNC) => {}
+        }
+    }
+}
+
+fn route_table(
+    consensus: &Consensus,
+    board: &StatusBoard,
+    previous: &RouteTable,
+) -> anyhow::Result<RouteTable> {
+    let state = consensus.state();
+    let services = state.services()?;
+    let deployments = services
+        .iter()
+        .map(|(service_id, _)| state.deployments(service_id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
+    let assignments = state
+        .nodes()?
+        .iter()
+        .map(|node| state.assignments(node.id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
+    let observed = |replica_id: &ReplicaId| board.get(replica_id);
+    Ok(build_routes(
+        &RoutingInput {
+            services: &services,
+            deployments: &deployments,
+            assignments: &assignments,
+            observed: &observed,
+        },
+        previous,
+    ))
 }
 
 async fn open_consensus(data_dir: &Path, identity: &NodeIdentity) -> anyhow::Result<Consensus> {

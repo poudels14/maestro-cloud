@@ -226,3 +226,25 @@ async fn reports_pull_failures_and_retries() {
     assert!(status.last_error.unwrap().contains("fake pull failure"));
     assert_eq!(harness.runtime.start_count("d1-0"), 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn adopts_running_replicas_after_agent_restart() {
+    let mut harness = harness(None);
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    let ip = harness.board.get(&ReplicaId::from("d1-0")).unwrap().ip;
+
+    let restarted_board = StatusBoard::new();
+    let mut restarted = Reconciler::new(
+        harness.runtime.clone(),
+        Arc::new(LocalPlanSource::new(harness.state.clone(), NODE)),
+        restarted_board.clone(),
+        ReconcilerSettings::default(),
+    );
+    restarted.reconcile().await.unwrap();
+
+    let adopted = restarted_board.get(&ReplicaId::from("d1-0")).unwrap();
+    assert_eq!(adopted.phase, ReplicaPhase::Healthy);
+    assert_eq!(adopted.ip, ip);
+    assert_eq!(harness.runtime.start_count("d1-0"), 1);
+}

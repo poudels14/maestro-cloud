@@ -135,6 +135,12 @@ impl CniNetwork {
         }
     }
 
+    pub async fn cached_ip(&self, container_id: &str) -> Option<IpAddr> {
+        let bytes = tokio::fs::read(self.cache_path(container_id)).await.ok()?;
+        let cached: Value = serde_json::from_slice(&bytes).ok()?;
+        first_ip(&cached)
+    }
+
     fn find_plugin(&self, plugin_type: &str) -> Result<PathBuf, RuntimeError> {
         self.plugin_dirs
             .iter()

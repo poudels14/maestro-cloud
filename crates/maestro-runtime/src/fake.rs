@@ -28,6 +28,7 @@ struct FakeState {
 struct FakeContainer {
     spec: ContainerSpec,
     state: ContainerState,
+    ip: IpAddr,
 }
 
 impl FakeRuntime {
@@ -101,6 +102,7 @@ impl Runtime for FakeRuntime {
                     FakeContainer {
                         spec: spec.clone(),
                         state: ContainerState::Running,
+                        ip,
                     },
                 );
                 state.started.push(spec.id.clone());
@@ -138,6 +140,7 @@ impl Runtime for FakeRuntime {
                 id: id.clone(),
                 labels: container.spec.labels.clone(),
                 state: container.state,
+                ip: Some(container.ip),
             })
             .collect())
     }

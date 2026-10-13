@@ -475,12 +475,14 @@ impl Runtime for ContainerdRuntime {
                 }))
                 .await;
             let process = ignore_not_found(response.map(|response| response.into_inner().process))?;
+            let ip = self.network.cached_ip(&container.id).await;
             statuses.push(ContainerStatus {
                 id: container.id,
                 labels: container.labels.into_iter().collect(),
                 state: process.map_or(ContainerState::Created, |process| {
                     task_state(process.status, process.exit_status)
                 }),
+                ip,
             });
         }
         Ok(statuses)

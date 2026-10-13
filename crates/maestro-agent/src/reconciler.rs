@@ -131,7 +131,11 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             (container.state, current)
         });
         match state {
-            Some((ContainerState::Running, true)) => {}
+            Some((ContainerState::Running, true)) => {
+                if self.board.get(&plan.replica_id).is_none() {
+                    self.adopt(plan, container.and_then(|container| container.ip));
+                }
+            }
             Some((ContainerState::Running, false)) => {
                 self.retire(&plan.replica_id).await;
                 self.restarts.remove(&plan.replica_id);
@@ -195,6 +199,26 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
                 self.schedule_restart(plan, error.to_string());
             }
         }
+    }
+
+    fn adopt(&mut self, plan: &ReplicaPlan, ip: Option<std::net::IpAddr>) {
+        let phase = match plan.healthcheck {
+            Some(_) => ReplicaPhase::Running,
+            None => ReplicaPhase::Healthy,
+        };
+        self.restarts.insert(
+            plan.replica_id.clone(),
+            RestartState {
+                attempts: 0,
+                not_before: Instant::now(),
+                started_at: Some(Instant::now()),
+            },
+        );
+        self.board.upsert(ReplicaStatus {
+            phase,
+            ip,
+            ..self.status_for(plan)
+        });
     }
 
     async fn handle_exit(&mut self, plan: &ReplicaPlan, exit_code: Option<u32>) {
