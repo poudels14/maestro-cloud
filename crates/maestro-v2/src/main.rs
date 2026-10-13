@@ -7,6 +7,7 @@ mod server;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use maestro_telemetry::TelemetrySettings;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_API: &str = "http://127.0.0.1:3000";
@@ -25,6 +26,14 @@ enum Command {
     #[command(subcommand)]
     Dev(dev::DevCommand),
     Agent(server::AgentArgs),
+    Telemetry {
+        #[arg(long, default_value = "/var/lib/maestro/logs")]
+        log_dir: PathBuf,
+        #[arg(long, default_value = "/var/lib/maestro/telemetry")]
+        data_dir: PathBuf,
+        #[arg(long, default_value = "/run/maestro/telemetry.sock")]
+        socket: PathBuf,
+    },
     Rollout {
         #[arg(short, long, default_value = "maestro.services.jsonc")]
         file: PathBuf,
@@ -78,6 +87,19 @@ async fn run_cli() -> anyhow::Result<()> {
         Command::Server(ServerCommand::Init { data_dir }) => server::init(&data_dir).await,
         Command::Dev(command) => dev::run(command).await,
         Command::Agent(args) => server::run_agent(args).await,
+        Command::Telemetry {
+            log_dir,
+            data_dir,
+            socket,
+        } => {
+            let settings = TelemetrySettings {
+                log_dir,
+                data_dir,
+                socket,
+                ..TelemetrySettings::default()
+            };
+            Ok(maestro_telemetry::run(settings).await?)
+        }
         Command::Rollout { file, apply, api } => client::rollout(&api, &file, apply).await,
         Command::Services { api } => client::services(&api).await,
         Command::Deploy { service, api } => client::deploy(&api, &service).await,
