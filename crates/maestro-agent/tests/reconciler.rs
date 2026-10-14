@@ -34,6 +34,7 @@ fn harness(max_restarts: Option<u32>) -> Harness {
             ..DeploySpec::default()
         },
         ingress: None,
+        preview: None,
     };
     state
         .apply(&[

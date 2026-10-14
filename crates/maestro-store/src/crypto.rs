@@ -155,6 +155,7 @@ mod tests {
                 dockerfile: "Dockerfile".to_string(),
                 watch: false,
                 registry: None,
+                depot: None,
                 env: EnvSpec::default(),
                 secrets: EnvSpec {
                     source: None,
@@ -169,6 +170,7 @@ mod tests {
                 ..DeploySpec::default()
             },
             ingress: None,
+            preview: None,
         }
     }
 

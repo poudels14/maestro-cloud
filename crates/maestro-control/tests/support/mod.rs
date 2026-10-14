@@ -144,6 +144,7 @@ pub fn image_service(replicas: u32) -> ServiceSpec {
             ..DeploySpec::default()
         },
         ingress: None,
+        preview: None,
     }
 }
 
@@ -206,6 +207,7 @@ pub fn build_service(replicas: u32) -> ServiceSpec {
             dockerfile: "Dockerfile".to_string(),
             watch: false,
             registry: None,
+            depot: None,
             env: Default::default(),
             secrets: Default::default(),
         }),
@@ -214,5 +216,6 @@ pub fn build_service(replicas: u32) -> ServiceSpec {
             ..DeploySpec::default()
         },
         ingress: None,
+        preview: None,
     }
 }

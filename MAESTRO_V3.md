@@ -370,13 +370,13 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 
 ### Cross-cutting foundations
 
-- [ ] W0a: services schema parity — `deploy.secrets` (mountPath, items, source), volumes
+- [x] W0a: services schema parity (schema and validation; runtime behavior lands with each workstream) — `deploy.secrets` (mountPath, items, source), volumes
   (owner, denied paths, writable ⇒ single replica + node pin), `nodeAffinity`
   (nodeId, labels), `egress.allow`, `exec` (default true), `flags` (container args),
   `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`,
   v1 healthcheck semantics (interval default 60 clamped 5–300, 2xx, 10 failures ⇒
   restart), `maxRestarts` default 10.
-- [ ] W0b: cluster config parity — `tags`, `egress {deny, allow}`, `tailscale`,
+- [x] W0b: cluster config parity (schema; `aws-secret://` config sources land with W3) — `tags`, `egress {deny, allow}`, `tailscale`,
   `datadog {apiKey, site, includeIngressLogs, includeTailscaleLogs, logs.includeHealthcheck,
   includeMetrics}`, `depot.token`, `cloudflare.tunnel {token, replicas}`,
   `slack.webhookUrl`, `github {token, previewDomain, pollIntervalSecs,

@@ -9,8 +9,10 @@ mod service;
 mod status;
 
 pub use config::{
-    ClusterConfig, ClusterSettings, ConfigError, Defaults, EgressSettings, IngressSettings,
-    NodeSettings, ReserveSettings,
+    CloudflareSettings, CloudflareTunnel, ClusterConfig, ClusterSettings, ConfigError,
+    DatadogLogSettings, DatadogSettings, Defaults, DepotSettings, EgressSettings, GithubSettings,
+    IngressSettings, LogBackupSettings, NodeSettings, ReserveSettings, SlackSettings,
+    TailscaleSettings,
 };
 pub use deployment::{Assignment, Deployment, DeploymentStatus, HealthcheckPlan, ReplicaPlan};
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
@@ -24,6 +26,8 @@ pub use resources::{
 };
 pub use routing::{Backend, RouteTable, ServiceRoute, internal_names};
 pub use service::{
-    BuildSpec, Command, DeploySpec, EnvSpec, IngressSpec, ServiceSpec, ServicesFile, SpecError,
+    BuildSpec, Command, DeploySpec, DepotSpec, EgressRule, EgressSpec, EnvSpec, IngressSpec,
+    NodeAffinity, PreviewSpec, SecretsSpec, ServiceSpec, ServicesFile, SessionAffinity, SpecError,
+    VolumeMount, VolumeOwner, parse_duration_secs,
 };
 pub use status::{ReplicaPhase, ReplicaStatus};

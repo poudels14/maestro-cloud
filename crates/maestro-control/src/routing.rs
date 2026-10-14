@@ -152,7 +152,9 @@ mod tests {
                 host: Some("web.example.com".to_string()),
                 hosts: vec!["www.example.com".to_string()],
                 port: 8080,
+                session_affinity: None,
             }),
+            preview: None,
         }
     }
 

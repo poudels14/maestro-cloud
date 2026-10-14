@@ -236,6 +236,7 @@ mod tests {
                     build: None,
                     deploy: DeploySpec::default(),
                     ingress: None,
+                    preview: None,
                 },
             }])
             .unwrap();

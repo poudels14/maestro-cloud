@@ -263,6 +263,7 @@ fn put_service(id: &str) -> Mutation {
             build: None,
             deploy: DeploySpec::default(),
             ingress: None,
+            preview: None,
         },
     }
 }
