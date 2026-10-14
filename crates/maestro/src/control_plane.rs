@@ -209,6 +209,10 @@ pub async fn spawn(
             axum::routing::get(observability::service_metrics),
         )
         .route(
+            "/api/services/{service_id}/traffic",
+            axum::routing::get(observability::service_traffic),
+        )
+        .route(
             "/api/services/{service_id}/metrics/containers",
             axum::routing::get(observability::container_metrics),
         )

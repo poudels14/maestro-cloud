@@ -15,11 +15,13 @@ mod db;
 mod metrics;
 mod query;
 mod rollover;
+mod traffic;
 
 use db::Db;
 pub use metrics::MetricsQuery;
 use query::query_logs;
 use rollover::{remove_stale_exports, rollover_partitions, write_partition_manifest};
+pub use traffic::TrafficQuery;
 
 const SCHEMA: &str = r#"
 CREATE SEQUENCE IF NOT EXISTS log_seq START 1;
@@ -109,7 +111,11 @@ impl LogStore {
         let store = Self {
             db: Arc::new(Db::open(
                 &data_dir.join("logs.duckdb"),
-                &format!("{SCHEMA}{}", metrics::METRICS_SCHEMA),
+                &format!(
+                    "{SCHEMA}{}{}",
+                    metrics::METRICS_SCHEMA,
+                    traffic::TRAFFIC_SCHEMA
+                ),
             )?),
             parts_root,
             rollover_lock: Arc::new(Mutex::new(())),

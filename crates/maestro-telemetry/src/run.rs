@@ -11,6 +11,7 @@ use crate::metrics::MetricsCollector;
 use crate::resolver::{DeploymentFromReplicaId, ReplicaResolver};
 use crate::store::LogStore;
 use crate::tailer::Tailer;
+use crate::traffic::TrafficScraper;
 
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 const METRICS_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -25,6 +26,8 @@ pub struct TelemetrySettings {
     pub idle_retention: Duration,
     pub rollover_interval: Duration,
     pub metrics_interval: Duration,
+    pub traffic_interval: Duration,
+    pub traefik_metrics: String,
     pub cgroup_root: PathBuf,
     pub proc_root: PathBuf,
     pub resolver: Arc<dyn ReplicaResolver>,
@@ -58,6 +61,11 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
             ),
             settings.metrics_interval,
         ) => result,
+        result = scrape_traffic(
+            store.clone(),
+            settings.traefik_metrics.clone(),
+            settings.traffic_interval,
+        ) => result,
         result = axum::serve(listener, router(store)) => Ok(result?),
         _ = tokio::signal::ctrl_c() => Ok(()),
         _ = terminate.recv() => Ok(()),
@@ -74,6 +82,8 @@ impl Default for TelemetrySettings {
             idle_retention: Duration::from_secs(3600),
             rollover_interval: Duration::from_secs(3600),
             metrics_interval: Duration::from_secs(15),
+            traffic_interval: Duration::from_secs(5),
+            traefik_metrics: "127.0.0.1:9100".to_string(),
             cgroup_root: PathBuf::from("/sys/fs/cgroup/maestro.slice/maestro-workloads.slice"),
             proc_root: PathBuf::from("/proc"),
             resolver: Arc::new(DeploymentFromReplicaId),
@@ -97,6 +107,7 @@ async fn collect_metrics(
             writer.insert_metrics(&points)?;
             if prune {
                 writer.prune_metrics(now_ms() - METRICS_RETENTION_MS)?;
+                writer.prune_traffic(now_ms() - METRICS_RETENTION_MS)?;
             }
             Ok::<_, crate::error::TelemetryError>(())
         })
@@ -106,6 +117,23 @@ async fn collect_metrics(
         }
         if prune {
             last_prune = Instant::now();
+        }
+    }
+}
+
+async fn scrape_traffic(store: Arc<LogStore>, address: String, interval: Duration) -> Result<()> {
+    let mut scraper = TrafficScraper::default();
+    let mut ticker = tokio::time::interval(interval);
+    loop {
+        ticker.tick().await;
+        let points = scraper.scrape(&address, now_ms()).await;
+        if !points.is_empty() {
+            let writer = store.clone();
+            let written =
+                tokio::task::spawn_blocking(move || writer.insert_traffic(&points)).await?;
+            if let Err(error) = written {
+                tracing::warn!(%error, "failed to record traffic");
+            }
         }
     }
 }

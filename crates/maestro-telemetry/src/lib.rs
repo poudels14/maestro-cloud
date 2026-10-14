@@ -9,6 +9,7 @@ mod run;
 mod search;
 mod store;
 mod tailer;
+mod traffic;
 
 pub use api::router;
 pub use error::{Result, TelemetryError};
@@ -17,5 +18,6 @@ pub use metrics::{MetricPoint, MetricsCollector};
 pub use resolver::{DeploymentFromReplicaId, ReplicaIdentity, ReplicaResolver};
 pub use run::{TelemetrySettings, run};
 pub use search::LogSearchQuery;
-pub use store::{LogQuery, LogStore, MetricsQuery, StoredLog, TailCheckpoint};
+pub use store::{LogQuery, LogStore, MetricsQuery, StoredLog, TailCheckpoint, TrafficQuery};
 pub use tailer::Tailer;
+pub use traffic::{TrafficPoint, TrafficScraper};

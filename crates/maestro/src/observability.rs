@@ -5,9 +5,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId};
-use maestro_telemetry::MetricPoint;
+use maestro_telemetry::{MetricPoint, TrafficPoint};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::node_service::{ClusterAccess, NodeRequest, call_nodes, url_query};
 
@@ -110,6 +110,50 @@ pub async fn container_metrics(
     })
 }
 
+pub async fn service_traffic(
+    State(access): State<ClusterAccess>,
+    Path(service_id): Path<String>,
+    Query(range): Query<RangeQuery>,
+) -> Response {
+    let to = range.to.unwrap_or_else(now_ms);
+    let from = range.from.unwrap_or(to - DEFAULT_RANGE_MS);
+    let path = format!(
+        "/traffic?{}",
+        url_query(&[
+            ("serviceId", service_id),
+            ("from", from.to_string()),
+            ("to", to.to_string()),
+        ])
+    );
+    respond(match nodes(&access) {
+        Ok(nodes) => {
+            let mut points = gather(&access, nodes, path)
+                .await
+                .into_iter()
+                .filter_map(|value| serde_json::from_value::<Vec<TrafficPoint>>(value).ok())
+                .flatten()
+                .collect::<Vec<_>>();
+            points.sort_by_key(|point| point.ts);
+            Ok(points)
+        }
+        Err(error) => Err(error),
+    })
+}
+
+async fn gather(access: &ClusterAccess, nodes: Vec<NodeRecord>, path: String) -> Vec<Value> {
+    call_nodes(&access.clients, nodes, NodeRequest::Telemetry { path })
+        .await
+        .into_iter()
+        .filter_map(|(_, node_name, reply)| match reply {
+            Ok(value) => Some(value),
+            Err(status) => {
+                tracing::warn!(node = %node_name, error = %status.message(), "node telemetry query failed");
+                None
+            }
+        })
+        .collect()
+}
+
 async fn gather_metrics(
     access: &ClusterAccess,
     nodes: Vec<NodeRecord>,
@@ -127,16 +171,10 @@ async fn gather_metrics(
             ("to", to.to_string())
         ])
     );
-    call_nodes(&access.clients, nodes, NodeRequest::Telemetry { path })
+    gather(access, nodes, path)
         .await
         .into_iter()
-        .filter_map(|(_, node_name, reply)| match reply {
-            Ok(points) => serde_json::from_value::<Vec<MetricPoint>>(points).ok(),
-            Err(status) => {
-                tracing::warn!(node = %node_name, error = %status.message(), "node metrics query failed");
-                None
-            }
-        })
+        .filter_map(|points| serde_json::from_value::<Vec<MetricPoint>>(points).ok())
         .flatten()
         .collect()
 }

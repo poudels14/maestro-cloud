@@ -19,6 +19,7 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(10);
 const TRAEFIK_IMAGE: &str = "traefik:v3.6";
 const TRAEFIK_CONFIG_MOUNT: &str = "/etc/maestro-traefik";
+const TRAEFIK_METRICS_ADDRESS: &str = "127.0.0.1:9100";
 const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
 const ADMIN_API_SOCKET: &str = "/run/maestro/api.sock";
 pub const ADMIN_CONTAINER_ID: &str = "maestro-admin";
@@ -97,6 +98,11 @@ pub fn traefik_container(config_dir: &Path, ports: &[u16]) -> ContainerSpec {
         "--accesslog=true".to_string(),
         "--accesslog.format=json".to_string(),
         "--log.level=WARN".to_string(),
+        format!("--entryPoints.metrics.address={TRAEFIK_METRICS_ADDRESS}"),
+        "--metrics.prometheus=true".to_string(),
+        "--metrics.prometheus.entryPoint=metrics".to_string(),
+        "--metrics.prometheus.addServicesLabels=true".to_string(),
+        "--metrics.prometheus.buckets=1.0,5.0,10.0".to_string(),
     ]
     .into_iter()
     .chain(entry_points)
