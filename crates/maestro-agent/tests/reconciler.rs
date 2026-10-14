@@ -102,6 +102,7 @@ fn assignment(replica: &str, cpu: u32) -> Assignment {
                 memory: ByteSize::new(512 << 20),
             },
         },
+        retiring_since_ms: None,
     }
 }
 

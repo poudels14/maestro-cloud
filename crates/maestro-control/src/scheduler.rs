@@ -131,6 +131,7 @@ fn place_on_eligible(
                 index: request.index,
                 image: request.image.clone(),
                 resources,
+                retiring_since_ms: None,
             })
         }
         (None, Some(error)) => Err(error),
@@ -293,6 +294,7 @@ mod tests {
                     memory: ByteSize::new(memory_gib * GIB),
                 },
             },
+            retiring_since_ms: None,
         }
     }
 

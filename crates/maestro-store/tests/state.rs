@@ -61,6 +61,7 @@ fn assignment(node: u64, replica: &str) -> Assignment {
                 memory: ByteSize::new(512 << 20),
             },
         },
+        retiring_since_ms: None,
     }
 }
 

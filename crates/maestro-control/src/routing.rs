@@ -51,6 +51,7 @@ pub fn cluster_dns(
 ) -> Result<BTreeMap<String, Vec<IpAddr>>, StoreError> {
     let names = all_assignments(state)?
         .iter()
+        .filter(|assignment| !assignment.is_retiring())
         .filter_map(|assignment| {
             let status = observed(&assignment.replica_id)?;
             let ip = status
@@ -85,6 +86,7 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
                 .assignments
                 .iter()
                 .filter(|assignment| &assignment.service_id == service_id)
+                .filter(|assignment| !assignment.is_retiring())
                 .filter(|assignment| {
                     input.deployments.iter().any(|deployment| {
                         deployment.id == assignment.deployment_id
@@ -201,6 +203,7 @@ mod tests {
                     memory: ByteSize::new(512 << 20),
                 },
             },
+            retiring_since_ms: None,
         }
     }
 
@@ -271,6 +274,24 @@ mod tests {
         let route = &routes.routes[&ServiceId::from("web")];
         assert_eq!(route.hosts, ["web.example.com", "www.example.com"]);
         assert_eq!(addresses(&routes), ["10.200.1.3:8080"]);
+    }
+
+    #[test]
+    fn retiring_replicas_leave_the_routes_while_still_running() {
+        let retiring = Assignment {
+            retiring_since_ms: Some(1),
+            ..assignment("d1", 1)
+        };
+        let routes = table(
+            &[deployment("d1", DeploymentStatus::Ready)],
+            &[assignment("d1", 0), retiring],
+            &[
+                status("d1-0", ReplicaPhase::Healthy, 2),
+                status("d1-1", ReplicaPhase::Healthy, 3),
+            ],
+            &RouteTable::default(),
+        );
+        assert_eq!(addresses(&routes), ["10.200.1.2:8080"]);
     }
 
     #[test]

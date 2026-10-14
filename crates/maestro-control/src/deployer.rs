@@ -552,6 +552,8 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
     }
 
     async fn scale_active(&self) -> Result<(), ControlError> {
+        let now = self.now();
+        let grace_ms = self.settings.drain_grace.as_millis() as u64;
         let existing = self.all_assignments()?;
         let current = existing.values().flatten().cloned().collect::<Vec<_>>();
         let draining_nodes = self
@@ -572,6 +574,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             let assigned = current
                 .iter()
                 .filter(|assignment| assignment.deployment_id == deployment.id)
+                .filter(|assignment| !assignment.is_retiring())
                 .collect::<Vec<_>>();
             if let Some(first) = assigned.first() {
                 let (mut serving, draining): (Vec<&Assignment>, Vec<&Assignment>) = assigned
@@ -580,8 +583,9 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                     .partition(|assignment| !draining_nodes.contains(&assignment.node_id));
                 serving.sort_by_key(|assignment| assignment.index);
                 let target = self.target_replicas(deployment)? as usize;
-                let next_index = assigned
+                let next_index = current
                     .iter()
+                    .filter(|assignment| assignment.deployment_id == deployment.id)
                     .map(|assignment| assignment.index + 1)
                     .max()
                     .unwrap_or_default();
@@ -614,7 +618,16 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 );
             }
         }
-        if !released.is_empty() || !requests.is_empty() {
+        let retired = current
+            .iter()
+            .filter(|assignment| {
+                assignment
+                    .retiring_since_ms
+                    .is_some_and(|since| now.saturating_sub(since) >= grace_ms)
+            })
+            .map(|assignment| assignment.replica_id.clone())
+            .collect::<Vec<_>>();
+        if !released.is_empty() || !requests.is_empty() || !retired.is_empty() {
             let placement = scheduler::place(
                 &self.available_nodes()?,
                 &current,
@@ -624,7 +637,13 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             self.note_unschedulable(&requests, &placement.unschedulable);
             let mut next = existing;
             next.values_mut().for_each(|assignments| {
-                assignments.retain(|assignment| !released.contains(&assignment.replica_id))
+                assignments.retain(|assignment| !retired.contains(&assignment.replica_id));
+                assignments
+                    .iter_mut()
+                    .filter(|assignment| released.contains(&assignment.replica_id))
+                    .for_each(|assignment| {
+                        assignment.retiring_since_ms.get_or_insert(now);
+                    });
             });
             placement.assignments.into_iter().for_each(|assignment| {
                 next.entry(assignment.node_id).or_default().push(assignment)

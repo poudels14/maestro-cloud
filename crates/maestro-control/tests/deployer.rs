@@ -95,6 +95,21 @@ fn status(harness: &Harness, deployment_id: &str) -> DeploymentStatus {
         .status
 }
 
+fn retiring_replicas(harness: &Harness) -> Vec<String> {
+    let mut replicas = harness
+        .writer
+        .state()
+        .nodes()
+        .unwrap()
+        .iter()
+        .flat_map(|node| harness.writer.state().assignments(node.id).unwrap())
+        .filter(|assignment| assignment.is_retiring())
+        .map(|assignment| assignment.replica_id.to_string())
+        .collect::<Vec<_>>();
+    replicas.sort();
+    replicas
+}
+
 fn assigned_replicas(harness: &Harness) -> Vec<String> {
     let mut replicas = harness
         .writer
@@ -417,6 +432,13 @@ async fn replicas_override_scales_a_ready_deployment_in_place() {
 
     set_override(&harness, None);
     harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1", "d1-2"]);
+    assert_eq!(retiring_replicas(&harness), ["d1-1", "d1-2"]);
+
+    harness
+        .clock
+        .advance(Duration::from_secs(6).as_millis() as u64);
+    harness.deployer.tick().await.unwrap();
     assert_eq!(assigned_replicas(&harness), ["d1-0"]);
 }
 
@@ -512,6 +534,12 @@ async fn draining_a_node_replaces_its_replicas_before_releasing_them() {
     assert!(assigned_replicas(&harness).contains(&on_one));
 
     harness.observed.set("d1-2", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(retiring_replicas(&harness), [on_one.clone()]);
+
+    harness
+        .clock
+        .advance(Duration::from_secs(6).as_millis() as u64);
     harness.deployer.tick().await.unwrap();
     assert!(
         harness

@@ -56,6 +56,14 @@ pub struct Assignment {
     pub index: u32,
     pub image: String,
     pub resources: EffectiveResources,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retiring_since_ms: Option<u64>,
+}
+
+impl Assignment {
+    pub fn is_retiring(&self) -> bool {
+        self.retiring_since_ms.is_some()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
