@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use maestro_control::{ImageBuilder, ObservedReplicas, StoreWriter};
+use maestro_control::{BuiltImage, ImageBuilder, ObservedReplicas, StoreWriter};
 use maestro_core::{
-    BuildSpec, ByteSize, DeploySpec, Deployment, Millicores, NodeCapacity, NodeId, NodeRecord,
-    NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, ServiceSpec,
+    BuildSpec, ByteSize, DeploySpec, Deployment, GitCommit, Millicores, NodeCapacity, NodeId,
+    NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, ServiceSpec,
 };
 use maestro_store::{ConsensusError, Mutation, StateMachine};
 use tempfile::TempDir;
@@ -179,7 +179,7 @@ impl FakeBuilder {
 }
 
 impl ImageBuilder for FakeBuilder {
-    async fn build(&self, deployment: Deployment) -> Result<String, String> {
+    async fn build(&self, deployment: Deployment) -> Result<BuiltImage, String> {
         self.started.lock().unwrap().push(deployment.id.to_string());
         self.gate.acquire().await.unwrap().forget();
         match self
@@ -189,10 +189,13 @@ impl ImageBuilder for FakeBuilder {
             .contains(&deployment.id.to_string())
         {
             true => Err("dockerfile not found".to_string()),
-            false => Ok(format!(
-                "maestro.local/{}:{}",
-                deployment.service_id, deployment.id
-            )),
+            false => Ok(BuiltImage {
+                image: format!("maestro.local/{}:{}", deployment.service_id, deployment.id),
+                commit: Some(GitCommit {
+                    reference: "abc123".to_string(),
+                    message: "Add things".to_string(),
+                }),
+            }),
         }
     }
     async fn resolve_sources(&self, deployment: Deployment) -> Result<ServiceSpec, String> {

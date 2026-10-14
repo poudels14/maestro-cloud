@@ -16,7 +16,9 @@ pub use config::{
     TailscaleSettings, read_file_source,
 };
 pub use controls::{ClusterFreeze, MAX_REPLICAS_OVERRIDE, ServiceControls, UnschedulableReplica};
-pub use deployment::{Assignment, Deployment, DeploymentStatus, HealthcheckPlan, ReplicaPlan};
+pub use deployment::{
+    Assignment, Deployment, DeploymentStatus, GitCommit, HealthcheckPlan, ReplicaPlan,
+};
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo};
 pub use protocol::{

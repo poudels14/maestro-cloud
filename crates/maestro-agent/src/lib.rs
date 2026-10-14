@@ -14,7 +14,9 @@ mod system;
 mod wireguard;
 
 pub use attach::{Attachment, ControlLink, StreamPlanSource};
-pub use build::{BuildKitBuilder, BuildKitSettings, BuildRequest, image_name};
+pub use build::{
+    BuildKitBuilder, BuildKitSettings, BuildOutput, BuildRequest, image_name, remote_head,
+};
 pub use disks::{Disk, disks};
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
 pub use error::AgentError;

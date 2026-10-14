@@ -59,6 +59,7 @@ fn harness_with(deploy: DeploySpec, settings: ReconcilerSettings) -> Harness {
                     failure: None,
                     created_at_ms: 1,
                     updated_at_ms: 1,
+                    git_commit: None,
                 },
             },
         ])

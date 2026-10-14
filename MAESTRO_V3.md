@@ -361,6 +361,11 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   and a higher-priority router sends requests carrying that token to the same replica.
   No extra proxy hop. Replicas also get `MAESTRO_NODE_ID`, `MAESTRO_REPLICA_INDEX`, and
   `MAESTRO_REPLICA_ID` as in v1.
+- Built images without `build.registry` are shipped node-to-node: the building node
+  keeps an OCI archive and nodes that need the image stream it over the node gRPC
+  service and import it into containerd. With a registry, builds push and nodes pull.
+- `maestro services up` uploads can go to any voter; followers stream them to the
+  leader over the node gRPC service.
 - The IP blocklist routes matching requests (ClientIP, CF-Connecting-IP, X-Real-IP,
   X-Forwarded-For) to a loopback 403 responder in the agent instead of v1's probe
   container.

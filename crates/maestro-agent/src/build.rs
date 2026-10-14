@@ -4,6 +4,7 @@ use std::process::Stdio;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use maestro_core::GitCommit;
 use tokio::process::Command;
 
 const LOCAL_REGISTRY: &str = "maestro.local";
@@ -33,6 +34,12 @@ pub struct BuildRequest {
     pub secrets: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildOutput {
+    pub image: String,
+    pub commit: Option<GitCommit>,
+}
+
 pub struct BuildKitBuilder {
     settings: BuildKitSettings,
 }
@@ -42,7 +49,7 @@ impl BuildKitBuilder {
         Self { settings }
     }
 
-    pub async fn build(&self, request: &BuildRequest) -> Result<String, String> {
+    pub async fn build(&self, request: &BuildRequest) -> Result<BuildOutput, String> {
         let workspace = self.settings.work_dir.join(&request.deployment_id);
         let log_path = self
             .settings
@@ -51,7 +58,7 @@ impl BuildKitBuilder {
         let result = self.run(request, &workspace, &log_path).await;
         let _ = tokio::fs::remove_dir_all(&workspace).await;
         match result {
-            Ok(image) => Ok(image),
+            Ok(output) => Ok(output),
             Err(error) => {
                 let tail = log_tail(&log_path).await;
                 Err(match tail.is_empty() {
@@ -67,7 +74,7 @@ impl BuildKitBuilder {
         request: &BuildRequest,
         workspace: &Path,
         log_path: &Path,
-    ) -> Result<String, String> {
+    ) -> Result<BuildOutput, String> {
         let _ = tokio::fs::remove_dir_all(workspace).await;
         tokio::fs::create_dir_all(workspace)
             .await
@@ -77,6 +84,7 @@ impl BuildKitBuilder {
             .map_err(|error| format!("failed to create build log dir: {error}"))?;
         let log = std::fs::File::create(log_path)
             .map_err(|error| format!("failed to create build log: {error}"))?;
+        let mut commit = None;
         let context = match (&request.repo, &request.context_dir) {
             (Some(repo), _) => {
                 let checkout = workspace.join("src");
@@ -85,6 +93,7 @@ impl BuildKitBuilder {
                     .get(GIT_TOKEN_SECRET)
                     .or(self.settings.git_token.as_ref());
                 clone_repo(repo, request.branch.as_deref(), token, &checkout, &log).await?;
+                commit = head_commit(&checkout).await;
                 checkout
             }
             (None, Some(context_dir)) => context_dir.clone(),
@@ -102,7 +111,7 @@ impl BuildKitBuilder {
             .await
             .map_err(|error| format!("failed to run buildctl: {error}"))?;
         match status.success() {
-            true => Ok(image),
+            true => Ok(BuildOutput { image, commit }),
             false => Err(format!("buildctl exited with {status}")),
         }
     }
@@ -194,6 +203,48 @@ async fn clone_repo(
         true => Ok(()),
         false => Err(format!("git clone of {repo} failed")),
     }
+}
+
+pub async fn remote_head(
+    repo: &str,
+    branch: &str,
+    token: Option<&String>,
+) -> Result<String, String> {
+    let (url, auth_env) = git_auth(repo, token);
+    let output = Command::new("git")
+        .args(["ls-remote", &url, &format!("refs/heads/{branch}")])
+        .envs(auth_env)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|error| format!("failed to run git: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match (output.status.success(), stdout.split_whitespace().next()) {
+        (true, Some(sha)) => Ok(sha.to_string()),
+        (true, None) => Err(format!("branch {branch} not found in {repo}")),
+        (false, _) => Err(format!(
+            "git ls-remote {repo} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
+async fn head_commit(checkout: &Path) -> Option<GitCommit> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(["log", "-1", "--format=%H%n%s"])
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut lines = text.lines();
+    Some(GitCommit {
+        reference: lines.next()?.to_string(),
+        message: lines.next().unwrap_or_default().to_string(),
+    })
 }
 
 fn git_auth(repo: &str, token: Option<&String>) -> (String, Vec<(String, String)>) {

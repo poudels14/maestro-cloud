@@ -424,6 +424,19 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
             write_deployment(transaction, Some(&existing), &updated)?;
             Ok(vec![deployment_key(&updated)])
         }
+        Mutation::SetDeploymentCommit {
+            service_id,
+            deployment_id,
+            commit,
+        } => {
+            let existing = read_deployment(transaction, service_id, deployment_id)?;
+            let updated = Deployment {
+                git_commit: Some(commit.clone()),
+                ..existing.clone()
+            };
+            write_deployment(transaction, Some(&existing), &updated)?;
+            Ok(vec![deployment_key(&updated)])
+        }
         Mutation::DeleteDeployment {
             service_id,
             deployment_id,

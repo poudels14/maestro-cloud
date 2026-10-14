@@ -14,8 +14,8 @@ use maestro_agent::{
     admin_container,
 };
 use maestro_control::{
-    AgentHub, ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, require_token, router,
-    run_publisher,
+    AgentHub, ApiAuth, ApiState, BuildWatcher, BuiltImage, Deployer, DeployerSettings,
+    ImageBuilder, RemoteHeads, require_token, router, run_publisher,
 };
 use maestro_core::{
     ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole, NodeState, ServiceSpec,
@@ -40,6 +40,7 @@ use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
+const WATCH_INTERVAL: Duration = Duration::from_secs(30);
 const MEMBERSHIP_INTERVAL: Duration = Duration::from_secs(5);
 const LEARNER_CATCH_UP: Duration = Duration::from_secs(120);
 const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
@@ -83,6 +84,8 @@ struct ClusterMember {
     id: NodeId,
     address: String,
 }
+
+struct GitHeads;
 
 struct SealedSpecBuilder {
     builder: BuildKitBuilder,
@@ -159,6 +162,10 @@ pub async fn spawn(
         },
     );
     tasks.spawn(run_deployer(deployer, consensus.clone()));
+    tasks.spawn(run_watcher(
+        BuildWatcher::new(consensus.clone(), Arc::new(GitHeads), key.clone()),
+        consensus.clone(),
+    ));
 
     let clients = NodeClients::new(settings.credentials.clone());
     let logs = axum::Router::new()
@@ -228,8 +235,19 @@ pub async fn open_consensus(
     .await?)
 }
 
+impl RemoteHeads for GitHeads {
+    async fn head(
+        &self,
+        repo: String,
+        branch: String,
+        token: Option<String>,
+    ) -> Result<String, String> {
+        maestro_agent::remote_head(&repo, &branch, token.as_ref()).await
+    }
+}
+
 impl ImageBuilder for SealedSpecBuilder {
-    async fn build(&self, deployment: Deployment) -> Result<String, String> {
+    async fn build(&self, deployment: Deployment) -> Result<BuiltImage, String> {
         let spec = self
             .key
             .open_spec(&deployment.spec)
@@ -249,7 +267,10 @@ impl ImageBuilder for SealedSpecBuilder {
             build_args: build.env.items,
             secrets: build.secrets.items,
         };
-        self.builder.build(&request).await
+        self.builder.build(&request).await.map(|output| BuiltImage {
+            image: output.image,
+            commit: output.commit,
+        })
     }
 
     async fn resolve_sources(&self, deployment: Deployment) -> Result<ServiceSpec, String> {
@@ -384,6 +405,21 @@ async fn run_deployer(
             && let Err(error) = deployer.tick().await
         {
             tracing::warn!(%error, "deployer tick failed");
+        }
+    }
+}
+
+async fn run_watcher(
+    watcher: BuildWatcher<Consensus, GitHeads>,
+    consensus: Arc<Consensus>,
+) -> anyhow::Result<()> {
+    let mut ticker = tokio::time::interval(WATCH_INTERVAL);
+    loop {
+        ticker.tick().await;
+        if consensus.is_leader()
+            && let Err(error) = watcher.poll().await
+        {
+            tracing::warn!(%error, "build watcher poll failed");
         }
     }
 }

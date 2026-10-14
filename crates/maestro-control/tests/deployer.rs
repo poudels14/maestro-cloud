@@ -67,6 +67,7 @@ async fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::
                     failure: None,
                     created_at_ms: harness.clock.now(),
                     updated_at_ms: harness.clock.now(),
+                    git_commit: None,
                 },
             },
         ])
@@ -244,6 +245,10 @@ async fn builds_images_before_deploying() {
         .unwrap();
     assert_eq!(deployment.status, DeploymentStatus::Deploying);
     assert_eq!(deployment.image.as_deref(), Some("maestro.local/api:d1"));
+    assert_eq!(
+        deployment.git_commit.map(|commit| commit.reference),
+        Some("abc123".to_string())
+    );
 
     harness.deployer.tick().await.unwrap();
     let node_assignments = harness.writer.state().assignments(NodeId(1)).unwrap();

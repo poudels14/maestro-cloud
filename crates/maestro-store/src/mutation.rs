@@ -1,6 +1,6 @@
 use maestro_core::{
-    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
-    ServiceControls, ServiceId, ServiceSpec, UnschedulableReplica,
+    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, GitCommit, NodeId,
+    NodeRecord, ServiceControls, ServiceId, ServiceSpec, UnschedulableReplica,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,11 @@ pub enum Mutation {
         service_id: ServiceId,
         deployment_id: DeploymentId,
         spec: ServiceSpec,
+    },
+    SetDeploymentCommit {
+        service_id: ServiceId,
+        deployment_id: DeploymentId,
+        commit: GitCommit,
     },
     DeleteDeployment {
         service_id: ServiceId,

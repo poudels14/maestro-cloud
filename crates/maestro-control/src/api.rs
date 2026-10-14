@@ -581,13 +581,14 @@ async fn restart_service<W: StoreWriter, O: ObservedReplicas>(
         .service(&id)?
         .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
     reject_frozen(store, &id, query.force)?;
-    let image = restart_image(store.deployments(&id)?).ok_or_else(|| {
+    let source = restart_source(store.deployments(&id)?).ok_or_else(|| {
         ControlError::Conflict(format!(
             "service {id} has no deployed image to restart from"
         ))
     })?;
     let deployment = Deployment {
-        image: Some(image),
+        image: source.image,
+        git_commit: source.git_commit,
         ..new_deployment(&id, spec)
     };
     let deployment_id = deployment.id.clone();
@@ -899,17 +900,18 @@ fn reject_cluster_freeze(store: &maestro_store::StateMachine) -> Result<(), Cont
     }
 }
 
-fn restart_image(mut deployments: Vec<Deployment>) -> Option<String> {
+fn restart_source(mut deployments: Vec<Deployment>) -> Option<Deployment> {
     deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at_ms));
-    deployments
+    let ready = deployments
         .iter()
-        .find(|deployment| deployment.status == DeploymentStatus::Ready)
-        .or_else(|| {
-            deployments
-                .iter()
-                .find(|deployment| deployment.image.is_some())
-        })
-        .and_then(|deployment| deployment.image.clone())
+        .position(|deployment| deployment.status == DeploymentStatus::Ready);
+    let with_image = deployments
+        .iter()
+        .position(|deployment| deployment.image.is_some());
+    ready
+        .or(with_image)
+        .map(|index| deployments.swap_remove(index))
+        .filter(|deployment| deployment.image.is_some())
 }
 
 fn all_assignments(store: &maestro_store::StateMachine) -> Result<Vec<Assignment>, ControlError> {
@@ -928,7 +930,7 @@ fn masked_deployment(deployment: Deployment) -> Deployment {
     }
 }
 
-fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deployment {
+pub(crate) fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deployment {
     let now = unix_millis();
     let suffix = nanoid::format(nanoid::rngs::default, &DEPLOYMENT_ID_ALPHABET, 4);
     Deployment {
@@ -940,6 +942,7 @@ fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deployment {
         failure: None,
         created_at_ms: now,
         updated_at_ms: now,
+        git_commit: None,
     }
 }
 

@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use maestro_core::{
-    Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord, NodeState,
-    ReplicaId, ReplicaPhase, ReplicaStatus, ResourceDefaults, ServiceId, ServiceSpec,
+    Assignment, Deployment, DeploymentId, DeploymentStatus, GitCommit, NodeId, NodeRecord,
+    NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, ResourceDefaults, ServiceId, ServiceSpec,
     UnschedulableReplica,
 };
 use maestro_store::Mutation;
@@ -37,8 +37,17 @@ pub trait ObservedReplicas: Send + Sync + 'static {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuiltImage {
+    pub image: String,
+    pub commit: Option<GitCommit>,
+}
+
 pub trait ImageBuilder: Send + Sync + 'static {
-    fn build(&self, deployment: Deployment) -> impl Future<Output = Result<String, String>> + Send;
+    fn build(
+        &self,
+        deployment: Deployment,
+    ) -> impl Future<Output = Result<BuiltImage, String>> + Send;
 
     fn resolve(&self, image: String) -> impl Future<Output = Result<String, String>> + Send;
 
@@ -262,18 +271,33 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         tokio::spawn(async move {
             let (result, failure_prefix) = match step {
                 ImageStep::Build => (builder.build(deployment.clone()).await, "build failed"),
-                ImageStep::Resolve(image) => {
-                    (builder.resolve(image).await, "image resolution failed")
-                }
+                ImageStep::Resolve(image) => (
+                    builder.resolve(image).await.map(|image| BuiltImage {
+                        image,
+                        commit: None,
+                    }),
+                    "image resolution failed",
+                ),
             };
-            let (status, image, failure) = match result {
-                Ok(image) => (DeploymentStatus::Deploying, Some(image), None),
+            let (status, image, failure, commit) = match result {
+                Ok(built) => (
+                    DeploymentStatus::Deploying,
+                    Some(built.image),
+                    None,
+                    built.commit,
+                ),
                 Err(reason) => (
                     DeploymentStatus::Failed,
                     None,
                     Some(format!("{failure_prefix}: {reason}")),
+                    None,
                 ),
             };
+            let commit = commit.map(|commit| Mutation::SetDeploymentCommit {
+                service_id: deployment.service_id.clone(),
+                deployment_id: deployment.id.clone(),
+                commit,
+            });
             let unchanged = writer
                 .state()
                 .deployment(&deployment.service_id, &deployment.id)
@@ -282,13 +306,12 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 .is_some_and(|current| current.status == expected);
             let written = match unchanged {
                 true => writer
-                    .write(vec![status_change(
-                        &deployment,
-                        status,
-                        image,
-                        failure,
-                        clock(),
-                    )])
+                    .write(
+                        commit
+                            .into_iter()
+                            .chain([status_change(&deployment, status, image, failure, clock())])
+                            .collect(),
+                    )
                     .await
                     .map(|_| ()),
                 false => Ok(()),

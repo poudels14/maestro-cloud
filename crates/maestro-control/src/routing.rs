@@ -179,6 +179,7 @@ mod tests {
             failure: None,
             created_at_ms: 0,
             updated_at_ms: 0,
+            git_commit: None,
         }
     }
 

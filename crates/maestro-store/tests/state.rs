@@ -33,6 +33,7 @@ fn deployment(service: &str, id: &str, created_at_ms: u64, status: DeploymentSta
         failure: None,
         created_at_ms,
         updated_at_ms: created_at_ms,
+        git_commit: None,
     }
 }
 
