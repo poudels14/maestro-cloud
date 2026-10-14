@@ -438,7 +438,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   Deployment statuses), coordinated rolling upgrade/restart on NixOS with drain and
   maintenance banner (`maestro cluster upgrade|restart|unfreeze`, run exposed on
   `/api/cluster`), archive of finished deployments and build logs to S3.
-- [ ] W10 admin UI: every v1 screen on the v3 API, restyled.
+- [x] W10 admin UI (exec relay and the rebuilt admin image are untested live): every v1 screen on the v3 API, restyled, plus rolling upgrade/restart, node removal and separate build/deploy logs.
 
 ## Phases
 
@@ -466,7 +466,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - [x] API served on `/run/maestro/api.sock` for the admin container
 - [ ] Telemetry process tailing driver files into DuckDB, query API
 - [x] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
-- [ ] Port the admin UI from v1 API endpoints to the v3 API
+- [x] Port the admin UI from v1 API endpoints to the v3 API
 - [ ] Secrets encryption, external secret providers, JWT auth, CLI contexts
 
 ### Phase 3: multi-node
