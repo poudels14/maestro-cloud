@@ -58,7 +58,7 @@ cached. No other image is built at startup.
 
 ### Node roles
 
-- `voter`: runs Raft and the control plane, plus workloads unless `--no-workloads`.
+- `voter`: forms the Raft quorum and runs the control plane, plus workloads.
 - `agent`: runs workloads only. Holds no Raft state and never sees other nodes' data.
 
 A cluster has 1, 3, or 5 voters. Every other node is an agent. A single-node install is
@@ -301,7 +301,7 @@ Two files, one naming style (camelCase), and no CLI flags that duplicate config.
 }
 ```
 
-CLI flags on the daemon: `--config`, `--data-dir`, `--role`, `--no-workloads`.
+CLI flags on the daemon: `--config`, `--data-dir`, `--role`.
 
 ## CLI
 
