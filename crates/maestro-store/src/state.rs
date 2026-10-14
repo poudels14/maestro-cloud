@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use maestro_core::{
-    Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord, ServiceId,
-    ServiceSpec,
+    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
+    ServiceControls, ServiceId, ServiceSpec,
 };
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction};
 use serde::de::DeserializeOwned;
@@ -20,8 +20,11 @@ const DEPLOYMENTS_BY_STATUS: TableDefinition<(u8, &str, &str), ()> =
     TableDefinition::new("deployments_by_status");
 const ASSIGNMENTS: TableDefinition<(u64, &str), &[u8]> = TableDefinition::new("assignments");
 const RAFT_META: TableDefinition<&str, &[u8]> = TableDefinition::new("raft_meta");
+const SERVICE_CONTROLS: TableDefinition<&str, &[u8]> = TableDefinition::new("service_controls");
+const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
 
 const VERSION_KEY: &str = "version";
+const FREEZE_KEY: &str = "freeze";
 const KEY_MAX: &str = "\u{10FFFF}";
 const CHANGE_BUFFER: usize = 1024;
 
@@ -39,6 +42,10 @@ pub(crate) struct StateExport {
     deployments: Vec<Deployment>,
     nodes: Vec<NodeRecord>,
     assignments: Vec<Assignment>,
+    #[serde(default)]
+    service_controls: Vec<(ServiceId, ServiceControls)>,
+    #[serde(default)]
+    cluster_freeze: Option<ClusterFreeze>,
 }
 
 impl StateMachine {
@@ -120,6 +127,8 @@ impl StateMachine {
             deployments,
             nodes: self.nodes()?,
             assignments,
+            service_controls: self.all_service_controls()?,
+            cluster_freeze: self.cluster_freeze()?,
         })
     }
 
@@ -159,6 +168,25 @@ impl StateMachine {
             )?;
             Ok::<_, StoreError>(())
         })?;
+        export
+            .service_controls
+            .iter()
+            .try_for_each(|(id, controls)| {
+                apply_mutation(
+                    &transaction,
+                    &Mutation::SetServiceControls {
+                        id: id.clone(),
+                        controls: controls.clone(),
+                    },
+                )
+                .map(|_| ())
+            })?;
+        apply_mutation(
+            &transaction,
+            &Mutation::SetClusterFreeze {
+                freeze: export.cluster_freeze.clone(),
+            },
+        )?;
         record(&transaction)?;
         transaction.commit()?;
         let _ = self.changes.send(Change {
@@ -252,6 +280,37 @@ impl StateMachine {
             .collect()
     }
 
+    pub fn service_controls(&self, id: &ServiceId) -> Result<ServiceControls> {
+        let transaction = self.database.begin_read()?;
+        let controls = transaction.open_table(SERVICE_CONTROLS)?;
+        controls
+            .get(id.as_str())?
+            .map(|guard| decode(guard.value()))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    pub fn all_service_controls(&self) -> Result<Vec<(ServiceId, ServiceControls)>> {
+        let transaction = self.database.begin_read()?;
+        let controls = transaction.open_table(SERVICE_CONTROLS)?;
+        controls
+            .iter()?
+            .map(|entry| {
+                let (key, value) = entry?;
+                Ok((ServiceId::new(key.value()), decode(value.value())?))
+            })
+            .collect()
+    }
+
+    pub fn cluster_freeze(&self) -> Result<Option<ClusterFreeze>> {
+        let transaction = self.database.begin_read()?;
+        let cluster = transaction.open_table(CLUSTER)?;
+        cluster
+            .get(FREEZE_KEY)?
+            .map(|guard| decode(guard.value()))
+            .transpose()
+    }
+
     pub fn assignments(&self, node_id: NodeId) -> Result<Vec<Assignment>> {
         let transaction = self.database.begin_read()?;
         let assignments = transaction.open_table(ASSIGNMENTS)?;
@@ -270,6 +329,8 @@ fn create_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.open_table(DEPLOYMENTS_BY_STATUS)?;
     transaction.open_table(ASSIGNMENTS)?;
     transaction.open_table(RAFT_META)?;
+    transaction.open_table(SERVICE_CONTROLS)?;
+    transaction.open_table(CLUSTER)?;
     Ok(())
 }
 
@@ -281,6 +342,8 @@ fn delete_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.delete_table(DEPLOYMENTS_BY_STATUS)?;
     transaction.delete_table(ASSIGNMENTS)?;
     transaction.delete_table(RAFT_META)?;
+    transaction.delete_table(SERVICE_CONTROLS)?;
+    transaction.delete_table(CLUSTER)?;
     Ok(())
 }
 
@@ -325,6 +388,30 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
             write_deployment(transaction, Some(&existing), &updated)?;
             Ok(vec![deployment_key(&updated)])
         }
+        Mutation::DeleteDeployment {
+            service_id,
+            deployment_id,
+        } => {
+            let existing = read_deployment(transaction, service_id, deployment_id)?;
+            remove_deployment(transaction, &existing)?;
+            Ok(vec![deployment_key(&existing)])
+        }
+        Mutation::SetServiceControls { id, controls } => {
+            let mut table = transaction.open_table(SERVICE_CONTROLS)?;
+            match *controls == ServiceControls::default() {
+                true => table.remove(id.as_str())?,
+                false => table.insert(id.as_str(), encode(controls)?.as_slice())?,
+            };
+            Ok(vec![ChangeKey::ServiceControls { id: id.clone() }])
+        }
+        Mutation::SetClusterFreeze { freeze } => {
+            let mut table = transaction.open_table(CLUSTER)?;
+            match freeze {
+                Some(freeze) => table.insert(FREEZE_KEY, encode(freeze)?.as_slice())?,
+                None => table.remove(FREEZE_KEY)?,
+            };
+            Ok(vec![ChangeKey::ClusterFreeze])
+        }
         Mutation::PruneDeployments { service_id, keep } => {
             prune_deployments(transaction, service_id, *keep)
         }
@@ -354,6 +441,9 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
 
 fn delete_service(transaction: &WriteTransaction, id: &ServiceId) -> Result<Vec<ChangeKey>> {
     transaction.open_table(SERVICES)?.remove(id.as_str())?;
+    transaction
+        .open_table(SERVICE_CONTROLS)?
+        .remove(id.as_str())?;
     let deployment_keys = service_deployments(transaction, id)?
         .iter()
         .map(|deployment| {

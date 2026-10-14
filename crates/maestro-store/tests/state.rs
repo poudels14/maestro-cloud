@@ -1,7 +1,7 @@
 use maestro_core::{
-    Assignment, ByteSize, DeploySpec, Deployment, DeploymentId, DeploymentStatus,
+    Assignment, ByteSize, ClusterFreeze, DeploySpec, Deployment, DeploymentId, DeploymentStatus,
     EffectiveResources, Millicores, NodeCapacity, NodeId, NodeRecord, NodeRole, NodeState,
-    ReplicaId, ResolvedRequest, ServiceId, ServiceSpec,
+    ReplicaId, ResolvedRequest, ServiceControls, ServiceId, ServiceSpec,
 };
 use maestro_store::{ChangeKey, Mutation, StateMachine, StoreError};
 use tempfile::TempDir;
@@ -324,5 +324,88 @@ fn persists_across_reopen() {
     assert_eq!(
         reopened.service(&ServiceId::from("api")).unwrap(),
         Some(service_spec("api"))
+    );
+}
+
+#[test]
+fn stores_service_controls_until_the_service_is_deleted() {
+    let (_directory, store) = open_store();
+    let api = ServiceId::from("api");
+    let controls = ServiceControls {
+        frozen: true,
+        replicas_override: Some(6),
+    };
+    store
+        .apply(&[
+            put_service("api"),
+            Mutation::SetServiceControls {
+                id: api.clone(),
+                controls: controls.clone(),
+            },
+        ])
+        .unwrap();
+    assert_eq!(store.service_controls(&api).unwrap(), controls);
+    assert_eq!(
+        store.service_controls(&ServiceId::from("web")).unwrap(),
+        ServiceControls::default()
+    );
+
+    store
+        .apply(&[Mutation::DeleteService { id: api.clone() }])
+        .unwrap();
+    assert_eq!(
+        store.service_controls(&api).unwrap(),
+        ServiceControls::default()
+    );
+    assert!(store.all_service_controls().unwrap().is_empty());
+}
+
+#[test]
+fn sets_and_clears_the_cluster_freeze() {
+    let (_directory, store) = open_store();
+    let freeze = ClusterFreeze {
+        reason: "upgrade".to_string(),
+        upgrade_run_id: Some("u1".to_string()),
+        at_ms: 5,
+    };
+    store
+        .apply(&[Mutation::SetClusterFreeze {
+            freeze: Some(freeze.clone()),
+        }])
+        .unwrap();
+    assert_eq!(store.cluster_freeze().unwrap(), Some(freeze));
+    store
+        .apply(&[Mutation::SetClusterFreeze { freeze: None }])
+        .unwrap();
+    assert_eq!(store.cluster_freeze().unwrap(), None);
+}
+
+#[test]
+fn deletes_a_single_deployment_record() {
+    let (_directory, store) = open_store();
+    store
+        .apply(&[
+            put_service("api"),
+            Mutation::CreateDeployment {
+                deployment: deployment("api", "d1", 1, DeploymentStatus::Stopped),
+            },
+            Mutation::CreateDeployment {
+                deployment: deployment("api", "d2", 2, DeploymentStatus::Ready),
+            },
+        ])
+        .unwrap();
+    store
+        .apply(&[Mutation::DeleteDeployment {
+            service_id: ServiceId::from("api"),
+            deployment_id: DeploymentId::from("d1"),
+        }])
+        .unwrap();
+    let remaining = store.deployments(&ServiceId::from("api")).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert!(
+        store
+            .deployments_with_status(DeploymentStatus::Stopped)
+            .unwrap()
+            .is_empty()
     );
 }

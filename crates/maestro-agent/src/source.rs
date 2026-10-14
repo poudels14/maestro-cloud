@@ -35,7 +35,10 @@ impl LocalPlanSource {
         change.keys.iter().any(|key| match key {
             ChangeKey::NodeAssignments { node_id } => *node_id == self.node_id,
             ChangeKey::Everything | ChangeKey::Deployment { .. } => true,
-            ChangeKey::Service { .. } | ChangeKey::Node { .. } => false,
+            ChangeKey::Service { .. }
+            | ChangeKey::Node { .. }
+            | ChangeKey::ServiceControls { .. }
+            | ChangeKey::ClusterFreeze => false,
         })
     }
 }

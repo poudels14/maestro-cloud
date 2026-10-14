@@ -1,6 +1,6 @@
 use maestro_core::{
-    Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord, ServiceId,
-    ServiceSpec,
+    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
+    ServiceControls, ServiceId, ServiceSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,17 @@ pub enum Mutation {
         image: Option<String>,
         failure: Option<String>,
         at_ms: u64,
+    },
+    DeleteDeployment {
+        service_id: ServiceId,
+        deployment_id: DeploymentId,
+    },
+    SetServiceControls {
+        id: ServiceId,
+        controls: ServiceControls,
+    },
+    SetClusterFreeze {
+        freeze: Option<ClusterFreeze>,
     },
     PruneDeployments {
         service_id: ServiceId,
@@ -57,6 +68,10 @@ pub enum ChangeKey {
     NodeAssignments {
         node_id: NodeId,
     },
+    ServiceControls {
+        id: ServiceId,
+    },
+    ClusterFreeze,
     Everything,
 }
 
