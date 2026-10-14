@@ -6,6 +6,7 @@ use maestro_core::{
     ControlMessage, MeshPeer, NodeId, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable,
 };
 use maestro_store::{SecretKey, StateMachine, StoreError, replica_plans};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
@@ -44,6 +45,15 @@ struct NodeReplicas {
     statuses: Vec<ReplicaStatus>,
     disconnected_at: Option<Instant>,
     reported_at: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedNode {
+    pub node_id: NodeId,
+    pub statuses: Vec<ReplicaStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disconnected_for_ms: Option<u64>,
 }
 
 pub struct AgentSession {
@@ -133,6 +143,61 @@ impl AgentHub {
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+
+    pub fn snapshot(&self) -> Vec<ObservedNode> {
+        let now = Instant::now();
+        self.lock()
+            .replicas
+            .iter()
+            .map(|(node_id, replicas)| ObservedNode {
+                node_id: *node_id,
+                statuses: replicas.statuses.clone(),
+                disconnected_for_ms: replicas
+                    .disconnected_at
+                    .map(|since| now.duration_since(since).as_millis() as u64),
+            })
+            .collect()
+    }
+
+    pub fn mirror(&self, nodes: Vec<ObservedNode>) {
+        let changed = {
+            let mut state = self.lock();
+            match state.links.is_empty() {
+                true => {
+                    let now = Instant::now();
+                    let mirrored = nodes
+                        .into_iter()
+                        .map(|node| {
+                            let disconnected_at = node.disconnected_for_ms.map(|ago| {
+                                now.checked_sub(Duration::from_millis(ago)).unwrap_or(now)
+                            });
+                            (
+                                node.node_id,
+                                NodeReplicas {
+                                    statuses: node.statuses,
+                                    disconnected_at,
+                                    reported_at: now,
+                                },
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+                    let changed = mirrored.len() != state.replicas.len()
+                        || mirrored.iter().any(|(node_id, node)| {
+                            state
+                                .replicas
+                                .get(node_id)
+                                .is_none_or(|current| current.statuses != node.statuses)
+                        });
+                    state.replicas = mirrored;
+                    changed
+                }
+                false => false,
+            }
+        };
+        if changed {
+            self.bump();
+        }
     }
 
     pub fn awaiting_reports(&self, nodes: &[NodeId]) -> bool {
@@ -405,6 +470,35 @@ mod tests {
         assert!(silent.awaiting_reports(&nodes));
         tokio::time::advance(Duration::from_secs(31)).await;
         assert!(!silent.awaiting_reports(&nodes));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn followers_mirror_the_leaders_observed_replicas() {
+        let leader = AgentHub::new(Duration::from_secs(30));
+        let _link = leader.register(NodeId(1));
+        leader.record_replicas(NodeId(1), vec![status("api-0", ReplicaPhase::Healthy)]);
+        leader.record_replicas(NodeId(2), vec![status("api-1", ReplicaPhase::Healthy)]);
+        let link = leader.register(NodeId(2));
+        leader.unregister(NodeId(2), link.session);
+        tokio::time::advance(Duration::from_secs(40)).await;
+
+        let follower = AgentHub::new(Duration::from_secs(30));
+        tokio::time::advance(Duration::from_secs(40)).await;
+        follower.mirror(leader.snapshot());
+        assert_eq!(
+            follower.replica(&ReplicaId::from("api-0")).unwrap().phase,
+            ReplicaPhase::Healthy
+        );
+        assert_eq!(
+            follower.replica(&ReplicaId::from("api-1")).unwrap().phase,
+            ReplicaPhase::Failed
+        );
+        assert!(follower.node_available(NodeId(1)));
+        assert!(!follower.node_available(NodeId(2)));
+
+        let _own = leader.register(NodeId(3));
+        leader.mirror(Vec::new());
+        assert!(leader.replica(&ReplicaId::from("api-0")).is_some());
     }
 
     #[tokio::test]

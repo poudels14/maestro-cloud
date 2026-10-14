@@ -13,7 +13,7 @@ pub use api::{ApiState, new_deployment, router, service_deletion};
 pub use auth::{ApiAuth, require_token};
 pub use deployer::{BuiltImage, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas};
 pub use error::ControlError;
-pub use hub::{AgentHub, AgentSession, run_publisher};
+pub use hub::{AgentHub, AgentSession, ObservedNode, run_publisher};
 pub use routing::{RoutingInput, build_routes, cluster_dns, cluster_routes};
 pub use scheduler::{Placement, PlacementRequest, place};
 pub use subnets::allocate_subnet;

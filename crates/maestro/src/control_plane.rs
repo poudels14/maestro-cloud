@@ -15,7 +15,7 @@ use maestro_agent::{
 };
 use maestro_control::{
     AgentHub, ApiAuth, ApiState, BuildWatcher, BuiltImage, Deployer, DeployerSettings,
-    ImageBuilder, RemoteHeads, require_token, router, run_publisher,
+    ImageBuilder, ObservedNode, RemoteHeads, require_token, router, run_publisher,
 };
 use maestro_core::{
     ClusterConfig, ClusterSettings, Deployment, DeploymentId, MaintenanceRun, NodeId, NodeRole,
@@ -50,6 +50,7 @@ use crate::slack::{self, SlackState};
 use crate::uploads::{self, UploadState, upload_service};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
+const MIRROR_INTERVAL: Duration = Duration::from_secs(2);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_INTERVAL: Duration = Duration::from_secs(30);
 const GITHUB_API: &str = "https://api.github.com";
@@ -149,7 +150,8 @@ pub async fn spawn(
                 runtime.clone(),
                 settings.data_dir.clone(),
             )
-            .with_uploads(key.clone(), uploads_dir(&settings.data_dir)),
+            .with_uploads(key.clone(), uploads_dir(&settings.data_dir))
+            .with_hub(hub.clone()),
         ))
         .serve(settings.grpc_listen);
     tasks.spawn(async move { grpc.await.context("gRPC server stopped") });
@@ -247,6 +249,11 @@ pub async fn spawn(
     ));
 
     let clients = NodeClients::new(settings.credentials.clone());
+    tasks.spawn(mirror_observed(
+        observed.as_ref().clone(),
+        consensus.clone(),
+        clients.clone(),
+    ));
     let logs = axum::Router::new()
         .route("/api/logs", axum::routing::get(cluster_logs))
         .route("/api/disks", axum::routing::get(local_disks))
@@ -643,6 +650,36 @@ async fn publish(
 ) -> anyhow::Result<()> {
     run_publisher(hub, consensus.state_handle(), key, cluster).await;
     Ok(())
+}
+
+async fn mirror_observed(
+    hub: AgentHub,
+    consensus: Arc<Consensus>,
+    clients: NodeClients,
+) -> anyhow::Result<()> {
+    let mut ticker = tokio::time::interval(MIRROR_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let leader = consensus
+            .current_leader()
+            .filter(|_| !consensus.is_leader())
+            .map(|(_, address)| address);
+        if let Some(address) = leader {
+            let snapshot = clients
+                .call(&address, &NodeRequest::ObservedReplicas)
+                .await
+                .map_err(|status| status.message().to_string())
+                .and_then(|reply| {
+                    serde_json::from_value::<Vec<ObservedNode>>(reply)
+                        .map_err(|error| error.to_string())
+                });
+            match snapshot {
+                Ok(nodes) => hub.mirror(nodes),
+                Err(error) => tracing::debug!(%error, "mirroring observed replicas failed"),
+            }
+        }
+    }
 }
 
 async fn run_membership(consensus: Arc<Consensus>) -> anyhow::Result<()> {

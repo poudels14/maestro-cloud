@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response as HttpResponse};
 
 use maestro_agent::ImageFetcher;
-use maestro_control::StoreWriter;
+use maestro_control::{AgentHub, StoreWriter};
 use maestro_core::{MaintenanceKind, NodeId, NodeRecord, NodeState};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::node_client::NodeClient;
@@ -72,6 +72,7 @@ pub enum NodeRequest {
     BuildLog {
         deployment_id: String,
     },
+    ObservedReplicas,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -96,6 +97,7 @@ pub struct NodeService {
     exec_limiter: ExecLimiter,
     started: std::time::Instant,
     node_dir: PathBuf,
+    hub: Option<AgentHub>,
 }
 
 #[derive(Clone)]
@@ -145,6 +147,14 @@ impl NodeService {
             exec_limiter: ExecLimiter::default(),
             started: std::time::Instant::now(),
             node_dir,
+            hub: None,
+        }
+    }
+
+    pub fn with_hub(self, hub: AgentHub) -> Self {
+        Self {
+            hub: Some(hub),
+            ..self
         }
     }
 
@@ -210,6 +220,12 @@ impl NodeService {
                 node_maintenance::start(self.node_dir.clone(), kind, run_id);
                 Ok(json!({ "accepted": true }))
             }
+            NodeRequest::ObservedReplicas => match &self.hub {
+                Some(hub) => encode_value(&hub.snapshot()),
+                None => Err(Status::failed_precondition(
+                    "this node does not run the control plane",
+                )),
+            },
             NodeRequest::BuildLog { deployment_id } => Ok(json!({
                 "text": read_build_log(&self.node_dir.join(BUILD_LOGS_DIR), &deployment_id).await,
             })),
