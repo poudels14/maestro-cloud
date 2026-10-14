@@ -1,5 +1,6 @@
 mod cni;
 mod containerd;
+mod docker_auth;
 #[cfg(feature = "fake")]
 mod fake;
 mod oci;

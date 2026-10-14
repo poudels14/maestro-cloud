@@ -2844,6 +2844,7 @@ dependencies = [
 name = "maestro-runtime"
 version = "3.0.0"
 dependencies = [
+ "base64 0.23.1",
  "containerd-client",
  "flate2",
  "hex",

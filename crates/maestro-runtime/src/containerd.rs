@@ -23,8 +23,8 @@ use containerd_client::services::v1::{
 use containerd_client::tonic::transport::Channel;
 use containerd_client::tonic::{Code, Request, Status};
 use containerd_client::types::transfer::{
-    Data, ImageExportStream, ImageImportStream, ImageReference, ImageStore, OciRegistry,
-    UnpackConfiguration, WindowUpdate,
+    AuthRequest, AuthResponse, AuthType, Data, ImageExportStream, ImageImportStream,
+    ImageReference, ImageStore, OciRegistry, RegistryResolver, UnpackConfiguration, WindowUpdate,
 };
 use containerd_client::types::{Descriptor, Platform};
 use prost::Message;
@@ -35,6 +35,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cni::CniNetwork;
+use crate::docker_auth::registry_credentials;
 use crate::oci;
 use crate::reference;
 use crate::spec::{
@@ -792,9 +793,16 @@ impl Runtime for ContainerdRuntime {
         match self.image_exists(&name).await? {
             true => Ok(()),
             false => {
+                let auth_stream = stream_id("auth");
+                let (outbound, inbound) = self.open_stream(&auth_stream).await?;
+                let responder = tokio::spawn(answer_auth_requests(outbound, inbound));
                 let source = OciRegistry {
                     reference: name.clone(),
-                    resolver: None,
+                    resolver: Some(RegistryResolver {
+                        auth_stream,
+                        default_scheme: registry_scheme(&name).to_string(),
+                        ..Default::default()
+                    }),
                 };
                 let destination = ImageStore {
                     name: name.clone(),
@@ -805,15 +813,17 @@ impl Runtime for ContainerdRuntime {
                     }],
                     ..Default::default()
                 };
-                TransferClient::new(self.channel.clone())
+                let transferred = TransferClient::new(self.channel.clone())
                     .transfer(self.request(TransferRequest {
                         source: Some(containerd_client::to_any(&source)),
                         destination: Some(containerd_client::to_any(&destination)),
                         options: None,
                     }))
-                    .await
-                    .map_err(|status| image_error(&name, status.message()))?;
-                Ok(())
+                    .await;
+                responder.abort();
+                transferred
+                    .map(|_| ())
+                    .map_err(|status| image_error(&name, status.message()))
             }
         }
     }
@@ -1092,6 +1102,41 @@ async fn forward_output(
         && read > 0
         && output.send(buffer[..read].to_vec()).await.is_ok()
     {}
+}
+
+fn registry_scheme(reference: &str) -> &'static str {
+    let host = reference.split('/').next().unwrap_or_default();
+    match host.split(':').next().unwrap_or_default() {
+        "localhost" | "127.0.0.1" => "http",
+        _ => "https",
+    }
+}
+
+async fn answer_auth_requests(
+    outbound: mpsc::Sender<Any>,
+    mut inbound: containerd_client::tonic::Streaming<Any>,
+) {
+    while let Ok(Some(message)) = inbound.message().await {
+        let host = AuthRequest::decode(message.value.as_slice())
+            .map(|request| request.host)
+            .unwrap_or_default();
+        let response = match registry_credentials(&host).await {
+            Ok(Some(credentials)) => AuthResponse {
+                auth_type: AuthType::Credentials as i32,
+                username: credentials.username,
+                secret: credentials.secret,
+                expire_at: None,
+            },
+            Ok(None) | Err(_) => AuthResponse::default(),
+        };
+        if outbound
+            .send(containerd_client::to_any(&response))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
 }
 
 fn stream_id(prefix: &str) -> String {

@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use reqwest::StatusCode;
 use reqwest::header::{ACCEPT, AUTHORIZATION, WWW_AUTHENTICATE};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::docker_auth::{RegistryCredentials, registry_credentials};
 use crate::reference;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -81,8 +84,18 @@ impl RegistryClient {
                     .and_then(|value| value.to_str().ok())
                     .ok_or("registry requires authentication without a challenge")?
                     .to_string();
-                let token = self.bearer_token(&challenge, name).await?;
-                self.manifest(&url, Some(&token)).await?
+                let credentials = registry_credentials(&name.registry).await?;
+                let authorization = match challenge.to_ascii_lowercase().starts_with("basic") {
+                    true => credentials.as_ref().map(basic_authorization).ok_or(
+                        "registry requires credentials; add them to the node's Docker config",
+                    )?,
+                    false => format!(
+                        "Bearer {}",
+                        self.bearer_token(&challenge, name, credentials.as_ref())
+                            .await?
+                    ),
+                };
+                self.manifest(&url, Some(&authorization)).await?
             }
             _ => anonymous,
         };
@@ -102,23 +115,33 @@ impl RegistryClient {
                 }
             }
             StatusCode::NOT_FOUND => Err("image or tag not found".to_string()),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                Err("access denied (private images are not supported yet)".to_string())
-            }
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(format!(
+                "access denied; check the node's Docker credentials for {}",
+                name.registry
+            )),
             status => Err(format!("registry returned {status}")),
         }
     }
 
-    async fn manifest(&self, url: &str, token: Option<&str>) -> Result<reqwest::Response, String> {
+    async fn manifest(
+        &self,
+        url: &str,
+        authorization: Option<&str>,
+    ) -> Result<reqwest::Response, String> {
         let request = self.http.get(url).header(ACCEPT, MANIFEST_TYPES);
-        let request = match token {
-            Some(token) => request.header(AUTHORIZATION, format!("Bearer {token}")),
+        let request = match authorization {
+            Some(authorization) => request.header(AUTHORIZATION, authorization),
             None => request,
         };
         request.send().await.map_err(|error| error.to_string())
     }
 
-    async fn bearer_token(&self, challenge: &str, name: &ImageName) -> Result<String, String> {
+    async fn bearer_token(
+        &self,
+        challenge: &str,
+        name: &ImageName,
+        credentials: Option<&RegistryCredentials>,
+    ) -> Result<String, String> {
         let parameters = challenge_parameters(challenge);
         let realm = parameters
             .get("realm")
@@ -131,10 +154,14 @@ impl RegistryClient {
             .get("service")
             .map(|service| vec![("service", service.clone()), ("scope", scope.clone())])
             .unwrap_or_else(|| vec![("scope", scope)]);
-        let response: TokenResponse = self
-            .http
-            .get(realm)
-            .query(&query)
+        let request = self.http.get(realm).query(&query);
+        let request = match credentials {
+            Some(credentials) => {
+                request.basic_auth(&credentials.username, Some(&credentials.secret))
+            }
+            None => request,
+        };
+        let response: TokenResponse = request
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
@@ -147,6 +174,11 @@ impl RegistryClient {
             .or(response.access_token)
             .ok_or_else(|| "token response has no token".to_string())
     }
+}
+
+fn basic_authorization(credentials: &RegistryCredentials) -> String {
+    let pair = format!("{}:{}", credentials.username, credentials.secret);
+    format!("Basic {}", BASE64.encode(pair))
 }
 
 impl Default for RegistryClient {
