@@ -389,7 +389,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 
 ### Workstreams
 
-- [ ] W1 service operations: freeze (blocks rollout/redeploy/restart and watchers unless
+- [x] W1 service operations: freeze (blocks rollout/redeploy/restart and watchers unless
   `force`), replicas override (configured..25, in place without redeploy), redeploy
   (rebuild from stored config), restart (reuse last image), stop deployment, delete
   deployment record, delete service, cluster-wide freeze during upgrades.

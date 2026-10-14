@@ -16,4 +16,6 @@ pub enum ControlError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("{0}")]
+    Invalid(String),
 }

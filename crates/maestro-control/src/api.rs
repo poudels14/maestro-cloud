@@ -3,12 +3,12 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maestro_core::{
-    Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, Millicores, NodeCapacity,
-    NodeRecord, ReplicaId, ReplicaStatus, RouteTable, ServiceId, ServiceSpec, ServicesFile,
-    SpecError,
+    Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, MAX_REPLICAS_OVERRIDE,
+    Millicores, NodeCapacity, NodeRecord, ReplicaId, ReplicaStatus, RouteTable, ServiceControls,
+    ServiceId, ServiceSpec, ServicesFile, SpecError,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,9 @@ const CANCELLABLE_STATUSES: [DeploymentStatus; 3] = [
     DeploymentStatus::Building,
     DeploymentStatus::Deploying,
 ];
+
+const STOPPABLE_STATUSES: [DeploymentStatus; 2] =
+    [DeploymentStatus::Deploying, DeploymentStatus::Ready];
 
 const DEPLOYMENT_ID_ALPHABET: [char; 36] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
@@ -42,6 +45,9 @@ struct ServiceSummary {
     id: ServiceId,
     spec: ServiceSpec,
     latest_deployment: Option<Deployment>,
+    deploy_frozen: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replicas_override: Option<u32>,
 }
 
 #[derive(Default, Serialize)]
@@ -60,6 +66,9 @@ struct RolloutPlan {
 struct ServiceDetail {
     id: ServiceId,
     spec: ServiceSpec,
+    deploy_frozen: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replicas_override: Option<u32>,
     deployments: Vec<Deployment>,
     replicas: Vec<ReplicaStatus>,
     assignments: Vec<Assignment>,
@@ -76,14 +85,51 @@ struct NodeSummary {
 }
 
 #[derive(Deserialize)]
-struct ScaleRequest {
+struct ReplicasRequest {
     replicas: u32,
+}
+
+#[derive(Deserialize)]
+struct FreezeRequest {
+    frozen: bool,
 }
 
 #[derive(Deserialize)]
 struct RolloutQuery {
     #[serde(default)]
     apply: bool,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Deserialize)]
+struct ForceQuery {
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FreezeResponse {
+    service_id: ServiceId,
+    deploy_frozen: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplicasResponse {
+    service_id: ServiceId,
+    replicas: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replicas_override: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoppedDeployment {
+    service_id: ServiceId,
+    deployment_id: DeploymentId,
+    status: DeploymentStatus,
 }
 
 #[derive(Serialize)]
@@ -107,13 +153,34 @@ pub fn router<W: StoreWriter, O: ObservedReplicas>(state: Arc<ApiState<W, O>>) -
             get(list_deployments::<W, O>).post(queue_deployment::<W, O>),
         )
         .route(
-            "/api/services/{service_id}/deployments/{deployment_id}/cancel",
-            post(cancel_deployment::<W, O>),
+            "/api/services/{service_id}/deployments/{deployment_id}",
+            axum::routing::delete(delete_deployment::<W, O>),
         )
         .route(
-            "/api/services/{service_id}/scale",
-            post(scale_service::<W, O>),
+            "/api/services/{service_id}/deployments/{deployment_id}/cancel",
+            patch(cancel_deployment::<W, O>),
         )
+        .route(
+            "/api/services/{service_id}/deployments/{deployment_id}/remove",
+            patch(stop_deployment::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/redeploy",
+            post(redeploy_service::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/restart",
+            post(restart_service::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/freeze",
+            patch(freeze_service::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/replicas",
+            patch(set_replicas::<W, O>).delete(clear_replicas::<W, O>),
+        )
+        .route("/api/cluster/unfreeze", post(unfreeze_cluster::<W, O>))
         .route("/api/rollout", post(rollout::<W, O>))
         .route("/api/replicas", get(list_replicas::<W, O>))
         .route("/api/nodes", get(list_nodes::<W, O>))
@@ -138,10 +205,13 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
                 .into_iter()
                 .max_by_key(|deployment| deployment.created_at_ms)
                 .map(masked_deployment);
+            let controls = store.service_controls(&id)?;
             Ok(ServiceSummary {
-                id,
                 spec: mask_spec(&spec),
                 latest_deployment,
+                deploy_frozen: controls.frozen,
+                replicas_override: controls.replicas_override,
+                id,
             })
         })
         .collect::<Result<Vec<_>, ControlError>>()
@@ -155,6 +225,7 @@ async fn put_service<W: StoreWriter, O: ObservedReplicas>(
 ) -> Result<Json<serde_json::Value>, ControlError> {
     let id = ServiceId::new(service_id);
     spec.validate(&id)?;
+    reject_cluster_freeze(state.writer.state())?;
     let sealed = state.key.seal_spec(&spec);
     let version = state
         .writer
@@ -225,6 +296,7 @@ async fn list_deployments<W: StoreWriter, O: ObservedReplicas>(
 async fn queue_deployment<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
     Path(service_id): Path<String>,
+    Query(query): Query<ForceQuery>,
 ) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
     let id = ServiceId::new(service_id);
     let spec = state
@@ -232,6 +304,7 @@ async fn queue_deployment<W: StoreWriter, O: ObservedReplicas>(
         .state()
         .service(&id)?
         .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    reject_frozen(state.writer.state(), &id, query.force)?;
     let deployment = new_deployment(&id, spec);
     let deployment_id = deployment.id.clone();
     state
@@ -288,6 +361,9 @@ async fn rollout<W: StoreWriter, O: ObservedReplicas>(
         )
         .collect::<Vec<_>>();
     if query.apply && !changed.is_empty() {
+        changed
+            .iter()
+            .try_for_each(|(id, _)| reject_frozen(state.writer.state(), id, query.force))?;
         let mutations = changed
             .into_iter()
             .flat_map(|(id, spec)| {
@@ -340,7 +416,10 @@ async fn get_service<W: StoreWriter, O: ObservedReplicas>(
         .into_iter()
         .filter(|assignment| assignment.service_id == id)
         .collect();
+    let controls = store.service_controls(&id)?;
     Ok(Json(ServiceDetail {
+        deploy_frozen: controls.frozen,
+        replicas_override: controls.replicas_override,
         id,
         spec: mask_spec(&spec),
         deployments,
@@ -382,31 +461,203 @@ async fn cancel_deployment<W: StoreWriter, O: ObservedReplicas>(
     }
 }
 
-async fn scale_service<W: StoreWriter, O: ObservedReplicas>(
+async fn stop_deployment<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
-    Path(service_id): Path<String>,
-    Json(request): Json<ScaleRequest>,
-) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
-    let id = ServiceId::new(service_id);
-    let mut spec = state
+    Path((service_id, deployment_id)): Path<(String, String)>,
+) -> Result<Json<StoppedDeployment>, ControlError> {
+    let service_id = ServiceId::new(service_id);
+    let deployment_id = DeploymentId::new(deployment_id);
+    let deployment = state
         .writer
         .state()
+        .deployment(&service_id, &deployment_id)?
+        .ok_or_else(|| ControlError::NotFound(format!("deployment {deployment_id}")))?;
+    match STOPPABLE_STATUSES.contains(&deployment.status) {
+        false => Err(ControlError::Conflict(format!(
+            "deployment {deployment_id} is {:?} and cannot be stopped",
+            deployment.status
+        ))),
+        true => {
+            state
+                .writer
+                .write(vec![Mutation::SetDeploymentStatus {
+                    service_id: service_id.clone(),
+                    deployment_id: deployment_id.clone(),
+                    status: DeploymentStatus::Draining,
+                    image: None,
+                    failure: None,
+                    at_ms: unix_millis(),
+                }])
+                .await?;
+            Ok(Json(StoppedDeployment {
+                service_id,
+                deployment_id,
+                status: DeploymentStatus::Draining,
+            }))
+        }
+    }
+}
+
+async fn delete_deployment<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path((service_id, deployment_id)): Path<(String, String)>,
+) -> Result<StatusCode, ControlError> {
+    let service_id = ServiceId::new(service_id);
+    let deployment_id = DeploymentId::new(deployment_id);
+    let deployment = state
+        .writer
+        .state()
+        .deployment(&service_id, &deployment_id)?
+        .ok_or_else(|| ControlError::NotFound(format!("deployment {deployment_id}")))?;
+    match deployment.status.is_terminal() {
+        false => Err(ControlError::Conflict(format!(
+            "deployment {deployment_id} is {:?}; stop or cancel it before deleting it",
+            deployment.status
+        ))),
+        true => {
+            state
+                .writer
+                .write(vec![Mutation::DeleteDeployment {
+                    service_id,
+                    deployment_id,
+                }])
+                .await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+    }
+}
+
+async fn redeploy_service<W: StoreWriter, O: ObservedReplicas>(
+    state: State<Arc<ApiState<W, O>>>,
+    service_id: Path<String>,
+    query: Query<ForceQuery>,
+) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
+    queue_deployment(state, service_id, query).await
+}
+
+async fn restart_service<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+    Query(query): Query<ForceQuery>,
+) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
+    let id = ServiceId::new(service_id);
+    let store = state.writer.state();
+    let spec = store
         .service(&id)?
         .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
-    spec.deploy.replicas = request.replicas;
-    let deployment = new_deployment(&id, spec.clone());
+    reject_frozen(store, &id, query.force)?;
+    let image = restart_image(store.deployments(&id)?).ok_or_else(|| {
+        ControlError::Conflict(format!(
+            "service {id} has no deployed image to restart from"
+        ))
+    })?;
+    let deployment = Deployment {
+        image: Some(image),
+        ..new_deployment(&id, spec)
+    };
     let deployment_id = deployment.id.clone();
     state
         .writer
-        .write(vec![
-            Mutation::PutService { id, spec },
-            Mutation::CreateDeployment { deployment },
-        ])
+        .write(vec![Mutation::CreateDeployment { deployment }])
         .await?;
     Ok((
         StatusCode::ACCEPTED,
         Json(QueuedDeployment { deployment_id }),
     ))
+}
+
+async fn freeze_service<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+    Json(request): Json<FreezeRequest>,
+) -> Result<Json<FreezeResponse>, ControlError> {
+    let id = ServiceId::new(service_id);
+    let store = state.writer.state();
+    store
+        .service(&id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    let controls = ServiceControls {
+        frozen: request.frozen,
+        ..store.service_controls(&id)?
+    };
+    state
+        .writer
+        .write(vec![Mutation::SetServiceControls {
+            id: id.clone(),
+            controls,
+        }])
+        .await?;
+    Ok(Json(FreezeResponse {
+        service_id: id,
+        deploy_frozen: request.frozen,
+    }))
+}
+
+async fn set_replicas<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+    Json(request): Json<ReplicasRequest>,
+) -> Result<Json<ReplicasResponse>, ControlError> {
+    let id = ServiceId::new(service_id);
+    let store = state.writer.state();
+    let spec = store
+        .service(&id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    let configured = spec.deploy.replicas;
+    let writable_volume = spec.deploy.volumes.iter().any(|volume| !volume.read_only);
+    let problem = match request.replicas {
+        0 => Some("replicas must be at least 1".to_string()),
+        replicas if replicas > MAX_REPLICAS_OVERRIDE => {
+            Some(format!("replicas cannot exceed {MAX_REPLICAS_OVERRIDE}"))
+        }
+        replicas if replicas < configured => Some(format!(
+            "replicas cannot be less than the configured value ({configured})"
+        )),
+        replicas if replicas > 1 && writable_volume => {
+            Some("services with writable volumes run a single replica".to_string())
+        }
+        _ => None,
+    };
+    match problem {
+        Some(problem) => Err(ControlError::Invalid(problem)),
+        None => {
+            let replicas_override = (request.replicas != configured).then_some(request.replicas);
+            write_replicas_override(&state, &id, replicas_override).await?;
+            Ok(Json(ReplicasResponse {
+                service_id: id,
+                replicas: request.replicas,
+                replicas_override,
+            }))
+        }
+    }
+}
+
+async fn clear_replicas<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+) -> Result<Json<ReplicasResponse>, ControlError> {
+    let id = ServiceId::new(service_id);
+    let spec = state
+        .writer
+        .state()
+        .service(&id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    write_replicas_override(&state, &id, None).await?;
+    Ok(Json(ReplicasResponse {
+        service_id: id,
+        replicas: spec.deploy.replicas,
+        replicas_override: None,
+    }))
+}
+
+async fn unfreeze_cluster<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+) -> Result<StatusCode, ControlError> {
+    state
+        .writer
+        .write(vec![Mutation::SetClusterFreeze { freeze: None }])
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_nodes<W: StoreWriter, O: ObservedReplicas>(
@@ -465,6 +716,7 @@ impl IntoResponse for ControlError {
                 StatusCode::BAD_REQUEST
             }
             ControlError::NotFound(_) => StatusCode::NOT_FOUND,
+            ControlError::Invalid(_) => StatusCode::BAD_REQUEST,
             ControlError::Conflict(_) => StatusCode::CONFLICT,
             ControlError::Secret(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ControlError::Consensus(ConsensusError::Rejected(_)) => StatusCode::CONFLICT,
@@ -474,6 +726,62 @@ impl IntoResponse for ControlError {
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }
+}
+
+async fn write_replicas_override<W: StoreWriter, O: ObservedReplicas>(
+    state: &ApiState<W, O>,
+    id: &ServiceId,
+    replicas_override: Option<u32>,
+) -> Result<(), ControlError> {
+    let controls = ServiceControls {
+        replicas_override,
+        ..state.writer.state().service_controls(id)?
+    };
+    state
+        .writer
+        .write(vec![Mutation::SetServiceControls {
+            id: id.clone(),
+            controls,
+        }])
+        .await?;
+    Ok(())
+}
+
+fn reject_frozen(
+    store: &maestro_store::StateMachine,
+    id: &ServiceId,
+    force: bool,
+) -> Result<(), ControlError> {
+    reject_cluster_freeze(store)?;
+    match store.service_controls(id)?.frozen && !force {
+        true => Err(ControlError::Conflict(format!(
+            "deploy is frozen for service {id}; use ?force=true to override"
+        ))),
+        false => Ok(()),
+    }
+}
+
+fn reject_cluster_freeze(store: &maestro_store::StateMachine) -> Result<(), ControlError> {
+    match store.cluster_freeze()? {
+        Some(freeze) => Err(ControlError::Conflict(format!(
+            "cluster deploys are frozen: {}",
+            freeze.reason
+        ))),
+        None => Ok(()),
+    }
+}
+
+fn restart_image(mut deployments: Vec<Deployment>) -> Option<String> {
+    deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at_ms));
+    deployments
+        .iter()
+        .find(|deployment| deployment.status == DeploymentStatus::Ready)
+        .or_else(|| {
+            deployments
+                .iter()
+                .find(|deployment| deployment.image.is_some())
+        })
+        .and_then(|deployment| deployment.image.clone())
 }
 
 fn all_assignments(store: &maestro_store::StateMachine) -> Result<Vec<Assignment>, ControlError> {

@@ -226,7 +226,7 @@ async fn token_middleware_guards_everything_but_health() {
 }
 
 #[tokio::test]
-async fn returns_service_detail_and_scales_with_a_new_deployment() {
+async fn overrides_replicas_without_a_new_deployment() {
     let (writer, app) = app();
     call(
         &app,
@@ -241,28 +241,187 @@ async fn returns_service_detail_and_scales_with_a_new_deployment() {
     assert_eq!(detail["spec"]["deploy"]["replicas"], 2);
     assert_eq!(detail["deployments"].as_array().unwrap().len(), 1);
 
-    let (status, queued) = call(
+    let path = "/api/services/api/replicas";
+    let (status, body) = call(&app, "PATCH", path, Some(json!({ "replicas": 5 }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({ "serviceId": "api", "replicas": 5, "replicasOverride": 5 })
+    );
+    let (_, detail) = call(&app, "GET", "/api/services/api", None).await;
+    assert_eq!(detail["replicasOverride"], 5);
+    assert_eq!(detail["deployments"].as_array().unwrap().len(), 1);
+
+    for (replicas, message) in [
+        (1, "cannot be less than the configured value"),
+        (26, "cannot exceed 25"),
+        (0, "at least 1"),
+    ] {
+        let (status, body) = call(&app, "PATCH", path, Some(json!({ "replicas": replicas }))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains(message), "{body}");
+    }
+
+    let (status, body) = call(&app, "DELETE", path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "serviceId": "api", "replicas": 2 }));
+    assert_eq!(
+        writer
+            .state()
+            .service_controls(&ServiceId::from("api"))
+            .unwrap()
+            .replicas_override,
+        None
+    );
+}
+
+#[tokio::test]
+async fn frozen_services_reject_deploys_unless_forced() {
+    let (_, app) = app();
+    call(
         &app,
         "POST",
-        "/api/services/api/scale",
-        Some(json!({ "replicas": 5 })),
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
     )
     .await;
+    let (status, body) = call(
+        &app,
+        "PATCH",
+        "/api/services/api/freeze",
+        Some(json!({ "frozen": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "serviceId": "api", "deployFrozen": true }));
+
+    let (status, body) = call(&app, "POST", "/api/services/api/redeploy", None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["error"].as_str().unwrap().contains("frozen"));
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:2")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _) = call(&app, "POST", "/api/services/api/redeploy?force=true", None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
-    assert!(queued["deploymentId"].is_string());
-    let stored = writer
+    let (_, services) = call(&app, "GET", "/api/services", None).await;
+    let api = services
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|service| service["id"] == "api")
+        .unwrap();
+    assert_eq!(api["deployFrozen"], true);
+}
+
+#[tokio::test]
+async fn cluster_freeze_blocks_even_forced_deploys() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    writer
+        .write(vec![maestro_store::Mutation::SetClusterFreeze {
+            freeze: Some(maestro_core::ClusterFreeze {
+                reason: "upgrade in progress".to_string(),
+                upgrade_run_id: None,
+                at_ms: 1,
+            }),
+        }])
+        .await
+        .unwrap();
+    let (status, body) = call(&app, "POST", "/api/services/api/redeploy?force=true", None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("upgrade in progress")
+    );
+
+    let (status, _) = call(&app, "POST", "/api/cluster/unfreeze", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&app, "POST", "/api/services/api/redeploy", None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn stops_restarts_and_deletes_deployments() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    let (status, _) = call(&app, "POST", "/api/services/api/restart", None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let deployment = writer.state().deployments(&ServiceId::from("api")).unwrap()[0].clone();
+    writer
+        .write(vec![maestro_store::Mutation::SetDeploymentStatus {
+            service_id: deployment.service_id.clone(),
+            deployment_id: deployment.id.clone(),
+            status: DeploymentStatus::Ready,
+            image: Some("docker.io/library/api:1@sha256:abc".to_string()),
+            failure: None,
+            at_ms: 2,
+        }])
+        .await
+        .unwrap();
+    let base = format!("/api/services/api/deployments/{}", deployment.id);
+
+    let (status, _) = call(&app, "DELETE", &base, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, queued) = call(&app, "POST", "/api/services/api/restart", None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let restarted = writer
         .state()
-        .service(&ServiceId::from("api"))
+        .deployment(
+            &ServiceId::from("api"),
+            &maestro_core::DeploymentId::new(queued["deploymentId"].as_str().unwrap()),
+        )
         .unwrap()
         .unwrap();
-    assert_eq!(stored.deploy.replicas, 5);
+    assert_eq!(
+        restarted.image.as_deref(),
+        Some("docker.io/library/api:1@sha256:abc")
+    );
+
+    let (status, body) = call(&app, "PATCH", &format!("{base}/remove"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "draining");
+    writer
+        .write(vec![maestro_store::Mutation::SetDeploymentStatus {
+            service_id: deployment.service_id.clone(),
+            deployment_id: deployment.id.clone(),
+            status: DeploymentStatus::Stopped,
+            image: None,
+            failure: None,
+            at_ms: 3,
+        }])
+        .await
+        .unwrap();
+    let (status, _) = call(&app, "DELETE", &base, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(
         writer
             .state()
             .deployments(&ServiceId::from("api"))
             .unwrap()
             .len(),
-        2
+        1
     );
 }
 
@@ -281,9 +440,9 @@ async fn cancels_only_in_flight_deployments() {
         .to_string();
     let path = format!("/api/services/api/deployments/{deployment}/cancel");
 
-    let (status, _) = call(&app, "POST", &path, None).await;
+    let (status, _) = call(&app, "PATCH", &path, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let (status, body) = call(&app, "POST", &path, None).await;
+    let (status, body) = call(&app, "PATCH", &path, None).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(
         body["error"]
@@ -293,7 +452,7 @@ async fn cancels_only_in_flight_deployments() {
     );
     let (status, _) = call(
         &app,
-        "POST",
+        "PATCH",
         "/api/services/api/deployments/missing/cancel",
         None,
     )

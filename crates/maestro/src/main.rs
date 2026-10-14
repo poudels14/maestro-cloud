@@ -56,10 +56,16 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        force: bool,
     },
     Services,
+    #[command(subcommand)]
+    Service(client::ServiceCommand),
     Deploy {
         service: String,
+        #[arg(long)]
+        force: bool,
     },
     Replicas,
     Nodes,
@@ -136,12 +142,15 @@ async fn run_cli() -> anyhow::Result<()> {
             };
             Ok(maestro_telemetry::run(settings).await?)
         }
-        Command::Rollout { file, apply } => {
-            client::rollout(&contexts::resolve(cli.api, cli.token)?, &file, apply).await
+        Command::Rollout { file, apply, force } => {
+            client::rollout(&contexts::resolve(cli.api, cli.token)?, &file, apply, force).await
         }
         Command::Services => client::services(&contexts::resolve(cli.api, cli.token)?).await,
-        Command::Deploy { service } => {
-            client::deploy(&contexts::resolve(cli.api, cli.token)?, &service).await
+        Command::Service(command) => {
+            client::service(&contexts::resolve(cli.api, cli.token)?, command).await
+        }
+        Command::Deploy { service, force } => {
+            client::deploy(&contexts::resolve(cli.api, cli.token)?, &service, force).await
         }
         Command::Replicas => client::replicas(&contexts::resolve(cli.api, cli.token)?).await,
         Command::Nodes => client::nodes(&contexts::resolve(cli.api, cli.token)?).await,

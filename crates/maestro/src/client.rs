@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use anyhow::Context;
+use clap::Subcommand;
 use maestro_core::ServicesFile;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub struct Endpoint {
     pub api: String,
@@ -18,6 +19,14 @@ impl Endpoint {
         self.authorize(reqwest::Client::new().post(format!("{}{path}", self.api)))
     }
 
+    fn patch(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authorize(reqwest::Client::new().patch(format!("{}{path}", self.api)))
+    }
+
+    fn delete(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authorize(reqwest::Client::new().delete(format!("{}{path}", self.api)))
+    }
+
     fn authorize(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.token {
             Some(token) => builder.bearer_auth(token),
@@ -26,13 +35,132 @@ impl Endpoint {
     }
 }
 
-pub async fn rollout(endpoint: &Endpoint, file: &Path, apply: bool) -> anyhow::Result<()> {
+#[derive(Subcommand)]
+pub enum ServiceCommand {
+    Freeze {
+        service: String,
+    },
+    Unfreeze {
+        service: String,
+    },
+    Redeploy {
+        service: String,
+        #[arg(long)]
+        force: bool,
+    },
+    Restart {
+        service: String,
+        #[arg(long)]
+        force: bool,
+    },
+    Scale {
+        service: String,
+        #[arg(required_unless_present = "reset")]
+        replicas: Option<u32>,
+        #[arg(long, conflicts_with = "replicas")]
+        reset: bool,
+    },
+    Stop {
+        service: String,
+        deployment: String,
+    },
+    Cancel {
+        service: String,
+        deployment: String,
+    },
+    Forget {
+        service: String,
+        deployment: String,
+    },
+    Delete {
+        service: String,
+    },
+}
+
+pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Result<()> {
+    match command {
+        ServiceCommand::Freeze { service } => set_frozen(endpoint, &service, true).await,
+        ServiceCommand::Unfreeze { service } => set_frozen(endpoint, &service, false).await,
+        ServiceCommand::Redeploy { service, force } => {
+            queue(
+                endpoint,
+                &format!("/api/services/{service}/redeploy?force={force}"),
+            )
+            .await
+        }
+        ServiceCommand::Restart { service, force } => {
+            queue(
+                endpoint,
+                &format!("/api/services/{service}/restart?force={force}"),
+            )
+            .await
+        }
+        ServiceCommand::Scale {
+            service,
+            replicas,
+            reset,
+        } => {
+            let path = format!("/api/services/{service}/replicas");
+            let response = match (reset, replicas) {
+                (false, Some(replicas)) => {
+                    request(endpoint.patch(&path).json(&json!({ "replicas": replicas }))).await?
+                }
+                _ => request(endpoint.delete(&path)).await?,
+            };
+            println!("{service} runs {} replicas", text(&response["replicas"]));
+            Ok(())
+        }
+        ServiceCommand::Stop {
+            service,
+            deployment,
+        } => {
+            request(endpoint.patch(&format!(
+                "/api/services/{service}/deployments/{deployment}/remove"
+            )))
+            .await?;
+            println!("stopping deployment {deployment}");
+            Ok(())
+        }
+        ServiceCommand::Cancel {
+            service,
+            deployment,
+        } => {
+            request(endpoint.patch(&format!(
+                "/api/services/{service}/deployments/{deployment}/cancel"
+            )))
+            .await?;
+            println!("cancelled deployment {deployment}");
+            Ok(())
+        }
+        ServiceCommand::Forget {
+            service,
+            deployment,
+        } => {
+            request(endpoint.delete(&format!("/api/services/{service}/deployments/{deployment}")))
+                .await?;
+            println!("deleted deployment record {deployment}");
+            Ok(())
+        }
+        ServiceCommand::Delete { service } => {
+            request(endpoint.delete(&format!("/api/services/{service}"))).await?;
+            println!("deleted service {service}");
+            Ok(())
+        }
+    }
+}
+
+pub async fn rollout(
+    endpoint: &Endpoint,
+    file: &Path,
+    apply: bool,
+    force: bool,
+) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read {}", file.display()))?;
     let services = ServicesFile::parse(&text)?;
     let plan = request(
         endpoint
-            .post(&format!("/api/rollout?apply={apply}"))
+            .post(&format!("/api/rollout?apply={apply}&force={force}"))
             .json(&services),
     )
     .await?;
@@ -70,10 +198,12 @@ pub async fn services(endpoint: &Endpoint) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn deploy(endpoint: &Endpoint, service: &str) -> anyhow::Result<()> {
-    let queued = request(endpoint.post(&format!("/api/services/{service}/deployments"))).await?;
-    println!("queued deployment {}", text(&queued["deploymentId"]));
-    Ok(())
+pub async fn deploy(endpoint: &Endpoint, service: &str, force: bool) -> anyhow::Result<()> {
+    queue(
+        endpoint,
+        &format!("/api/services/{service}/deployments?force={force}"),
+    )
+    .await
 }
 
 pub async fn replicas(endpoint: &Endpoint) -> anyhow::Result<()> {
@@ -150,6 +280,26 @@ pub async fn logs(
             text(&record["line"]),
         );
     });
+    Ok(())
+}
+
+async fn queue(endpoint: &Endpoint, path: &str) -> anyhow::Result<()> {
+    let queued = request(endpoint.post(path)).await?;
+    println!("queued deployment {}", text(&queued["deploymentId"]));
+    Ok(())
+}
+
+async fn set_frozen(endpoint: &Endpoint, service: &str, frozen: bool) -> anyhow::Result<()> {
+    request(
+        endpoint
+            .patch(&format!("/api/services/{service}/freeze"))
+            .json(&json!({ "frozen": frozen })),
+    )
+    .await?;
+    match frozen {
+        true => println!("{service} is frozen; deploys need --force"),
+        false => println!("{service} is unfrozen"),
+    }
     Ok(())
 }
 
