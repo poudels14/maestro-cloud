@@ -434,9 +434,10 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   Datadog logs (healthcheck filter, dead letters) and metrics, S3 log backup
   (SSE-KMS, checksums, retention), egress firewall (nftables per replica IP),
   Tailscale, Cloudflare tunnel (gated on node readiness).
-- [ ] W9 delivery: PR previews (GitHub polling, sticky comments, quota, close grace,
+- [x] W9 delivery (the NixOS upgrade path is unit-tested; only restart was exercised live, and the banner itself ships with W10): PR previews (GitHub polling, sticky comments, quota, close grace,
   Deployment statuses), coordinated rolling upgrade/restart on NixOS with drain and
-  maintenance banner.
+  maintenance banner (`maestro cluster upgrade|restart|unfreeze`, run exposed on
+  `/api/cluster`), archive of finished deployments and build logs to S3.
 - [ ] W10 admin UI: every v1 screen on the v3 API, restyled.
 
 ## Phases
