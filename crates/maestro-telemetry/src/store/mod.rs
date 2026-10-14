@@ -152,11 +152,25 @@ impl LogStore {
     ) -> Result<()> {
         let mut connection = self.db.writer()?;
         let transaction = connection.transaction()?;
+        let mut access_events = Vec::new();
         {
             let mut statement = transaction.prepare_cached(INSERT_LOG)?;
             records.iter().try_for_each(|record| {
-                let parsed = parse_log_line(&record.line);
+                let mut parsed = parse_log_line(&record.line);
                 let timestamp = i64::try_from(record.ts).unwrap_or(i64::MAX);
+                let access_event = match replica_id == INGRESS_REPLICA {
+                    true => parse_access_event(&record.line, timestamp),
+                    false => None,
+                };
+                if let Some(event) = &access_event {
+                    parsed.attributes.insert(
+                        "maestro".to_string(),
+                        serde_json::json!({
+                            "log_type": "ingress_access",
+                            "client_ip": event.client_ip,
+                        }),
+                    );
+                }
                 let message = (parsed.message != record.line).then_some(parsed.message);
                 statement.execute(params![
                     timestamp,
@@ -170,18 +184,13 @@ impl LogStore {
                     message,
                     serde_json::Value::Object(parsed.attributes).to_string(),
                 ])?;
+                access_events.extend(access_event);
                 Ok::<_, TelemetryError>(())
             })?;
         }
-        if replica_id == INGRESS_REPLICA {
-            records.iter().try_for_each(|record| {
-                let timestamp = i64::try_from(record.ts).unwrap_or(i64::MAX);
-                match parse_access_event(&record.line, timestamp) {
-                    Some(event) => ingress::record_access(&transaction, &event),
-                    None => Ok(()),
-                }
-            })?;
-        }
+        access_events
+            .iter()
+            .try_for_each(|event| ingress::record_access(&transaction, event))?;
         transaction.execute(
             UPSERT_CHECKPOINT,
             params![replica_id, checkpoint.inode, checkpoint.offset, now_ms()],
