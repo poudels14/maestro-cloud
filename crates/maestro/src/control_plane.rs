@@ -17,7 +17,7 @@ use maestro_control::{
     AgentHub, ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, require_token, router,
     run_publisher,
 };
-use maestro_core::{ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole};
+use maestro_core::{ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole, NodeState};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_proto::pb::node_server::NodeServer;
@@ -29,7 +29,9 @@ use tokio::task::JoinSet;
 use crate::cluster_service::ClusterService;
 use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
-use crate::node_service::{ForwardingWriter, LogFanOut, NodeClients, NodeService, cluster_logs};
+use crate::node_service::{
+    ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_logs, remove_cluster_node,
+};
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
@@ -157,7 +159,11 @@ pub async fn spawn(
     let clients = NodeClients::new(settings.credentials.clone());
     let logs = axum::Router::new()
         .route("/api/logs", axum::routing::get(cluster_logs))
-        .with_state(LogFanOut {
+        .route(
+            "/api/cluster/nodes/{node_id}",
+            axum::routing::delete(remove_cluster_node),
+        )
+        .with_state(ClusterAccess {
             consensus: consensus.clone(),
             clients: clients.clone(),
         });
@@ -335,7 +341,11 @@ async fn converge_membership(consensus: &Consensus) -> anyhow::Result<()> {
         .state()
         .nodes()?
         .into_iter()
-        .filter(|node| node.role == NodeRole::Voter && !metrics.voters.contains_key(&node.id))
+        .filter(|node| {
+            node.role == NodeRole::Voter
+                && node.state != NodeState::Removed
+                && !metrics.voters.contains_key(&node.id)
+        })
         .collect::<Vec<_>>();
     for node in pending {
         if !metrics.learners.contains_key(&node.id) {

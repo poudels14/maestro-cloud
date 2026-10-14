@@ -77,6 +77,36 @@ pub enum ServiceCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub enum NodeCommand {
+    Drain { node: String },
+    Restore { node: String },
+    Remove { node: String },
+}
+
+pub async fn node(endpoint: &Endpoint, command: NodeCommand) -> anyhow::Result<()> {
+    match command {
+        NodeCommand::Drain { node } => {
+            request(endpoint.post(&format!("/api/cluster/nodes/{node}/drain"))).await?;
+            println!("draining node {node}; its replicas move once replacements are healthy");
+        }
+        NodeCommand::Restore { node } => {
+            request(endpoint.post(&format!("/api/cluster/nodes/{node}/restore"))).await?;
+            println!("node {node} accepts new replicas again");
+        }
+        NodeCommand::Remove { node } => {
+            let removal = request(endpoint.delete(&format!("/api/cluster/nodes/{node}"))).await?;
+            match removal["state"].as_str() {
+                Some("removed") => println!("removed node {node}"),
+                _ => {
+                    println!("node {node} is draining; run this again once its replicas have moved")
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Result<()> {
     match command {
         ServiceCommand::Freeze { service } => set_frozen(endpoint, &service, true).await,

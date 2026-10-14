@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response as HttpResponse};
 
 use maestro_control::StoreWriter;
-use maestro_core::{NodeRecord, NodeState};
+use maestro_core::{NodeId, NodeRecord, NodeState};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::node_client::NodeClient;
@@ -44,6 +44,23 @@ pub enum NodeRequest {
     Write {
         mutations: Vec<Mutation>,
     },
+    RemoveNode {
+        node_id: NodeId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemovalState {
+    Draining,
+    Removed,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemovalResponse {
+    node_id: NodeId,
+    state: RemovalState,
 }
 
 pub struct NodeService {
@@ -58,7 +75,7 @@ pub struct NodeClients {
 }
 
 #[derive(Clone)]
-pub struct LogFanOut {
+pub struct ClusterAccess {
     pub consensus: Arc<Consensus>,
     pub clients: NodeClients,
 }
@@ -111,6 +128,14 @@ impl NodeService {
                     .await
                     .map(Value::from)
                     .map_err(|error| Status::failed_precondition(error.to_string())),
+                None => Err(Status::failed_precondition(
+                    "this node does not run the control plane",
+                )),
+            },
+            NodeRequest::RemoveNode { node_id } => match &self.consensus {
+                Some(consensus) => remove_node(consensus, node_id)
+                    .await
+                    .and_then(|state| encode_value(&state)),
                 None => Err(Status::failed_precondition(
                     "this node does not run the control plane",
                 )),
@@ -219,7 +244,7 @@ impl StoreWriter for ForwardingWriter {
 }
 
 pub async fn cluster_logs(
-    State(fan_out): State<LogFanOut>,
+    State(fan_out): State<ClusterAccess>,
     Query(params): Query<ClusterLogsParams>,
 ) -> HttpResponse {
     match fan_out.consensus.state().nodes() {
@@ -236,6 +261,112 @@ pub async fn cluster_logs(
         )
             .into_response(),
     }
+}
+
+pub async fn remove_cluster_node(
+    State(access): State<ClusterAccess>,
+    Path(node_id): Path<String>,
+) -> HttpResponse {
+    let removal = match node_id.parse().map(NodeId) {
+        Err(_) => Err(Status::not_found(format!("node {node_id} not found"))),
+        Ok(node_id) => match access.consensus.current_leader() {
+            Some((leader, _)) if leader == access.consensus.metrics().node_id => {
+                remove_node(&access.consensus, node_id).await
+            }
+            Some((_, address)) => access
+                .clients
+                .call(&address, &NodeRequest::RemoveNode { node_id })
+                .await
+                .and_then(|reply| serde_json::from_value(reply).map_err(internal)),
+            None => Err(Status::unavailable("the cluster has no leader")),
+        }
+        .map(|state| (node_id, state)),
+    };
+    match removal {
+        Ok((node_id, state)) => {
+            let status = match state {
+                RemovalState::Draining => StatusCode::ACCEPTED,
+                RemovalState::Removed => StatusCode::OK,
+            };
+            (status, Json(RemovalResponse { node_id, state })).into_response()
+        }
+        Err(status) => {
+            let code = match status.code() {
+                tonic::Code::NotFound => StatusCode::NOT_FOUND,
+                tonic::Code::FailedPrecondition => StatusCode::CONFLICT,
+                tonic::Code::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (code, Json(json!({ "error": status.message() }))).into_response()
+        }
+    }
+}
+
+async fn remove_node(consensus: &Consensus, node_id: NodeId) -> Result<RemovalState, Status> {
+    let state = consensus.state();
+    let node = state
+        .node(node_id)
+        .map_err(internal)?
+        .ok_or_else(|| Status::not_found(format!("node {node_id} not found")))?;
+    let has_assignments = !state.assignments(node_id).map_err(internal)?.is_empty();
+    let metrics = consensus.metrics();
+    let in_membership =
+        metrics.voters.contains_key(&node_id) || metrics.learners.contains_key(&node_id);
+    match (node.state, has_assignments) {
+        (NodeState::Removed, _) => Ok(RemovalState::Removed),
+        _ if node_id == metrics.node_id => Err(Status::failed_precondition(
+            "this node is the leader; stop it so another voter takes over, then remove it",
+        )),
+        (_, true) => {
+            if node.state == NodeState::Active {
+                write(
+                    consensus,
+                    vec![Mutation::PutNode {
+                        node: NodeRecord {
+                            state: NodeState::Draining,
+                            ..node
+                        },
+                    }],
+                )
+                .await?;
+            }
+            Ok(RemovalState::Draining)
+        }
+        (_, false) => {
+            if in_membership {
+                consensus
+                    .remove_node(node_id)
+                    .await
+                    .map_err(|error| Status::failed_precondition(error.to_string()))?;
+            }
+            write(
+                consensus,
+                vec![Mutation::PutNode {
+                    node: NodeRecord {
+                        state: NodeState::Removed,
+                        ..node
+                    },
+                }],
+            )
+            .await?;
+            Ok(RemovalState::Removed)
+        }
+    }
+}
+
+async fn write(consensus: &Consensus, mutations: Vec<Mutation>) -> Result<u64, Status> {
+    consensus
+        .write(mutations)
+        .await
+        .map_err(|error| Status::failed_precondition(error.to_string()))
+}
+
+fn internal(error: impl std::fmt::Display) -> Status {
+    Status::internal(error.to_string())
+}
+
+fn encode_value<T: Serialize>(value: &T) -> Result<Value, Status> {
+    serde_json::to_value(value).map_err(internal)
 }
 
 async fn query_nodes(

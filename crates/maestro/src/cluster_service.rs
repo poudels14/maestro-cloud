@@ -2,10 +2,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use maestro_control::AgentHub;
-use maestro_core::{AgentMessage, ClusterSettings, ControlMessage, JoinRequest};
+use maestro_core::{AgentMessage, ClusterSettings, ControlMessage, JoinRequest, NodeId, NodeState};
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::cluster_server::Cluster;
-use maestro_store::Consensus;
+use maestro_store::{Consensus, StateMachine};
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
@@ -71,7 +71,12 @@ impl Cluster for ClusterService {
             (true, true) => {
                 let inbound = request.into_inner();
                 let (outbound_sender, outbound_receiver) = mpsc::channel(OUTBOUND_BUFFER);
-                tokio::spawn(serve_agent(self.hub.clone(), inbound, outbound_sender));
+                tokio::spawn(serve_agent(
+                    self.hub.clone(),
+                    self.consensus.state_handle(),
+                    inbound,
+                    outbound_sender,
+                ));
                 let stream: EnvelopeStream = Box::pin(ReceiverStream::new(outbound_receiver));
                 Ok(Response::new(stream))
             }
@@ -81,6 +86,7 @@ impl Cluster for ClusterService {
 
 async fn serve_agent(
     hub: AgentHub,
+    state: Arc<StateMachine>,
     mut inbound: Streaming<Envelope>,
     outbound: mpsc::Sender<Result<Envelope, Status>>,
 ) {
@@ -90,7 +96,21 @@ async fn serve_agent(
         .ok()
         .flatten()
         .map(|envelope| decode(&envelope));
+    let member = |node_id: NodeId| {
+        state
+            .node(node_id)
+            .ok()
+            .flatten()
+            .is_some_and(|node| node.state != NodeState::Removed)
+    };
     match hello {
+        Some(Ok(AgentMessage::Hello { node_id })) if !member(node_id) => {
+            let _ = outbound
+                .send(Err(Status::permission_denied(format!(
+                    "node {node_id} is not a member of this cluster"
+                ))))
+                .await;
+        }
         Some(Ok(AgentMessage::Hello { node_id })) => {
             let mut session = hub.register(node_id);
             let session_id = session.session;

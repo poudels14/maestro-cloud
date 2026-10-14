@@ -69,6 +69,8 @@ enum Command {
     },
     Replicas,
     Nodes,
+    #[command(subcommand)]
+    Node(client::NodeCommand),
     Logs {
         #[arg(long)]
         service: Option<String>,
@@ -154,6 +156,9 @@ async fn run_cli() -> anyhow::Result<()> {
         }
         Command::Replicas => client::replicas(&contexts::resolve(cli.api, cli.token)?).await,
         Command::Nodes => client::nodes(&contexts::resolve(cli.api, cli.token)?).await,
+        Command::Node(command) => {
+            client::node(&contexts::resolve(cli.api, cli.token)?, command).await
+        }
         Command::Logs {
             service,
             query,
