@@ -366,6 +366,14 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   service and import it into containerd. With a registry, builds push and nodes pull.
 - `maestro services up` uploads can go to any voter; followers stream them to the
   leader over the node gRPC service.
+- Datadog logs/metrics and the S3 log backup run per node in telemetry: each node ships
+  and uploads its own data (S3 keys prefixed by node id), with cursors and dead letters
+  in its local DuckDB.
+- Tailscale runs per node in userspace mode (`TS_USERSPACE=true`, as in v1), advertising
+  the node's /24 plus `advertiseRoutes`.
+- Cloudflare tunnel connectors run per node (`replicas` each) on the host network
+  against local Traefik, stopped while the node is not attached to the leader or
+  Traefik is down.
 - The IP blocklist routes matching requests (ClientIP, CF-Connecting-IP, X-Real-IP,
   X-Forwarded-For) to a loopback 403 responder in the agent instead of v1's probe
   container.
