@@ -68,6 +68,7 @@ async fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::
                     created_at_ms: harness.clock.now(),
                     updated_at_ms: harness.clock.now(),
                     git_commit: None,
+                    built_on: None,
                 },
             },
         ])

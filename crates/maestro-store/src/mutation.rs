@@ -30,10 +30,11 @@ pub enum Mutation {
         deployment_id: DeploymentId,
         spec: ServiceSpec,
     },
-    SetDeploymentCommit {
+    SetDeploymentBuild {
         service_id: ServiceId,
         deployment_id: DeploymentId,
-        commit: GitCommit,
+        commit: Option<GitCommit>,
+        built_on: Option<NodeId>,
     },
     DeleteDeployment {
         service_id: ServiceId,

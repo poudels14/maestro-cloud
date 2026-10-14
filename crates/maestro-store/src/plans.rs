@@ -27,7 +27,17 @@ pub fn replica_plans(
                 .transpose()?;
             Some(deployment.and_then(|deployment| {
                 let spec = key.open_spec(&deployment.spec)?;
-                Ok(ReplicaPlan::new(assignment, &spec))
+                let image_source = deployment
+                    .built_on
+                    .filter(|built_on| *built_on != node_id)
+                    .map(|built_on| state.node(built_on))
+                    .transpose()?
+                    .flatten()
+                    .map(|node| node.endpoint);
+                Ok(ReplicaPlan {
+                    image_source,
+                    ..ReplicaPlan::new(assignment, &spec)
+                })
             }))
         })
         .collect()

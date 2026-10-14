@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -9,29 +10,35 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response as HttpResponse};
 
+use maestro_agent::ImageFetcher;
 use maestro_control::StoreWriter;
 use maestro_core::{NodeId, NodeRecord, NodeState};
 use maestro_proto::NodeCredentials;
-use maestro_proto::pb::Envelope;
 use maestro_proto::pb::node_client::NodeClient;
 use maestro_proto::pb::node_server::Node;
+use maestro_proto::pb::{Chunk, Envelope, ImageRequest};
+use maestro_runtime::ContainerdRuntime;
 use maestro_store::{Consensus, ConsensusError, Mutation, StateMachine};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::cluster_service::{decode, encode};
 use crate::unix_http;
 
+const IMAGE_CHUNK_BUFFER: usize = 16;
 const NODE_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_LOG_LIMIT: usize = 100;
 const MAX_LOG_LIMIT: usize = 1_000;
 
 type EnvelopeStream = Pin<Box<dyn Stream<Item = Result<Envelope, Status>> + Send>>;
+type ChunkStream = Pin<Box<dyn Stream<Item = Result<Chunk, Status>> + Send>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -67,6 +74,7 @@ struct RemovalResponse {
 pub struct NodeService {
     telemetry_socket: PathBuf,
     consensus: Option<Arc<Consensus>>,
+    runtime: Arc<ContainerdRuntime>,
 }
 
 #[derive(Clone)]
@@ -89,16 +97,26 @@ pub struct ClusterLogsParams {
     before_ts: Option<i64>,
 }
 
+pub struct MeshImageFetcher {
+    runtime: Arc<ContainerdRuntime>,
+    clients: NodeClients,
+}
+
 pub struct ForwardingWriter {
     consensus: Arc<Consensus>,
     clients: NodeClients,
 }
 
 impl NodeService {
-    pub fn new(telemetry_socket: PathBuf, consensus: Option<Arc<Consensus>>) -> Self {
+    pub fn new(
+        telemetry_socket: PathBuf,
+        consensus: Option<Arc<Consensus>>,
+        runtime: Arc<ContainerdRuntime>,
+    ) -> Self {
         Self {
             telemetry_socket,
             consensus,
+            runtime,
         }
     }
 
@@ -149,6 +167,7 @@ impl NodeService {
 #[tonic::async_trait]
 impl Node for NodeService {
     type ExecStream = EnvelopeStream;
+    type FetchImageStream = ChunkStream;
 
     async fn call(&self, request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
         let authenticated = request
@@ -160,6 +179,36 @@ impl Node for NodeService {
                 let node_request: NodeRequest = decode(request.get_ref())?;
                 let reply = self.handle(node_request).await?;
                 Ok(Response::new(encode(&reply)?))
+            }
+        }
+    }
+
+    async fn fetch_image(
+        &self,
+        request: Request<ImageRequest>,
+    ) -> Result<Response<Self::FetchImageStream>, Status> {
+        let authenticated = request
+            .peer_certs()
+            .is_some_and(|certificates| !certificates.is_empty());
+        let image = request.into_inner().image;
+        match (authenticated, self.runtime.has_image(&image).await) {
+            (false, _) => Err(Status::unauthenticated("a node certificate is required")),
+            (true, Ok(false)) => Err(Status::not_found(format!(
+                "image {image} is not on this node"
+            ))),
+            (true, Err(error)) => Err(Status::unavailable(error.to_string())),
+            (true, Ok(true)) => {
+                let chunks = self
+                    .runtime
+                    .export_image(&image)
+                    .await
+                    .map_err(|error| Status::internal(error.to_string()))?;
+                let stream: ChunkStream = Box::pin(ReceiverStream::new(chunks).map(|chunk| {
+                    chunk
+                        .map(|data| Chunk { data })
+                        .map_err(|error| Status::internal(error.to_string()))
+                }));
+                Ok(Response::new(stream))
             }
         }
     }
@@ -184,6 +233,20 @@ impl NodeClients {
         let channel = self.channel(address).await?;
         let reply = NodeClient::new(channel).call(encode(request)?).await?;
         decode(&reply.into_inner())
+    }
+
+    pub async fn fetch_image(
+        &self,
+        address: &str,
+        image: &str,
+    ) -> Result<tonic::Streaming<Chunk>, Status> {
+        let channel = self.channel(address).await?;
+        let response = NodeClient::new(channel)
+            .fetch_image(ImageRequest {
+                image: image.to_string(),
+            })
+            .await?;
+        Ok(response.into_inner())
     }
 
     async fn channel(&self, address: &str) -> Result<Channel, Status> {
@@ -211,6 +274,65 @@ impl NodeClients {
                 Ok(channel)
             }
         }
+    }
+}
+
+impl MeshImageFetcher {
+    pub fn new(runtime: Arc<ContainerdRuntime>, clients: NodeClients) -> Self {
+        Self { runtime, clients }
+    }
+
+    async fn fetch_missing(&self, image: &str, source: &str) -> Result<(), String> {
+        let present = self
+            .runtime
+            .has_image(image)
+            .await
+            .map_err(|error| error.to_string())?;
+        match present {
+            true => Ok(()),
+            false => {
+                tracing::info!(%image, %source, "fetching image from its build node");
+                let mut stream =
+                    self.clients
+                        .fetch_image(source, image)
+                        .await
+                        .map_err(|status| {
+                            format!("fetch {image} from {source}: {}", status.message())
+                        })?;
+                let (chunks, receiver) = mpsc::channel(IMAGE_CHUNK_BUFFER);
+                let forward = tokio::spawn(async move {
+                    while let Some(chunk) = stream.message().await? {
+                        if chunks.send(chunk.data).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok::<(), Status>(())
+                });
+                let imported = self
+                    .runtime
+                    .import_image(image, receiver)
+                    .await
+                    .map_err(|error| error.to_string());
+                let forwarded =
+                    forward
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .map_err(|status| {
+                            format!("image stream from {source} failed: {}", status.message())
+                        });
+                forwarded.and(imported)
+            }
+        }
+    }
+}
+
+impl ImageFetcher for MeshImageFetcher {
+    fn fetch<'a>(
+        &'a self,
+        image: &'a str,
+        source: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(self.fetch_missing(image, source))
     }
 }
 

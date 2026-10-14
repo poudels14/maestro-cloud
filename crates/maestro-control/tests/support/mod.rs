@@ -195,6 +195,7 @@ impl ImageBuilder for FakeBuilder {
                     reference: "abc123".to_string(),
                     message: "Add things".to_string(),
                 }),
+                built_on: Some(NodeId(1)),
             }),
         }
     }

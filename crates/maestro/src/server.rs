@@ -24,7 +24,7 @@ use crate::control_plane::{self, ControlPlaneSettings};
 use crate::identity::NodeIdentity;
 use crate::join::join_secret;
 use crate::log_driver;
-use crate::node_service::NodeService;
+use crate::node_service::{MeshImageFetcher, NodeClients, NodeService};
 use crate::unix_http;
 
 const DEFAULT_ADVERTISE: &str = "127.0.0.1:7400";
@@ -199,7 +199,11 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         Arc::new(source),
         board.clone(),
         ReconcilerSettings::default(),
-    );
+    )
+    .with_image_fetcher(Arc::new(MeshImageFetcher::new(
+        runtime.clone(),
+        NodeClients::new(credentials.clone()),
+    )));
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
 
     let mut tasks = JoinSet::new();
@@ -253,6 +257,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
                 .add_service(NodeServer::new(NodeService::new(
                     args.telemetry_socket.clone(),
                     None,
+                    runtime.clone(),
                 )))
                 .serve(grpc_listen);
             tasks.spawn(async move { node_grpc.await.context("node gRPC server stopped") });

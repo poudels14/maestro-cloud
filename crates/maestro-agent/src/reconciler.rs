@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,7 +44,16 @@ pub struct Reconciler<R: Runtime, S: PlanSource> {
     settings: ReconcilerSettings,
     restarts: HashMap<ReplicaId, RestartState>,
     replaced: HashSet<ReplicaId>,
+    fetcher: Option<Arc<dyn ImageFetcher>>,
     plans: watch::Sender<Vec<ReplicaPlan>>,
+}
+
+pub trait ImageFetcher: Send + Sync + 'static {
+    fn fetch<'a>(
+        &'a self,
+        image: &'a str,
+        source: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -67,7 +78,15 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             settings,
             restarts: HashMap::new(),
             replaced: HashSet::new(),
+            fetcher: None,
             plans,
+        }
+    }
+
+    pub fn with_image_fetcher(self, fetcher: Arc<dyn ImageFetcher>) -> Self {
+        Self {
+            fetcher: Some(fetcher),
+            ..self
         }
     }
 
@@ -179,13 +198,13 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             ..self.status_for(plan)
         });
         let started = match self.prepare_mounts(plan) {
-            Ok(mounts) => match self.runtime.pull(&plan.image).await {
+            Ok(mounts) => match self.obtain_image(plan).await {
                 Ok(()) => self
                     .runtime
                     .start(&self.container_spec(plan, hash, mounts))
                     .await
                     .map_err(|error| error.to_string()),
-                Err(error) => Err(error.to_string()),
+                Err(error) => Err(error),
             },
             Err(error) => Err(error),
         };
@@ -332,6 +351,17 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             restarts: previous.as_ref().map_or(0, |status| status.restarts),
             consecutive_failures: 0,
             last_error: previous.and_then(|status| status.last_error),
+        }
+    }
+
+    async fn obtain_image(&self, plan: &ReplicaPlan) -> Result<(), String> {
+        match (&plan.image_source, &self.fetcher) {
+            (Some(source), Some(fetcher)) => fetcher.fetch(&plan.image, source).await,
+            _ => self
+                .runtime
+                .pull(&plan.image)
+                .await
+                .map_err(|error| error.to_string()),
         }
     }
 

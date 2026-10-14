@@ -88,6 +88,7 @@ struct ClusterMember {
 struct GitHeads;
 
 struct SealedSpecBuilder {
+    node_id: NodeId,
     builder: BuildKitBuilder,
     registry: RegistryClient,
     key: Arc<SecretKey>,
@@ -123,6 +124,7 @@ pub async fn spawn(
         .add_service(NodeServer::new(NodeService::new(
             settings.telemetry_socket.clone(),
             Some(consensus.clone()),
+            runtime.clone(),
         )))
         .serve(settings.grpc_listen);
     tasks.spawn(async move { grpc.await.context("gRPC server stopped") });
@@ -152,6 +154,7 @@ pub async fn spawn(
         consensus.clone(),
         observed.clone(),
         Arc::new(SealedSpecBuilder {
+            node_id: settings.identity.id,
             builder: BuildKitBuilder::new(buildkit),
             registry: RegistryClient::new(),
             key: key.clone(),
@@ -255,6 +258,7 @@ impl ImageBuilder for SealedSpecBuilder {
         let build = spec
             .build
             .ok_or_else(|| "deployment has no build configuration".to_string())?;
+        let built_on = build.registry.is_none().then_some(self.node_id);
         let request = BuildRequest {
             deployment_id: deployment.id.to_string(),
             service_id: deployment.service_id.to_string(),
@@ -270,6 +274,7 @@ impl ImageBuilder for SealedSpecBuilder {
         self.builder.build(&request).await.map(|output| BuiltImage {
             image: output.image,
             commit: output.commit,
+            built_on,
         })
     }
 

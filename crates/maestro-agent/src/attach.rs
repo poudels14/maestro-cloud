@@ -263,6 +263,7 @@ mod tests {
             max_restarts: None,
             volumes: Vec::new(),
             secrets: None,
+            image_source: None,
         }
     }
 

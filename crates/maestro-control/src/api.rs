@@ -589,6 +589,7 @@ async fn restart_service<W: StoreWriter, O: ObservedReplicas>(
     let deployment = Deployment {
         image: source.image,
         git_commit: source.git_commit,
+        built_on: source.built_on,
         ..new_deployment(&id, spec)
     };
     let deployment_id = deployment.id.clone();
@@ -943,6 +944,7 @@ pub(crate) fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deplo
         created_at_ms: now,
         updated_at_ms: now,
         git_commit: None,
+        built_on: None,
     }
 }
 

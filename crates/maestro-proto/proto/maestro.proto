@@ -8,6 +8,14 @@ message Envelope {
   bytes json = 1;
 }
 
+message ImageRequest {
+  string image = 1;
+}
+
+message Chunk {
+  bytes data = 1;
+}
+
 service Raft {
   rpc AppendEntries(Envelope) returns (Envelope);
   rpc Vote(Envelope) returns (Envelope);
@@ -22,4 +30,5 @@ service Cluster {
 service Node {
   rpc Call(Envelope) returns (Envelope);
   rpc Exec(stream Envelope) returns (stream Envelope);
+  rpc FetchImage(ImageRequest) returns (stream Chunk);
 }

@@ -85,6 +85,7 @@ fn record(harness: &Harness, id: &str, status: DeploymentStatus, commit: Option<
                     reference: reference.to_string(),
                     message: String::new(),
                 }),
+                built_on: None,
             },
         }])
         .unwrap();

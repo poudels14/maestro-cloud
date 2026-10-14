@@ -35,6 +35,8 @@ pub struct Deployment {
     pub updated_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_commit: Option<GitCommit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_on: Option<NodeId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +79,8 @@ pub struct ReplicaPlan {
     pub volumes: Vec<VolumeMount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<SecretsSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_source: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +128,7 @@ impl ReplicaPlan {
                     source: None,
                     ..secrets
                 }),
+            image_source: None,
         }
     }
 }

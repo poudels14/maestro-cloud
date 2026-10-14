@@ -41,6 +41,7 @@ pub trait ObservedReplicas: Send + Sync + 'static {
 pub struct BuiltImage {
     pub image: String,
     pub commit: Option<GitCommit>,
+    pub built_on: Option<NodeId>,
 }
 
 pub trait ImageBuilder: Send + Sync + 'static {
@@ -275,16 +276,24 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                     builder.resolve(image).await.map(|image| BuiltImage {
                         image,
                         commit: None,
+                        built_on: None,
                     }),
                     "image resolution failed",
                 ),
             };
-            let (status, image, failure, commit) = match result {
+            let (status, image, failure, build) = match result {
                 Ok(built) => (
                     DeploymentStatus::Deploying,
                     Some(built.image),
                     None,
-                    built.commit,
+                    (built.commit.is_some() || built.built_on.is_some()).then_some(
+                        Mutation::SetDeploymentBuild {
+                            service_id: deployment.service_id.clone(),
+                            deployment_id: deployment.id.clone(),
+                            commit: built.commit,
+                            built_on: built.built_on,
+                        },
+                    ),
                 ),
                 Err(reason) => (
                     DeploymentStatus::Failed,
@@ -293,11 +302,6 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                     None,
                 ),
             };
-            let commit = commit.map(|commit| Mutation::SetDeploymentCommit {
-                service_id: deployment.service_id.clone(),
-                deployment_id: deployment.id.clone(),
-                commit,
-            });
             let unchanged = writer
                 .state()
                 .deployment(&deployment.service_id, &deployment.id)
@@ -307,7 +311,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             let written = match unchanged {
                 true => writer
                     .write(
-                        commit
+                        build
                             .into_iter()
                             .chain([status_change(&deployment, status, image, failure, clock())])
                             .collect(),
