@@ -453,21 +453,21 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - [x] `maestro-control`: services/deployments API, deploy reconciler, request-based scheduler
 - [x] `maestro dev` with Lima on macOS (`maestro dev up|reload|down|status`)
 - [x] Milestone: deploy an image-based service locally on macOS with limits enforced.
-- [ ] Named image users (`USER node`) need `/etc/passwd` lookup from the image rootfs
-- [ ] Private registry credentials for pulls (Transfer API auth stream)
+- [x] Named image users (`USER node`) need `/etc/passwd` lookup from the image rootfs
+- [x] Private registry credentials for pulls (Transfer API auth stream) from the node's Docker config (`auths`, credential helpers), also used for digest lookups and BuildKit pushes
 
 ### Phase 2: single-node parity
 
 - [x] Traefik file-provider ingress (system container, host network) and routing table
 - [x] In-process DNS (`hickory-proto`) on the bridge gateway for `*.maestro.internal`, upstream forwarding
 - [x] Builds via BuildKit (`buildctl`, containerd worker in the `maestro` namespace, `maestro-builds.slice`), bounded build queue, registry push
-- [ ] Build sources: GitHub token from config, local context upload (`maestro up`), external secret sources (`aws-secret://`)
+- [x] Build sources: GitHub token from config, local context upload (`maestro up`), external secret sources (`aws-secret://`)
 - [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
 - [x] API served on `/run/maestro/api.sock` for the admin container
-- [ ] Telemetry process tailing driver files into DuckDB, query API
+- [x] Telemetry process tailing driver files into DuckDB, query API
 - [x] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
 - [x] Port the admin UI from v1 API endpoints to the v3 API
-- [ ] Secrets encryption, external secret providers, JWT auth, CLI contexts
+- [x] Secrets encryption, external secret providers, JWT auth, CLI contexts
 
 ### Phase 3: multi-node
 
@@ -477,13 +477,12 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - [x] Reschedule replicas from lost nodes; Traefik retries, dial timeouts, and active health checks
 - [x] WireGuard mesh between nodes, subnet allocation at join, agent-owned NAT
 - [ ] Routing deltas instead of full tables (needed before ~100 nodes)
-- [ ] Drain, remove, rolling upgrades, NixOS module with slices
+- [x] Drain, remove, rolling upgrades, NixOS module with slices
 - [ ] Scale test: 3 voters + simulated 1000 agents
 
 ### Phase 4: remaining features and cutover
 
-- [ ] PR previews (see PR previews section), exec, egress rules, Datadog/S3 sinks, Tailscale/Cloudflare add-ons
-- [ ] `maestro migrate v1`: export services, deployments, and secrets from v1 etcd
+- [x] PR previews (see PR previews section), exec, egress rules, Datadog/S3 sinks, Tailscale/Cloudflare add-ons
 - [ ] Remove `controller/`
 
 ## Open items
