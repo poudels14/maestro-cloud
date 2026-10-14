@@ -12,7 +12,7 @@ import { DeploymentRow } from "./DeploymentRow";
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
-function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
+function DeploymentsTab(props: { serviceId: string; deployFrozen: boolean }) {
   const queryClient = useQueryClient();
   const deployments = useQuery(() => deploymentsQuery(props.serviceId));
   const nodes = useQuery(() => clusterNodesQuery());
@@ -181,7 +181,6 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
       <DeploymentSheet
         deployment={selectedDeployment()}
         serviceId={props.serviceId}
-        hasBuild={props.hasBuild}
         tab={sheetTab()}
         onTabChange={(tab) => setUrlSheetState({ tab })}
         onClose={() => setUrlSheetState({ deployment: undefined, tab: undefined })}

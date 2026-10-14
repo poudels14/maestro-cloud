@@ -14,7 +14,6 @@ type SheetTabId = "logs" | "build" | "details";
 function DeploymentSheet(props: {
   deployment: Deployment | null;
   serviceId: string;
-  hasBuild: boolean;
   tab: SheetTabId;
   onTabChange: (tab: SheetTabId) => void;
   onClose: () => void;
@@ -69,15 +68,15 @@ function DeploymentSheet(props: {
                         active={props.tab === "details"}
                         onClick={() => props.onTabChange("details")}
                       />
-                      <Show when={props.hasBuild}>
+                      <Show when={d.spec.build}>
                         <SheetTab
-                          label="Build"
+                          label="Build logs"
                           active={props.tab === "build"}
                           onClick={() => props.onTabChange("build")}
                         />
                       </Show>
                       <SheetTab
-                        label="Logs"
+                        label="Deploy logs"
                         active={props.tab === "logs"}
                         onClick={() => props.onTabChange("logs")}
                       />

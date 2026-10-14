@@ -33,12 +33,24 @@ function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
 
   return (
     <>
-      <SidebarSection title="Node">
+      <SidebarSection title="Cluster">
         <SidebarNavItem
-          label="Info"
+          label="Overview"
           icon={Info}
           selected={props.active === "info"}
           onClick={() => go("/")}
+        />
+        <SidebarNavItem
+          label="Services"
+          icon={LayoutGrid}
+          selected={props.active === "services"}
+          onClick={() => go("/services")}
+        />
+        <SidebarNavItem
+          label="Nodes"
+          icon={Network}
+          selected={props.active === "cluster"}
+          onClick={() => go("/cluster")}
         />
         <SidebarNavItem
           label="Metrics"
@@ -47,11 +59,13 @@ function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
           onClick={() => go("/metrics")}
         />
         <SidebarNavItem
-          label="Services"
-          icon={LayoutGrid}
-          selected={props.active === "services"}
-          onClick={() => go("/services")}
+          label="Logs"
+          icon={ScrollText}
+          selected={props.active === "cluster-logs"}
+          onClick={() => go("/cluster/logs")}
         />
+      </SidebarSection>
+      <SidebarSection title="Ingress">
         <SidebarNavItem
           label="Traffic"
           icon={ArrowLeftRight}
@@ -63,20 +77,6 @@ function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
           icon={ScrollText}
           selected={props.active === "http-logs"}
           onClick={() => go("/http-logs")}
-        />
-      </SidebarSection>
-      <SidebarSection title="Cluster">
-        <SidebarNavItem
-          label="Nodes"
-          icon={Network}
-          selected={props.active === "cluster"}
-          onClick={() => go("/cluster")}
-        />
-        <SidebarNavItem
-          label="Logs"
-          icon={ScrollText}
-          selected={props.active === "cluster-logs"}
-          onClick={() => go("/cluster/logs")}
         />
       </SidebarSection>
     </>

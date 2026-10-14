@@ -178,7 +178,6 @@ function ServiceDetailPanel(props: {
           <Show when={props.tab === "deployments"}>
             <DeploymentsTab
               serviceId={props.service.id}
-              hasBuild={!!props.service.build}
               deployFrozen={!!props.service.deployFrozen}
             />
           </Show>
