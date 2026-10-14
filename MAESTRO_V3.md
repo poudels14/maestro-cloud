@@ -348,6 +348,60 @@ crates/
 
 The v1 `controller/` crate has been removed.
 
+## v1 feature parity
+
+Every v1 feature is being ported. Workstreams (W1–W9) group the work so independent
+parts can proceed in parallel; the inventory came from the v1 source at `f5431cb8`.
+
+### Cross-cutting foundations
+
+- [ ] W0a: services schema parity — `deploy.secrets` (mountPath, items, source), volumes
+  (owner, denied paths, writable ⇒ single replica + node pin), `nodeAffinity`
+  (nodeId, labels), `egress.allow`, `exec` (default true), `flags` (container args),
+  `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`, v1 id rules,
+  v1 healthcheck semantics (interval default 60 clamped 5–300, 2xx, 10 failures ⇒
+  restart), `maxRestarts` default 10.
+- [ ] W0b: cluster config parity — `tags`, `egress {deny, allow}`, `tailscale`,
+  `datadog {apiKey, site, includeIngressLogs, includeTailscaleLogs, logs.includeHealthcheck,
+  includeMetrics}`, `depot.token`, `cloudflare.tunnel {token, replicas}`,
+  `slack.webhookUrl`, `github {token, previewDomain, pollIntervalSecs,
+  maxConcurrentPreviews}`, `homepage`, `logBackup {bucket, kmsKeyId, region, prefix,
+  retentionDays}`, `allowCliDeployment`, `allowExec`, `aws-secret://` sources for the
+  config and `$extends`. Accept v1 kebab-case keys as aliases.
+- [ ] W0c: node gRPC service on every node (mTLS) for exec, log/metric/traffic/disk
+  fan-out, and node-local operations; API on any voter forwards writes to the leader.
+- [ ] W0d: image digest pinning at pull (restart requires immutable images).
+
+### Workstreams
+
+- [ ] W1 service operations: freeze (blocks rollout/redeploy/restart and watchers unless
+  `force`), replicas override (configured..25, in place without redeploy), redeploy
+  (rebuild from stored config), restart (reuse last image), stop deployment, delete
+  deployment record, delete service, cluster-wide freeze during upgrades.
+- [ ] W2 nodes and scheduling: drain/restore, unschedulable report, affinity and
+  volume pinning, node removal, disks per node.
+- [ ] W3 secrets and config sources: `aws-secret://` (JSON or dotenv) for env, secrets,
+  build env/secrets, and cluster config; `${VAR}` expansion in the CLI; secrets file
+  mounts (`K="v"` lines, 0600, zeroed on stop); `GH_TOKEN` build secret for git auth.
+- [ ] W4 builds: `build.watch` (git ls-remote polling with backoff), Depot, `maestro
+  services up` (tar.gz upload honoring .gitignore/.dockerignore, `allowCliDeployment`).
+- [ ] W5 observability: container and node metrics from cgroups, disk usage, Traefik
+  Prometheus traffic metrics, access-log analytics (client IP rules, per-minute
+  ip/path buckets), log histograms, cluster/system log fan-out, cluster stats with
+  warnings, 7-day metric retention, Parquet partitioning by service/deployment/date.
+- [ ] W6 ingress: IP blocklist enforced by Traefik routers (ClientIP and forwarded
+  headers) returning 403, session affinity, ingress routes view.
+- [ ] W7 exec: WebSocket API and CLI (`maestro exec`), framing, resize, 8 sessions per
+  node, 30-minute idle timeout, audit log lines, `allowExec` + `deploy.exec`.
+- [ ] W8 integrations: Slack webhooks (CRUD, test, event templates, node down/recovered),
+  Datadog logs (healthcheck filter, dead letters) and metrics, S3 log backup
+  (SSE-KMS, checksums, retention), egress firewall (nftables per replica IP),
+  Tailscale, Cloudflare tunnel (gated on node readiness).
+- [ ] W9 delivery: PR previews (GitHub polling, sticky comments, quota, close grace,
+  Deployment statuses), coordinated rolling upgrade/restart on NixOS with drain and
+  maintenance banner.
+- [ ] W10 admin UI: every v1 screen on the v3 API, restyled.
+
 ## Phases
 
 ### Phase 1: foundation (single node, macOS dev)
