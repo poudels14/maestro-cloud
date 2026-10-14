@@ -1,6 +1,6 @@
 use maestro_core::{
     Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, GitCommit, NodeId,
-    NodeRecord, ServiceControls, ServiceId, ServiceSpec, UnschedulableReplica,
+    NodeRecord, ServiceControls, ServiceId, ServiceSpec, SlackWebhook, UnschedulableReplica,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +54,9 @@ pub enum Mutation {
         ip: String,
         blocked: bool,
     },
+    SetSlackWebhooks {
+        webhooks: Vec<SlackWebhook>,
+    },
     PruneDeployments {
         service_id: ServiceId,
         keep: usize,
@@ -92,6 +95,7 @@ pub enum ChangeKey {
     ClusterFreeze,
     Unschedulable,
     Blocklist,
+    SlackWebhooks,
     Everything,
 }
 

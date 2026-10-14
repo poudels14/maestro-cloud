@@ -40,6 +40,7 @@ use crate::node_service::{
 use crate::observability;
 use crate::secret_sources;
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
+use crate::slack::{self, SlackState};
 use crate::uploads::{self, UploadState, upload_service};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
@@ -267,6 +268,40 @@ pub async fn spawn(
             clients: clients.clone(),
             allowed: settings.config.allow_exec,
         });
+    let writer = Arc::new(ForwardingWriter::new(consensus.clone(), clients.clone()));
+    let slack = SlackState {
+        writer: writer.clone(),
+        key: key.clone(),
+        cluster: settings.identity.cluster.name.clone(),
+        config_webhook: settings
+            .config
+            .slack
+            .as_ref()
+            .map(|slack| slack.webhook_url.clone())
+            .filter(|url| !url.trim().is_empty()),
+        http: reqwest::Client::new(),
+    };
+    tasks.spawn({
+        let notifier = slack::run_notifier(slack.clone(), consensus.clone(), observed.clone());
+        async move {
+            notifier.await;
+            Ok(())
+        }
+    });
+    let webhooks = axum::Router::new()
+        .route(
+            "/api/webhooks/slack",
+            axum::routing::get(slack::list_webhooks).post(slack::create_webhook),
+        )
+        .route(
+            "/api/webhooks/slack/{webhook_id}",
+            axum::routing::patch(slack::update_webhook).delete(slack::delete_webhook),
+        )
+        .route(
+            "/api/webhooks/slack/{webhook_id}/test",
+            axum::routing::post(slack::test_webhook),
+        )
+        .with_state(slack);
     let info = axum::Router::new()
         .route("/api/cluster", axum::routing::get(cluster_info))
         .route(
@@ -279,12 +314,13 @@ pub async fn spawn(
             build_logs: settings.data_dir.join("builds/logs"),
         }));
     let api = router(Arc::new(ApiState {
-        writer: Arc::new(ForwardingWriter::new(consensus.clone(), clients)),
+        writer: writer.clone(),
         observed,
         key,
     }))
     .merge(logs)
     .merge(uploads)
+    .merge(webhooks)
     .merge(exec)
     .merge(info);
     let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));

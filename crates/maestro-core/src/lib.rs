@@ -15,7 +15,10 @@ pub use config::{
     IngressSettings, LogBackupSettings, NodeSettings, ReserveSettings, SlackSettings,
     TailscaleSettings, read_file_source,
 };
-pub use controls::{ClusterFreeze, MAX_REPLICAS_OVERRIDE, ServiceControls, UnschedulableReplica};
+pub use controls::{
+    ClusterFreeze, MAX_REPLICAS_OVERRIDE, ServiceControls, SlackCategory, SlackWebhook,
+    UnschedulableReplica,
+};
 pub use deployment::{
     Assignment, Deployment, DeploymentStatus, GitCommit, HealthcheckPlan, ReplicaPlan,
 };

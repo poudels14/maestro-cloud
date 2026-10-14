@@ -40,7 +40,8 @@ impl LocalPlanSource {
             | ChangeKey::ServiceControls { .. }
             | ChangeKey::ClusterFreeze
             | ChangeKey::Unschedulable
-            | ChangeKey::Blocklist => false,
+            | ChangeKey::Blocklist
+            | ChangeKey::SlackWebhooks => false,
         })
     }
 }

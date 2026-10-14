@@ -13,6 +13,7 @@ mod node_service;
 mod observability;
 mod secret_sources;
 mod server;
+mod slack;
 mod unix_http;
 mod uploads;
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use maestro_core::{
     Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
-    ServiceControls, ServiceId, ServiceSpec, UnschedulableReplica,
+    ServiceControls, ServiceId, ServiceSpec, SlackWebhook, UnschedulableReplica,
 };
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction};
 use serde::de::DeserializeOwned;
@@ -27,6 +27,7 @@ const VERSION_KEY: &str = "version";
 const FREEZE_KEY: &str = "freeze";
 const UNSCHEDULABLE_KEY: &str = "unschedulable";
 const BLOCKED_IPS_KEY: &str = "blocked_ips";
+const SLACK_WEBHOOKS_KEY: &str = "slack_webhooks";
 const KEY_MAX: &str = "\u{10FFFF}";
 const CHANGE_BUFFER: usize = 1024;
 
@@ -50,6 +51,8 @@ pub(crate) struct StateExport {
     cluster_freeze: Option<ClusterFreeze>,
     #[serde(default)]
     blocked_ips: Vec<String>,
+    #[serde(default)]
+    slack_webhooks: Vec<SlackWebhook>,
 }
 
 impl StateMachine {
@@ -134,6 +137,7 @@ impl StateMachine {
             service_controls: self.all_service_controls()?,
             cluster_freeze: self.cluster_freeze()?,
             blocked_ips: self.blocked_ips()?,
+            slack_webhooks: self.slack_webhooks()?,
         })
     }
 
@@ -195,6 +199,10 @@ impl StateMachine {
         transaction
             .open_table(CLUSTER)?
             .insert(BLOCKED_IPS_KEY, encode(&export.blocked_ips)?.as_slice())?;
+        transaction.open_table(CLUSTER)?.insert(
+            SLACK_WEBHOOKS_KEY,
+            encode(&export.slack_webhooks)?.as_slice(),
+        )?;
         record(&transaction)?;
         transaction.commit()?;
         let _ = self.changes.send(Change {
@@ -324,6 +332,16 @@ impl StateMachine {
         let cluster = transaction.open_table(CLUSTER)?;
         cluster
             .get(UNSCHEDULABLE_KEY)?
+            .map(|guard| decode(guard.value()))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    pub fn slack_webhooks(&self) -> Result<Vec<SlackWebhook>> {
+        let transaction = self.database.begin_read()?;
+        transaction
+            .open_table(CLUSTER)?
+            .get(SLACK_WEBHOOKS_KEY)?
             .map(|guard| decode(guard.value()))
             .transpose()
             .map(Option::unwrap_or_default)
@@ -479,6 +497,12 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
             }
             table.insert(BLOCKED_IPS_KEY, encode(&blocked_ips)?.as_slice())?;
             Ok(vec![ChangeKey::Blocklist])
+        }
+        Mutation::SetSlackWebhooks { webhooks } => {
+            transaction
+                .open_table(CLUSTER)?
+                .insert(SLACK_WEBHOOKS_KEY, encode(webhooks)?.as_slice())?;
+            Ok(vec![ChangeKey::SlackWebhooks])
         }
         Mutation::PruneDeployments { service_id, keep } => {
             prune_deployments(transaction, service_id, *keep)

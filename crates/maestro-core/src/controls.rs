@@ -35,3 +35,20 @@ pub struct UnschedulableReplica {
     pub replica_index: u32,
     pub reason: String,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlackCategory {
+    Info,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackWebhook {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub categories: Vec<SlackCategory>,
+    pub enabled: bool,
+}
