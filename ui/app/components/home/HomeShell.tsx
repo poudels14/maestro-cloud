@@ -35,7 +35,7 @@ function HomeShell(props: { tab: HomeTab }) {
   };
 
   return (
-    <div class="h-screen flex bg-[#fafafa]">
+    <div class="h-screen flex bg-gray-50">
       <ServiceSidebar
         services={services.data ?? []}
         selected={null}
@@ -60,7 +60,7 @@ function HomeShell(props: { tab: HomeTab }) {
           </button>
           <Show when={cluster.data}>
             {(info) => (
-              <span class="text-sm font-semibold text-gray-900 truncate">{info().clusterName}</span>
+              <span class="text-sm font-semibold text-gray-900 truncate">{info().name}</span>
             )}
           </Show>
         </div>
@@ -134,7 +134,7 @@ function ClusterHero() {
         <div>
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-lg font-semibold text-gray-900 tracking-tight truncate">
-              {info().clusterName}
+              {info().name}
             </h1>
             <Show when={info().version}>
               {(version) => (
@@ -147,21 +147,12 @@ function ClusterHero() {
               )}
             </Show>
           </div>
-          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <a
-              href={`http://${info().canonicalDomain}`}
-              title="Canonical domain"
-              class="text-gray-500 hover:text-gray-700 no-underline truncate"
-            >
-              {info().canonicalDomain}
-            </a>
-            <a
-              href={`http://${info().aliasDomain}`}
-              title="Alias domain"
-              class="text-gray-400 hover:text-gray-600 no-underline truncate"
-            >
-              {info().aliasDomain}
-            </a>
+          <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+            <span class="font-mono">{info().cidr}</span>
+            <span>
+              {info().voters.length} {info().voters.length === 1 ? "voter" : "voters"}, term{" "}
+              {info().term}
+            </span>
           </div>
         </div>
       )}

@@ -1,13 +1,10 @@
 import { For, Show } from "solid-js";
 import type { Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { useQuery } from "@tanstack/solid-query";
 import { Monitor, X } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../../lib/types";
 import { StatusDot } from "../../lib/ui";
-import { clusterInfoQuery } from "../../lib/queries";
-import { visibleSystemServices } from "../../lib/systemServices";
 import { userServices as visibleUserServices } from "../../lib/previews";
 
 function ServiceSidebar(props: {
@@ -19,9 +16,7 @@ function ServiceSidebar(props: {
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
-  const cluster = useQuery(() => clusterInfoQuery());
   const userServices = () => visibleUserServices(props.services);
-  const systemServices = () => visibleSystemServices(props.services, cluster.data);
 
   return (
     <>
@@ -77,20 +72,6 @@ function ServiceSidebar(props: {
               </For>
             </SidebarSection>
           </Show>
-          <Show when={systemServices().length > 0}>
-            <SidebarSection title="System" count={systemServices().length}>
-              <For each={systemServices()}>
-                {(service) => (
-                  <SidebarServiceItem
-                    service={service}
-                    selected={service.id === props.selected?.id}
-                    onClick={() => props.onSelect(service)}
-                    system
-                  />
-                )}
-              </For>
-            </SidebarSection>
-          </Show>
         </div>
       </aside>
     </>
@@ -138,13 +119,8 @@ function SidebarNavItem(props: {
   );
 }
 
-function SidebarServiceItem(props: {
-  service: Service;
-  selected: boolean;
-  onClick: () => void;
-  system?: boolean;
-}) {
-  const status = () => (props.system ? "SYSTEM" : (props.service.status ?? "IDLE"));
+function SidebarServiceItem(props: { service: Service; selected: boolean; onClick: () => void }) {
+  const status = () => props.service.status;
   return (
     <button
       type="button"

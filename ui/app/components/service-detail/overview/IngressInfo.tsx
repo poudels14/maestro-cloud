@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import type { Service } from "../../../lib/types";
-import { ingressRoutesQuery } from "../../../lib/queries";
+import { routesQuery } from "../../../lib/queries";
 
 function IngressInfo(props: { service: Service }) {
   const ingress = () => props.service.ingress;
@@ -10,12 +10,11 @@ function IngressInfo(props: { service: Service }) {
     if (!value) return [];
     return [value.host, ...(value.hosts ?? [])].filter((host): host is string => !!host);
   };
-  const isIngressService = () => props.service.id === "maestro-ingress";
-
   const routes = useQuery(() => ({
-    ...ingressRoutesQuery(),
-    enabled: isIngressService()
+    ...routesQuery(),
+    enabled: !!props.service.ingress
   }));
+  const backends = () => routes.data?.routes[props.service.id]?.backends ?? [];
 
   return (
     <>
@@ -50,50 +49,34 @@ function IngressInfo(props: { service: Service }) {
               <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
                 <span class="text-xs font-medium text-gray-700 shrink-0">Port</span>
                 <span class="text-xs text-gray-600 text-right truncate tabular-nums">
-                  {String(value().port ?? 80)}
+                  {String(value().port)}
                 </span>
               </div>
+              <Show when={value().sessionAffinity}>
+                {(affinity) => (
+                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                    <span class="text-xs font-medium text-gray-700 shrink-0">Session affinity</span>
+                    <span class="text-xs text-gray-600 text-right truncate font-mono">
+                      {affinity().header}
+                    </span>
+                  </div>
+                )}
+              </Show>
             </div>
           </div>
         )}
       </Show>
-      <Show when={isIngressService() && (routes.data?.length ?? 0) > 0}>
+      <Show when={backends().length > 0}>
         <div>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Routes</h4>
-          <div class="space-y-3">
-            <For each={routes.data}>
-              {(route) => (
-                <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs font-medium text-gray-700 shrink-0">Service</span>
-                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
-                      {route.serviceId}
-                    </span>
-                  </div>
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs font-medium text-gray-700 shrink-0">Rule</span>
-                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
-                      {route.rule}
-                    </span>
-                  </div>
-                  <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                    <span class="text-xs font-medium text-gray-700 shrink-0">Entry points</span>
-                    <span class="text-xs text-gray-600 text-right truncate tabular-nums">
-                      {route.entryPoints.join(", ")}
-                    </span>
-                  </div>
-                  <For each={route.servers}>
-                    {(server, idx) => (
-                      <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                        <span class="text-xs font-medium text-gray-700 shrink-0">
-                          {route.servers.length > 1 ? `Server ${idx() + 1}` : "Server"}
-                        </span>
-                        <span class="text-xs text-gray-600 text-right truncate tabular-nums">
-                          {server}
-                        </span>
-                      </div>
-                    )}
-                  </For>
+          <h4 class="text-xs font-medium text-gray-400 mb-2">Routed replicas</h4>
+          <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+            <For each={backends()}>
+              {(backend) => (
+                <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+                  <span class="text-xs font-mono text-gray-700 shrink-0">{backend.replicaId}</span>
+                  <span class="text-xs font-mono text-gray-600 text-right truncate">
+                    {backend.address}
+                  </span>
                 </div>
               )}
             </For>

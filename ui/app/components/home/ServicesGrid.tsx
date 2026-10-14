@@ -5,8 +5,7 @@ import { Rocket } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { deleteService } from "../../lib/api";
 import { ErrorBanner, SectionHeader } from "../../lib/ui";
-import { clusterInfoQuery, queryKeys, servicesQuery } from "../../lib/queries";
-import { visibleSystemServices } from "../../lib/systemServices";
+import { queryKeys, servicesQuery } from "../../lib/queries";
 import { userServices as visibleUserServices } from "../../lib/previews";
 import { ServiceCard } from "./ServiceCard";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -25,9 +24,7 @@ function ServicesGrid() {
     }
   }));
 
-  const cluster = useQuery(() => clusterInfoQuery());
   const userServices = () => visibleUserServices(services.data ?? []);
-  const systemServices = () => visibleSystemServices(services.data ?? [], cluster.data);
 
   const openService = (service: Service) =>
     navigate({
@@ -65,23 +62,6 @@ function ServicesGrid() {
                   service={service}
                   onClick={() => openService(service)}
                   onDelete={() => setDeleteTarget(service)}
-                />
-              )}
-            </For>
-          </div>
-        </Show>
-
-        <Show when={systemServices().length > 0}>
-          <div class="flex items-baseline gap-2 mb-4 mt-10">
-            <SectionHeader>System</SectionHeader>
-          </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <For each={systemServices()}>
-              {(service) => (
-                <ServiceCard
-                  service={service}
-                  onClick={() => openService(service)}
-                  onDelete={() => {}}
                 />
               )}
             </For>

@@ -1,13 +1,13 @@
 import { createSignal, For, Show, Switch, Match } from "solid-js";
-import { Check, Copy, ExternalLink, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
+import { Check, Copy, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
-import type { Deployment } from "../../lib/types";
-import { type ClusterInfo } from "../../lib/api";
+import type { ClusterNode, Deployment } from "../../lib/types";
 import { StatusBadge, timeAgo } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
-import { ReplicaRow } from "./DeploymentRow";
+import { ReplicaRow, deploymentTitle } from "./DeploymentRow";
+import { BuildLog } from "./BuildLog";
 
 type SheetTabId = "logs" | "build" | "details";
 
@@ -18,7 +18,7 @@ function DeploymentSheet(props: {
   tab: SheetTabId;
   onTabChange: (tab: SheetTabId) => void;
   onClose: () => void;
-  clusterInfo: ClusterInfo | null;
+  nodes: ClusterNode[];
 }) {
   return (
     <Dialog
@@ -33,14 +33,14 @@ function DeploymentSheet(props: {
           <Show when={props.deployment}>
             {(deployment) => {
               const d = deployment();
-              const shortId = d.id.split("-").slice(-1)[0] ?? d.id;
+              const shortId = d.id;
               return (
                 <>
                   <div class="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-200 shrink-0">
                     <div class="flex items-start justify-between gap-3 mb-3">
                       <div class="min-w-0 flex-1">
                         <div class="text-xl font-semibold text-gray-900 leading-snug tracking-tight">
-                          {d.gitCommit ? d.gitCommit.message : shortId}
+                          {d.gitCommit?.message ?? deploymentTitle(d)}
                         </div>
                         <div class="flex items-center gap-2 flex-wrap text-xs mt-1.5">
                           <StatusBadge status={d.status} />
@@ -51,12 +51,11 @@ function DeploymentSheet(props: {
                             </span>
                           </Show>
                           <span class="font-mono text-gray-400">{shortId}</span>
-                          <span class="text-gray-300">·</span>
                           <span
                             class="text-gray-400 tabular-nums"
-                            title={new Date(d.createdAt).toLocaleString()}
+                            title={new Date(d.createdAtMs).toLocaleString()}
                           >
-                            {formatDateTime(d.createdAt, true)}
+                            {formatDateTime(d.createdAtMs, true)}
                           </span>
                         </div>
                       </div>
@@ -92,29 +91,17 @@ function DeploymentSheet(props: {
                   >
                     <Switch>
                       <Match when={props.tab === "logs"}>
-                        <LogViewer
-                          serviceId={props.serviceId}
-                          deploymentId={d.id}
-                          isSystem={false}
-                          hasBuild={props.hasBuild}
-                          phase="deploy"
-                          embedded={true}
-                          fillHeight
-                        />
+                        <LogViewer scope={`deployment:${d.id}`} embedded={true} fillHeight />
                       </Match>
                       <Match when={props.tab === "build"}>
-                        <LogViewer
+                        <BuildLog
                           serviceId={props.serviceId}
                           deploymentId={d.id}
-                          isSystem={false}
-                          hasBuild={props.hasBuild}
-                          phase="build"
-                          embedded={true}
-                          fillHeight
+                          building={["queued", "building"].includes(d.status)}
                         />
                       </Match>
                       <Match when={props.tab === "details"}>
-                        <DeploymentDetails deployment={d} clusterInfo={props.clusterInfo} />
+                        <DeploymentDetails deployment={d} nodes={props.nodes} />
                       </Match>
                     </Switch>
                   </div>
@@ -143,34 +130,26 @@ function SheetTab(props: { label: string; active: boolean; onClick: () => void }
   );
 }
 
-function DeploymentDetails(props: { deployment: Deployment; clusterInfo: ClusterInfo | null }) {
+function DeploymentDetails(props: { deployment: Deployment; nodes: ClusterNode[] }) {
   const [envRevealed, setEnvRevealed] = createSignal(false);
   const d = props.deployment;
   const envEntries = () =>
-    Object.entries(d.config.deploy.env?.items ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  const envSource = () => d.config.deploy.env?.source ?? null;
-  const secretEntries = () =>
-    Object.entries(d.config.deploy.secrets?.keys ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  const secretSource = () => d.config.deploy.secrets?.source ?? null;
+    Object.entries(d.spec.deploy.env?.items ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const envSource = () => d.spec.deploy.env?.source ?? null;
+  const secretKeys = () => Object.keys(d.spec.deploy.secrets?.items ?? {}).sort();
+  const secretSource = () => d.spec.deploy.secrets?.source ?? null;
   const buildEnvEntries = () =>
-    Object.entries(d.config.build?.env?.items ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  const buildEnvSource = () => d.config.build?.env?.source ?? null;
-  const buildSecretKeys = () => Object.keys(d.config.build?.secrets?.items ?? {}).sort();
-  const buildSecretSource = () => d.config.build?.secrets?.source ?? null;
+    Object.entries(d.spec.build?.env?.items ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const buildEnvSource = () => d.spec.build?.env?.source ?? null;
+  const buildSecretKeys = () => Object.keys(d.spec.build?.secrets?.items ?? {}).sort();
+  const buildSecretSource = () => d.spec.build?.secrets?.source ?? null;
 
-  const deploymentDomain = () => {
-    const info = props.clusterInfo;
-    if (!info) return null;
-    const idPrefix = d.id.slice(0, 6);
-    const host = `${d.config.id}-${idPrefix}.${info.canonicalDomain}`;
-    const port = d.config.ingress?.port ?? null;
-    return port ? `${host}:${port}` : host;
-  };
+  const builtOn = () => props.nodes.find((node) => node.id === d.builtOn)?.name ?? d.builtOn;
 
   const hasAnyDetails = () =>
     envEntries().length > 0 ||
     envSource() ||
-    secretEntries().length > 0 ||
+    secretKeys().length > 0 ||
     secretSource() ||
     buildEnvEntries().length > 0 ||
     buildEnvSource() ||
@@ -186,32 +165,14 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
           <Show when={d.gitCommit}>
             {(commit) => <DetailRow label="Git commit" value={commit().reference} />}
           </Show>
-          <DetailRow label="Created" value={formatTimestamp(d.createdAt)} />
-          <Show when={d.deployedAt}>
-            {(deployedAt) => <DetailRow label="Deployed" value={formatTimestamp(deployedAt())} />}
+          <DetailRow label="Created" value={formatTimestamp(d.createdAtMs)} />
+          <DetailRow label="Updated" value={formatTimestamp(d.updatedAtMs)} />
+          <Show when={d.image}>{(image) => <CopyRow label="Image" value={image()} />}</Show>
+          <Show when={builtOn()}>
+            {(node) => <DetailRow label="Built on" value={String(node())} />}
           </Show>
-          <Show when={d.drainedAt}>
-            {(drainedAt) => <DetailRow label="Drained" value={formatTimestamp(drainedAt())} />}
-          </Show>
-          <CopyRow label="Config version" value={d.config.version} />
-          <Show when={d.build?.dockerImageId}>
-            {(imageId) => <DetailRow label="Image" value={imageId()} />}
-          </Show>
-          <Show when={deploymentDomain()}>
-            {(domain) => (
-              <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-                <span class="text-xs font-medium text-gray-700 shrink-0">Endpoint</span>
-                <a
-                  href={`http://${domain()}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="group inline-flex min-w-0 items-center gap-1 text-xs text-gray-600 hover:text-indigo-600 underline decoration-gray-300 underline-offset-2 hover:decoration-indigo-300"
-                >
-                  <span class="truncate">{domain()}</span>
-                  <ExternalLink class="size-3 shrink-0 text-gray-400 group-hover:text-indigo-500" />
-                </a>
-              </div>
-            )}
+          <Show when={d.failure}>
+            {(failure) => <DetailRow label="Failure" value={failure()} class="text-red-700" />}
           </Show>
         </div>
       </div>
@@ -222,14 +183,8 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
             <For each={d.replicas}>
               {(replica) => (
                 <div class="px-4 py-2.5">
-                  <ReplicaRow
-                    deployment={d}
-                    replicaIndex={replica.replicaIndex}
-                    replicaStatus={replica.status}
-                    nodeId={replica.nodeId}
-                    clusterInfo={props.clusterInfo}
-                  />
-                  <Show when={replica.error}>
+                  <ReplicaRow replica={replica} nodes={props.nodes} />
+                  <Show when={replica.lastError}>
                     {(error) => (
                       <p class="mt-1 pl-4 text-[11px] text-red-500 break-words">{error()}</p>
                     )}
@@ -266,28 +221,21 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
           onToggleReveal={() => setEnvRevealed(!envRevealed())}
         />
       </Show>
-      <Show when={secretEntries().length > 0 || secretSource()}>
+      <Show when={secretKeys().length > 0 || secretSource()}>
         <div>
           <div class="text-xs font-medium text-gray-400 mb-2">
             Deploy Secrets
-            <span class="text-gray-300 ml-1">
-              (mounted at {d.config.deploy.secrets?.mountPath})
-            </span>
+            <span class="text-gray-300 ml-1">(mounted at {d.spec.deploy.secrets?.mountPath})</span>
           </div>
           <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
             <Show when={secretSource()}>
               {(source) => <DetailRow label="Source" value={source()} class="bg-gray-50" />}
             </Show>
-            <For each={secretEntries()}>
-              {([key, meta]) => (
+            <For each={secretKeys()}>
+              {(key) => (
                 <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
                   <span class="text-xs text-gray-700">{key}</span>
-                  <div class="flex items-center gap-2">
-                    <Show when={meta.changed}>
-                      <span class="text-amber-600 text-[10px] font-medium">changed</span>
-                    </Show>
-                    <span class="text-xs text-gray-400">••••••••</span>
-                  </div>
+                  <span class="text-xs text-gray-400">••••••••</span>
                 </div>
               )}
             </For>
@@ -304,7 +252,7 @@ function DeploymentDetails(props: { deployment: Deployment; clusterInfo: Cluster
 }
 
 function formatTimestamp(ms: number) {
-  return `${formatDateTime(ms, true)} · ${timeAgo(ms)}`;
+  return `${formatDateTime(ms, true)}, ${timeAgo(ms)}`;
 }
 
 function CopyRow(props: { label: string; value: string }) {

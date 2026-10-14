@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
 import { useQuery } from "@tanstack/solid-query";
-import { createEffect, createSignal, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { Menu } from "lucide-solid";
 import clsx from "clsx";
 import type { Service } from "../lib/types";
@@ -64,7 +64,7 @@ function ServiceDetailPage() {
   const loading = () => services.isLoading;
 
   return (
-    <div class="h-screen flex bg-[#fafafa]">
+    <div class="h-screen flex bg-gray-50">
       <ServiceSidebar
         services={services.data ?? []}
         selected={selected() ?? null}
@@ -115,12 +115,6 @@ function ServiceDetailPanel(props: {
   navigateTab: (t: DetailTab) => void;
   onOpenDrawer: () => void;
 }) {
-  createEffect(() => {
-    if (props.service.system && props.tab === "deployments") {
-      props.navigateTab("logs");
-    }
-  });
-
   const contentMaxWidth = () => (props.tab === "logs" ? "max-w-6xl" : "max-w-4xl");
 
   return (
@@ -154,13 +148,11 @@ function ServiceDetailPanel(props: {
               active={props.tab === "metrics"}
               onClick={() => props.navigateTab("metrics")}
             />
-            <Show when={!props.service.system}>
-              <TabButton
-                label="Deployments"
-                active={props.tab === "deployments"}
-                onClick={() => props.navigateTab("deployments")}
-              />
-            </Show>
+            <TabButton
+              label="Deployments"
+              active={props.tab === "deployments"}
+              onClick={() => props.navigateTab("deployments")}
+            />
             <TabButton
               label="Logs"
               active={props.tab === "logs"}
@@ -170,7 +162,7 @@ function ServiceDetailPanel(props: {
         </div>
       </div>
       <div
-        class={clsx("flex-1 py-3 sm:py-4 bg-[#fafafa]", {
+        class={clsx("flex-1 py-3 sm:py-4 bg-gray-50", {
           "min-h-0 overflow-hidden": props.tab === "logs",
           "overflow-y-auto": props.tab !== "logs"
         })}

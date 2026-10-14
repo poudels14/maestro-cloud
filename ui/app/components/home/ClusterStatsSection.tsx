@@ -2,24 +2,19 @@ import { For, Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
-import type { BackupStats, ControllerStats, SinkStats } from "../../lib/types";
-import { formatBytes } from "../../lib/format";
+import type { Stats } from "../../lib/types";
+import { formatBytes, formatUptime } from "../../lib/format";
 import { ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
 import { clusterConfigQuery, clusterStatsQuery } from "../../lib/queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
 
-const ROW_COVERED_WARNING_CODES = new Set([
-  "controller-heartbeat-missing",
-  "controller-heartbeat-stale",
-  "datadog-dead-letters",
-  "log-backup-failing",
-  "log-backup-disabled"
-]);
-
 function ClusterStatsSection() {
   const stats = useQuery(() => clusterStatsQuery());
   const config = useQuery(() => clusterConfigQuery());
+  const healthchecksFiltered = () =>
+    config.data?.datadog ? !config.data.datadog.logs?.includeHealthcheck : undefined;
+
   return (
     <div>
       <div class="mb-4">
@@ -31,209 +26,157 @@ function ClusterStatsSection() {
       </Show>
 
       <Show when={stats.data}>
-        {(data) => {
-          const controller = () => data().controller;
-          const probeSink = () => controller()?.sinks.find((sink) => sink.id === "controller");
-          const datadogSink = () => controller()?.sinks.find((sink) => sink.id === "datadog");
-          const warnings = () =>
-            data().warnings.filter((warning) => !ROW_COVERED_WARNING_CODES.has(warning.code));
-          return (
-            <div class="space-y-3">
-              <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-                <HealthRow
-                  label="Controller"
-                  level={controllerLevel(controller(), data().controllerHeartbeatAgeMs)}
-                  value={
-                    controller()
-                      ? `v${controller()!.version} · uptime ${formatDuration(controller()!.uptimeMs)}`
-                      : "No heartbeat received"
-                  }
-                  detail={
-                    controller()
-                      ? `reported ${timeAgo(controller()!.reportedAtMs)}`
-                      : "The probe has not received a controller stats report"
-                  }
+        {(data) => (
+          <div class="space-y-3">
+            <For each={data().nodes}>
+              {(node) => (
+                <NodeStatsCard
+                  node={node}
+                  isLeader={data().leader === node.nodeId}
+                  healthchecksFiltered={healthchecksFiltered()}
                 />
-                <HealthRow
-                  label="Probe"
-                  level="healthy"
-                  value={`v${data().probe.version}`}
-                  detail={`uptime ${formatDuration(data().probe.uptimeMs)}`}
-                />
-                <SinkRow
-                  label="Probe log sync"
-                  sink={probeSink()}
-                  controllerPresent={!!controller()}
-                />
-                <SinkRow
-                  label="Datadog logs"
-                  sink={datadogSink()}
-                  controllerPresent={!!controller()}
-                  successfulHealthchecksFiltered={
-                    config.data?.datadog
-                      ? !config.data.datadog.logs["include-healthcheck"]
-                      : undefined
-                  }
-                />
-                <SpoolRow controller={controller()} />
-                <DeadLetterRow controller={controller()} />
-                <BackupRow backup={data().backup} />
+              )}
+            </For>
+            <Show when={data().warnings.length > 0}>
+              <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
+                <For each={data().warnings}>
+                  {(warning) => (
+                    <div class="flex items-start gap-2.5 px-4 py-2.5">
+                      <AlertTriangle
+                        class={clsx("mt-0.5 size-3.5 shrink-0", {
+                          "text-red-500": warning.severity === "error",
+                          "text-amber-500": warning.severity === "warning"
+                        })}
+                      />
+                      <span
+                        class={clsx("text-xs", {
+                          "text-red-700": warning.severity === "error",
+                          "text-amber-700": warning.severity === "warning"
+                        })}
+                      >
+                        {warning.message}
+                      </span>
+                    </div>
+                  )}
+                </For>
               </div>
-
-              <Show when={warnings().length > 0}>
-                <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
-                  <For each={warnings()}>
-                    {(warning) => (
-                      <div class="flex items-start gap-2.5 px-4 py-2.5">
-                        <AlertTriangle
-                          class={clsx("mt-0.5 size-3.5 shrink-0", {
-                            "text-red-500": warning.severity === "error",
-                            "text-amber-500": warning.severity === "warning"
-                          })}
-                        />
-                        <span
-                          class={clsx("text-xs", {
-                            "text-red-700": warning.severity === "error",
-                            "text-amber-700": warning.severity === "warning"
-                          })}
-                        >
-                          {warning.message}
-                        </span>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </Show>
-            </div>
-          );
-        }}
+            </Show>
+          </div>
+        )}
       </Show>
     </div>
   );
 }
 
-function SinkRow(props: {
-  label: string;
-  sink?: SinkStats;
-  controllerPresent: boolean;
-  successfulHealthchecksFiltered?: boolean;
+function NodeStatsCard(props: {
+  node: Stats.Node;
+  isLeader: boolean;
+  healthchecksFiltered: boolean | undefined;
 }) {
+  const datadog = () => props.node.sinks.find((sink) => sink.id === "datadog");
+  const summary = () =>
+    [
+      props.node.version ? `v${props.node.version}` : null,
+      props.node.uptimeMs != null ? `up ${formatUptime(props.node.uptimeMs)}` : null,
+      props.isLeader ? "leader" : null
+    ]
+      .filter((part): part is string => part !== null)
+      .join(", ");
+
   return (
-    <Show
-      when={props.controllerPresent}
-      fallback={
-        <HealthRow label={props.label} level="error" value="Unknown" detail="Controller offline" />
-      }
-    >
-      <Show
-        when={props.sink}
-        fallback={<HealthRow label={props.label} level="disabled" value="Disabled" />}
-      >
-        {(sink) => {
-          const pending = () => `${sink().pendingEntries.toLocaleString()} pending`;
-          const oldest = () =>
-            sink().oldestPendingAtMs ? ` · oldest ${timeAgo(sink().oldestPendingAtMs!)}` : "";
-          const deliveryDetail = () =>
-            sink().consecutiveFailures > 0
-              ? `${sink().consecutiveFailures} consecutive failures${sink().lastError ? ` · ${sink().lastError}` : ""}`
-              : sink().lastSuccessAtMs
-                ? `last delivered ${timeAgo(sink().lastSuccessAtMs!)}`
-                : sink().pendingEntries === 0
-                  ? "No delivery required yet"
-                  : "Waiting for first delivery";
-          const filterDetail = () => {
-            if (props.successfulHealthchecksFiltered === undefined) return undefined;
-            if (!props.successfulHealthchecksFiltered) {
-              return "successful health checks included";
-            }
-            return sink().filteredEntries > 0
-              ? `health-check filter active · ${sink().filteredEntries.toLocaleString()} filtered since restart`
-              : "health-check filter active · none filtered since restart";
-          };
-          const detail = () =>
-            [deliveryDetail(), filterDetail()].filter((item): item is string => !!item).join(" · ");
-          return (
-            <HealthRow
-              label={props.label}
-              level={sinkLevel(sink())}
-              value={sink().pendingEntries === 0 ? "Caught up" : `${pending()}${oldest()}`}
-              detail={detail()}
-            />
-          );
-        }}
+    <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+      <HealthRow
+        label={props.node.nodeName}
+        level={props.node.available ? "healthy" : "error"}
+        value={props.node.available ? summary() : "Unreachable"}
+      />
+      <Show when={props.node.available}>
+        <HealthRow
+          label="Telemetry"
+          level={props.node.telemetry ? "healthy" : "error"}
+          value={props.node.telemetry ? "Collecting logs and metrics" : "Not responding"}
+        />
+        <Show
+          when={datadog()}
+          fallback={<HealthRow label="Datadog logs" level="disabled" value="Disabled" />}
+        >
+          {(sink) => <SinkRow sink={sink()} healthchecksFiltered={props.healthchecksFiltered} />}
+        </Show>
+        <BackupRow backup={props.node.backup} />
       </Show>
-    </Show>
+    </div>
   );
 }
 
-function SpoolRow(props: { controller: ControllerStats | null }) {
-  const spool = () => props.controller?.spool;
-  return (
-    <HealthRow
-      label="Controller log spool"
-      level={props.controller ? "healthy" : "error"}
-      value={
-        spool()
-          ? `${spool()!.rowCount.toLocaleString()} rows · ${formatBytes(spool()!.databaseBytes)}`
-          : "Unknown"
-      }
-      detail={
-        spool()?.oldestEntryAtMs
-          ? `oldest retained ${timeAgo(spool()!.oldestEntryAtMs!)}`
-          : undefined
-      }
-    />
-  );
-}
-
-function DeadLetterRow(props: { controller: ControllerStats | null }) {
-  const dead = () => props.controller?.deadLetters;
-  const level = () => {
-    if (!dead()) return "error" as const;
-    if (dead()!.count === 0) return "healthy" as const;
-    return dead()!.count * 10 >= dead()!.capacity * 9 ? ("error" as const) : ("warning" as const);
-  };
-  return (
-    <HealthRow
-      label="Datadog dead letters"
-      level={level()}
-      value={
-        dead()
-          ? `${dead()!.count.toLocaleString()} / ${dead()!.capacity.toLocaleString()} · ${formatBytes(dead()!.payloadBytes)}`
-          : "Unknown"
-      }
-      detail={
-        dead()?.latestAtMs
-          ? `latest ${timeAgo(dead()!.latestAtMs!)}${dead()!.latestStatus ? ` · HTTP ${dead()!.latestStatus}` : ""}`
-          : undefined
-      }
-    />
-  );
-}
-
-function BackupRow(props: { backup: BackupStats }) {
-  const level = () => {
-    if (!props.backup.configured) return "disabled" as const;
-    if (
-      props.backup.lastErrorAtMs &&
-      (!props.backup.lastSuccessAtMs || props.backup.lastErrorAtMs > props.backup.lastSuccessAtMs)
-    ) {
-      return "error" as const;
+function SinkRow(props: { sink: Stats.Sink; healthchecksFiltered: boolean | undefined }) {
+  const delivery = () => {
+    if (props.sink.consecutiveFailures > 0) {
+      return [`${props.sink.consecutiveFailures} consecutive failures`, props.sink.lastError]
+        .filter(Boolean)
+        .join(": ");
+    } else if (props.sink.lastSuccessAtMs) {
+      return `last delivered ${timeAgo(props.sink.lastSuccessAtMs)}`;
+    } else {
+      return "Waiting for first delivery";
     }
-    return props.backup.pendingPartitions > 0 ? ("catching-up" as const) : ("healthy" as const);
+  };
+  const detail = () =>
+    [
+      delivery(),
+      props.sink.deadLetters > 0
+        ? `${props.sink.deadLetters.toLocaleString()} of ${props.sink.deadLetterCapacity.toLocaleString()} dead letters`
+        : null,
+      props.healthchecksFiltered === true ? "successful health checks filtered" : null
+    ]
+      .filter((part): part is string => !!part)
+      .join(", ");
+  return (
+    <HealthRow
+      label="Datadog logs"
+      level={sinkLevel(props.sink)}
+      value={
+        props.sink.pendingEntries === 0
+          ? "Caught up"
+          : `${props.sink.pendingEntries.toLocaleString()} pending`
+      }
+      detail={detail()}
+    />
+  );
+}
+
+function BackupRow(props: { backup: Stats.Backup | null }) {
+  const level = (): HealthLevel => {
+    const backup = props.backup;
+    if (!backup?.configured) {
+      return "disabled";
+    } else if (
+      backup.lastErrorAtMs &&
+      (!backup.lastSuccessAtMs || backup.lastErrorAtMs > backup.lastSuccessAtMs)
+    ) {
+      return "error";
+    } else {
+      return backup.pendingPartitions > 0 ? "catching-up" : "healthy";
+    }
   };
   const value = () => {
-    if (!props.backup.configured) return "Disabled";
-    if (props.backup.pendingPartitions > 0) {
-      return `${props.backup.pendingPartitions} pending · ${formatBytes(props.backup.pendingBytes)}`;
+    const backup = props.backup;
+    if (!backup?.configured) {
+      return "Disabled";
+    } else if (backup.pendingPartitions > 0) {
+      return `${backup.pendingPartitions} partitions pending`;
+    } else {
+      return "Up to date";
     }
-    return "Up to date";
   };
   const detail = () => {
-    if (props.backup.lastError) return props.backup.lastError;
-    if (props.backup.lastSuccessAtMs)
-      return `last successful ${timeAgo(props.backup.lastSuccessAtMs)}`;
-    return props.backup.configured ? "Waiting for first backup run" : undefined;
+    const backup = props.backup;
+    if (backup?.lastError) {
+      return backup.lastError;
+    } else if (backup?.lastSuccessAtMs) {
+      return `last run ${timeAgo(backup.lastSuccessAtMs)}, ${formatBytes(backup.uploadedBytesLastRun)} uploaded`;
+    } else {
+      return backup?.configured ? "Waiting for first backup run" : undefined;
+    }
   };
   return <HealthRow label="S3 log backup" level={level()} value={value()} detail={detail()} />;
 }
@@ -284,31 +227,14 @@ function HealthPill(props: { level: HealthLevel; label?: string }) {
   );
 }
 
-function controllerLevel(
-  controller: ControllerStats | null,
-  heartbeatAgeMs: number | null
-): HealthLevel {
-  if (!controller || heartbeatAgeMs == null || heartbeatAgeMs > 30_000) return "error";
-  return "healthy";
-}
-
-function sinkLevel(sink: SinkStats): HealthLevel {
-  if (sink.consecutiveFailures > 0) return "error";
-  if (sink.pendingEntries === 0) return "healthy";
-  if (sink.lastCursorAdvanceAtMs && Date.now() - sink.lastCursorAdvanceAtMs <= 30_000) {
-    return "catching-up";
+function sinkLevel(sink: Stats.Sink): HealthLevel {
+  if (sink.consecutiveFailures > 0) {
+    return "error";
+  } else if (sink.deadLetters * 10 >= sink.deadLetterCapacity * 9 && sink.deadLetters > 0) {
+    return "warning";
+  } else {
+    return sink.pendingEntries === 0 ? "healthy" : "catching-up";
   }
-  if (sink.oldestPendingAtMs && Date.now() - sink.oldestPendingAtMs > 60_000) return "warning";
-  return "catching-up";
-}
-
-function formatDuration(ms: number): string {
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 export { ClusterStatsSection };

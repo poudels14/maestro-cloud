@@ -13,13 +13,8 @@ import { ChevronDown, ChevronUp, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
 import {
-  getClusterLogHistogram,
-  getClusterLogs,
-  getLogs,
-  getServiceLogHistogram,
-  getServiceLogs,
-  getSystemLogHistogram,
-  getSystemLogs,
+  getLogHistogram,
+  queryLogs,
   type LogHistogram,
   type LogHistogramBucket
 } from "../../lib/api";
@@ -88,15 +83,13 @@ function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = fa
 }
 
 function logEntryKey(entry: LogEntry) {
-  return `${entry.nodeId ?? "local"}:${entry.tier ?? "logs"}:${entry.seq}`;
+  return `${entry.nodeId ?? "local"}:${entry.seq}`;
 }
 
 function LogViewer(props: {
-  serviceId: string;
-  deploymentId: string | null;
-  isSystem: boolean;
-  hasBuild: boolean;
-  phase?: "build" | "deploy";
+  scope: string;
+  nodeId?: number;
+  showHost?: boolean;
   embedded?: boolean;
   showHistogram?: boolean;
   histogramGroupBy?: "level" | "status";
@@ -106,7 +99,6 @@ function LogViewer(props: {
   onQueryChange?: (query: string) => void;
   range?: string;
   onRangeChange?: (range: string) => void;
-  cluster?: { nodeId?: string };
 }) {
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -124,7 +116,8 @@ function LogViewer(props: {
   };
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
-  const [pollCursor, setPollCursor] = createSignal<number | string>(props.cluster ? "" : 0);
+  const [newestTs, setNewestTs] = createSignal<number | null>(null);
+  const [olderCursor, setOlderCursor] = createSignal<number | null>(null);
   const [unavailableNodes, setUnavailableNodes] = createSignal<string[]>([]);
   const [internalRangeMs, setInternalRangeMs] = createSignal(TIME_RANGES[0].ms);
   const rangeMs = () => {
@@ -150,14 +143,7 @@ function LogViewer(props: {
   let fetchGeneration = 0;
   let histogramGeneration = 0;
 
-  const hasBuildLogs = () => lines().some((line) => line.source?.endsWith("/build"));
-
-  const phaseLines = () => {
-    const all = lines().filter((line) => line.text.trim().length > 0);
-    if (!props.phase) return all;
-    if (props.phase === "build") return all.filter((line) => line.source?.endsWith("/build"));
-    return all.filter((line) => !line.source?.endsWith("/build"));
-  };
+  const phaseLines = () => lines().filter((line) => line.text.trim().length > 0);
 
   const queryCatalog = createMemo<LogQueryCatalog>(() => {
     const fields = new Set<string>();
@@ -173,12 +159,13 @@ function LogViewer(props: {
       if (candidates.size < 25) candidates.add(normalized);
     };
 
-    addValue("service", props.serviceId);
     for (const line of phaseLines()) {
       addValue("service", line.serviceId);
+      addValue("deployment", line.deploymentId);
       addValue("level", line.level.toLowerCase());
       addValue("status", line.level.toLowerCase());
-      addValue("source", line.source);
+      addValue("replica", line.source);
+      addValue("stream", line.stream);
       const http = httpFields(line.attrs);
       addValue("@http.status_code", http.status);
       for (const [name, value] of line.attrs ?? []) {
@@ -209,7 +196,7 @@ function LogViewer(props: {
   };
 
   const requestQuery = () => {
-    return combineLogQueries(props.requiredQuery ?? "", query());
+    return combineLogQueries(combineLogQueries(props.scope, props.requiredQuery ?? ""), query());
   };
 
   const applyQuery = () => {
@@ -227,7 +214,7 @@ function LogViewer(props: {
 
   const rowRequestContext = createMemo(
     () =>
-      `${props.serviceId}\0${props.cluster?.nodeId ?? ""}\0${props.deploymentId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
+      `${props.scope}\0${props.nodeId ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
   );
 
   const selectRange = (nextRangeMs: number) => {
@@ -285,10 +272,10 @@ function LogViewer(props: {
   };
 
   const showHost = () => {
-    if (props.cluster) return true;
+    if (props.showHost) return true;
     const seen = new Set<string>();
     for (const line of phaseLines()) {
-      const host = line.hostname || line.source || "";
+      const host = line.source || "";
       if (host) seen.add(host);
       if (seen.size > 1) return true;
     }
@@ -310,136 +297,16 @@ function LogViewer(props: {
     setExpanded(next);
   };
 
-  const fetchTail = async (searchQuery: string) => {
-    const { from, to } = activeTimeRange();
-    if (props.cluster)
-      return getClusterLogs({
-        tail: PAGE_SIZE,
-        nodeId: props.cluster.nodeId,
-        serviceId: props.serviceId || undefined,
-        query: searchQuery || undefined,
-        from,
-        to
-      });
-    if (props.isSystem)
-      return getSystemLogs(
-        props.serviceId,
-        PAGE_SIZE,
-        undefined,
-        undefined,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    if (props.deploymentId)
-      return getLogs(
-        props.serviceId,
-        props.deploymentId,
-        PAGE_SIZE,
-        undefined,
-        undefined,
-        props.phase,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    return getServiceLogs(
-      props.serviceId,
-      PAGE_SIZE,
-      undefined,
-      undefined,
-      props.phase,
-      searchQuery || undefined,
-      from,
-      to
-    );
-  };
-
-  const fetchAfter = async (after: number | string, searchQuery: string) => {
-    const { from, to } = activeTimeRange();
-    if (props.cluster)
-      return getClusterLogs({
-        tail: PAGE_SIZE,
-        cursor: typeof after === "string" ? after || undefined : undefined,
-        nodeId: props.cluster.nodeId,
-        serviceId: props.serviceId || undefined,
-        query: searchQuery || undefined,
-        from,
-        to
-      });
-    const afterSeq = typeof after === "number" ? after : undefined;
-    if (props.isSystem)
-      return getSystemLogs(
-        props.serviceId,
-        PAGE_SIZE,
-        afterSeq,
-        undefined,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    if (props.deploymentId)
-      return getLogs(
-        props.serviceId,
-        props.deploymentId,
-        PAGE_SIZE,
-        afterSeq,
-        undefined,
-        props.phase,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    return getServiceLogs(
-      props.serviceId,
-      PAGE_SIZE,
-      afterSeq,
-      undefined,
-      props.phase,
-      searchQuery || undefined,
-      from,
-      to
-    );
-  };
-
-  const fetchBefore = async (before: number, searchQuery: string) => {
-    const { from, to } = activeTimeRange();
-    if (props.isSystem)
-      return getSystemLogs(
-        props.serviceId,
-        PAGE_SIZE,
-        undefined,
-        before,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    if (props.deploymentId)
-      return getLogs(
-        props.serviceId,
-        props.deploymentId,
-        PAGE_SIZE,
-        undefined,
-        before,
-        props.phase,
-        searchQuery || undefined,
-        from,
-        to
-      );
-    return getServiceLogs(
-      props.serviceId,
-      PAGE_SIZE,
-      undefined,
-      before,
-      props.phase,
-      searchQuery || undefined,
-      from,
-      to
-    );
-  };
+  const fetchPage = (searchQuery: string, bounds: { afterTs?: number; beforeTs?: number }) =>
+    queryLogs({
+      query: searchQuery,
+      limit: PAGE_SIZE,
+      nodeId: props.nodeId,
+      ...bounds
+    });
 
   const fetchHistogram = async () => {
-    if (!props.showHistogram || props.deploymentId) return;
+    if (!props.showHistogram) return;
     const generation = ++histogramGeneration;
     const requestedRangeMs = rangeMs();
     const bucketMs = TIME_RANGES.find((range) => range.ms === requestedRangeMs)?.bucketMs;
@@ -449,34 +316,14 @@ function LogViewer(props: {
     setHistogramLoading(true);
     setHistogramError(null);
     try {
-      const result = props.cluster
-        ? await getClusterLogHistogram({
-            from,
-            to,
-            nodeId: props.cluster.nodeId,
-            serviceId: props.serviceId || undefined,
-            query: searchQuery || undefined,
-            bucketMs,
-            groupBy: props.histogramGroupBy
-          })
-        : props.isSystem
-          ? await getSystemLogHistogram(
-              props.serviceId,
-              from,
-              to,
-              searchQuery || undefined,
-              bucketMs,
-              props.histogramGroupBy
-            )
-          : await getServiceLogHistogram(
-              props.serviceId,
-              from,
-              to,
-              props.phase,
-              searchQuery || undefined,
-              bucketMs,
-              props.histogramGroupBy
-            );
+      const result = await getLogHistogram({
+        query: searchQuery,
+        from,
+        to,
+        bucketMs,
+        groupBy: props.histogramGroupBy,
+        nodeId: props.nodeId
+      });
       if (
         generation !== histogramGeneration ||
         searchQuery !== requestQuery() ||
@@ -484,9 +331,7 @@ function LogViewer(props: {
       )
         return;
       setHistogram(result);
-      if ("unavailableNodes" in result) {
-        setUnavailableNodes(result.unavailableNodes.map((node) => node.nodeName || node.nodeId));
-      }
+      setUnavailableNodes((result.unavailableNodes ?? []).map((node) => node.nodeName));
       setHistogramError(null);
     } catch (err) {
       if (generation !== histogramGeneration) return;
@@ -498,16 +343,14 @@ function LogViewer(props: {
 
   const fetchInitialLogs = async (searchQuery: string, generation: number) => {
     try {
-      const page = await fetchTail(searchQuery);
+      const { from, to } = activeTimeRange();
+      const page = await fetchPage(searchQuery, { afterTs: from, beforeTs: to });
       if (generation !== fetchGeneration) return;
-      setHasMore(!props.cluster && page.entries.length >= PAGE_SIZE);
+      setHasMore(page.nextCursor != null);
+      setOlderCursor(page.nextCursor);
       setLines(page.entries);
-      setPollCursor(page.cursor);
-      setUnavailableNodes(
-        "unavailableNodes" in page
-          ? page.unavailableNodes.map((node) => node.nodeName || node.nodeId)
-          : []
-      );
+      setNewestTs(page.entries.at(-1)?.ts ?? null);
+      setUnavailableNodes(page.unavailableNodes.map((node) => node.nodeName));
       setError(null);
     } catch (err) {
       if (generation !== fetchGeneration) return;
@@ -521,16 +364,15 @@ function LogViewer(props: {
     if (selectedBucket()) return;
     const searchQuery = requestQuery();
     const requestContext = rowRequestContext();
+    const { from, to } = activeTimeRange();
     try {
-      const page = await fetchAfter(pollCursor(), searchQuery);
+      const page = await fetchPage(searchQuery, {
+        afterTs: Math.max(newestTs() ?? from ?? 0, from ?? 0) || undefined,
+        beforeTs: to
+      });
       if (requestContext !== rowRequestContext()) return;
-      setPollCursor(page.cursor);
-      setUnavailableNodes(
-        "unavailableNodes" in page
-          ? page.unavailableNodes.map((node) => node.nodeName || node.nodeId)
-          : []
-      );
-      const { from, to } = activeTimeRange();
+      setNewestTs((current) => Math.max(current ?? 0, page.entries.at(-1)?.ts ?? 0) || null);
+      setUnavailableNodes(page.unavailableNodes.map((node) => node.nodeName));
       setLines((prev) =>
         mergeLogEntries(prev, page.entries).filter(
           (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
@@ -543,18 +385,21 @@ function LogViewer(props: {
   };
 
   const loadMore = async () => {
-    if (loadingMore() || props.cluster) return;
-    const oldestSeq = lines()[0]?.seq;
-    if (oldestSeq != null) {
+    const cursor = olderCursor();
+    if (!loadingMore() && cursor != null) {
       setLoadingMore(true);
       const prevHeight = scrollRef?.scrollHeight ?? 0;
       const prevTop = scrollRef?.scrollTop ?? 0;
       const searchQuery = requestQuery();
       const requestContext = rowRequestContext();
       try {
-        const page = await fetchBefore(oldestSeq, searchQuery);
+        const page = await fetchPage(searchQuery, {
+          afterTs: activeTimeRange().from,
+          beforeTs: cursor
+        });
         if (requestContext !== rowRequestContext()) return;
-        setHasMore(page.entries.length >= PAGE_SIZE);
+        setHasMore(page.nextCursor != null);
+        setOlderCursor(page.nextCursor);
         wasAtBottom = false;
         setLines((prev) => mergeLogEntries(prev, page.entries, true));
         requestAnimationFrame(() => {
@@ -576,7 +421,8 @@ function LogViewer(props: {
     on(rowRequestContext, () => {
       setLines([]);
       setHasMore(false);
-      setPollCursor(props.cluster ? "" : 0);
+      setNewestTs(null);
+      setOlderCursor(null);
       setExpanded(new Set<string>());
       setUnavailableNodes([]);
       setLoading(true);
@@ -588,7 +434,7 @@ function LogViewer(props: {
   createEffect(
     on(
       () =>
-        `${props.serviceId}\0${props.cluster?.nodeId ?? ""}\0${props.phase ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
+        `${props.scope}\0${props.nodeId ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
       () => {
         void fetchHistogram();
       }
@@ -642,16 +488,6 @@ function LogViewer(props: {
       void loadMore();
     }
   };
-
-  createEffect(() => {
-    if (props.phase !== "build") return;
-    if (loading() || loadingMore()) return;
-    if (!hasMore()) return;
-    if (hasBuildLogs()) return;
-    loadMore();
-  });
-
-  const streamView = () => props.phase === "build";
 
   return (
     <div
@@ -820,14 +656,14 @@ function LogViewer(props: {
             </Show>
             <ul class="font-mono text-xs">
               <li class="hidden sm:flex items-stretch py-1.5 px-2 border-b border-gray-200 bg-gray-100 text-[11px] font-sans font-medium text-gray-500 sticky top-0 z-10">
-                <span class={clsx("shrink-0", streamView() ? "w-2" : "w-[18px]")} />
+                <span class="w-[18px] shrink-0" />
                 <span class={clsx(COL.time, "shrink-0 pr-2 truncate")}>Time</span>
                 <Show when={showHost()}>
                   <span class={clsx(COL.host, "shrink-0 px-2 truncate border-l border-gray-300")}>
-                    {props.cluster ? "Node" : "Host"}
+                    {props.showHost ? "Node" : "Replica"}
                   </span>
                 </Show>
-                <Show when={props.cluster}>
+                <Show when={props.showHost}>
                   <span
                     class={clsx(COL.service, "shrink-0 px-2 truncate border-l border-gray-300")}
                   >
@@ -857,9 +693,8 @@ function LogViewer(props: {
                       line={line}
                       index={index()}
                       showHost={showHost()}
-                      showService={Boolean(props.cluster)}
+                      showService={Boolean(props.showHost)}
                       showHttp={showHttp()}
-                      stream={streamView()}
                       expanded={expanded().has(key())}
                       onToggle={() => toggleExpanded(key())}
                     />
@@ -884,63 +719,37 @@ function LogViewer(props: {
   );
 }
 
-function streamMessageClass(level: string) {
-  switch (level.toLowerCase()) {
-    case "error":
-    case "err":
-    case "fatal":
-    case "panic":
-      return "text-red-600";
-    case "warn":
-    case "warning":
-      return "text-amber-700";
-    default:
-      return "text-gray-700";
-  }
-}
-
 function LogRow(props: {
   line: LogEntry;
   index: number;
   showHost: boolean;
   showService: boolean;
   showHttp: boolean;
-  stream?: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
   const host = () =>
-    props.line.nodeName || props.line.nodeId || props.line.hostname || props.line.source || "";
-  const service = () => props.line.serviceId || props.line.source?.split("/")[0] || "";
+    (props.showService ? props.line.nodeName : props.line.source) || props.line.source || "";
+  const service = () => props.line.serviceId || props.line.source || "";
   const http = () => httpFields(props.line.attrs);
   return (
     <li
-      class={clsx("border-b border-gray-50 transition-colors", {
-        "cursor-pointer": !props.stream,
+      class={clsx("cursor-pointer border-b border-gray-50 transition-colors", {
         "bg-indigo-50/60 hover:bg-indigo-50/80": props.expanded,
         "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
         "bg-gray-50/60 hover:bg-gray-100/60": !props.expanded && props.index % 2 === 1
       })}
-      onClick={() => {
-        if (!props.stream) props.onToggle();
-      }}
+      onClick={() => props.onToggle()}
     >
-      <div
-        class={clsx("flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 pr-2 py-1.5 sm:py-1", {
-          "pl-2": !props.stream,
-          "pl-4": props.stream
-        })}
-      >
+      <div class="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-0 pl-2 pr-2 py-1.5 sm:py-1">
         <div class="flex items-center flex-wrap gap-x-2 gap-y-1 shrink-0 sm:contents">
-          <Show when={!props.stream}>
-            <ExpanderCell
-              expanded={props.expanded}
-              onToggle={(ev) => {
-                ev.stopPropagation();
-                props.onToggle();
-              }}
-            />
-          </Show>
+          <ExpanderCell
+            expanded={props.expanded}
+            onToggle={(ev) => {
+              ev.stopPropagation();
+              props.onToggle();
+            }}
+          />
           <div class={clsx("shrink-0 sm:pr-2 sm:pt-px", COL.time)}>
             <TimeCell ts={props.line.ts} />
           </div>
@@ -967,15 +776,7 @@ function LogRow(props: {
           </Show>
         </div>
         <div class="min-w-0 flex-1 w-full pl-6 sm:pl-2 sm:pr-4 sm:w-auto">
-          <Show
-            when={http().path}
-            fallback={
-              <MessageCell
-                text={props.line.text}
-                class={props.stream ? streamMessageClass(props.line.level) : undefined}
-              />
-            }
-          >
+          <Show when={http().path} fallback={<MessageCell text={props.line.text} />}>
             <PathCell
               path={http().path!}
               durationLabel={http().durationLabel}

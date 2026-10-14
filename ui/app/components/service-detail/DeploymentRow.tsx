@@ -1,17 +1,15 @@
 import { For, Show } from "solid-js";
 import clsx from "clsx";
-import { ExternalLink, GitCommitHorizontal } from "lucide-solid";
-import type { ClusterInfo } from "../../lib/api";
-import type { Deployment } from "../../lib/types";
+import { GitCommitHorizontal } from "lucide-solid";
+import type { ClusterNode, Deployment, ReplicaState } from "../../lib/types";
 import { DeploymentMenu, STATUS_COLORS, StatusBadge, StatusDot } from "../../lib/ui";
 import { formatDateTime } from "../../lib/format";
-import { nodeAdminUrl } from "../../lib/nodeAdmin";
 
 type Props = {
   deployment: Deployment;
   isLatest: boolean;
   isSelected: boolean;
-  clusterInfo: ClusterInfo | null;
+  nodes: ClusterNode[];
   onOpen: () => void;
   onCancel: () => void;
   onStop: () => void;
@@ -20,19 +18,11 @@ type Props = {
 };
 
 function DeploymentRow(props: Props) {
-  const shortId = () => props.deployment.id.split("-").slice(-1)[0] ?? props.deployment.id;
-  const isLive = () =>
-    ["READY", "RUNNING", "DEPLOYING", "PENDING_READY", "BUILDING"].includes(
-      props.deployment.status
-    );
-  const changedSecrets = () =>
-    Object.entries(props.deployment.config.deploy.secrets?.keys ?? {})
-      .filter(([, meta]) => meta.changed)
-      .map(([key]) => key);
+  const shortId = () => props.deployment.id;
+  const isLive = () => ["ready", "deploying", "building"].includes(props.deployment.status);
   const showReplicas = () =>
-    props.deployment.replicas &&
     props.deployment.replicas.length > 0 &&
-    !["TERMINATED", "REMOVED", "CANCELED", "DRAINING"].includes(props.deployment.status);
+    ["deploying", "ready"].includes(props.deployment.status);
 
   return (
     <div
@@ -58,7 +48,7 @@ function DeploymentRow(props: Props) {
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2 min-w-0">
             <span class="text-sm font-medium text-gray-800 truncate">
-              {props.deployment.gitCommit ? props.deployment.gitCommit.message : shortId()}
+              {props.deployment.gitCommit?.message ?? deploymentTitle(props.deployment)}
             </span>
           </div>
           <div class="mt-0.5 flex items-center gap-4 flex-wrap text-[11px] text-gray-400">
@@ -68,43 +58,26 @@ function DeploymentRow(props: Props) {
                 {props.deployment.gitCommit!.reference.slice(0, 7)}
               </span>
             </Show>
-            <span class="font-mono" title={props.deployment.config.version}>
-              {shortId()}
-            </span>
-            <Show when={changedSecrets().length > 0}>
-              <span class="text-amber-600" title={changedSecrets().join(", ")}>
-                secrets changed: {changedSecrets().join(", ")}
-              </span>
+            <span class="font-mono">{shortId()}</span>
+            <Show when={props.deployment.failure}>
+              {(failure) => <span class="text-red-600 truncate">{failure()}</span>}
             </Show>
           </div>
           <Show when={showReplicas()}>
             <div class="mt-1.5 space-y-0.5">
               <For each={props.deployment.replicas}>
-                {(replica) => (
-                  <ReplicaRow
-                    deployment={props.deployment}
-                    replicaIndex={replica.replicaIndex}
-                    replicaStatus={replica.status}
-                    nodeId={replica.nodeId}
-                    clusterInfo={props.clusterInfo}
-                  />
-                )}
+                {(replica) => <ReplicaRow replica={replica} nodes={props.nodes} />}
               </For>
             </div>
           </Show>
         </div>
         <div class="flex items-center gap-2 shrink-0">
-          <Show
-            when={props.deployment.status !== "REMOVED"}
-            fallback={<span class="w-24" aria-hidden="true" />}
-          >
-            <StatusBadge status={props.deployment.status} class="w-24 justify-center" />
-          </Show>
+          <StatusBadge status={props.deployment.status} class="w-24 justify-center" />
           <span
             class="hidden sm:inline text-xs text-gray-400 tabular-nums"
-            title={new Date(props.deployment.createdAt).toLocaleString()}
+            title={new Date(props.deployment.createdAtMs).toLocaleString()}
           >
-            {formatDateTime(props.deployment.createdAt)}
+            {formatDateTime(props.deployment.createdAtMs)}
           </span>
           <div onClick={(e) => e.stopPropagation()}>
             <DeploymentMenu
@@ -121,90 +94,46 @@ function DeploymentRow(props: Props) {
   );
 }
 
-function ReplicaRow(props: {
-  deployment: Deployment;
-  replicaIndex: number;
-  replicaStatus: string;
-  nodeId?: string | null;
-  clusterInfo: ClusterInfo | null;
-}) {
-  const shortDepId = () => props.deployment.id.slice(0, 6);
-  const hostname = () =>
-    props.replicaIndex === 0
-      ? `${props.deployment.config.id}-${shortDepId()}`
-      : `${props.deployment.config.id}-${shortDepId()}-${props.replicaIndex}`;
-  const fqdn = () =>
-    props.clusterInfo ? `${hostname()}.${props.clusterInfo.canonicalDomain}` : null;
-  const href = () => {
-    const host = fqdn();
-    if (!host) return null;
-    const port = props.deployment.config.ingress?.port;
-    return port ? `http://${host}:${port}` : `http://${host}`;
-  };
-  const replicaStatusColors = () => STATUS_COLORS[props.replicaStatus] ?? STATUS_COLORS.STOPPED!;
-  const adminUrl = () => nodeAdminUrl(props.clusterInfo?.nodes, props.nodeId);
+function ReplicaRow(props: { replica: ReplicaState; nodes: ClusterNode[] }) {
+  const nodeName = () =>
+    props.nodes.find((node) => node.id === props.replica.nodeId)?.name ?? props.replica.nodeId;
+  const phaseColors = () => STATUS_COLORS[props.replica.phase] ?? STATUS_COLORS.stopped!;
 
   return (
     <div class="flex items-center gap-2 text-xs">
-      <StatusDot status={props.replicaStatus} />
-      <Show
-        when={href()}
-        fallback={<span class="font-mono text-gray-600 truncate">{fqdn() ?? hostname()}</span>}
-      >
-        {(url) => (
-          <a
-            href={url()}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            title="Open in new tab"
-            class="group inline-flex items-center gap-1 font-mono text-gray-600 hover:text-indigo-600 truncate underline decoration-gray-300 underline-offset-2 hover:decoration-indigo-300"
-          >
-            <span class="truncate">{fqdn()}</span>
-            <ExternalLink class="size-3 text-gray-400 group-hover:text-indigo-500 shrink-0" />
-          </a>
+      <StatusDot status={props.replica.phase} />
+      <span class="font-mono text-gray-600 truncate">{props.replica.replicaId}</span>
+      <Show when={props.replica.ip}>
+        {(ip) => <span class="font-mono text-gray-400">{ip()}</span>}
+      </Show>
+      <Show when={nodeName()}>
+        {(name) => (
+          <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500" title="Node">
+            {name()}
+          </span>
         )}
       </Show>
-      <Show when={props.nodeId}>
-        {(nodeId) => (
-          <Show
-            when={adminUrl()}
-            fallback={
-              <span
-                class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
-                title="Cluster node"
-              >
-                <span class="font-semibold">NODE:</span> {nodeId()}
-              </span>
-            }
-          >
-            {(url) => (
-              <a
-                href={url()}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(event) => event.stopPropagation()}
-                class="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 hover:bg-indigo-50 hover:text-indigo-600"
-                title="Open node admin homepage"
-              >
-                <span class="font-semibold">NODE:</span> {nodeId()}
-              </a>
-            )}
-          </Show>
-        )}
-      </Show>
-      <Show when={props.replicaStatus !== "READY"}>
+      <Show when={props.replica.phase !== "healthy"}>
         <span
-          class={clsx(
-            "rounded-md border px-1.5 py-px text-[10px] font-medium",
-            replicaStatusColors().pill
-          )}
+          class={clsx("rounded-md border px-1.5 py-px text-[10px] font-medium", phaseColors().pill)}
         >
-          {props.replicaStatus.toLowerCase()}
+          {props.replica.phase}
+        </span>
+      </Show>
+      <Show when={props.replica.restarts > 0}>
+        <span class="text-[10px] text-gray-400 tabular-nums">
+          {props.replica.restarts} {props.replica.restarts === 1 ? "restart" : "restarts"}
         </span>
       </Show>
     </div>
   );
 }
 
-export { DeploymentRow, ReplicaRow };
+function deploymentTitle(deployment: Deployment): string {
+  return (deployment.image ?? deployment.spec.image ?? deployment.id).replace(
+    /@sha256:[0-9a-f]+$/,
+    ""
+  );
+}
+
+export { DeploymentRow, ReplicaRow, deploymentTitle };

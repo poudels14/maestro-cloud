@@ -6,15 +6,11 @@ import { deploymentsQuery } from "../../lib/queries";
 import { LogViewer } from "../logs/LogViewer";
 
 function LogsTab(props: { service: Service }) {
-  const isSystem = () => props.service.system === true;
   const location = useLocation();
   const search = () => location().search as { query?: string; range?: string };
   const navigate = useNavigate();
 
-  const deployments = useQuery(() => ({
-    ...deploymentsQuery(props.service.id),
-    enabled: !isSystem()
-  }));
+  const deployments = useQuery(() => deploymentsQuery(props.service.id));
   const hasAnyDeployment = () => (deployments.data?.length ?? 0) > 0;
 
   const setUrlSearch = (updates: { query?: string; range?: string }) =>
@@ -27,7 +23,7 @@ function LogsTab(props: { service: Service }) {
 
   return (
     <Show
-      when={isSystem() || hasAnyDeployment()}
+      when={hasAnyDeployment()}
       fallback={
         <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
           <p class="text-sm text-gray-400">No deployments yet. Deploy this service to see logs.</p>
@@ -35,11 +31,7 @@ function LogsTab(props: { service: Service }) {
       }
     >
       <LogViewer
-        serviceId={props.service.id}
-        deploymentId={null}
-        isSystem={isSystem()}
-        hasBuild={!!props.service.build}
-        phase="deploy"
+        scope={`service:${props.service.id}`}
         showHistogram
         fillHeight
         query={search().query ?? ""}

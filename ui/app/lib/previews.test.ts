@@ -6,7 +6,8 @@ import { servicePreviews, userServices } from "./previews.ts";
 const service = (id: string, baseServiceId?: string, prNumber = 0): Service => ({
   id,
   name: id,
-  version: "test",
+  status: "ready",
+  deployFrozen: false,
   deploy: {
     command: null,
     healthcheckInterval: 60,
@@ -20,7 +21,7 @@ const service = (id: string, baseServiceId?: string, prNumber = 0): Service => (
           headRef: "feature",
           headSha: "abc",
           title: "Feature",
-          createdAt: 1
+          createdAtMs: 1
         }
       }
     : {})

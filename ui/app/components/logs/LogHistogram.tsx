@@ -7,30 +7,30 @@ const LEVEL_PRIORITY = ["trace", "debug", "info", "warn", "error", "2xx", "3xx",
 function levelColor(level: string) {
   switch (level.toLowerCase()) {
     case "2xx":
-      return "#34d399";
+      return "#52a47c";
     case "3xx":
-      return "#22d3ee";
+      return "#8aa6c1";
     case "4xx":
-      return "#fbbf24";
+      return "#e6b960";
     case "5xx":
-      return "#f87171";
+      return "#cd656a";
     case "error":
     case "err":
     case "fatal":
     case "panic":
-      return "#ef4444";
+      return "#b23a3f";
     case "warn":
     case "warning":
-      return "#f59e0b";
+      return "#c5861a";
     case "info":
-      return "#6366f1";
+      return "#93681c";
     case "debug":
     case "dbg":
-      return "#8b5cf6";
+      return "#4f6d8f";
     case "trace":
-      return "#64748b";
+      return "#697386";
     default:
-      return "#9ca3af";
+      return "#98a2b3";
   }
 }
 
@@ -95,10 +95,10 @@ function LogHistogramChart(props: {
           .ticks(6)
           .tickFormat((value) => timeFormat(value as Date))
       )
-      .call((axis) => axis.select(".domain").attr("stroke", "#e5e7eb"))
-      .call((axis) => axis.selectAll(".tick line").attr("stroke", "#e5e7eb"))
+      .call((axis) => axis.select(".domain").attr("stroke", "#dce1e8"))
+      .call((axis) => axis.selectAll(".tick line").attr("stroke", "#dce1e8"))
       .call((axis) =>
-        axis.selectAll(".tick text").attr("fill", "#9ca3af").attr("font-size", "10px")
+        axis.selectAll(".tick text").attr("fill", "#98a2b3").attr("font-size", "10px")
       );
     graph
       .append("g")
@@ -109,9 +109,9 @@ function LogHistogramChart(props: {
           .tickFormat((value) => d3.format("~s")(value.valueOf()))
       )
       .call((axis) => axis.select(".domain").remove())
-      .call((axis) => axis.selectAll(".tick line").attr("x2", innerWidth).attr("stroke", "#f3f4f6"))
+      .call((axis) => axis.selectAll(".tick line").attr("x2", innerWidth).attr("stroke", "#eaedf2"))
       .call((axis) =>
-        axis.selectAll(".tick text").attr("fill", "#9ca3af").attr("font-size", "10px")
+        axis.selectAll(".tick text").attr("fill", "#98a2b3").attr("font-size", "10px")
       );
 
     const bucketBounds = (bucket: LogHistogramBucket) => {
@@ -131,7 +131,7 @@ function LogHistogramChart(props: {
         .attr("y", 0)
         .attr("width", bounds.width + 1)
         .attr("height", innerHeight)
-        .attr("fill", "#eef2ff");
+        .attr("fill", "#f5ebd3");
     }
 
     const tooltip = graph.append("g").style("display", "none").attr("pointer-events", "none");
@@ -139,12 +139,12 @@ function LogHistogramChart(props: {
       .append("line")
       .attr("y1", 0)
       .attr("y2", innerHeight)
-      .attr("stroke", "#9ca3af")
+      .attr("stroke", "#98a2b3")
       .attr("stroke-dasharray", "3,3");
     const tooltipText = tooltip
       .append("text")
       .attr("y", -3)
-      .attr("fill", "#374151")
+      .attr("fill", "#3a4352")
       .attr("font-size", "11px");
 
     graph
@@ -244,7 +244,7 @@ function LogHistogramChart(props: {
         .attr("x", innerWidth / 2)
         .attr("y", innerHeight / 2)
         .attr("text-anchor", "middle")
-        .attr("fill", "#9ca3af")
+        .attr("fill", "#98a2b3")
         .attr("font-size", "11px")
         .text("No matching logs in this range");
     }

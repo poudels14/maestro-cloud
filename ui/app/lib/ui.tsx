@@ -15,25 +15,34 @@ export function timeAgo(ms: number): string {
   return `${days}d ago`;
 }
 
+const PILL = {
+  waiting: { dot: "bg-amber-400", pill: "bg-amber-50 text-amber-700 border-amber-100" },
+  progress: { dot: "bg-indigo-400", pill: "bg-indigo-50 text-indigo-700 border-indigo-100" },
+  good: { dot: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-800 border-emerald-200" },
+  bad: { dot: "bg-red-400", pill: "bg-red-50 text-red-700 border-red-100" },
+  idle: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" }
+};
+
 export const STATUS_COLORS: Record<string, { dot: string; pill: string }> = {
-  QUEUED: { dot: "bg-amber-400", pill: "bg-amber-50 text-amber-700 border-amber-100" },
-  BUILDING: { dot: "bg-blue-400", pill: "bg-blue-50 text-blue-700 border-blue-100" },
-  PENDING_READY: { dot: "bg-cyan-400", pill: "bg-cyan-50 text-cyan-700 border-cyan-100" },
-  READY: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  DEPLOYING: { dot: "bg-indigo-400", pill: "bg-indigo-50 text-indigo-700 border-indigo-100" },
-  RUNNING: { dot: "bg-emerald-400", pill: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  FAILED: { dot: "bg-red-400", pill: "bg-red-50 text-red-700 border-red-100" },
-  CRASHED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
-  TERMINATED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
-  CANCELLED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
-  CANCELED: { dot: "bg-red-400", pill: "bg-red-50 text-red-500 border-red-100" },
-  SYSTEM: { dot: "bg-violet-400", pill: "bg-violet-50 text-violet-700 border-violet-100" },
-  IDLE: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" },
-  STOPPED: { dot: "bg-gray-400", pill: "bg-gray-100 text-gray-500 border-gray-200" }
+  queued: PILL.waiting,
+  building: PILL.progress,
+  deploying: PILL.progress,
+  ready: PILL.good,
+  draining: PILL.waiting,
+  stopped: PILL.idle,
+  failed: PILL.bad,
+  cancelled: PILL.idle,
+  idle: PILL.idle,
+  pending: PILL.waiting,
+  starting: PILL.progress,
+  running: PILL.progress,
+  healthy: PILL.good,
+  unhealthy: PILL.bad,
+  restarting: PILL.waiting
 };
 
 export function StatusBadge(props: { status: string; class?: string }) {
-  const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.STOPPED!;
+  const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.stopped!;
   return (
     <span
       class={clsx(
@@ -42,13 +51,13 @@ export function StatusBadge(props: { status: string; class?: string }) {
         props.class
       )}
     >
-      {props.status.toLowerCase()}
+      {props.status}
     </span>
   );
 }
 
 export function StatusDot(props: { status: string }) {
-  const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.STOPPED!;
+  const colors = () => STATUS_COLORS[props.status] ?? STATUS_COLORS.stopped!;
   return <span class={clsx("size-2 rounded-full inline-block shrink-0", colors().dot)} />;
 }
 
@@ -85,8 +94,8 @@ export function TabButton(props: {
   );
 }
 
-const CANCELLABLE_STATUSES = new Set(["QUEUED", "BUILDING", "DEPLOYING"]);
-const STOPPABLE_STATUSES = new Set(["READY", "PENDING_READY", "RUNNING"]);
+const CANCELLABLE_STATUSES = new Set(["queued", "building", "deploying"]);
+const STOPPABLE_STATUSES = new Set(["ready"]);
 
 export function DeploymentMenu(props: {
   status: string;

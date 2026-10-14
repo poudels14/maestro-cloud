@@ -53,6 +53,56 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
       label: "Healthcheck interval",
       value: `${props.service.deploy.healthcheckInterval}s`
     });
+    const resources = props.service.deploy.resources;
+    if (resources?.cpu != null || resources?.memory) {
+      items.push({
+        label: "Limits",
+        value: [
+          resources.cpu != null ? `${resources.cpu} CPU` : null,
+          resources.memory ? `${resources.memory} memory` : null
+        ]
+          .filter(Boolean)
+          .join(", ")
+      });
+    }
+    if (resources?.request?.cpu != null || resources?.request?.memory) {
+      items.push({
+        label: "Requests",
+        value: [
+          resources.request.cpu != null ? `${resources.request.cpu} CPU` : null,
+          resources.request.memory ? `${resources.request.memory} memory` : null
+        ]
+          .filter(Boolean)
+          .join(", ")
+      });
+    }
+    const affinity = props.service.deploy.nodeAffinity;
+    if (affinity?.node || Object.keys(affinity?.labels ?? {}).length > 0) {
+      items.push({
+        label: "Node affinity",
+        value: [
+          affinity?.node,
+          ...Object.entries(affinity?.labels ?? {}).map(([key, value]) => `${key}=${value}`)
+        ]
+          .filter(Boolean)
+          .join(", ")
+      });
+    }
+    const egress = props.service.deploy.egress?.allow ?? [];
+    if (egress.length > 0) {
+      items.push({
+        label: "Egress allowed",
+        value: egress
+          .map((rule) => (rule.ports?.length ? `${rule.cidr}:${rule.ports.join("/")}` : rule.cidr))
+          .join(", ")
+      });
+    }
+    if (props.service.deploy.maxRestarts != null) {
+      items.push({ label: "Max restarts", value: String(props.service.deploy.maxRestarts) });
+    }
+    if (props.service.deploy.exec === false) {
+      items.push({ label: "Exec", value: "disabled" });
+    }
     return items;
   };
 
@@ -62,15 +112,20 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
       value
     }));
   const envSource = () => props.service.deploy.env?.source ?? null;
-  const secretKeys = () => Object.keys(props.service.deploy.secrets?.keys ?? {}).sort();
+  const secretKeys = () => Object.keys(props.service.deploy.secrets?.items ?? {}).sort();
   const secretMountPath = () => props.service.deploy.secrets?.mountPath ?? null;
   const previews = () => servicePreviews(props.services, props.service.id);
+  const volumesStripped = () => {
+    const baseServiceId = props.service.previewSource?.baseServiceId;
+    const base = props.services.find((service) => service.id === baseServiceId);
+    return (base?.deploy.volumes?.length ?? 0) > 0;
+  };
 
   return (
     <div class="space-y-6">
       <ConfigSection title="Deploy" items={[...sourceItems(), ...deployItems()]} />
 
-      <Show when={props.service.previewSource?.volumesStripped}>
+      <Show when={volumesStripped()}>
         <div class="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <Info class="mt-0.5 size-4 shrink-0" />
           <span>Volumes from the base service are not mounted in this preview.</span>
@@ -111,7 +166,7 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
 
       <IngressInfo service={props.service} />
 
-      <Show when={!props.service.system && !props.service.previewSource}>
+      <Show when={!props.service.previewSource}>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           <ReplicasEditor service={props.service} />
           <FreezeToggle service={props.service} />
@@ -171,15 +226,15 @@ function PreviewsList(props: { previews: Service[] }) {
                       PR #{source().prNumber} · {source().title}
                     </span>
                     <span class="block truncate text-xs text-gray-400">
-                      {source().headRef} · opened {timeAgo(source().createdAt)}
+                      {source().headRef} · opened {timeAgo(source().createdAtMs)}
                     </span>
                   </span>
                 </a>
                 <div class="flex items-center gap-2 pl-6 sm:pl-0">
-                  <Show when={source().closedAt}>
+                  <Show when={source().closedAtMs}>
                     <span class="text-xs font-medium text-amber-600">closing</span>
                   </Show>
-                  <StatusBadge status={preview.status ?? "IDLE"} />
+                  <StatusBadge status={preview.status} />
                   <Show when={previewUrl()}>
                     {(url) => (
                       <a

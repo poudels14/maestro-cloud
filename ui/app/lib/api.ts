@@ -1,592 +1,429 @@
 import type {
+  ClusterConfig,
+  ClusterInfo,
   ClusterNode,
   Deployment,
   DiskInfo,
   IngressBlocklist,
   IngressTrafficBreakdown,
-  IngressRouting,
   LogEntry,
-  MaskedConfig,
   MetricPoint,
-  ClusterStats,
+  ReplicaState,
+  Routes,
   Service,
+  ServiceSpec,
   SlackCategory,
   SlackWebhook,
-  StatsMetricPoint,
+  Stats,
   TrafficPoint,
   UnschedulableReplica
 } from "./types";
 
-export interface ClusterInfo {
-  clusterId?: string | null;
-  thisNodeId?: string | null;
-  leader?: string | null;
-  clusterName: string;
-  clusterAlias: string;
-  canonicalDomain: string;
-  aliasDomain: string;
-  version?: string;
-  upgrading?: boolean;
-  restarting?: boolean;
-  upgradeRun?: { requestedAtMs: number } | null;
-  nodes?: ClusterNode[];
-}
+type ServiceSummary = Pick<
+  Service,
+  "id" | "latestDeployment" | "deployFrozen" | "replicasOverride" | "previewSource"
+> & { spec: ServiceSpec };
 
-export async function getClusterNodes(): Promise<ClusterNode[]> {
-  const res = await fetch("/api/cluster/nodes");
-  if (!res.ok) throw new Error(`Failed to fetch cluster nodes: ${res.statusText}`);
-  return res.json();
-}
+type ServiceDetail = {
+  deployments: Omit<Deployment, "replicas">[];
+  replicas: Omit<ReplicaState, "index" | "nodeId">[];
+  assignments: { replicaId: string; deploymentId: string; nodeId: number; index: number }[];
+};
 
-export async function getUnschedulableReplicas(): Promise<UnschedulableReplica[]> {
-  const res = await fetch("/api/cluster/unschedulable");
-  if (!res.ok) throw new Error(`Failed to fetch scheduling errors: ${res.statusText}`);
-  return res.json();
-}
+type LogRecord = {
+  seq: number;
+  ts: number;
+  replicaId: string;
+  serviceId?: string | null;
+  deploymentId?: string | null;
+  stream: LogEntry["stream"];
+  level: string;
+  line: string;
+  message?: string;
+  attributes?: Record<string, unknown>;
+  nodeId?: number;
+  nodeName?: string;
+};
 
-export async function setNodeDrain(nodeId: string, drain: boolean): Promise<void> {
-  const operation = drain ? "drain" : "restore";
-  const res = await fetch(`/api/cluster/nodes/${encodeURIComponent(nodeId)}/${operation}`, {
-    method: "POST"
-  });
-  if (!res.ok) throw new Error((await res.text()) || `Failed to ${operation} node`);
-}
+type NodeError = {
+  nodeId: number;
+  nodeName: string;
+  error: string;
+};
 
-export async function getClusterInfo(): Promise<ClusterInfo> {
-  const res = await fetch("/api/cluster");
-  if (!res.ok) throw new Error(`Failed to fetch cluster info: ${res.statusText}`);
-  return res.json();
-}
+type LogPage = {
+  entries: LogEntry[];
+  nextCursor: number | null;
+  partial: boolean;
+  unavailableNodes: NodeError[];
+};
 
-export async function getClusterStats(): Promise<ClusterStats> {
-  const res = await fetch("/api/cluster/stats");
-  if (!res.ok) throw new Error(`Failed to fetch cluster stats: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getStatsMetrics(
-  name?: string,
-  from?: number,
-  to?: number
-): Promise<StatsMetricPoint[]> {
-  const url = new URL("/api/metrics/stats", location.origin);
-  if (name) url.searchParams.set("name", name);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch stats metrics: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getClusterConfig(): Promise<MaskedConfig> {
-  const res = await fetch("/api/config");
-  if (!res.ok) throw new Error(`Failed to fetch cluster config: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getServices(): Promise<Service[]> {
-  const res = await fetch("/api/services");
-  if (!res.ok) throw new Error(`Failed to fetch services: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getDeployments(serviceId: string): Promise<Deployment[]> {
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch deployments: ${res.statusText}`);
-  return res.json();
-}
-
-export async function deleteService(serviceId: string) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}`, {
-    method: "DELETE"
-  });
-  if (!res.ok) throw new Error(`Failed to delete service: ${res.statusText}`);
-}
-
-export async function redeployService(serviceId: string, force?: boolean) {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/redeploy`, location.origin);
-  if (force) url.searchParams.set("force", "true");
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to redeploy: ${res.statusText}`);
-}
-
-export async function restartService(serviceId: string, force?: boolean) {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/restart`, location.origin);
-  if (force) url.searchParams.set("force", "true");
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to restart: ${res.statusText}`);
-}
-
-export async function freezeService(serviceId: string, frozen: boolean) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/freeze`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ frozen })
-  });
-  if (!res.ok) throw new Error(`Failed to update freeze status: ${res.statusText}`);
-}
-
-export async function setServiceReplicas(serviceId: string, replicas: number) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/replicas`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ replicas })
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to update replicas: ${res.statusText}`);
-  }
-}
-
-export async function clearServiceReplicasOverride(serviceId: string) {
-  const res = await fetch(`/api/services/${encodeURIComponent(serviceId)}/replicas`, {
-    method: "DELETE"
-  });
-  if (!res.ok) throw new Error(`Failed to clear replicas override: ${res.statusText}`);
-}
-
-export async function cancelDeployment(serviceId: string, deploymentId: string) {
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`;
-  const res = await fetch(url, { method: "PATCH" });
-  if (!res.ok) throw new Error(`Failed to cancel deployment: ${res.statusText}`);
-}
-
-export async function stopDeployment(serviceId: string, deploymentId: string) {
-  const url = `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/remove`;
-  const res = await fetch(url, { method: "PATCH" });
-  if (!res.ok) throw new Error(`Failed to stop deployment: ${res.statusText}`);
-}
-
-export async function getLogs(
-  serviceId: string,
-  deploymentId: string,
-  tail?: number,
-  afterSeq?: number,
-  beforeSeq?: number,
-  phase?: "build" | "deploy",
-  query?: string,
-  from?: number,
-  to?: number
-): Promise<LogPage> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/logs`,
-    location.origin
-  );
-  if (tail != null) url.searchParams.set("tail", String(tail));
-  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
-  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
-  if (phase != null) url.searchParams.set("phase", phase);
-  if (query) url.searchParams.set("query", query);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch logs: ${res.statusText}`);
-  }
-  const raw = await res.json();
-  return mapLogPage(res, raw);
-}
-
-export async function getServiceLogs(
-  serviceId: string,
-  tail?: number,
-  afterSeq?: number,
-  beforeSeq?: number,
-  phase?: "build" | "deploy",
-  query?: string,
-  from?: number,
-  to?: number
-): Promise<LogPage> {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/logs`, location.origin);
-  if (tail != null) url.searchParams.set("tail", String(tail));
-  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
-  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
-  if (phase != null) url.searchParams.set("phase", phase);
-  if (query) url.searchParams.set("query", query);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch service logs: ${res.statusText}`);
-  }
-  const raw = await res.json();
-  return mapLogPage(res, raw);
-}
-
-export async function getSystemLogs(
-  name: string,
-  tail?: number,
-  afterSeq?: number,
-  beforeSeq?: number,
-  query?: string,
-  from?: number,
-  to?: number
-): Promise<LogPage> {
-  const url = new URL(`/api/system/${encodeURIComponent(name)}/logs`, location.origin);
-  if (tail != null) url.searchParams.set("tail", String(tail));
-  if (afterSeq != null) url.searchParams.set("after", String(afterSeq));
-  if (beforeSeq != null) url.searchParams.set("before", String(beforeSeq));
-  if (query) url.searchParams.set("query", query);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch system logs: ${res.statusText}`);
-  }
-  const raw = await res.json();
-  return mapLogPage(res, raw);
-}
-
-export interface LogHistogramBucket {
+type LogHistogramBucket = {
   ts: number;
   count: number;
   levels?: Record<string, number>;
-}
+};
 
-export interface LogHistogram {
+type LogHistogram = {
   from: number;
   to: number;
   bucketMs: number;
   buckets: LogHistogramBucket[];
+  partial?: boolean;
+  unavailableNodes?: NodeError[];
+};
+
+type MaintenanceTarget =
+  | { kind: "upgrade"; targetVersion: string }
+  | { kind: "restart"; nodeId?: number };
+
+async function getClusterInfo(): Promise<ClusterInfo> {
+  return request("/api/cluster");
 }
 
-export async function getServiceLogHistogram(
-  serviceId: string,
-  from: number,
-  to: number,
-  phase?: "build" | "deploy",
-  query?: string,
-  bucketMs?: number,
-  groupBy?: "level" | "status"
-): Promise<LogHistogram> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/logs/histogram`,
-    location.origin
+async function getClusterNodes(): Promise<ClusterNode[]> {
+  const nodes = await request<ClusterNode[]>("/api/nodes");
+  return nodes.filter((node) => node.state !== "removed");
+}
+
+async function getUnschedulableReplicas(): Promise<UnschedulableReplica[]> {
+  return request("/api/cluster/unschedulable");
+}
+
+async function setNodeDrain(nodeId: number, drain: boolean): Promise<void> {
+  const operation = drain ? "drain" : "restore";
+  await request(`/api/cluster/nodes/${nodeId}/${operation}`, { method: "POST" });
+}
+
+async function removeNode(nodeId: number): Promise<{ state: "draining" | "removed" }> {
+  return request(`/api/cluster/nodes/${nodeId}`, { method: "DELETE" });
+}
+
+async function startMaintenance(target: MaintenanceTarget): Promise<void> {
+  const body =
+    target.kind === "upgrade" ? { targetVersion: target.targetVersion } : { nodeId: target.nodeId };
+  await request(`/api/cluster/${target.kind}`, jsonBody("POST", body));
+}
+
+async function unfreezeCluster(): Promise<void> {
+  await request("/api/cluster/unfreeze", { method: "POST" });
+}
+
+async function getClusterStats(): Promise<Stats.Cluster> {
+  return request("/api/cluster/stats");
+}
+
+async function getClusterConfig(): Promise<ClusterConfig> {
+  return request("/api/config");
+}
+
+async function getServices(): Promise<Service[]> {
+  const summaries = await request<ServiceSummary[]>("/api/services");
+  return summaries.map(({ spec, ...summary }) => ({
+    ...spec,
+    ...summary,
+    status: summary.latestDeployment?.status ?? "idle"
+  }));
+}
+
+async function getDeployments(serviceId: string): Promise<Deployment[]> {
+  const detail = await request<ServiceDetail>(`/api/services/${encodeURIComponent(serviceId)}`);
+  return detail.deployments.map((deployment) => ({
+    ...deployment,
+    replicas: detail.assignments
+      .filter((assignment) => assignment.deploymentId === deployment.id)
+      .map((assignment) => {
+        const status = detail.replicas.find(
+          (replica) => replica.replicaId === assignment.replicaId
+        );
+        return {
+          replicaId: assignment.replicaId,
+          deploymentId: assignment.deploymentId,
+          index: assignment.index,
+          nodeId: assignment.nodeId,
+          phase: status?.phase ?? "pending",
+          ip: status?.ip,
+          restarts: status?.restarts ?? 0,
+          consecutiveFailures: status?.consecutiveFailures ?? 0,
+          lastError: status?.lastError
+        };
+      })
+      .sort((left, right) => left.index - right.index)
+  }));
+}
+
+async function getBuildLog(serviceId: string, deploymentId: string): Promise<string | null> {
+  const response = await fetch(
+    `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/build-log`
   );
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  if (phase != null) url.searchParams.set("phase", phase);
-  if (query) url.searchParams.set("query", query);
-  if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
-  if (groupBy) url.searchParams.set("groupBy", groupBy);
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch log histogram: ${res.statusText}`);
+  if (response.status === 404) {
+    return null;
+  } else if (response.ok) {
+    return response.text();
+  } else {
+    throw new Error(await errorMessage(response));
   }
-  return res.json();
 }
 
-export async function getSystemLogHistogram(
-  name: string,
-  from: number,
-  to: number,
-  query?: string,
-  bucketMs?: number,
-  groupBy?: "level" | "status"
-): Promise<LogHistogram> {
-  const url = new URL(`/api/system/${encodeURIComponent(name)}/logs/histogram`, location.origin);
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  if (query) url.searchParams.set("query", query);
-  if (bucketMs != null) url.searchParams.set("bucketMs", String(bucketMs));
-  if (groupBy) url.searchParams.set("groupBy", groupBy);
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch log histogram: ${res.statusText}`);
-  }
-  return res.json();
+async function deleteService(serviceId: string) {
+  await request(`/api/services/${encodeURIComponent(serviceId)}`, { method: "DELETE" });
 }
 
-export interface LogPage {
-  entries: LogEntry[];
-  cursor: number;
+async function redeployService(serviceId: string, force?: boolean) {
+  await request(serviceAction(serviceId, "redeploy", force), { method: "POST" });
 }
 
-export interface ClusterLogNodeError {
-  nodeId: string;
-  nodeName: string;
-  error: string;
+async function restartService(serviceId: string, force?: boolean) {
+  await request(serviceAction(serviceId, "restart", force), { method: "POST" });
 }
 
-export interface ClusterLogPage {
-  entries: LogEntry[];
-  cursor: string;
-  partial: boolean;
-  unavailableNodes: ClusterLogNodeError[];
+async function freezeService(serviceId: string, frozen: boolean) {
+  await request(
+    `/api/services/${encodeURIComponent(serviceId)}/freeze`,
+    jsonBody("PATCH", { frozen })
+  );
 }
 
-export interface ClusterLogHistogram extends LogHistogram {
-  partial: boolean;
-  unavailableNodes: ClusterLogNodeError[];
+async function setServiceReplicas(serviceId: string, replicas: number) {
+  await request(
+    `/api/services/${encodeURIComponent(serviceId)}/replicas`,
+    jsonBody("PATCH", { replicas })
+  );
 }
 
-export async function getClusterLogs(params: {
-  tail?: number;
-  cursor?: string;
-  nodeId?: string;
-  serviceId?: string;
-  query?: string;
-  from?: number;
-  to?: number;
-}): Promise<ClusterLogPage> {
-  const url = new URL("/api/cluster/logs", location.origin);
-  if (params.tail != null) url.searchParams.set("tail", String(params.tail));
-  if (params.cursor) url.searchParams.set("cursor", params.cursor);
-  if (params.nodeId) url.searchParams.set("nodeId", params.nodeId);
-  if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
-  if (params.query) url.searchParams.set("query", params.query);
-  if (params.from != null) url.searchParams.set("from", String(params.from));
-  if (params.to != null) url.searchParams.set("to", String(params.to));
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch cluster logs: ${res.statusText}`);
-  }
-  const raw = (await res.json()) as Omit<ClusterLogPage, "entries"> & {
-    entries: Record<string, unknown>[];
+async function clearServiceReplicasOverride(serviceId: string) {
+  await request(`/api/services/${encodeURIComponent(serviceId)}/replicas`, { method: "DELETE" });
+}
+
+async function cancelDeployment(serviceId: string, deploymentId: string) {
+  await request(deploymentAction(serviceId, deploymentId, "cancel"), { method: "PATCH" });
+}
+
+async function stopDeployment(serviceId: string, deploymentId: string) {
+  await request(deploymentAction(serviceId, deploymentId, "remove"), { method: "PATCH" });
+}
+
+async function queryLogs(params: {
+  query: string;
+  limit: number;
+  beforeTs?: number;
+  afterTs?: number;
+  nodeId?: number;
+}): Promise<LogPage> {
+  const page = await request<Omit<LogPage, "entries"> & { records: LogRecord[] }>(
+    withParams("/api/logs", params)
+  );
+  return {
+    entries: page.records.map(toLogEntry).reverse(),
+    nextCursor: page.nextCursor,
+    partial: page.partial,
+    unavailableNodes: page.unavailableNodes
   };
-  return { ...raw, entries: mapLogEntries(raw.entries) };
 }
 
-export async function getClusterLogHistogram(params: {
+async function getLogHistogram(params: {
+  query: string;
   from: number;
   to: number;
-  nodeId?: string;
-  serviceId?: string;
-  query?: string;
   bucketMs?: number;
   groupBy?: "level" | "status";
-}): Promise<ClusterLogHistogram> {
-  const url = new URL("/api/cluster/logs/histogram", location.origin);
-  url.searchParams.set("from", String(params.from));
-  url.searchParams.set("to", String(params.to));
-  if (params.nodeId) url.searchParams.set("nodeId", params.nodeId);
-  if (params.serviceId) url.searchParams.set("serviceId", params.serviceId);
-  if (params.query) url.searchParams.set("query", params.query);
-  if (params.bucketMs != null) url.searchParams.set("bucketMs", String(params.bucketMs));
-  if (params.groupBy) url.searchParams.set("groupBy", params.groupBy);
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to fetch cluster log histogram: ${res.statusText}`);
-  }
-  return res.json();
+  nodeId?: number;
+}): Promise<LogHistogram> {
+  return request(withParams("/api/logs/histogram", params));
 }
 
-function mapLogPage(res: Response, raw: Record<string, unknown>[]): LogPage {
-  const entries = mapLogEntries(raw);
-  const header = Number(res.headers.get("x-maestro-log-cursor"));
-  const lastEntry = entries.at(-1)?.seq ?? 0;
-  return {
-    entries,
-    cursor: Number.isSafeInteger(header) && header >= 0 ? Math.max(header, lastEntry) : lastEntry
-  };
+async function getDisks(): Promise<Record<string, DiskInfo[]>> {
+  return request("/api/disks/nodes");
 }
 
-function mapLogEntries(raw: Record<string, unknown>[]): LogEntry[] {
-  return raw.map((entry) => {
-    const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : undefined;
-    let hostname: string | undefined;
-    if (tags) {
-      const match = tags.find((tag) => tag.startsWith("hostname:"));
-      if (match) hostname = match.slice("hostname:".length);
-    }
-    return {
-      seq: entry.seq as number,
-      ts: entry.ts as number,
-      level: entry.level as string,
-      stream: entry.stream as LogEntry["stream"],
-      text: entry.text as string,
-      source: entry.source as string | undefined,
-      origin: entry.origin as string | undefined,
-      hostname,
-      nodeId: entry.nodeId as string | undefined,
-      nodeName: entry.nodeName as string | undefined,
-      serviceId: entry.serviceId as string | undefined,
-      tier: entry.tier as LogEntry["tier"],
-      tags,
-      attrs: Array.isArray(entry.attrs) ? (entry.attrs as [string, string][]) : undefined
-    };
-  });
+async function getRoutes(): Promise<Routes.Table> {
+  return request("/api/routes");
 }
 
-export async function getDisks(): Promise<DiskInfo[]> {
-  const res = await fetch("/api/disks");
-  if (!res.ok) throw new Error(`Failed to fetch disks: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getIngressRoutes(): Promise<IngressRouting[]> {
-  const res = await fetch("/api/ingress/routes");
-  if (!res.ok) throw new Error(`Failed to fetch ingress routes: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getServiceMetrics(
+async function getServiceMetrics(
   serviceId: string,
   from?: number,
   to?: number
 ): Promise<MetricPoint[]> {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/metrics`, location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch metrics: ${res.statusText}`);
-  return res.json();
+  return request(
+    withParams(`/api/services/${encodeURIComponent(serviceId)}/metrics`, { from, to })
+  );
 }
 
-export async function getServiceTraffic(
+async function getServiceTraffic(
   serviceId: string,
   from?: number,
   to?: number
 ): Promise<TrafficPoint[]> {
-  const url = new URL(`/api/services/${encodeURIComponent(serviceId)}/traffic`, location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (res.status === 404) return [];
-  if (!res.ok) throw new Error(`Failed to fetch traffic: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getIngressTraffic(
-  from: number,
-  to: number,
-  nodeId?: string
-): Promise<IngressTrafficBreakdown> {
-  const url = new URL("/api/ingress/traffic", location.origin);
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  url.searchParams.set("limit", "200");
-  if (nodeId) url.searchParams.set("nodeId", nodeId);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch ingress traffic: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getBlockedIngressTraffic(
-  from: number,
-  to: number,
-  nodeId?: string
-): Promise<IngressTrafficBreakdown> {
-  const url = new URL("/api/ingress/blocked-traffic", location.origin);
-  url.searchParams.set("from", String(from));
-  url.searchParams.set("to", String(to));
-  url.searchParams.set("limit", "200");
-  if (nodeId) url.searchParams.set("nodeId", nodeId);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch blocked ingress traffic: ${res.statusText}`);
-  return res.json();
-}
-
-export async function setBlockedIngressIp(ip: string, blocked: boolean) {
-  const res = await fetch("/api/ingress/blocked-ips", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ip, blocked })
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to update blocked IPs: ${res.statusText}`);
-  }
-  return res.json() as Promise<IngressBlocklist>;
-}
-
-export async function getIngressBlocklist(): Promise<IngressBlocklist> {
-  const res = await fetch("/api/ingress/blocked-ips");
-  if (!res.ok) throw new Error(`Failed to fetch ingress blocklist: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getNodeMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
-  const url = new URL("/api/metrics/node", location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch node metrics: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getClusterMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
-  const url = new URL("/api/metrics/cluster", location.origin);
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch cluster metrics: ${res.statusText}`);
-  return res.json();
-}
-
-export async function getContainerMetrics(
-  serviceId: string,
-  from?: number,
-  to?: number
-): Promise<MetricPoint[]> {
-  const url = new URL(
-    `/api/services/${encodeURIComponent(serviceId)}/metrics/containers`,
-    location.origin
+  return request(
+    withParams(`/api/services/${encodeURIComponent(serviceId)}/traffic`, { from, to })
   );
-  if (from != null) url.searchParams.set("from", String(from));
-  if (to != null) url.searchParams.set("to", String(to));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch container metrics: ${res.statusText}`);
-  return res.json();
 }
 
-export async function listSlackWebhooks(): Promise<SlackWebhook[]> {
-  const res = await fetch("/api/webhooks/slack");
-  if (!res.ok) throw new Error(`Failed to load webhooks: ${res.statusText}`);
-  return res.json();
+async function getIngressTraffic(from: number, to: number): Promise<IngressTrafficBreakdown> {
+  return request(withParams("/api/ingress/traffic", { from, to, limit: 200 }));
 }
 
-export async function createSlackWebhook(payload: {
+async function getBlockedIngressTraffic(
+  from: number,
+  to: number
+): Promise<IngressTrafficBreakdown> {
+  return request(withParams("/api/ingress/blocked-traffic", { from, to, limit: 200 }));
+}
+
+async function setBlockedIngressIp(ip: string, blocked: boolean): Promise<IngressBlocklist> {
+  return request("/api/ingress/blocked-ips", jsonBody("PATCH", { ip, blocked }));
+}
+
+async function getIngressBlocklist(): Promise<IngressBlocklist> {
+  return request("/api/ingress/blocked-ips");
+}
+
+async function getNodeMetrics(from?: number, to?: number, nodeId?: number): Promise<MetricPoint[]> {
+  return request(withParams("/api/metrics/node", { from, to, nodeId }));
+}
+
+async function getClusterMetrics(from?: number, to?: number): Promise<MetricPoint[]> {
+  return request(withParams("/api/metrics/cluster", { from, to }));
+}
+
+async function listSlackWebhooks(): Promise<SlackWebhook[]> {
+  return request("/api/webhooks/slack");
+}
+
+async function createSlackWebhook(payload: {
   name: string;
   url: string;
   categories: SlackCategory[];
   enabled?: boolean;
 }): Promise<SlackWebhook> {
-  const res = await fetch("/api/webhooks/slack", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to create webhook: ${res.statusText}`);
-  }
-  return res.json();
+  return request("/api/webhooks/slack", jsonBody("POST", payload));
 }
 
-export async function updateSlackWebhook(
+async function updateSlackWebhook(
   id: string,
-  patch: Partial<{ name: string; url: string; categories: SlackCategory[]; enabled: boolean }>
+  patch: Partial<Omit<SlackWebhook, "id">>
 ): Promise<SlackWebhook> {
-  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}`, {
-    method: "PATCH",
+  return request(`/api/webhooks/slack/${encodeURIComponent(id)}`, jsonBody("PATCH", patch));
+}
+
+async function deleteSlackWebhook(id: string): Promise<void> {
+  await request(`/api/webhooks/slack/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function testSlackWebhook(id: string): Promise<void> {
+  await request(`/api/webhooks/slack/${encodeURIComponent(id)}/test`, { method: "POST" });
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const body = await response.text();
+  return (body ? JSON.parse(body) : undefined) as T;
+}
+
+async function errorMessage(response: Response): Promise<string> {
+  const body = await response.text();
+  try {
+    return JSON.parse(body).error ?? body;
+  } catch {
+    return body || response.statusText;
+  }
+}
+
+function jsonBody(method: string, body: unknown): RequestInit {
+  return {
+    method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch)
+    body: JSON.stringify(body)
+  };
+}
+
+function withParams(path: string, params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams(
+    Object.entries(params).flatMap(([name, value]) =>
+      value === undefined || value === "" ? [] : [[name, String(value)]]
+    )
+  ).toString();
+  return search ? `${path}?${search}` : path;
+}
+
+function serviceAction(serviceId: string, action: string, force?: boolean): string {
+  return withParams(`/api/services/${encodeURIComponent(serviceId)}/${action}`, {
+    force: force ? "true" : undefined
   });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Failed to update webhook: ${res.statusText}`);
-  }
-  return res.json();
 }
 
-export async function deleteSlackWebhook(id: string): Promise<void> {
-  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Failed to delete webhook: ${res.statusText}`);
+function deploymentAction(serviceId: string, deploymentId: string, action: string): string {
+  return `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/${action}`;
 }
 
-export async function testSlackWebhook(id: string): Promise<void> {
-  const res = await fetch(`/api/webhooks/slack/${encodeURIComponent(id)}/test`, { method: "POST" });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Test message failed: ${res.statusText}`);
-  }
+function toLogEntry(record: LogRecord): LogEntry {
+  return {
+    seq: record.seq,
+    ts: record.ts,
+    level: record.level,
+    stream: record.stream,
+    text: record.line,
+    message: record.message,
+    source: record.replicaId,
+    nodeId: record.nodeId,
+    nodeName: record.nodeName,
+    serviceId: record.serviceId ?? undefined,
+    deploymentId: record.deploymentId ?? undefined,
+    attrs: record.attributes ? flattenAttributes(record.attributes, "") : undefined
+  };
 }
+
+function flattenAttributes(value: Record<string, unknown>, prefix: string): [string, string][] {
+  return Object.entries(value).flatMap(([name, nested]): [string, string][] => {
+    const path = prefix ? `${prefix}.${name}` : name;
+    if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+      return flattenAttributes(nested as Record<string, unknown>, path);
+    } else {
+      return [[path, typeof nested === "string" ? nested : JSON.stringify(nested)]];
+    }
+  });
+}
+
+export {
+  getClusterInfo,
+  getClusterNodes,
+  getUnschedulableReplicas,
+  setNodeDrain,
+  removeNode,
+  startMaintenance,
+  unfreezeCluster,
+  getClusterStats,
+  getClusterConfig,
+  getServices,
+  getDeployments,
+  getBuildLog,
+  deleteService,
+  redeployService,
+  restartService,
+  freezeService,
+  setServiceReplicas,
+  clearServiceReplicasOverride,
+  cancelDeployment,
+  stopDeployment,
+  queryLogs,
+  getLogHistogram,
+  getDisks,
+  getRoutes,
+  getServiceMetrics,
+  getServiceTraffic,
+  getIngressTraffic,
+  getBlockedIngressTraffic,
+  setBlockedIngressIp,
+  getIngressBlocklist,
+  getNodeMetrics,
+  getClusterMetrics,
+  listSlackWebhooks,
+  createSlackWebhook,
+  updateSlackWebhook,
+  deleteSlackWebhook,
+  testSlackWebhook
+};
+
+export type { NodeError, LogPage, LogHistogramBucket, LogHistogram, MaintenanceTarget };

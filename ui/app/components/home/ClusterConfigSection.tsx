@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
-import type { MaskedConfig } from "../../lib/types";
+import type { ClusterConfig } from "../../lib/types";
 import { clusterConfigQuery } from "../../lib/queries";
 import { SectionHeader } from "../../lib/ui";
 
@@ -30,40 +30,47 @@ function ClusterConfigSection() {
   );
 }
 
-function configRows(config: MaskedConfig) {
-  const items: { label: string; value: string }[] = [
-    ...(config.node.name ? [{ label: "Node name", value: config.node.name }] : []),
-    { label: "Node role", value: config.node.role },
-    { label: "API port", value: String(config.node["api-port"]) },
-    { label: "Gateway port", value: String(config.node["gateway-port"]) },
-    { label: "etcd client port", value: String(config.node["etcd-client-port"]) },
-    { label: "etcd peer port", value: String(config.node["etcd-peer-port"]) },
-    { label: "Ingress ports", value: (config.ingress?.ports ?? []).join(", ") },
-    { label: "Runtime", value: config.runtime },
-    { label: "Builder", value: config.depot ? "depot" : "default" }
+function configRows(config: ClusterConfig) {
+  const enabled = (value: unknown) => (value ? "enabled" : "disabled");
+  const rows: [string, string | null | undefined][] = [
+    ["Cluster network", config.cluster.cidr],
+    ["Ingress ports", config.ingress.ports.join(", ")],
+    [
+      "Default limits",
+      `${config.defaults.resources.cpu} CPU, ${config.defaults.resources.memory} memory`
+    ],
+    [
+      "Default requests",
+      `${config.defaults.resources.request.cpu} CPU, ${config.defaults.resources.request.memory} memory`
+    ],
+    ["Builder", config.depot ? "Depot" : "BuildKit"],
+    ["CLI deployments", enabled(config.allowCliDeployment)],
+    ["Exec", enabled(config.allowExec)],
+    ["Homepage", config.homepage],
+    ["Tags", config.tags?.join(", ")],
+    ["Egress deny", config.egress.deny?.join(", ")],
+    ["Egress allow", config.egress.allow?.join(", ")],
+    ["Tailscale", config.tailscale ? "enabled" : null],
+    ["Tailscale routes", config.tailscale?.advertiseRoutes?.join(", ")],
+    [
+      "Cloudflare tunnel",
+      config.cloudflare ? `${config.cloudflare.tunnel.replicas ?? 1} connectors` : null
+    ],
+    ["PR previews", config.github ? `*.${config.github.previewDomain}` : null],
+    ["Datadog site", config.datadog ? (config.datadog.site ?? "datadoghq.com") : null],
+    [
+      "Datadog health-check logs",
+      config.datadog
+        ? config.datadog.logs?.includeHealthcheck
+          ? "included"
+          : "excluded on success"
+        : null
+    ],
+    ["S3 log backup", config.logBackup ? `s3://${config.logBackup.bucket}` : null]
   ];
-  const advertiseRoutes = config.tailscale?.["advertise-routes"] ?? [];
-  if (advertiseRoutes.length > 0) {
-    items.push({ label: "Tailscale routes", value: advertiseRoutes.join(", ") });
-  }
-  const egressDeny = config.egress?.deny ?? [];
-  if (egressDeny.length > 0) {
-    items.push({ label: "Egress deny", value: egressDeny.join(", ") });
-  }
-  const egressAllow = config.egress?.allow ?? [];
-  if (egressAllow.length > 0) {
-    items.push({ label: "Egress allow", value: egressAllow.join(", ") });
-  }
-  if (config.datadog?.site) {
-    items.push({ label: "Datadog site", value: config.datadog.site });
-  }
-  if (config.datadog) {
-    items.push({
-      label: "Datadog health-check logs",
-      value: config.datadog.logs["include-healthcheck"] ? "included" : "excluded on success"
-    });
-  }
-  return items;
+  return rows
+    .filter((row): row is [string, string] => !!row[1])
+    .map(([label, value]) => ({ label, value }));
 }
 
 export { ClusterConfigSection };

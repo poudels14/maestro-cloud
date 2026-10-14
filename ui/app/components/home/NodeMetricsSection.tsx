@@ -73,7 +73,7 @@ function NodeMetricsSection() {
             <TimelineChart
               data={(nodeMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
               label="CPU"
-              color="#6366f1"
+              color="#93681c"
               yFormat={formatPercent}
               xMin={xMin()}
               xMax={xMax()}
@@ -90,7 +90,7 @@ function NodeMetricsSection() {
             <TimelineChart
               data={(nodeMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
               label="Memory"
-              color="#8b5cf6"
+              color="#4f6d8f"
               yFormat={formatBytes}
               xMin={xMin()}
               xMax={xMax()}
@@ -108,7 +108,7 @@ function NodeMetricsSection() {
             <TimelineChart
               data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.cpuPercent }))}
               label="CPU"
-              color="#0ea5e9"
+              color="#5b7fa3"
               yFormat={formatPercent}
               xMin={xMin()}
               xMax={xMax()}
@@ -125,7 +125,7 @@ function NodeMetricsSection() {
             <TimelineChart
               data={(clusterMetrics.data ?? []).map((m) => ({ ts: m.ts, value: m.memoryBytes }))}
               label="Memory"
-              color="#14b8a6"
+              color="#2f7f7a"
               yFormat={formatBytes}
               xMin={xMin()}
               xMax={xMax()}

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
-import { clusterInfoQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
+import { clusterNodesQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
 import { ErrorBanner } from "../../lib/ui";
 import { ConfirmDialog } from "../home/ConfirmDialog";
 import { DeploymentSheet, type SheetTabId } from "./DeploymentSheet";
@@ -15,7 +15,7 @@ const LOAD_MORE_STEP = 10;
 function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFrozen: boolean }) {
   const queryClient = useQueryClient();
   const deployments = useQuery(() => deploymentsQuery(props.serviceId));
-  const clusterInfo = useQuery(() => clusterInfoQuery());
+  const nodes = useQuery(() => clusterNodesQuery());
   const location = useLocation();
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
@@ -154,11 +154,11 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
                     deployment={deployment}
                     isLatest={index() === 0}
                     isSelected={selectedId() === deployment.id}
-                    clusterInfo={clusterInfo.data ?? null}
+                    nodes={nodes.data ?? []}
                     onOpen={() =>
                       setUrlSheetState({
                         deployment: deployment.id,
-                        tab: ["QUEUED", "BUILDING"].includes(deployment.status) ? "build" : "logs"
+                        tab: ["queued", "building"].includes(deployment.status) ? "build" : "logs"
                       })
                     }
                     onCancel={() => cancelMutation.mutate(deployment.id)}
@@ -185,7 +185,7 @@ function DeploymentsTab(props: { serviceId: string; hasBuild: boolean; deployFro
         tab={sheetTab()}
         onTabChange={(tab) => setUrlSheetState({ tab })}
         onClose={() => setUrlSheetState({ deployment: undefined, tab: undefined })}
-        clusterInfo={clusterInfo.data ?? null}
+        nodes={nodes.data ?? []}
       />
     </>
   );

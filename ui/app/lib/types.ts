@@ -1,14 +1,14 @@
-export interface BuildCommand {
+export type BuildCommand = {
   command: string;
   args: string[];
-}
+};
 
-export interface EnvConfig {
+export type EnvConfig = {
   source?: string | null;
   items?: Record<string, string>;
-}
+};
 
-export interface Build {
+export type Build = {
   repo?: string | null;
   branch?: string | null;
   dockerfile: string;
@@ -17,62 +17,79 @@ export interface Build {
   depot?: { project: string } | null;
   env?: EnvConfig;
   secrets?: EnvConfig;
-}
+};
 
-export interface Ingress {
+export type Ingress = {
   host?: string | null;
   hosts?: string[];
-  port?: number | null;
+  port: number;
   sessionAffinity?: { header: string } | null;
-}
+};
 
-export interface IngressBlocklist {
+export type IngressBlocklist = {
   blockedIps: string[];
+};
+
+export namespace Routes {
+  export type Backend = {
+    replicaId: string;
+    address: string;
+  };
+
+  export type Route = {
+    hosts: string[];
+    backends: Backend[];
+    healthPath?: string | null;
+    affinityHeader?: string | null;
+  };
+
+  export type Table = {
+    routes: Record<string, Route>;
+    blockedIps: string[];
+  };
 }
 
-export interface IngressRouting {
-  serviceId: string;
-  rule: string;
-  entryPoints: string[];
-  servers: string[];
-}
-
-export interface SecretKeyMeta {
-  hash?: string;
-  changed: boolean;
-}
-
-export interface SecretsConfig {
+export type SecretsConfig = {
   mountPath: string;
   source?: string | null;
   items?: Record<string, string>;
-  keys?: Record<string, SecretKeyMeta>;
-}
+};
 
-export interface Deploy {
+export type ResourceConfig = {
+  cpu?: number | null;
+  memory?: string | null;
+  request?: { cpu?: number | null; memory?: string | null } | null;
+};
+
+export type Deploy = {
   flags?: string[];
   exposePorts?: number[];
-  command: BuildCommand | null;
+  command?: BuildCommand | null;
   healthcheckPath?: string | null;
   healthcheckInterval: number;
   replicas: number;
+  exec?: boolean;
   maxRestarts?: number | null;
   env?: EnvConfig;
   secrets?: SecretsConfig | null;
   volumes?: VolumeMount[];
-}
+  nodeAffinity?: { node?: string | null; labels?: Record<string, string> } | null;
+  egress?: { allow?: { cidr: string; ports?: number[] }[] };
+  resources?: ResourceConfig;
+  oomPriority?: "low" | "normal" | "high";
+};
 
-export interface VolumeMount {
+export type VolumeMount = {
   hostPath: string;
   mountPath: string;
   readOnly?: boolean;
   owner?: VolumeOwner;
-}
+};
 
-export interface VolumeOwner {
+export type VolumeOwner = {
   uid: number;
   gid?: number;
-}
+};
 
 export namespace Preview {
   export type Config = {
@@ -88,104 +105,117 @@ export namespace Preview {
     headRef: string;
     headSha: string;
     title: string;
-    createdAt: number;
-    volumesStripped?: boolean;
-    closedAt?: number | null;
+    createdAtMs: number;
+    closedAtMs?: number | null;
   };
 }
 
 export type SlackCategory = "info" | "error";
 
-export interface SlackWebhook {
+export type SlackWebhook = {
   id: string;
   name: string;
   url: string;
   categories: SlackCategory[];
   enabled: boolean;
-}
+};
 
-export interface Service {
-  id: string;
+export type ServiceSpec = {
   name: string;
-  version: string;
-  status?: string | null;
-  build?: Build | null;
   image?: string | null;
+  build?: Build | null;
   deploy: Deploy;
   ingress?: Ingress | null;
-  system?: boolean;
-  deployFrozen?: boolean;
-  replicasOverride?: number | null;
   preview?: Preview.Config | null;
+};
+
+export type DeploymentStatus =
+  | "queued"
+  | "building"
+  | "deploying"
+  | "ready"
+  | "draining"
+  | "stopped"
+  | "failed"
+  | "cancelled";
+
+export type Service = ServiceSpec & {
+  id: string;
+  status: DeploymentStatus | "idle";
+  latestDeployment?: Deployment | null;
+  deployFrozen: boolean;
+  replicasOverride?: number | null;
   previewSource?: Preview.Source | null;
-}
+};
 
-export interface ReplicaState {
-  replicaIndex: number;
-  status: string;
-  healthcheckFailures: number;
-  restartAttempts: number;
-  nodeId?: string | null;
-  assignmentId?: string | null;
-  endpoint?: {
-    containerIp: string;
-    containerHostname: string;
-    ingressContainerPort: number;
-  } | null;
-  error?: string | null;
-}
+export type ReplicaPhase =
+  | "starting"
+  | "running"
+  | "healthy"
+  | "unhealthy"
+  | "restarting"
+  | "failed";
 
-export interface ClusterNode {
-  nodeId: string;
-  hostname: string;
-  role: "master" | "hybrid" | "voter" | "worker";
-  clusterHostIp: string;
-  clusterApiPort: number;
-  adminUrl?: string | null;
-  subnet: string;
-  dataPlaneReady: boolean;
-  dataPlaneError?: string | null;
-  version: string;
-  alive: boolean;
-  lastSeenAtMs: number;
-  lostAtMs?: number | null;
-  state: {
-    unschedulable: boolean;
-    drainedAtMs?: number | null;
-    reason?: string | null;
-  };
-}
+export type ReplicaState = {
+  replicaId: string;
+  deploymentId: string;
+  index: number;
+  phase: ReplicaPhase | "pending";
+  nodeId?: number | null;
+  ip?: string | null;
+  restarts: number;
+  consecutiveFailures: number;
+  lastError?: string | null;
+};
 
-export interface UnschedulableReplica {
+export type NodeCapacity = {
+  cpu: number;
+  memory: string;
+};
+
+export type ClusterNode = {
+  id: number;
+  name: string;
+  role: "voter" | "agent";
+  endpoint: string;
+  subnet?: string | null;
+  runsWorkloads: boolean;
+  capacity: NodeCapacity;
+  reserved: NodeCapacity;
+  labels?: Record<string, string>;
+  state: "active" | "draining" | "removed";
+  available: boolean;
+  replicas: number;
+  allocated: NodeCapacity;
+};
+
+export type UnschedulableReplica = {
   serviceId: string;
   deploymentId: string;
   replicaIndex: number;
   reason: string;
-}
+};
 
-export interface GitCommitInfo {
+export type GitCommitInfo = {
   reference: string;
   message: string;
-}
+};
 
-export interface Deployment {
+export type Deployment = {
   id: string;
-  createdAt: number;
-  deployedAt?: number | null;
-  drainedAt?: number | null;
-  status: string;
-  replicas?: ReplicaState[];
-  config: Service;
-  gitCommit: GitCommitInfo | null;
-  build: DeploymentBuildInfo | null;
-  uploadArchive?: string | null;
-}
+  serviceId: string;
+  spec: ServiceSpec;
+  status: DeploymentStatus;
+  image?: string | null;
+  failure?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  gitCommit?: GitCommitInfo | null;
+  builtOn?: number | null;
+  replicas: ReplicaState[];
+};
 
-export interface DeploymentBuildInfo {
-  dockerImageId: string;
-}
-
-export interface MetricPoint {
+export type MetricPoint = {
   ts: number;
   source: string;
   cpuPercent: number;
@@ -193,9 +223,9 @@ export interface MetricPoint {
   memoryLimitBytes: number;
   netRxBytes: number;
   netTxBytes: number;
-}
+};
 
-export interface TrafficPoint {
+export type TrafficPoint = {
   ts: number;
   serviceId: string;
   deploymentId: string | null;
@@ -208,169 +238,176 @@ export interface TrafficPoint {
   latLe5s: number;
   latLe10s: number;
   latTotal: number;
-}
+};
 
-export interface TrafficBreakdownEntry {
+export type TrafficBreakdownEntry = {
   value: string;
   statusCode: number;
   requests: number;
   lastSeenAtMs: number;
-}
+};
 
-export interface IngressTrafficBreakdown {
+export type IngressTrafficBreakdown = {
   byIp: TrafficBreakdownEntry[];
   byPath: TrafficBreakdownEntry[];
   partial?: boolean;
   unavailableNodes?: number;
-}
+};
 
-export interface DiskInfo {
+export type DiskInfo = {
   name: string;
   mountPoint: string;
   totalBytes: number;
   availableBytes: number;
   fileSystem: string;
-}
+};
 
-export interface ClusterStats {
-  generatedAtMs: number;
-  probe: {
-    version: string;
-    uptimeMs: number;
+export namespace Stats {
+  export type Sink = {
+    id: string;
+    cursor: number;
+    pendingEntries: number;
+    lastSuccessAtMs: number | null;
+    lastErrorAtMs: number | null;
+    lastError: string | null;
+    consecutiveFailures: number;
+    deadLetters: number;
+    deadLetterCapacity: number;
   };
-  controller: ControllerStats | null;
-  controllerHeartbeatAgeMs: number | null;
-  backup: BackupStats;
-  warnings: StatsWarning[];
-}
 
-export interface ControllerStats {
-  reportedAtMs: number;
-  version: string;
-  uptimeMs: number;
-  spool: {
-    rowCount: number;
-    highWatermark: number;
-    oldestEntryAtMs: number | null;
-    databaseBytes: number;
+  export type Backup = {
+    configured: boolean;
+    lastAttemptAtMs: number | null;
+    lastSuccessAtMs: number | null;
+    lastErrorAtMs: number | null;
+    lastError: string | null;
+    pendingPartitions: number;
+    completedPartitionsLastRun: number;
+    failedPartitionsLastRun: number;
+    uploadedBytesLastRun: number;
   };
-  sinks: SinkStats[];
-  deadLetters: {
-    count: number;
-    capacity: number;
-    payloadBytes: number;
-    latestAtMs: number | null;
-    latestStatus: number | null;
-    latestError: string | null;
+
+  export type Node = {
+    nodeId: number;
+    nodeName: string;
+    version: string | null;
+    uptimeMs: number | null;
+    available: boolean;
+    telemetry: boolean;
+    sinks: Sink[];
+    backup: Backup | null;
+  };
+
+  export type Warning = {
+    code: string;
+    severity: "warning" | "error";
+    message: string;
+  };
+
+  export type Cluster = {
+    generatedAtMs: number;
+    term: number;
+    leader: number | null;
+    nodes: Node[];
+    warnings: Warning[];
   };
 }
 
-export interface SinkStats {
-  id: string;
-  cursor: number;
-  pendingEntries: number;
-  oldestPendingAtMs: number | null;
-  lastSuccessAtMs: number | null;
-  lastErrorAtMs: number | null;
-  lastError: string | null;
-  consecutiveFailures: number;
-  lastCursorAdvanceAtMs: number | null;
-  filteredEntries: number;
-}
-
-export interface BackupStats {
-  configured: boolean;
-  lastAttemptAtMs: number | null;
-  lastSuccessAtMs: number | null;
-  lastErrorAtMs: number | null;
-  lastError: string | null;
-  pendingPartitions: number;
-  pendingBytes: number;
-  oldestPendingDate: string | null;
-  uploadedBytesLastRun: number;
-  completedPartitionsLastRun: number;
-  failedPartitionsLastRun: number;
-}
-
-export interface StatsWarning {
-  code: string;
-  severity: "warning" | "error";
-  message: string;
-}
-
-export interface StatsMetricPoint {
-  ts: number;
-  name: string;
-  value: number;
-  labels?: Record<string, string>;
-}
-
-export interface LogEntry {
+export type LogEntry = {
   seq: number;
   ts: number;
   level: string;
   stream: "stdout" | "stderr";
   text: string;
+  message?: string;
   source?: string;
-  origin?: string;
-  hostname?: string;
-  nodeId?: string;
+  nodeId?: number;
   nodeName?: string;
   serviceId?: string;
-  tier?: "service" | "system";
-  tags?: string[];
+  deploymentId?: string;
   attrs?: [string, string][];
+};
+
+export namespace Maintenance {
+  export type Phase = "draining" | "requested" | "verifying" | "restoring" | "succeeded" | "failed";
+
+  export type Step = {
+    nodeId: number;
+    nodeName: string;
+    fromVersion?: string | null;
+    status: string;
+    error?: string | null;
+  };
+
+  export type Run = {
+    runId: string;
+    kind: "upgrade" | "restart";
+    targetVersion: string;
+    requestedAtMs: number;
+    updatedAtMs: number;
+    phase: Phase;
+    currentNodeIndex: number;
+    nodes: Step[];
+    failure?: string | null;
+  };
 }
 
-export type MaskedConfig = {
-  cluster: {
-    name: string;
-    nodes: Record<
-      string,
-      {
-        endpoint: string;
-        subnet: string;
-        role: "master" | "hybrid" | "voter" | "worker";
-      }
-    >;
-  };
-  node: {
-    name?: string | null;
-    role: "master" | "hybrid" | "voter" | "worker";
-    "api-port": number;
-    "gateway-port": number;
-    "etcd-client-port": number;
-    "etcd-peer-port": number;
-  };
+export type ClusterMember = {
+  id: number;
+  address: string;
+};
+
+export type ClusterInfo = {
+  name: string;
+  cidr: string;
+  version: string;
+  nodeId: number;
+  term: number;
+  leader: ClusterMember | null;
+  voters: ClusterMember[];
+  learners: ClusterMember[];
+  maintenance: Maintenance.Run | null;
+};
+
+export type ClusterConfig = {
+  cluster: { name: string; cidr: string };
+  node: { labels?: Record<string, string>; reserve: { cpu?: number; memory?: string } };
   ingress: { ports: number[] };
-  subnet?: string | null;
-  egress: { deny: string[]; allow: string[] };
-  "encryption-key": string | null;
-  tailscale?: { "auth-key": string | null; "advertise-routes": string[] } | null;
-  "jwt-secret-key": string | null;
-  tags: string[];
+  defaults: {
+    resources: {
+      cpu: number;
+      memory: string;
+      request: { cpu: number; memory: string };
+    };
+  };
+  egress: { deny?: string[]; allow?: string[] };
+  tags?: string[];
+  tailscale?: { authKey: string; advertiseRoutes?: string[] } | null;
   datadog?: {
-    "api-key": string | null;
+    apiKey: string;
     site?: string | null;
-    "include-ingress-logs": boolean;
-    "include-tailscale-logs": boolean;
-    logs: { "include-healthcheck": boolean };
-    "include-metrics": boolean;
+    includeIngressLogs?: boolean;
+    includeTailscaleLogs?: boolean;
+    logs?: { includeHealthcheck?: boolean };
+    includeMetrics?: boolean;
   } | null;
-  system?: string | null;
-  runtime: string;
-  depot?: { token: string | null } | null;
-  cloudflare?: {
-    tunnel: { token: string | null; replicas?: number | null };
-  } | null;
-  slack?: { "webhook-url": string | null } | null;
+  depot?: { token: string } | null;
+  cloudflare?: { tunnel: { token: string; replicas?: number } } | null;
+  slack?: { webhookUrl: string } | null;
   github?: {
-    token: string | null;
-    "preview-domain": string;
-    "poll-interval-secs": number;
-    "max-concurrent-previews": number;
+    token: string;
+    previewDomain: string;
+    pollIntervalSecs: number;
+    maxConcurrentPreviews: number;
   } | null;
   homepage?: string | null;
-  "disable-etcd-cert": boolean;
-  "allow-cli-deployment": boolean;
+  logBackup?: {
+    bucket: string;
+    kmsKeyId: string;
+    region?: string | null;
+    prefix?: string | null;
+    retentionDays?: number | null;
+  } | null;
+  allowCliDeployment: boolean;
+  allowExec: boolean;
 };

@@ -14,7 +14,7 @@ export type ExecUpstreamConstructor = new (
 
 export interface ExecProxyContext {
   url: string;
-  authorization: string;
+  authorization?: string;
   upstream?: ExecUpstream;
   pending: Uint8Array[];
 }
@@ -42,7 +42,7 @@ function forwardUpstreamMessage(peer: ExecProxyPeer, data: unknown) {
 export function openExecProxy(peer: ExecProxyPeer, WebSocketClient: ExecUpstreamConstructor) {
   const context = proxyContext(peer);
   const upstream = new WebSocketClient(context.url, [], {
-    headers: { authorization: context.authorization }
+    headers: context.authorization ? { authorization: context.authorization } : {}
   });
   context.upstream = upstream;
   upstream.binaryType = "arraybuffer";

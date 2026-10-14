@@ -17,15 +17,8 @@ function ClusterLogsSection() {
   const location = useLocation();
   const navigate = useNavigate();
   const search = () => location().search as ClusterLogsSearch;
-  const userServices = createMemo(() =>
-    (services.data ?? [])
-      .filter((service) => !service.system)
-      .sort((left, right) => left.name.localeCompare(right.name))
-  );
-  const systemServices = createMemo(() =>
-    (services.data ?? [])
-      .filter((service) => service.system)
-      .sort((left, right) => left.name.localeCompare(right.name))
+  const sortedServices = createMemo(() =>
+    [...(services.data ?? [])].sort((left, right) => left.name.localeCompare(right.name))
   );
   const setUrlSearch = (updates: ClusterLogsSearch) =>
     navigate({
@@ -52,9 +45,9 @@ function ClusterLogsSection() {
               <option value="">All nodes</option>
               <For each={nodes.data ?? []}>
                 {(node) => (
-                  <option value={node.nodeId} disabled={!node.alive}>
-                    {node.hostname}
-                    {node.alive ? "" : " (offline)"}
+                  <option value={node.id} disabled={!node.available}>
+                    {node.name}
+                    {node.available ? "" : " (offline)"}
                   </option>
                 )}
               </For>
@@ -70,29 +63,20 @@ function ClusterLogsSection() {
               class="min-w-48 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-normal text-gray-700 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
             >
               <option value="">All services</option>
-              <optgroup label="User services">
-                <For each={userServices()}>
-                  {(service) => <option value={service.id}>{service.name}</option>}
-                </For>
-              </optgroup>
-              <optgroup label="System services">
-                <For each={systemServices()}>
-                  {(service) => <option value={service.id}>{service.name}</option>}
-                </For>
-              </optgroup>
+              <For each={sortedServices()}>
+                {(service) => <option value={service.id}>{service.name}</option>}
+              </For>
             </select>
           </label>
         </div>
       </div>
       <div class="min-h-0 flex-1">
         <LogViewer
-          serviceId={search().service ?? ""}
-          deploymentId={null}
-          isSystem={false}
-          hasBuild={false}
+          scope={search().service ? `service:${search().service}` : ""}
+          nodeId={search().node ? Number(search().node) : undefined}
+          showHost
           showHistogram
           fillHeight
-          cluster={{ nodeId: search().node }}
           query={search().query ?? ""}
           onQueryChange={(value) => setUrlSearch({ query: value || undefined })}
           range={search().range}

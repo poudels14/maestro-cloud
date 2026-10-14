@@ -16,7 +16,7 @@ export function TimelineChart(props: {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
 
-  const color = () => props.color ?? "#6366f1";
+  const color = () => props.color ?? "#93681c";
   const height = () => props.height ?? 180;
 
   const margin = { top: 12, right: 16, bottom: 28, left: 52 };
@@ -44,7 +44,7 @@ export function TimelineChart(props: {
         .attr("x", width / 2)
         .attr("y", height() / 2)
         .attr("text-anchor", "middle")
-        .attr("fill", "#9ca3af")
+        .attr("fill", "#98a2b3")
         .attr("font-size", "12px")
         .text("No data");
       return;
@@ -73,9 +73,9 @@ export function TimelineChart(props: {
           .ticks(6)
           .tickFormat((d) => d3.timeFormat("%H:%M")(d as Date))
       )
-      .call((g) => g.select(".domain").attr("stroke", "#e5e7eb"))
-      .call((g) => g.selectAll(".tick line").attr("stroke", "#e5e7eb"))
-      .call((g) => g.selectAll(".tick text").attr("fill", "#9ca3af").attr("font-size", "10px"));
+      .call((g) => g.select(".domain").attr("stroke", "#dce1e8"))
+      .call((g) => g.selectAll(".tick line").attr("stroke", "#dce1e8"))
+      .call((g) => g.selectAll(".tick text").attr("fill", "#98a2b3").attr("font-size", "10px"));
 
     const yFormat = props.yFormat ?? ((v: number) => String(Math.round(v)));
     g.append("g")
@@ -89,8 +89,8 @@ export function TimelineChart(props: {
           ) => string)
       )
       .call((g) => g.select(".domain").remove())
-      .call((g) => g.selectAll(".tick line").attr("x2", innerWidth).attr("stroke", "#f3f4f6"))
-      .call((g) => g.selectAll(".tick text").attr("fill", "#9ca3af").attr("font-size", "10px"));
+      .call((g) => g.selectAll(".tick line").attr("x2", innerWidth).attr("stroke", "#eaedf2"))
+      .call((g) => g.selectAll(".tick text").attr("fill", "#98a2b3").attr("font-size", "10px"));
 
     const line = d3
       .line<DataPoint>()
@@ -149,7 +149,7 @@ export function TimelineChart(props: {
       .attr("stroke-width", 1.5);
     const tooltipText = tooltip
       .append("text")
-      .attr("fill", "#374151")
+      .attr("fill", "#3a4352")
       .attr("font-size", "11px")
       .attr("text-anchor", "start")
       .attr("dy", -8);
@@ -202,7 +202,7 @@ export function TimelineChart(props: {
         .append("text")
         .attr("x", 16)
         .attr("y", 4)
-        .attr("fill", "#6b7280")
+        .attr("fill", "#697386")
         .attr("font-size", "10px")
         .text(props.label);
       legendG
@@ -217,7 +217,7 @@ export function TimelineChart(props: {
         .append("text")
         .attr("x", 76)
         .attr("y", 4)
-        .attr("fill", "#6b7280")
+        .attr("fill", "#697386")
         .attr("font-size", "10px")
         .text(props.secondarySeries.label);
     }

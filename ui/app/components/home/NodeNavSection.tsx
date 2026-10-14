@@ -1,10 +1,6 @@
-import { Show } from "solid-js";
 import { useNavigate } from "@tanstack/solid-router";
-import { useQuery } from "@tanstack/solid-query";
 import { Activity, ArrowLeftRight, Info, LayoutGrid, Network, ScrollText } from "lucide-solid";
 import { SidebarNavItem, SidebarSection } from "../service-detail/Sidebar";
-import { clusterInfoQuery } from "../../lib/queries";
-import { isPartOfCluster } from "../../lib/systemServices";
 
 type HomeTab =
   | "info"
@@ -17,7 +13,6 @@ type HomeTab =
 
 function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
   const navigate = useNavigate();
-  const cluster = useQuery(() => clusterInfoQuery());
 
   const go = (
     to: "/" | "/metrics" | "/services" | "/cluster" | "/cluster/logs" | "/traffic" | "/http-logs"
@@ -70,22 +65,20 @@ function NodeNavSection(props: { active?: HomeTab; onNavigate?: () => void }) {
           onClick={() => go("/http-logs")}
         />
       </SidebarSection>
-      <Show when={isPartOfCluster(cluster.data)}>
-        <SidebarSection title="Cluster">
-          <SidebarNavItem
-            label="Nodes"
-            icon={Network}
-            selected={props.active === "cluster"}
-            onClick={() => go("/cluster")}
-          />
-          <SidebarNavItem
-            label="Logs"
-            icon={ScrollText}
-            selected={props.active === "cluster-logs"}
-            onClick={() => go("/cluster/logs")}
-          />
-        </SidebarSection>
-      </Show>
+      <SidebarSection title="Cluster">
+        <SidebarNavItem
+          label="Nodes"
+          icon={Network}
+          selected={props.active === "cluster"}
+          onClick={() => go("/cluster")}
+        />
+        <SidebarNavItem
+          label="Logs"
+          icon={ScrollText}
+          selected={props.active === "cluster-logs"}
+          onClick={() => go("/cluster/logs")}
+        />
+      </SidebarSection>
     </>
   );
 }

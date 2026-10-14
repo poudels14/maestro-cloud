@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { LogViewer } from "../logs/LogViewer";
 
-const INGRESS_ACCESS_LOG_QUERY = "@maestro.log_type:ingress_access OR @RequestMethod:*";
+const INGRESS_ACCESS_LOG_QUERY = "@maestro.log_type:ingress_access";
 
 function HttpLogsSection() {
   const location = useLocation();
@@ -13,11 +13,7 @@ function HttpLogsSection() {
 
   return (
     <LogViewer
-      serviceId="maestro-ingress"
-      deploymentId={null}
-      isSystem
-      hasBuild={false}
-      phase="deploy"
+      scope="replica:maestro-traefik"
       showHistogram
       histogramGroupBy="status"
       fillHeight

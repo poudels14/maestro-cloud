@@ -22,7 +22,7 @@ export const Route = createRootRoute({
       },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        href: "https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       }
     ],
     meta: [
@@ -73,9 +73,12 @@ function SchedulingBanner() {
 
 function MaintenanceBanner() {
   const cluster = useQuery(() => clusterInfoQuery({ pollForMaintenance: true }));
-  const isUpgrading = () => cluster.data?.upgrading ?? false;
-  const isRestarting = () => cluster.data?.restarting ?? false;
-  const isMaintaining = () => isUpgrading() || isRestarting();
+  const run = () => cluster.data?.maintenance ?? null;
+  const isRestarting = () => run()?.kind === "restart";
+  const isMaintaining = () => {
+    const phase = run()?.phase;
+    return phase !== undefined && phase !== "succeeded" && phase !== "failed";
+  };
   const [dismissed, setDismissed] = createSignal(false);
   const [nowMs, setNowMs] = createSignal(Date.now());
 
@@ -90,7 +93,7 @@ function MaintenanceBanner() {
   });
 
   const elapsedLabel = () => {
-    const startedAtMs = cluster.data?.upgradeRun?.requestedAtMs;
+    const startedAtMs = run()?.requestedAtMs;
     if (!startedAtMs) return null;
     return formatElapsed(nowMs() - startedAtMs);
   };

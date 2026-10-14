@@ -98,7 +98,7 @@ function MetricsTab(props: { service: Service }) {
         <TimelineChart
           data={cpuData()}
           label="CPU"
-          color="#6366f1"
+          color="#93681c"
           yFormat={formatPercent}
           xMin={xMin()}
           xMax={xMax()}
@@ -109,7 +109,7 @@ function MetricsTab(props: { service: Service }) {
         <TimelineChart
           data={memData()}
           label="Memory"
-          color="#8b5cf6"
+          color="#4f6d8f"
           yFormat={formatBytes}
           xMin={xMin()}
           xMax={xMax()}
@@ -120,11 +120,11 @@ function MetricsTab(props: { service: Service }) {
         <TimelineChart
           data={netRxData()}
           label="RX"
-          color="#10b981"
+          color="#2e7a57"
           yFormat={formatBytes}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: netTxData(), color: "#f59e0b", label: "TX" }}
+          secondarySeries={{ data: netTxData(), color: "#c5861a", label: "TX" }}
         />
       </ChartCard>
 
@@ -138,11 +138,11 @@ function MetricsTab(props: { service: Service }) {
         <TimelineChart
           data={totalReqRate()}
           label="req/s"
-          color="#6366f1"
+          color="#93681c"
           yFormat={formatRate}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: errorReqRate(), color: "#ef4444", label: "errors/s" }}
+          secondarySeries={{ data: errorReqRate(), color: "#b23a3f", label: "errors/s" }}
         />
       </ChartCard>
 
@@ -156,11 +156,11 @@ function MetricsTab(props: { service: Service }) {
         <TimelineChart
           data={p50LatencyMs()}
           label="p50"
-          color="#06b6d4"
+          color="#5b7fa3"
           yFormat={formatMs}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: p95LatencyMs(), color: "#f59e0b", label: "p95" }}
+          secondarySeries={{ data: p95LatencyMs(), color: "#c5861a", label: "p95" }}
         />
       </ChartCard>
 
@@ -174,11 +174,11 @@ function MetricsTab(props: { service: Service }) {
         <TimelineChart
           data={bytesInRate()}
           label="in/s"
-          color="#10b981"
+          color="#2e7a57"
           yFormat={formatBytesRate}
           xMin={xMin()}
           xMax={xMax()}
-          secondarySeries={{ data: bytesOutRate(), color: "#f97316", label: "out/s" }}
+          secondarySeries={{ data: bytesOutRate(), color: "#a96c10", label: "out/s" }}
         />
       </ChartCard>
     </div>
