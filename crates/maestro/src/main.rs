@@ -127,6 +127,10 @@ enum ServerCommand {
     JoinToken {
         #[arg(long, default_value = "/var/lib/maestro")]
         data_dir: PathBuf,
+        #[arg(long, value_parser = join::parse_role, default_value = "worker")]
+        role: maestro_core::NodeRole,
+        #[arg(long, value_parser = parse_ttl, default_value = "5m")]
+        ttl: u64,
     },
 }
 
@@ -159,7 +163,11 @@ async fn run_cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Server(ServerCommand::Init(args)) => server::init(args).await,
-        Command::Server(ServerCommand::JoinToken { data_dir }) => join::create_token(&data_dir),
+        Command::Server(ServerCommand::JoinToken {
+            data_dir,
+            role,
+            ttl,
+        }) => join::create_token(&data_dir, role, ttl),
         Command::Join(args) => join::join(args).await,
         Command::Dev(command) => dev::run(command).await,
         Command::Context(command) => contexts::run(command),
@@ -287,4 +295,9 @@ fn datadog_config(
             })
         }
     }
+}
+
+fn parse_ttl(value: &str) -> Result<u64, String> {
+    maestro_core::parse_duration_secs(value)
+        .ok_or_else(|| format!("invalid duration {value}; use e.g. 5m, 1h, or 1d"))
 }

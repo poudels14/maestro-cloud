@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::Args;
+use hmac::{Hmac, KeyInit, Mac};
 use maestro_agent::{WIREGUARD_PORT, detect_capacity, load_or_generate_key, system_reserve};
 use maestro_control::allocate_subnet;
 use maestro_core::{
@@ -12,12 +13,13 @@ use maestro_core::{
 use maestro_proto::pb::cluster_client::ClusterClient;
 use maestro_proto::{CertRole, ClusterCa, NodeCredentials, connect_pinned};
 use maestro_store::{Consensus, Mutation};
+use sha2::Sha256;
 use tonic::{Code, Status};
 
 use crate::cluster_service::{decode, encode};
 use crate::identity::{NodeIdentity, hostname, random_node_id};
 
-const TOKEN_PREFIX: &str = "mj1";
+const TOKEN_PREFIX: &str = "mj2";
 const JOIN_SECRET_FILE: &str = "join.key";
 const LEADER_MARKER: &str = "leader=";
 
@@ -29,8 +31,8 @@ pub struct JoinArgs {
     token: String,
     #[arg(long)]
     advertise: String,
-    #[arg(long, value_parser = parse_role, default_value = "worker")]
-    role: NodeRole,
+    #[arg(long, value_parser = parse_role)]
+    role: Option<NodeRole>,
     #[arg(long, default_value = "/var/lib/maestro")]
     data_dir: PathBuf,
     #[arg(long)]
@@ -61,14 +63,14 @@ impl JoinAuthority {
         request: JoinRequest,
     ) -> Result<JoinResponse, Status> {
         let leader = consensus.current_leader().map(|(_, address)| address);
-        let authorized = constant_time_eq(request.secret.as_bytes(), self.secret.as_bytes());
+        let authorized = verify_grant(&self.secret, &request.secret, request.role, unix_now());
         match (consensus.is_leader(), authorized) {
             (false, _) => Err(Status::failed_precondition(format!(
                 "not the leader; {LEADER_MARKER}{}",
                 leader.unwrap_or_default()
             ))),
-            (true, false) => Err(Status::permission_denied("invalid join token")),
-            (true, true) => self.register(consensus, cluster, request).await,
+            (true, Err(problem)) => Err(Status::permission_denied(problem)),
+            (true, Ok(())) => self.register(consensus, cluster, request).await,
         }
     }
 
@@ -141,13 +143,10 @@ impl JoinAuthority {
     }
 }
 
-pub fn create_token(data_dir: &Path) -> anyhow::Result<()> {
+pub fn create_token(data_dir: &Path, role: NodeRole, ttl_secs: u64) -> anyhow::Result<()> {
     let ca = ClusterCa::load(&data_dir.join("pki"))?;
-    println!(
-        "{TOKEN_PREFIX}.{}.{}",
-        ca.fingerprint()?,
-        join_secret(data_dir)?
-    );
+    let grant = sign_grant(&join_secret(data_dir)?, role, unix_now() + ttl_secs);
+    println!("{TOKEN_PREFIX}.{}.{grant}", ca.fingerprint()?);
     Ok(())
 }
 
@@ -166,6 +165,13 @@ pub fn join_secret(data_dir: &Path) -> anyhow::Result<String> {
 
 pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
     let (fingerprint, secret) = parse_token(&args.token)?;
+    let role = grant_role(&secret).context("the join token does not name a role")?;
+    anyhow::ensure!(
+        args.role.is_none_or(|requested| requested == role),
+        "this join token admits a {} node; mint one with --role {}",
+        role_name(role),
+        args.role.map(role_name).unwrap_or_default()
+    );
     let config = match &args.config {
         Some(source) => {
             ClusterConfig::load_with(source, &crate::secret_sources::read_config_source)?
@@ -180,7 +186,7 @@ pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
     let request = JoinRequest {
         secret,
         name: args.name.clone().unwrap_or_else(hostname),
-        role: args.role,
+        role,
         advertise: args.advertise.clone(),
         capacity,
         reserved: system_reserve(&capacity, &config.node.reserve),
@@ -202,7 +208,7 @@ pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
         }
         other => other?,
     };
-    persist(&args, response)?;
+    persist(&args, role, response)?;
     println!(
         "joined the cluster; start the node with `maestro agent --data-dir {} --advertise {}`",
         args.data_dir.display(),
@@ -223,7 +229,7 @@ async fn request_join(
     decode(&reply.into_inner())
 }
 
-fn persist(args: &JoinArgs, response: JoinResponse) -> anyhow::Result<()> {
+fn persist(args: &JoinArgs, role: NodeRole, response: JoinResponse) -> anyhow::Result<()> {
     let pki = args.data_dir.join("pki");
     let credentials = NodeCredentials {
         cert_pem: response.cert_pem,
@@ -241,7 +247,7 @@ fn persist(args: &JoinArgs, response: JoinResponse) -> anyhow::Result<()> {
     NodeIdentity {
         id: response.node_id,
         name: args.name.clone().unwrap_or_else(hostname),
-        role: args.role,
+        role,
         subnet: response.subnet,
         advertise: args.advertise.clone(),
         seeds: response.voters,
@@ -253,8 +259,67 @@ fn persist(args: &JoinArgs, response: JoinResponse) -> anyhow::Result<()> {
 fn parse_token(token: &str) -> anyhow::Result<(String, String)> {
     match token.trim().splitn(3, '.').collect::<Vec<_>>().as_slice() {
         [TOKEN_PREFIX, fingerprint, secret] => Ok((fingerprint.to_string(), secret.to_string())),
-        _ => anyhow::bail!("invalid join token; expected {TOKEN_PREFIX}.<ca-fingerprint>.<secret>"),
+        _ => anyhow::bail!(
+            "invalid join token; mint a new one with `maestro server join-token --role <voter|worker>`"
+        ),
     }
+}
+
+fn sign_grant(secret: &str, role: NodeRole, expires_at: u64) -> String {
+    let claims = format!("{}-{expires_at}", role_name(role));
+    format!("{claims}-{}", grant_signature(secret, &claims))
+}
+
+fn verify_grant(secret: &str, grant: &str, requested: NodeRole, now: u64) -> Result<(), String> {
+    let (claims, signature) = grant
+        .rsplit_once('-')
+        .ok_or_else(|| "invalid join token".to_string())?;
+    let expires_at = claims
+        .split_once('-')
+        .and_then(|(_, expires_at)| expires_at.parse::<u64>().ok())
+        .ok_or_else(|| "invalid join token".to_string())?;
+    let expected = grant_signature(secret, claims);
+    match (
+        constant_time_eq(signature.as_bytes(), expected.as_bytes()),
+        grant_role(grant) == Some(requested),
+        expires_at >= now,
+    ) {
+        (false, _, _) => Err("invalid join token".to_string()),
+        (true, false, _) => Err(format!(
+            "this join token does not admit {} nodes",
+            role_name(requested)
+        )),
+        (true, true, false) => Err("the join token has expired; mint a new one".to_string()),
+        (true, true, true) => Ok(()),
+    }
+}
+
+fn grant_role(grant: &str) -> Option<NodeRole> {
+    match grant.split('-').next()? {
+        "voter" => Some(NodeRole::Voter),
+        "worker" => Some(NodeRole::Worker),
+        _ => None,
+    }
+}
+
+fn grant_signature(secret: &str, claims: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .unwrap_or_else(|_| unreachable!("HMAC accepts keys of any length"));
+    mac.update(claims.as_bytes());
+    hex_encode(&mac.finalize().into_bytes())
+}
+
+fn role_name(role: NodeRole) -> &'static str {
+    match role {
+        NodeRole::Voter => "voter",
+        NodeRole::Worker => "worker",
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 fn cert_role(role: NodeRole) -> CertRole {
@@ -264,7 +329,7 @@ fn cert_role(role: NodeRole) -> CertRole {
     }
 }
 
-fn parse_role(value: &str) -> Result<NodeRole, String> {
+pub fn parse_role(value: &str) -> Result<NodeRole, String> {
     match value {
         "voter" => Ok(NodeRole::Voter),
         "worker" | "agent" => Ok(NodeRole::Worker),
@@ -320,13 +385,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn join_grants_admit_only_their_role_until_they_expire() {
+        let grant = sign_grant("secret", NodeRole::Worker, 1_000);
+        assert_eq!(grant_role(&grant), Some(NodeRole::Worker));
+        assert_eq!(
+            verify_grant("secret", &grant, NodeRole::Worker, 999),
+            Ok(())
+        );
+        assert!(verify_grant("secret", &grant, NodeRole::Voter, 999).is_err());
+        assert!(verify_grant("secret", &grant, NodeRole::Worker, 1_001).is_err());
+        assert!(verify_grant("other", &grant, NodeRole::Worker, 999).is_err());
+        let forged = grant.replacen("worker", "voter", 1);
+        assert!(verify_grant("secret", &forged, NodeRole::Voter, 999).is_err());
+        let extended = grant.replacen("1000", "9999999999", 1);
+        assert!(verify_grant("secret", &extended, NodeRole::Worker, 999).is_err());
+    }
+
+    #[test]
     fn parses_join_tokens() {
         assert_eq!(
-            parse_token("mj1.abcdef.s3cret").unwrap(),
-            ("abcdef".to_string(), "s3cret".to_string())
+            parse_token("mj2.abcdef.worker-100-sig").unwrap(),
+            ("abcdef".to_string(), "worker-100-sig".to_string())
         );
-        assert!(parse_token("mj2.abcdef.s3cret").is_err());
-        assert!(parse_token("mj1.only-two").is_err());
+        assert!(parse_token("mj1.abcdef.s3cret").is_err());
+        assert!(parse_token("mj2.only-two").is_err());
     }
 
     #[test]

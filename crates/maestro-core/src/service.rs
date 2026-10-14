@@ -475,7 +475,11 @@ fn absolute_path_problem(label: &str, path: &str) -> Option<String> {
 pub fn parse_duration_secs(value: &str) -> Option<u64> {
     let trimmed = value.trim();
     let unit = trimmed.chars().last()?;
-    let amount = trimmed[..trimmed.len() - 1].parse::<u64>().ok()?;
+    let amount = trimmed
+        .strip_suffix(unit)?
+        .parse::<u64>()
+        .ok()
+        .filter(|amount| *amount > 0)?;
     let multiplier = match unit {
         's' => Some(1),
         'm' => Some(60),
@@ -483,7 +487,7 @@ pub fn parse_duration_secs(value: &str) -> Option<u64> {
         'd' => Some(86_400),
         _ => None,
     }?;
-    (amount > 0).then_some(amount * multiplier)
+    amount.checked_mul(multiplier)
 }
 
 fn default_replicas() -> u32 {
@@ -638,6 +642,10 @@ mod tests {
         assert_eq!(parse_duration_secs("1d"), Some(86_400));
         assert_eq!(parse_duration_secs("0h"), None);
         assert_eq!(parse_duration_secs("2w"), None);
+        assert_eq!(parse_duration_secs("5é"), None);
+        assert_eq!(parse_duration_secs("é"), None);
+        assert_eq!(parse_duration_secs("99999999999999999999d"), None);
+        assert_eq!(parse_duration_secs("18446744073709551615d"), None);
     }
 
     #[test]

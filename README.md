@@ -164,7 +164,7 @@ ranges, `AND`/`OR`/`NOT`/`-`, and `*`/`?` wildcards.
 ```text
 maestro dev up|reload|down|status        local cluster in a Lima VM
 maestro server init                      initialize a cluster on this node
-maestro server join-token                print a token for joining nodes
+maestro server join-token --role R       print a join token for a voter or worker
 maestro join --server … --token … --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
@@ -219,18 +219,19 @@ and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and
    signing key, and the join secret in the data dir, then bootstraps a one-voter Raft
    group.
 
-2. Print a join token on any voter:
+2. Print a join token on any voter. A token admits only the role it was minted for
+   and expires after `--ttl` (default 5m):
 
    ```bash
-   sudo maestro server join-token
-   # mj1.<ca-sha256-fingerprint>.<secret>
+   sudo maestro server join-token --role worker   # or --role voter
+   # mj2.<ca-sha256-fingerprint>.<role>-<expiry>-<signature>
    ```
 
 3. Join other nodes:
 
    ```bash
    sudo maestro join --server 10.20.0.11:7400 --token "$TOKEN" \
-     --advertise 10.20.0.12:7400 --role voter   # or worker (default)
+     --advertise 10.20.0.12:7400                # the role comes from the token
    sudo systemctl start maestro
    ```
 
@@ -310,11 +311,13 @@ other nodes join with a token.
 On the first node, mint a join token and an API token:
 
 ```bash
-sudo maestro server join-token
+sudo maestro server join-token --role worker --ttl 30m
 sudo maestro token create --subject laptop
 ```
 
-Joining nodes set `join.server`, `join.tokenFile`, and optionally `join.role = "voter"`:
+Joining nodes set `join.server`, `join.tokenFile` (a token minted for their role; it is
+only used on first boot, so it just has to be fresh then), and optionally
+`join.role = "voter"`:
 
 ```nix
 services.maestro = {
