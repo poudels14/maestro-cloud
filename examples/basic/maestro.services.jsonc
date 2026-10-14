@@ -1,0 +1,21 @@
+{
+  "services": {
+    "web": {
+      "name": "Web",
+      "image": "nginx:1.27-alpine",
+      "ingress": { "host": "web.localhost", "port": 80 },
+      "deploy": {
+        "replicas": 2,
+        "healthcheckPath": "/",
+        "healthcheckInterval": 5,
+        "env": { "items": { "APP_ENV": "development" } },
+        "resources": {
+          "cpu": 1,
+          "memory": "512Mi",
+          "request": { "cpu": 0.1, "memory": "64Mi" }
+        },
+        "oomPriority": "normal"
+      }
+    }
+  }
+}

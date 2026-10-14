@@ -1,194 +1,107 @@
-# Multi-node Maestro
+# Multi-node clusters
 
-Maestro uses the EC2 private network for its control API, consensus traffic, and
-the internal workload gateway. Tailscale remains optional and is not part of
-cluster correctness.
+A Maestro cluster has 1, 3, or 5 **voters** and any number of **agents**.
 
-## Configuration contract
+- **Voters** run the control plane (Raft over mTLS gRPC with redb storage, the API,
+  the scheduler, the deployer, and the build queue) and also run workloads.
+- **Agents** run workloads only. They hold no cluster state and receive exactly the
+  replica plans, routes, DNS records, and mesh peers they need from the leader.
 
-Declare every planned node in one shared `cluster.nodes` map and select the local
-entry with the top-level `node` string:
+Use three voters for production; the cluster stays writable while a majority of
+voters is up. Agents can scale to hundreds of nodes.
 
-```jsonc
-{
-  "node": "node1",
-  "cluster": {
-    "name": "prod",
-    "nodes": {
-      "node1": {
-        "endpoint": "10.20.0.11",
-        "subnet": "10.1.0.0/24",
-        "role": "master"
-      },
-      "node2": {
-        "endpoint": "10.20.0.12:3100",
-        "subnet": "10.2.0.0/24"
-      },
-      "node3": {
-        "endpoint": "10.20.0.13",
-        "subnet": "10.3.0.0/24",
-        "role": "voter"
-      }
-    },
-    "join-secret": "<high-entropy-secret-of-at-least-32-characters>"
-  },
-  "ingress": { "port": 8080 },
-  "jwt-secret-key": "<at-least-32-character-jwt-secret>",
-  "encryption-key": "<encryption-key>",
-  "runtime": "docker"
-}
-```
+## Ports
 
-On the second machine, use the same cluster map and set `"node": "node2"`.
-The node entry supplies its workload subnet, private control address, optional
-API port, and optional role. The role defaults to `hybrid`; exactly one node must
-still explicitly use `master`. When the endpoint has no port, the API defaults
-to `3000`.
+| Port | Protocol | Between | Purpose |
+|---|---|---|---|
+| 7400 | TCP | all nodes and voters | gRPC: Raft, joins, and the agent control stream (mTLS) |
+| 51820 | UDP | all nodes | WireGuard mesh carrying replica traffic |
+| 3000 | TCP | localhost on voters | token-protected HTTP API for the CLI |
+| 80, 443 | TCP | public or load balancer | Traefik ingress |
 
-`cluster.control-allow-cidrs` is optional defense in depth. When configured, it
-restricts signed join requests to those private source ranges and must include
-every configured control endpoint. When omitted, the high-entropy join secret,
-the private source-address check, and live endpoint/subnet reservations remain
-the admission boundary.
+Ports are fixed; nothing is randomly assigned. The NixOS module opens 7400, 51820,
+and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and
+51820/udp from the cluster's security group.
 
-This is a breaking config format. The old node array, top-level cluster subnet,
-`node.role`, and explicit cluster gateway/etcd port fields are not accepted.
-Standalone installations continue to use a top-level `subnet` and omit both
-`cluster.nodes` and the top-level `node` selector.
+## Forming a cluster
 
-The shared map lets Maestro reject duplicate API endpoints, overlapping workload
-subnets, workload/control-network overlap, missing control CIDR coverage, and an
-invalid voter count before startup. Node names are lowercase DNS labels. Every
-cluster must have exactly one `master`, and the total number of master, hybrid,
-and voter nodes must be one or three.
+1. Initialize the first node (done automatically by the NixOS module when
+   `join.server` is unset):
 
-## Roles and bootstrap
-
-- `master` is the one-time bootstrap authority. It votes and runs workloads.
-- `hybrid` votes and runs workloads.
-- `voter` runs the control plane without workloads.
-- `worker` runs workloads without a local etcd member.
-
-The master starts a one-member etcd cluster immediately. It does not wait for an
-inbound connectivity check and it does not retain permanent leadership. Once the
-cluster is formed, ordinary lease-based election selects the leader.
-
-Additional voters join as learners and are promoted after catching up. A signed
-join using `cluster.join-secret` is the admission authority, so adding a node does
-not require restarting existing voters. The live etcd member list and signed port
-reservations are authoritative after bootstrap; `cluster.nodes` remains the
-shared desired-membership and subnet preflight map.
-
-## Ports and AWS security groups
-
-The API port is the endpoint port or `3000`. On first startup, each node asks the
-operating system for three distinct unused TCP ports for the gateway, etcd client,
-and etcd peer listeners. Maestro writes them to:
-
-```text
-<cluster-data-dir>/system/cluster-ports.json
-```
-
-Those ports are reused on restart and advertised in the signed join request.
-They are not derived from the API port and must not be edited after a node has
-joined.
-
-AWS security groups apply to private traffic too. Allow these inbound flows from
-the cluster's security group (or a narrowly scoped private CIDR):
-
-- the configured API port on every node;
-- the persisted gateway port on master, hybrid, and worker nodes;
-- the persisted etcd client port on voters;
-- the persisted etcd peer port between voters.
-
-Do not expose etcd publicly. Maestro binds these listeners to the selected private
-endpoint IP and uses cluster-issued mTLS, but it does not modify the host firewall
-or the EC2 security group.
-
-At startup Maestro logs the selected ports. The master's admin UI also displays
-the effective ports and a formation banner while fewer live nodes are registered
-than the shared map declares. This allows the master to start and report the exact
-security-group changes even when inbound traffic is initially blocked.
-
-## Workload subnet rules
-
-Every node gets one canonical private IPv4 `/24`. These subnets must be unique and
-non-overlapping across the shared map. They also must not overlap any control CIDR
-or contain a configured EC2 private endpoint.
-
-The workload subnet is an internal container address pool behind that node's
-gateway; it is not an AWS subnet and AWS does not assign those addresses to EC2
-interfaces. Ranges such as `10.1.0.0/24`, `10.2.0.0/24`, and `10.3.0.0/24` are
-valid only when the VPC/control ranges and other routed networks do not overlap
-them.
-
-Maestro reserves the gateway and fixed-address system containers near the high
-end of each `/24`; workload replicas use the remaining addresses. Cross-node
-requests enter through the destination node's mTLS gateway rather than routing
-container subnets through Tailscale.
-
-## Form a cluster
-
-1. Put the shared map and secrets in the common config source.
-2. Give each instance a small config that extends the common source and sets only
-   its node name:
-
-   ```jsonc
-   {
-     "$extends": "aws-secret://maestro/production/common",
-     "node": "node2"
-   }
+   ```bash
+   sudo maestro server init --advertise 10.20.0.11:7400 [--config maestro.jsonc]
+   sudo systemctl start maestro
    ```
 
-3. Start the master. It creates the cluster identity, CA, certificates, persisted
-   ports, and bootstrap permit under the daemon lock.
-4. Open the ports shown in its log/admin UI from the private cluster security
+   This creates the cluster CA, the node certificate, the data encryption key, the API
+   signing key, and the join secret in the data dir, then bootstraps a one-voter Raft
    group.
-5. Start the other nodes. Each authenticates CA discovery with the join secret,
-   advertises its actual ports and subnet, and installs the returned identity.
-6. Verify formation with `maestro cluster info`, `maestro cluster nodes`, and the
-   admin UI.
 
-For a three-voter cluster, avoid interrupting the temporary two-voter stage; both
-members are required until the third voter is promoted.
+2. Print a join token on any voter:
 
-## Add or replace a node
+   ```bash
+   sudo maestro server join-token
+   # mj1.<ca-sha256-fingerprint>.<secret>
+   ```
 
-Add the named entry to the shared map, deploy that effective config to the new
-machine, and set its top-level `node` selector. Existing voters do not need a
-restart. The leader validates live endpoint/subnet reservations and updates the
-authoritative voter cache after a voter joins.
+3. Join other nodes:
 
-Remove or drain an old node through the normal cluster lifecycle before reusing
-its name, endpoint, or subnet. Removed node identities cannot silently rejoin.
+   ```bash
+   sudo maestro join --server 10.20.0.11:7400 --token "$TOKEN" \
+     --advertise 10.20.0.12:7400 --role voter   # or agent (default)
+   sudo systemctl start maestro
+   ```
 
-## Registry and scheduling
+   The joining node pins the CA by the fingerprint in the token, so it never trusts an
+   impostor. The leader checks the secret, assigns a node id and the next free `/24`
+   from the cluster CIDR, records the node, and returns its certificate. Voters also
+   receive the CA key, the encryption and API keys, and the join secret so they can
+   lead. A follower that receives a join returns the leader's address and the client
+   retries there.
 
-Every service that Maestro builds in multi-node mode must set `build.registry`.
-Maestro publishes the image as
-`<build.registry>/<service-id>:<deployment-id>`. A service configured with
-`image` instead of `build` continues to use that image reference directly.
-Workload nodes must be able to pull from every configured service registry, and
-any node that can lead builds must be able to push. Configure runtime registry
-credentials independently on every host.
+4. The leader adds joining voters as Raft learners, waits for them to catch up, and
+   promotes them. Run `maestro nodes` to check the cluster.
 
-```jsonc
-{
-  "services": {
-    "api": {
-      "name": "API",
-      "build": {
-        "repo": "git@github.com:acme/api.git",
-        "dockerfile": "Dockerfile",
-        "registry": "ghcr.io/acme"
-      },
-      "deploy": {}
-    }
-  }
-}
-```
+## How the control plane scales
 
-The scheduler places workloads on ready `master`, `hybrid`, and `worker` nodes.
-Dedicated voters are never placement targets. Hard `deploy.nodeAffinity` rules
-continue to apply; writable host volumes require an exact node ID because their
-data cannot move between machines.
+Only desired state goes through Raft: services, deployments, encrypted secrets,
+assignments, and node records. Heartbeats, replica health, and status never touch
+consensus. Every agent holds one long-lived stream to the leader, sends its replica
+statuses (on change and every 5 seconds), and receives plans, routes, DNS records,
+and mesh peers only when they change. A follower that receives an agent redirects it
+to the leader.
+
+## Failure handling
+
+- **Agent restart:** running containers keep running and are adopted when the agent
+  comes back. Container logs keep flowing because the log driver is a child of the
+  containerd shim.
+- **Node loss:** a node whose stream has been gone for 30 seconds is marked
+  unreachable. Its replicas are removed from routing and rescheduled onto healthy
+  nodes. When the node returns, its agent stops the stale copies.
+- **Leader failover:** a new leader waits the same 30-second grace period before
+  judging any node, so failovers never trigger rescheduling. Agents reconnect with
+  backoff.
+- **Ingress during failures:** Traefik retries failed connections on another replica
+  with a 1-second dial timeout and actively health-checks backends, so a hard node
+  loss costs at most a handful of requests.
+
+## Networking
+
+Each node owns a `/24` (for example `10.200.2.0/24`) on its `maestro0` bridge.
+The WireGuard interface `maestro-wg` carries each peer's `/24`, so any replica can
+reach any other replica by IP and DNS returns replica IPs directly. Container traffic
+to the internet is masqueraded by the node; traffic inside the cluster CIDR keeps its
+source address.
+
+## Builds in multi-node clusters
+
+Set `build.registry` for every service that Maestro builds. The building node pushes
+`<registry>/<service>:<deployment>`, and other nodes pull it. Registry credentials
+must currently be configured on each host.
+
+## Local multi-node testing
+
+`dev/lima/maestro-node.yaml` creates additional Lima VMs on Lima's shared `user-v2`
+network next to the `maestro-dev` VM. Initialize `maestro-dev` with its `user-v2`
+address as `--advertise`, copy the Linux binary to the new VM, and join it.
