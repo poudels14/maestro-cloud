@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use maestro_telemetry::{
-    LogQuery, LogRecord, LogStore, MetricPoint, MetricsQuery, ReplicaIdentity, StoredLog, Stream,
-    TailCheckpoint,
+    IngressTrafficQuery, LogQuery, LogRecord, LogStore, MetricPoint, MetricsQuery, ReplicaIdentity,
+    StoredLog, Stream, TailCheckpoint, TrafficScope,
 };
 
 const OLD_TS: u64 = 1_700_000_000_000;
@@ -421,4 +421,69 @@ async fn stores_filters_and_prunes_metrics() {
         .unwrap();
     assert_eq!(containers.len(), 2);
     assert_eq!(store.prune_metrics(250).unwrap(), 3);
+}
+
+#[tokio::test]
+async fn counts_ingress_traffic_by_ip_and_path_per_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let access = |router: &str, ip: &str, path: &str, status: u16| {
+        format!(
+            r#"{{"ClientHost":"{ip}","DownstreamStatus":{status},"RouterName":"{router}","RequestPath":"{path}"}}"#
+        )
+    };
+    let lines = [
+        access("svc-web@file", "203.0.113.1", "/a?x=1", 200),
+        access("svc-web@file", "203.0.113.1", "/a", 200),
+        access("svc-web-dmv7n1a4xao07-1@file", "203.0.113.2", "/b", 500),
+        access("svc-webapp@file", "203.0.113.3", "/c", 200),
+        access("maestro-blocked-0@file", "198.51.100.9", "/", 403),
+        "not an access log".to_string(),
+    ];
+    let records = lines
+        .iter()
+        .map(|line| record(OLD_TS, line))
+        .collect::<Vec<_>>();
+    store
+        .ingest(
+            "maestro-traefik",
+            &ReplicaIdentity::default(),
+            &records,
+            TailCheckpoint {
+                inode: 1,
+                offset: 1,
+            },
+        )
+        .unwrap();
+    let query = |scope: TrafficScope, service: Option<&str>| IngressTrafficQuery {
+        scope,
+        service_id: service.map(str::to_string),
+        from: 0,
+        to: i64::MAX,
+        limit: 10,
+    };
+
+    let web = store
+        .read_ingress_traffic(query(TrafficScope::Service, Some("web")))
+        .await
+        .unwrap();
+    let ips = web
+        .by_ip
+        .iter()
+        .map(|entry| (entry.value.as_str(), entry.status_code, entry.requests))
+        .collect::<Vec<_>>();
+    assert_eq!(ips, [("203.0.113.1", 200, 2), ("203.0.113.2", 500, 1)]);
+    assert_eq!(web.by_path[0].value, "/a");
+
+    let cluster = store
+        .read_ingress_traffic(query(TrafficScope::Cluster, None))
+        .await
+        .unwrap();
+    assert_eq!(cluster.by_ip.len(), 3);
+    let blocked = store
+        .read_ingress_traffic(query(TrafficScope::Blocked, None))
+        .await
+        .unwrap();
+    assert_eq!(blocked.by_ip[0].value, "198.51.100.9");
+    assert_eq!(blocked.by_ip[0].status_code, 403);
 }

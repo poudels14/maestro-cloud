@@ -20,6 +20,7 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 const TRAEFIK_IMAGE: &str = "traefik:v3.6";
 const TRAEFIK_CONFIG_MOUNT: &str = "/etc/maestro-traefik";
 const TRAEFIK_METRICS_ADDRESS: &str = "127.0.0.1:9100";
+const LOOPBACK_CIDR: &str = "127.0.0.1/32";
 const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
 const ADMIN_API_SOCKET: &str = "/run/maestro/api.sock";
 pub const ADMIN_CONTAINER_ID: &str = "maestro-admin";
@@ -88,15 +89,24 @@ impl<R: Runtime> SystemSupervisor<R> {
     }
 }
 
-pub fn traefik_container(config_dir: &Path, ports: &[u16]) -> ContainerSpec {
-    let entry_points = ports
-        .iter()
-        .map(|port| format!("--entryPoints.{}.address=:{port}", entry_point_name(*port)));
+pub fn traefik_container(config_dir: &Path, ports: &[u16], cluster_cidr: &str) -> ContainerSpec {
+    let trusted = format!("{cluster_cidr},{LOOPBACK_CIDR}");
+    let entry_points = ports.iter().flat_map(|port| {
+        let name = entry_point_name(*port);
+        [
+            format!("--entryPoints.{name}.address=:{port}"),
+            format!("--entryPoints.{name}.forwardedHeaders.trustedIPs={trusted}"),
+        ]
+    });
     let args = [
         format!("--providers.file.directory={TRAEFIK_CONFIG_MOUNT}"),
         "--providers.file.watch=true".to_string(),
         "--accesslog=true".to_string(),
         "--accesslog.format=json".to_string(),
+        "--accesslog.fields.headers.defaultMode=drop".to_string(),
+        "--accesslog.fields.headers.names.X-Forwarded-For=keep".to_string(),
+        "--accesslog.fields.headers.names.X-Real-IP=keep".to_string(),
+        "--accesslog.fields.headers.names.CF-Connecting-IP=keep".to_string(),
         "--log.level=WARN".to_string(),
         format!("--entryPoints.metrics.address={TRAEFIK_METRICS_ADDRESS}"),
         "--metrics.prometheus=true".to_string(),
@@ -187,10 +197,20 @@ mod tests {
 
     #[test]
     fn traefik_listens_on_configured_ports_in_system_slice() {
-        let spec = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80, 443]);
+        let spec = traefik_container(
+            Path::new("/var/lib/maestro/traefik"),
+            &[80, 443],
+            "10.200.0.0/16",
+        );
         let args = spec.args.unwrap();
         assert!(args.contains(&"--entryPoints.web80.address=:80".to_string()));
         assert!(args.contains(&"--entryPoints.web443.address=:443".to_string()));
+        assert!(
+            args.contains(
+                &"--entryPoints.web80.forwardedHeaders.trustedIPs=10.200.0.0/16,127.0.0.1/32"
+                    .to_string()
+            )
+        );
         assert_eq!(spec.cgroup_parent, "maestro-system.slice");
         assert_eq!(spec.network, NetworkMode::Host);
         assert_eq!(spec.mounts[0].destination, TRAEFIK_CONFIG_MOUNT);
@@ -199,7 +219,11 @@ mod tests {
     #[tokio::test]
     async fn replaces_system_containers_whose_spec_changed() {
         let runtime = Arc::new(maestro_runtime::FakeRuntime::default());
-        let original = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80]);
+        let original = traefik_container(
+            Path::new("/var/lib/maestro/traefik"),
+            &[80],
+            "10.200.0.0/16",
+        );
         SystemSupervisor::new(runtime.clone(), vec![original.clone()])
             .ensure_running()
             .await;
@@ -208,7 +232,11 @@ mod tests {
             .await;
         assert_eq!(runtime.start_count("maestro-traefik"), 1);
 
-        let changed = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80, 443]);
+        let changed = traefik_container(
+            Path::new("/var/lib/maestro/traefik"),
+            &[80, 443],
+            "10.200.0.0/16",
+        );
         SystemSupervisor::new(runtime.clone(), vec![changed])
             .ensure_running()
             .await;

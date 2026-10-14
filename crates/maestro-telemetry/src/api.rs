@@ -8,10 +8,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::access_log::IngressTrafficBreakdown;
 use crate::error::TelemetryError;
 use crate::metrics::MetricPoint;
 use crate::search::LogSearchQuery;
-use crate::store::{LogQuery, LogStore, MetricsQuery, StoredLog, TrafficQuery};
+use crate::store::{
+    IngressTrafficQuery, LogQuery, LogStore, MetricsQuery, StoredLog, TrafficQuery,
+};
 use crate::traffic::TrafficPoint;
 
 const DEFAULT_LIMIT: usize = 100;
@@ -39,6 +42,7 @@ pub fn router(store: Arc<LogStore>) -> Router {
         .route("/logs", get(logs))
         .route("/metrics", get(metrics))
         .route("/traffic", get(traffic))
+        .route("/ingress-traffic", get(ingress_traffic))
         .with_state(store)
 }
 
@@ -88,6 +92,13 @@ async fn traffic(
     Query(query): Query<TrafficQuery>,
 ) -> Result<Json<Vec<TrafficPoint>>, TelemetryError> {
     Ok(Json(store.read_traffic(query).await?))
+}
+
+async fn ingress_traffic(
+    State(store): State<Arc<LogStore>>,
+    Query(query): Query<IngressTrafficQuery>,
+) -> Result<Json<IngressTrafficBreakdown>, TelemetryError> {
+    Ok(Json(store.read_ingress_traffic(query).await?))
 }
 
 impl IntoResponse for TelemetryError {

@@ -170,6 +170,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         vec![traefik_container(
             ingress.directory(),
             &config.ingress.ports,
+            &identity.cluster.cidr,
         )],
     );
     let dns_records = DnsRecords::default();

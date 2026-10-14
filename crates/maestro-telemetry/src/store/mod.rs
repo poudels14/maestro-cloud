@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use duckdb::{params, types::Value};
 use serde::Serialize;
 
+use crate::access_log::{INGRESS_REPLICA, parse_access_event};
 use crate::error::{Result, TelemetryError};
 use crate::log_driver::LogRecord;
 use crate::parse::parse_log_line;
@@ -12,12 +13,14 @@ use crate::resolver::ReplicaIdentity;
 use crate::search::LogSearchQuery;
 
 mod db;
+mod ingress;
 mod metrics;
 mod query;
 mod rollover;
 mod traffic;
 
 use db::Db;
+pub use ingress::{IngressTrafficQuery, TrafficScope};
 pub use metrics::MetricsQuery;
 use query::query_logs;
 use rollover::{remove_stale_exports, rollover_partitions, write_partition_manifest};
@@ -112,9 +115,10 @@ impl LogStore {
             db: Arc::new(Db::open(
                 &data_dir.join("logs.duckdb"),
                 &format!(
-                    "{SCHEMA}{}{}",
+                    "{SCHEMA}{}{}{}",
                     metrics::METRICS_SCHEMA,
-                    traffic::TRAFFIC_SCHEMA
+                    traffic::TRAFFIC_SCHEMA,
+                    ingress::INGRESS_SCHEMA
                 ),
             )?),
             parts_root,
@@ -152,6 +156,15 @@ impl LogStore {
                     serde_json::Value::Object(parsed.attributes).to_string(),
                 ])?;
                 Ok::<_, TelemetryError>(())
+            })?;
+        }
+        if replica_id == INGRESS_REPLICA {
+            records.iter().try_for_each(|record| {
+                let timestamp = i64::try_from(record.ts).unwrap_or(i64::MAX);
+                match parse_access_event(&record.line, timestamp) {
+                    Some(event) => ingress::record_access(&transaction, &event),
+                    None => Ok(()),
+                }
             })?;
         }
         transaction.execute(

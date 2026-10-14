@@ -5,8 +5,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId};
-use maestro_telemetry::{MetricPoint, TrafficPoint};
-use serde::Deserialize;
+use maestro_telemetry::{
+    IngressTrafficBreakdown, MetricPoint, TrafficBreakdownEntry, TrafficPoint,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::node_service::{ClusterAccess, NodeRequest, call_nodes, url_query};
@@ -14,6 +16,8 @@ use crate::node_service::{ClusterAccess, NodeRequest, call_nodes, url_query};
 const METRICS_BUCKET_MS: i64 = 15_000;
 const DEFAULT_RANGE_MS: i64 = 60 * 60 * 1000;
 const CONTAINER_SOURCE_PREFIX: &str = "container:";
+const DEFAULT_BREAKDOWN_LIMIT: usize = 100;
+const MAX_BREAKDOWN_LIMIT: usize = 500;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +25,16 @@ pub struct RangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     node_id: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MergedBreakdown {
+    #[serde(flatten)]
+    breakdown: IngressTrafficBreakdown,
+    partial: bool,
+    unavailable_nodes: usize,
 }
 
 pub async fn node_metrics(
@@ -108,6 +122,143 @@ pub async fn container_metrics(
         }
         (Err(error), _) | (_, Err(error)) => Err(error),
     })
+}
+
+pub async fn ingress_traffic(state: State<ClusterAccess>, range: Query<RangeQuery>) -> Response {
+    traffic_breakdown(state, range, "cluster", None).await
+}
+
+pub async fn blocked_ingress_traffic(
+    state: State<ClusterAccess>,
+    range: Query<RangeQuery>,
+) -> Response {
+    traffic_breakdown(state, range, "blocked", None).await
+}
+
+pub async fn service_traffic_breakdown(
+    state: State<ClusterAccess>,
+    Path(service_id): Path<String>,
+    range: Query<RangeQuery>,
+) -> Response {
+    traffic_breakdown(state, range, "service", Some(service_id)).await
+}
+
+async fn traffic_breakdown(
+    State(access): State<ClusterAccess>,
+    Query(range): Query<RangeQuery>,
+    scope: &str,
+    service_id: Option<String>,
+) -> Response {
+    let to = range.to.unwrap_or_else(now_ms);
+    let from = range.from.unwrap_or(to - DEFAULT_RANGE_MS);
+    let limit = range
+        .limit
+        .unwrap_or(DEFAULT_BREAKDOWN_LIMIT)
+        .clamp(1, MAX_BREAKDOWN_LIMIT);
+    match (from <= to, nodes(&access)) {
+        (false, _) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "traffic range `from` cannot be after `to`" })),
+        )
+            .into_response(),
+        (true, Err(error)) => respond::<()>(Err(error)),
+        (true, Ok(nodes)) => {
+            let selected = nodes
+                .into_iter()
+                .filter(|node| {
+                    range
+                        .node_id
+                        .is_none_or(|node_id| node.id == NodeId(node_id))
+                })
+                .collect::<Vec<_>>();
+            let requested = selected.len();
+            let mut pairs = vec![
+                ("scope", scope.to_string()),
+                ("from", from.to_string()),
+                ("to", to.to_string()),
+                ("limit", (limit * 2).to_string()),
+            ];
+            pairs.extend(service_id.map(|service_id| ("serviceId", service_id)));
+            let path = format!("/ingress-traffic?{}", url_query(&pairs));
+            let breakdowns = gather(&access, selected, path)
+                .await
+                .into_iter()
+                .filter_map(|value| serde_json::from_value::<IngressTrafficBreakdown>(value).ok())
+                .collect::<Vec<_>>();
+            let unavailable_nodes = requested - breakdowns.len();
+            Json(MergedBreakdown {
+                breakdown: IngressTrafficBreakdown {
+                    by_ip: merge_entries(
+                        breakdowns
+                            .iter()
+                            .flat_map(|breakdown| breakdown.by_ip.clone()),
+                        limit,
+                    ),
+                    by_path: merge_entries(
+                        breakdowns
+                            .iter()
+                            .flat_map(|breakdown| breakdown.by_path.clone()),
+                        limit,
+                    ),
+                },
+                partial: unavailable_nodes > 0,
+                unavailable_nodes,
+            })
+            .into_response()
+        }
+    }
+}
+
+fn merge_entries(
+    entries: impl Iterator<Item = TrafficBreakdownEntry>,
+    limit: usize,
+) -> Vec<TrafficBreakdownEntry> {
+    let merged = entries.fold(
+        BTreeMap::<(String, u16), TrafficBreakdownEntry>::new(),
+        |mut merged, entry| {
+            let total = merged
+                .entry((entry.value.clone(), entry.status_code))
+                .or_insert_with(|| TrafficBreakdownEntry {
+                    requests: 0,
+                    ..entry.clone()
+                });
+            total.requests += entry.requests;
+            total.last_seen_at_ms = total.last_seen_at_ms.max(entry.last_seen_at_ms);
+            merged
+        },
+    );
+    let mut totals = merged
+        .values()
+        .fold(
+            BTreeMap::<String, (u64, i64)>::new(),
+            |mut totals, entry| {
+                let total = totals.entry(entry.value.clone()).or_default();
+                total.0 += entry.requests;
+                total.1 = total.1.max(entry.last_seen_at_ms);
+                totals
+            },
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
+    totals.sort_by(|(left_value, left), (right_value, right)| {
+        right
+            .0
+            .cmp(&left.0)
+            .then(right.1.cmp(&left.1))
+            .then(left_value.cmp(right_value))
+    });
+    let ranks = totals
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(rank, (value, _))| (value, rank))
+        .collect::<BTreeMap<_, _>>();
+    let mut kept = merged
+        .into_values()
+        .filter(|entry| ranks.contains_key(&entry.value))
+        .collect::<Vec<_>>();
+    kept.sort_by_key(|entry| (ranks[&entry.value], entry.status_code));
+    kept
 }
 
 pub async fn service_traffic(
@@ -261,5 +412,41 @@ mod tests {
             (15_000, 15.0, 3)
         );
         assert_eq!((summed[1].ts, summed[1].memory_bytes), (30_000, 4));
+    }
+
+    #[test]
+    fn merges_breakdowns_across_nodes_and_ranks_by_total() {
+        let entry = |value: &str, status: u16, requests: u64, seen: i64| TrafficBreakdownEntry {
+            value: value.to_string(),
+            status_code: status,
+            requests,
+            last_seen_at_ms: seen,
+        };
+        let merged = merge_entries(
+            vec![
+                entry("a", 200, 3, 1),
+                entry("b", 200, 4, 2),
+                entry("a", 200, 2, 5),
+                entry("a", 404, 1, 3),
+                entry("c", 200, 1, 9),
+            ]
+            .into_iter(),
+            2,
+        );
+        let summary = merged
+            .iter()
+            .map(|entry| {
+                (
+                    entry.value.as_str(),
+                    entry.status_code,
+                    entry.requests,
+                    entry.last_seen_at_ms,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [("a", 200, 5, 5), ("a", 404, 1, 3), ("b", 200, 4, 2)]
+        );
     }
 }

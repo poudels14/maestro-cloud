@@ -108,6 +108,7 @@ async fn collect_metrics(
             if prune {
                 writer.prune_metrics(now_ms() - METRICS_RETENTION_MS)?;
                 writer.prune_traffic(now_ms() - METRICS_RETENTION_MS)?;
+                writer.prune_ingress_traffic(now_ms() - METRICS_RETENTION_MS)?;
             }
             Ok::<_, crate::error::TelemetryError>(())
         })
