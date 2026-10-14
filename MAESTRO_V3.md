@@ -383,7 +383,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   maxConcurrentPreviews}`, `homepage`, `logBackup {bucket, kmsKeyId, region, prefix,
   retentionDays}`, `allowCliDeployment`, `allowExec`, `aws-secret://` sources for the
   config and `$extends`. Accept v1 kebab-case keys as aliases.
-- [ ] W0c: node gRPC service on every node (mTLS) for exec, log/metric/traffic/disk
+- [x] W0c: node gRPC service on every node (mTLS) for exec, log/metric/traffic/disk
   fan-out, and node-local operations; API on any voter forwards writes to the leader.
 - [ ] W0d: image digest pinning at pull (restart requires immutable images).
 

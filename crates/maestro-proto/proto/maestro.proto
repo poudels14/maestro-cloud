@@ -18,3 +18,8 @@ service Cluster {
   rpc Join(Envelope) returns (Envelope);
   rpc Attach(stream Envelope) returns (stream Envelope);
 }
+
+service Node {
+  rpc Call(Envelope) returns (Envelope);
+  rpc Exec(stream Envelope) returns (stream Envelope);
+}

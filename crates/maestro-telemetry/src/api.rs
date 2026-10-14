@@ -16,10 +16,12 @@ const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1_000;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LogsParams {
     query: Option<String>,
     limit: Option<usize>,
     before: Option<i64>,
+    before_ts: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -57,6 +59,7 @@ async fn logs(
         .read_logs(LogQuery {
             search,
             before: params.before,
+            before_ts: params.before_ts,
             limit,
         })
         .await?;

@@ -51,7 +51,11 @@ pub(super) fn query_logs(db: &Db, parts_root: &Path, query: &LogQuery) -> Result
         sql.push_str(" AND seq < ?");
         values.push(Value::BigInt(before));
     }
-    sql.push_str(" ORDER BY seq DESC LIMIT ?");
+    if let Some(before_ts) = query.before_ts {
+        sql.push_str(" AND ts < ?");
+        values.push(Value::BigInt(before_ts));
+    }
+    sql.push_str(" ORDER BY ts DESC, seq DESC LIMIT ?");
     values.push(Value::BigInt(
         i64::try_from(query.limit).unwrap_or(i64::MAX),
     ));

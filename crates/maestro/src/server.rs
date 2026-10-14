@@ -13,6 +13,7 @@ use maestro_agent::{
 };
 use maestro_control::ApiAuth;
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
+use maestro_proto::pb::node_server::NodeServer;
 use maestro_proto::{ClusterCa, NodeCredentials};
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::{Mutation, SecretKey};
@@ -23,6 +24,7 @@ use crate::control_plane::{self, ControlPlaneSettings};
 use crate::identity::NodeIdentity;
 use crate::join::join_secret;
 use crate::log_driver;
+use crate::node_service::NodeService;
 use crate::unix_http;
 
 const DEFAULT_ADVERTISE: &str = "127.0.0.1:7400";
@@ -218,14 +220,15 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         attachment.run().await;
         Ok(())
     });
+    let grpc_listen = match args.grpc_listen {
+        Some(listen) => listen,
+        None => identity
+            .advertise
+            .parse()
+            .context("--grpc-listen is required when the advertise address is not IP:port")?,
+    };
     let consensus = match identity.role {
         NodeRole::Voter => {
-            let grpc_listen = match args.grpc_listen {
-                Some(listen) => listen,
-                None => identity.advertise.parse().context(
-                    "--grpc-listen is required when the advertise address is not IP:port",
-                )?,
-            };
             let settings = ControlPlaneSettings {
                 data_dir: args.data_dir.clone(),
                 identity: identity.clone(),
@@ -240,6 +243,14 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             Some(control_plane::spawn(&mut tasks, settings, runtime).await?)
         }
         NodeRole::Agent => {
+            let node_grpc = tonic::transport::Server::builder()
+                .tls_config(credentials.server_tls())?
+                .add_service(NodeServer::new(NodeService::new(
+                    args.telemetry_socket.clone(),
+                    None,
+                )))
+                .serve(grpc_listen);
+            tasks.spawn(async move { node_grpc.await.context("node gRPC server stopped") });
             let local_api = local_router(board, args.telemetry_socket.clone());
             let socket_listener = bind_api_socket(&args.api_socket)?;
             tasks.spawn(async move {

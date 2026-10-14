@@ -76,6 +76,7 @@ pub struct TailCheckpoint {
 pub struct LogQuery {
     pub search: Option<LogSearchQuery>,
     pub before: Option<i64>,
+    pub before_ts: Option<i64>,
     pub limit: usize,
 }
 

@@ -8,6 +8,7 @@ mod dev;
 mod identity;
 mod join;
 mod log_driver;
+mod node_service;
 mod server;
 mod unix_http;
 

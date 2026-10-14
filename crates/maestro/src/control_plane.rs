@@ -20,6 +20,7 @@ use maestro_control::{
 use maestro_core::{ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
+use maestro_proto::pb::node_server::NodeServer;
 use maestro_runtime::{ContainerdRuntime, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, SecretKey};
 use serde::Serialize;
@@ -28,7 +29,8 @@ use tokio::task::JoinSet;
 use crate::cluster_service::ClusterService;
 use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
-use crate::server::{api_secret, bind_api_socket, encryption_key_path, proxy_logs};
+use crate::node_service::{ForwardingWriter, LogFanOut, NodeClients, NodeService, cluster_logs};
+use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
@@ -108,6 +110,10 @@ pub async fn spawn(
             authority,
             settings.identity.cluster.clone(),
         )))
+        .add_service(NodeServer::new(NodeService::new(
+            settings.telemetry_socket.clone(),
+            Some(consensus.clone()),
+        )))
         .serve(settings.grpc_listen);
     tasks.spawn(async move { grpc.await.context("gRPC server stopped") });
     tasks.spawn(publish(
@@ -146,9 +152,13 @@ pub async fn spawn(
     );
     tasks.spawn(run_deployer(deployer, consensus.clone()));
 
+    let clients = NodeClients::new(settings.credentials.clone());
     let logs = axum::Router::new()
-        .route("/api/logs", axum::routing::get(proxy_logs))
-        .with_state(Arc::new(settings.telemetry_socket.clone()));
+        .route("/api/logs", axum::routing::get(cluster_logs))
+        .with_state(LogFanOut {
+            consensus: consensus.clone(),
+            clients: clients.clone(),
+        });
     let info = axum::Router::new()
         .route("/api/cluster", axum::routing::get(cluster_info))
         .route(
@@ -161,7 +171,7 @@ pub async fn spawn(
             build_logs: settings.data_dir.join("builds/logs"),
         }));
     let api = router(Arc::new(ApiState {
-        writer: consensus.clone(),
+        writer: Arc::new(ForwardingWriter::new(consensus.clone(), clients)),
         observed,
         key,
     }))

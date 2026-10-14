@@ -39,6 +39,7 @@ fn ingest(store: &LogStore, replica_id: &str, identity: &ReplicaIdentity, record
 async fn search(store: &LogStore, query: &str) -> Vec<StoredLog> {
     store
         .read_logs(LogQuery {
+            before_ts: None,
             search: Some(query.parse().unwrap()),
             before: None,
             limit: 100,
@@ -84,6 +85,7 @@ async fn reads_newest_first_with_identity_and_cursor() {
 
     let first_page = store
         .read_logs(LogQuery {
+            before_ts: None,
             search: None,
             before: None,
             limit: 2,
@@ -98,6 +100,7 @@ async fn reads_newest_first_with_identity_and_cursor() {
 
     let second_page = store
         .read_logs(LogQuery {
+            before_ts: None,
             search: None,
             before: Some(first_page[1].seq),
             limit: 10,
@@ -136,6 +139,7 @@ async fn ingest_persists_checkpoints_atomically() {
     assert!(reopened.checkpoints().unwrap().is_empty());
     let logs = reopened
         .read_logs(LogQuery {
+            before_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -254,6 +258,7 @@ async fn rollover_keeps_old_logs_queryable_from_parquet() {
     assert_eq!(failures[0].service_id.as_deref(), Some("api"));
     let everything = store
         .read_logs(LogQuery {
+            before_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -275,6 +280,7 @@ async fn rollover_exports_late_arrivals_as_additional_parts() {
 
     let logs = store
         .read_logs(LogQuery {
+            before_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -310,6 +316,7 @@ async fn rollover_replaces_an_uncommitted_export() {
     assert_eq!(parquet_files(&partition), ["part-1-2.parquet"]);
     let logs = store
         .read_logs(LogQuery {
+            before_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -340,6 +347,7 @@ async fn rollover_and_ingest_can_run_concurrently_without_losing_rows() {
 
     let logs = store
         .read_logs(LogQuery {
+            before_ts: None,
             limit: 500,
             ..LogQuery::default()
         })
