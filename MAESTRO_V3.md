@@ -353,12 +353,27 @@ The v1 `controller/` crate has been removed.
 Every v1 feature is being ported. Workstreams (W1–W9) group the work so independent
 parts can proceed in parallel; the inventory came from the v1 source at `f5431cb8`.
 
+### Decisions for features that changed shape
+
+- Session affinity pins a client to a replica, not a node: a Traefik sticky cookie,
+  plus header stickiness where each replica's responses carry an opaque per-replica
+  token in the configured header (default `X-Session-Affinity`) and a higher-priority
+  router sends requests carrying that token to the same replica.
+- Tailscale runs per node as a host-network system container advertising the node's
+  `/24` plus `advertiseRoutes`; the Rust DNS server also answers on the tailnet and
+  forwards other clusters' `*.<cluster>.maestro.internal` names to peers discovered via
+  `tailscale status`. No CoreDNS or Python proxy.
+- Service ids stay lowercase DNS labels (v1 also allowed uppercase and `_`).
+- `deploy.command` is applied as the container entrypoint and args (v1 ignored it).
+- v1 bugs not carried over: `secrets.source` now reaches every node, and changes to any
+  spec field are applied (v1 ignored changes outside its version hash).
+
 ### Cross-cutting foundations
 
 - [ ] W0a: services schema parity — `deploy.secrets` (mountPath, items, source), volumes
   (owner, denied paths, writable ⇒ single replica + node pin), `nodeAffinity`
   (nodeId, labels), `egress.allow`, `exec` (default true), `flags` (container args),
-  `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`, v1 id rules,
+  `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`,
   v1 healthcheck semantics (interval default 60 clamped 5–300, 2xx, 10 failures ⇒
   restart), `maxRestarts` default 10.
 - [ ] W0b: cluster config parity — `tags`, `egress {deny, allow}`, `tailscale`,
