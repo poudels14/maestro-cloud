@@ -20,6 +20,14 @@ function ClusterLogsSection() {
   const sortedServices = createMemo(() =>
     [...(services.data ?? [])].sort((left, right) => left.name.localeCompare(right.name))
   );
+  const scope = () => {
+    const service = search().service;
+    return service ? `service:${service}` : "";
+  };
+  const nodeId = () => {
+    const node = search().node;
+    return node ? Number(node) : undefined;
+  };
   const setUrlSearch = (updates: ClusterLogsSearch) =>
     navigate({
       to: "/cluster/logs",
@@ -72,8 +80,8 @@ function ClusterLogsSection() {
       </div>
       <div class="min-h-0 flex-1">
         <LogViewer
-          scope={search().service ? `service:${search().service}` : ""}
-          nodeId={search().node ? Number(search().node) : undefined}
+          scope={scope()}
+          nodeId={nodeId()}
           showHost
           showHistogram
           fillHeight
