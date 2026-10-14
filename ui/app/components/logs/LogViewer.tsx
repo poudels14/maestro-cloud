@@ -71,7 +71,7 @@ type SelectedLogBucket = {
   to: number;
 };
 
-function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = false) {
+function mergeLogEntries(current: LogEntry[], incoming: LogEntry[]) {
   const existing = new Set(current.map(logEntryKey));
   const unique = incoming.filter((entry) => {
     const key = logEntryKey(entry);
@@ -79,7 +79,7 @@ function mergeLogEntries(current: LogEntry[], incoming: LogEntry[], prepend = fa
     existing.add(key);
     return true;
   });
-  return prepend ? [...unique, ...current] : [...current, ...unique];
+  return [...current, ...unique].sort((left, right) => left.ts - right.ts);
 }
 
 function logEntryKey(entry: LogEntry) {
@@ -373,9 +373,11 @@ function LogViewer(props: {
       if (requestContext !== rowRequestContext()) return;
       setNewestTs((current) => Math.max(current ?? 0, page.entries.at(-1)?.ts ?? 0) || null);
       setUnavailableNodes(page.unavailableNodes.map((node) => node.nodeName));
-      setLines((prev) =>
-        mergeLogEntries(prev, page.entries).filter(
-          (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
+      keepVisibleRowInPlace(() =>
+        setLines((prev) =>
+          mergeLogEntries(prev, page.entries).filter(
+            (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
+          )
         )
       );
       setError(null);
@@ -388,8 +390,6 @@ function LogViewer(props: {
     const cursor = olderCursor();
     if (!loadingMore() && cursor != null) {
       setLoadingMore(true);
-      const prevHeight = scrollRef?.scrollHeight ?? 0;
-      const prevTop = scrollRef?.scrollTop ?? 0;
       const searchQuery = requestQuery();
       const requestContext = rowRequestContext();
       try {
@@ -401,12 +401,8 @@ function LogViewer(props: {
         setHasMore(page.nextCursor != null);
         setOlderCursor(page.nextCursor);
         wasAtBottom = false;
-        setLines((prev) => mergeLogEntries(prev, page.entries, true));
-        requestAnimationFrame(() => {
-          if (!scrollRef) return;
-          scrollRef.scrollTop = scrollRef.scrollHeight - prevHeight + prevTop;
-          updateScrollFlags();
-        });
+        keepVisibleRowInPlace(() => setLines((prev) => mergeLogEntries(prev, page.entries)));
+        updateScrollFlags();
       } catch (err) {
         if (requestContext === rowRequestContext()) {
           setError(err instanceof Error ? err.message : "Failed to load earlier logs");
@@ -454,6 +450,20 @@ function LogViewer(props: {
   let wasAtBottom = true;
   const [nearTop, setNearTop] = createSignal(false);
   const [atBottom, setAtBottom] = createSignal(true);
+
+  const keepVisibleRowInPlace = (update: () => void) => {
+    const container = scrollRef;
+    const anchor = container && !wasAtBottom ? firstVisibleRow(container) : null;
+    update();
+    if (container && anchor) {
+      const row = container.querySelector<HTMLElement>(
+        `[data-log-key="${CSS.escape(anchor.key)}"]`
+      );
+      if (row) {
+        container.scrollTop += row.getBoundingClientRect().top - anchor.top;
+      }
+    }
+  };
 
   const updateScrollFlags = () => {
     if (!scrollRef) return;
@@ -620,7 +630,7 @@ function LogViewer(props: {
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        class={clsx("overflow-y-auto", {
+        class={clsx("overflow-y-auto [overflow-anchor:none]", {
           "min-h-0 flex-1": props.fillHeight,
           "max-h-[600px]": !props.fillHeight
         })}
@@ -690,6 +700,7 @@ function LogViewer(props: {
                   const key = () => logEntryKey(line);
                   return (
                     <LogRow
+                      rowKey={key()}
                       line={line}
                       index={index()}
                       showHost={showHost()}
@@ -720,6 +731,7 @@ function LogViewer(props: {
 }
 
 function LogRow(props: {
+  rowKey: string;
   line: LogEntry;
   index: number;
   showHost: boolean;
@@ -734,6 +746,7 @@ function LogRow(props: {
   const http = () => httpFields(props.line.attrs);
   return (
     <li
+      data-log-key={props.rowKey}
       class={clsx("cursor-pointer border-b border-gray-50 transition-colors", {
         "bg-indigo-50/60 hover:bg-indigo-50/80": props.expanded,
         "bg-white hover:bg-gray-50": !props.expanded && props.index % 2 === 0,
@@ -794,6 +807,16 @@ function LogRow(props: {
       </Show>
     </li>
   );
+}
+
+function firstVisibleRow(container: HTMLElement) {
+  const containerTop = container.getBoundingClientRect().top;
+  const row = Array.from(container.querySelectorAll<HTMLElement>("[data-log-key]")).find(
+    (candidate) => candidate.getBoundingClientRect().bottom > containerTop
+  );
+  return row?.dataset.logKey
+    ? { key: row.dataset.logKey, top: row.getBoundingClientRect().top }
+    : null;
 }
 
 export { LogViewer };
