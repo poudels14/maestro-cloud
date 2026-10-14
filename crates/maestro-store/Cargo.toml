@@ -1,13 +1,13 @@
 [package]
 name = "maestro-store"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2024"
 
 [dependencies]
 aes-gcm = "0.10.3"
 base64 = "0.22"
-maestro-core = { version = "0.1.0", path = "../maestro-core" }
-maestro-proto = { version = "0.1.0", path = "../maestro-proto" }
+maestro-core = { version = "3.0.0", path = "../maestro-core" }
+maestro-proto = { version = "3.0.0", path = "../maestro-proto" }
 openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }
 rand = "0.10.3"
 redb = "4.3.0"
