@@ -88,6 +88,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.run_builds().await?;
         self.reschedule_lost().await?;
         self.place_deploying().await?;
+        self.scale_active().await?;
         self.settle_deploying().await?;
         self.drain_superseded().await?;
         self.stop_drained().await?;
@@ -95,8 +96,13 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
     }
 
     async fn start_queued(&self) -> Result<(), ControlError> {
-        self.state()
+        let now = self.now();
+        let (prepared, unresolved): (Vec<_>, Vec<_>) = self
+            .state()
             .deployments_with_status(DeploymentStatus::Queued)?
+            .into_iter()
+            .partition(|deployment| deployment.image.is_some());
+        unresolved
             .into_iter()
             .filter(|deployment| !lock(&self.active_resolutions).contains(&deployment.id))
             .for_each(|deployment| {
@@ -108,7 +114,13 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                     );
                 }
             });
-        Ok(())
+        let mutations = prepared
+            .iter()
+            .map(|deployment| {
+                status_change(deployment, DeploymentStatus::Deploying, None, None, now)
+            })
+            .collect();
+        self.write(mutations).await
     }
 
     async fn run_builds(&self) -> Result<(), ControlError> {
@@ -119,7 +131,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             .collect::<Result<Vec<_>, _>>()?
             .concat()
             .into_iter()
-            .filter(|deployment| deployment.spec.build.is_some())
+            .filter(|deployment| deployment.spec.build.is_some() && deployment.image.is_none())
             .filter(|deployment| !self.is_building(&deployment.id))
             .collect::<Vec<_>>();
         waiting.sort_by_key(|deployment| {
@@ -223,8 +235,14 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             .collect::<Vec<_>>();
         let requests = unplaced
             .iter()
-            .flat_map(placement_requests)
-            .collect::<Vec<_>>();
+            .map(|deployment| {
+                Ok(placement_requests(
+                    deployment,
+                    self.target_replicas(deployment)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, ControlError>>()?
+            .concat();
         if !requests.is_empty() {
             let current = existing.values().flatten().cloned().collect::<Vec<_>>();
             let placement = scheduler::place(
@@ -393,7 +411,8 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                             .map(|status| status.phase)
                     })
                     .collect::<Vec<_>>();
-                let all_healthy = phases.len() as u32 == deployment.spec.deploy.replicas
+                let target = self.target_replicas(&deployment).ok()?;
+                let all_healthy = phases.len() as u32 == target
                     && phases
                         .iter()
                         .all(|phase| *phase == Some(ReplicaPhase::Healthy));
@@ -426,6 +445,79 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             })
             .collect::<Vec<_>>();
         self.write(mutations).await
+    }
+
+    async fn scale_active(&self) -> Result<(), ControlError> {
+        let existing = self.all_assignments()?;
+        let current = existing.values().flatten().cloned().collect::<Vec<_>>();
+        let active = [DeploymentStatus::Deploying, DeploymentStatus::Ready]
+            .iter()
+            .map(|status| self.state().deployments_with_status(*status))
+            .collect::<Result<Vec<_>, _>>()?
+            .concat();
+        let mut surplus = Vec::new();
+        let mut requests = Vec::new();
+        for deployment in &active {
+            let mut assigned = current
+                .iter()
+                .filter(|assignment| assignment.deployment_id == deployment.id)
+                .collect::<Vec<_>>();
+            let target = self.target_replicas(deployment)? as usize;
+            if !assigned.is_empty() && assigned.len() != target {
+                assigned.sort_by_key(|assignment| assignment.index);
+                let next_index = assigned.last().map_or(0, |assignment| assignment.index + 1);
+                let image = assigned[0].image.clone();
+                surplus.extend(
+                    assigned
+                        .iter()
+                        .skip(target)
+                        .map(|assignment| assignment.replica_id.clone()),
+                );
+                requests.extend(
+                    (0..target.saturating_sub(assigned.len()) as u32).map(|offset| {
+                        let index = next_index + offset;
+                        PlacementRequest {
+                            replica_id: ReplicaId::for_deployment(&deployment.id, index),
+                            service_id: deployment.service_id.clone(),
+                            deployment_id: deployment.id.clone(),
+                            index,
+                            image: image.clone(),
+                            resources: deployment.spec.deploy.resources.clone(),
+                        }
+                    }),
+                );
+            }
+        }
+        if !surplus.is_empty() || !requests.is_empty() {
+            let placement = scheduler::place(
+                &self.state().nodes()?,
+                &current,
+                &requests,
+                &self.settings.defaults,
+            );
+            placement
+                .unschedulable
+                .iter()
+                .for_each(|(replica_id, reason)| {
+                    tracing::warn!(%replica_id, %reason, "cannot place an added replica");
+                });
+            let mut next = existing;
+            next.values_mut().for_each(|assignments| {
+                assignments.retain(|assignment| !surplus.contains(&assignment.replica_id))
+            });
+            placement.assignments.into_iter().for_each(|assignment| {
+                next.entry(assignment.node_id).or_default().push(assignment)
+            });
+            let mutations = next
+                .into_iter()
+                .map(|(node_id, assignments)| Mutation::SetNodeAssignments {
+                    node_id,
+                    assignments,
+                })
+                .collect();
+            self.write(mutations).await?;
+        }
+        Ok(())
     }
 
     async fn drain_superseded(&self) -> Result<(), ControlError> {
@@ -517,6 +609,13 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.write(mutations).await
     }
 
+    fn target_replicas(&self, deployment: &Deployment) -> Result<u32, ControlError> {
+        Ok(self
+            .state()
+            .service_controls(&deployment.service_id)?
+            .effective_replicas(deployment.spec.deploy.replicas))
+    }
+
     fn all_assignments(&self) -> Result<BTreeMap<NodeId, Vec<Assignment>>, ControlError> {
         self.state()
             .nodes()?
@@ -554,13 +653,13 @@ impl Default for DeployerSettings {
     }
 }
 
-fn placement_requests(deployment: &Deployment) -> Vec<PlacementRequest> {
+fn placement_requests(deployment: &Deployment, replicas: u32) -> Vec<PlacementRequest> {
     let image = deployment
         .image
         .clone()
         .or_else(|| deployment.spec.image.clone())
         .unwrap_or_default();
-    (0..deployment.spec.deploy.replicas)
+    (0..replicas)
         .map(|index| PlacementRequest {
             replica_id: ReplicaId::for_deployment(&deployment.id, index),
             service_id: deployment.service_id.clone(),

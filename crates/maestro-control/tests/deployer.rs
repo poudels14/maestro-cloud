@@ -394,3 +394,84 @@ async fn unresolvable_image_fails_the_deployment() {
     assert_eq!(status(&harness, "d1"), DeploymentStatus::Failed);
     assert!(assigned_replicas(&harness).is_empty());
 }
+
+#[tokio::test]
+async fn replicas_override_scales_a_ready_deployment_in_place() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    queue(&harness, "d1", 1).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+
+    set_override(&harness, Some(3));
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1", "d1-2"]);
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+
+    set_override(&harness, None);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0"]);
+}
+
+#[tokio::test]
+async fn new_deployments_start_with_the_override() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    set_override(&harness, Some(2));
+    queue(&harness, "d1", 1).await;
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1"]);
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Deploying);
+    harness.observed.set("d1-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+}
+
+#[tokio::test]
+async fn deployments_with_a_known_image_skip_the_build() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue_spec(&harness, "d1", build_service(1)).await;
+    let mut deployment = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    deployment.id = DeploymentId::from("d2");
+    deployment.image = Some("maestro.local/api:d0".to_string());
+    harness
+        .writer
+        .state()
+        .apply(&[
+            Mutation::SetDeploymentStatus {
+                service_id: ServiceId::from("api"),
+                deployment_id: DeploymentId::from("d1"),
+                status: DeploymentStatus::Cancelled,
+                image: None,
+                failure: None,
+                at_ms: harness.clock.now(),
+            },
+            Mutation::CreateDeployment { deployment },
+        ])
+        .unwrap();
+    harness.deployer.tick().await.unwrap();
+    assert!(harness.builder.started().is_empty());
+    assert_eq!(status(&harness, "d2"), DeploymentStatus::Deploying);
+    assert_eq!(assigned_replicas(&harness), ["d2-0"]);
+}
+
+fn set_override(harness: &Harness, replicas: Option<u32>) {
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::SetServiceControls {
+            id: ServiceId::from("api"),
+            controls: maestro_core::ServiceControls {
+                frozen: false,
+                replicas_override: replicas,
+            },
+        }])
+        .unwrap();
+}
