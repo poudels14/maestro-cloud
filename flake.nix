@@ -189,6 +189,27 @@
           };
         };
 
+        registry = {
+          dockerConfigFile = lib.mkOption {
+            type = lib.types.nullOr lib.types.path;
+            default = null;
+            example = "/run/secrets/docker-config.json";
+            description = ''
+              Docker config.json with registry credentials (`auths`, `credHelpers`, `credsStore`)
+              for private image pulls, digest lookups, and BuildKit pushes. It is passed to the
+              unit as a systemd credential, so keep it outside the Nix store. When null, root's
+              ~/.docker/config.json is used.
+            '';
+          };
+
+          credentialHelpers = lib.mkOption {
+            type = lib.types.listOf lib.types.package;
+            default = [];
+            example = lib.literalExpression "[ pkgs.amazon-ecr-credential-helper ]";
+            description = "Docker credential helpers (docker-credential-*) available to Maestro and BuildKit.";
+          };
+        };
+
         adminUi = lib.mkOption {
           type = lib.types.bool;
           default = true;
@@ -346,13 +367,18 @@
             pkgs.openssh
             pkgs.systemd
             pkgs.coreutils
-          ];
-          environment = {
-            CNI_PATH = "${pkgs.cni-plugins}/bin";
-          };
+          ] ++ cfg.registry.credentialHelpers;
+          environment =
+            {
+              CNI_PATH = "${pkgs.cni-plugins}/bin";
+            }
+            // lib.optionalAttrs (cfg.registry.dockerConfigFile != null) {
+              DOCKER_CONFIG = "%d";
+            };
           serviceConfig = {
             Type = "simple";
             Slice = "maestro-system.slice";
+            LoadCredential = lib.optional (cfg.registry.dockerConfigFile != null) "config.json:${cfg.registry.dockerConfigFile}";
             ExecStartPre = "${provision}";
             ExecStart = utils.escapeSystemdExecArgs agentArgs;
             Restart = "always";
