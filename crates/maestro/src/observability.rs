@@ -6,8 +6,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId};
 use maestro_telemetry::{
-    HistogramBucket, IngressTrafficBreakdown, LogHistogram, MetricPoint, TrafficBreakdownEntry,
-    TrafficPoint, histogram_bucket,
+    HistogramBucket, IngressTrafficBreakdown, LogHistogram, MetricPoint, SinkStats,
+    TrafficBreakdownEntry, TrafficPoint, histogram_bucket,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,6 +18,7 @@ const METRICS_BUCKET_MS: i64 = 15_000;
 const DEFAULT_RANGE_MS: i64 = 60 * 60 * 1000;
 const CONTAINER_SOURCE_PREFIX: &str = "container:";
 const DEFAULT_BREAKDOWN_LIMIT: usize = 100;
+const SINK_BEHIND_MS: i64 = 60_000;
 const MAX_BREAKDOWN_LIMIT: usize = 500;
 
 #[derive(Deserialize)]
@@ -134,6 +135,7 @@ struct NodeStats {
     uptime_ms: Option<u64>,
     available: bool,
     telemetry: bool,
+    sinks: Vec<SinkStats>,
 }
 
 #[derive(Serialize)]
@@ -180,6 +182,10 @@ pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
                         telemetry: info
                             .as_ref()
                             .is_some_and(|info| info["telemetry"].as_bool() == Some(true)),
+                        sinks: info
+                            .as_ref()
+                            .and_then(|info| serde_json::from_value(info["sinks"].clone()).ok())
+                            .unwrap_or_default(),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -248,10 +254,58 @@ fn stats_warnings(
             "the control plane has no leader".to_string(),
         )
     });
+    let now = now_ms();
+    let sinks = stats.iter().flat_map(|node| {
+        node.sinks.iter().flat_map(move |sink| {
+            let failing = (sink.consecutive_failures > 0).then(|| {
+                warning(
+                    format!("sink-{}-{}-failing", sink.id, node.node_id),
+                    "error",
+                    format!(
+                        "{} delivery from {} is failing: {}",
+                        sink.id,
+                        node.node_name,
+                        sink.last_error.clone().unwrap_or_default()
+                    ),
+                )
+            });
+            let behind = (sink.pending_entries > 0
+                && sink
+                    .last_success_at_ms
+                    .is_none_or(|success| now - success > SINK_BEHIND_MS))
+            .then(|| {
+                warning(
+                    format!("sink-{}-{}-behind", sink.id, node.node_id),
+                    "warning",
+                    format!(
+                        "{} on {} has {} entries waiting",
+                        sink.id, node.node_name, sink.pending_entries
+                    ),
+                )
+            });
+            let dead_letters = (sink.dead_letters > 0).then(|| {
+                let nearly_full =
+                    sink.dead_letters as f64 >= sink.dead_letter_capacity as f64 * 0.9;
+                warning(
+                    format!("sink-{}-{}-dead-letters", sink.id, node.node_id),
+                    match nearly_full {
+                        true => "error",
+                        false => "warning",
+                    },
+                    format!(
+                        "{} on {} has {} of {} dead letters",
+                        sink.id, node.node_name, sink.dead_letters, sink.dead_letter_capacity
+                    ),
+                )
+            });
+            failing.into_iter().chain(behind).chain(dead_letters)
+        })
+    });
     unreachable
         .chain(telemetry)
         .chain(mismatch)
         .chain(no_leader)
+        .chain(sinks)
         .collect()
 }
 
@@ -687,6 +741,7 @@ mod tests {
             uptime_ms: None,
             available,
             telemetry,
+            sinks: Vec::new(),
         };
         let stats = [
             node(1, Some("3.0.0"), true, true),

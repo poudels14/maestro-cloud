@@ -269,6 +269,7 @@ async fn resolves_service_and_deployment_identity() {
         ReplicaIdentity {
             service_id: Some("api".to_string()),
             deployment_id: Some("dep1".to_string()),
+            healthcheck_path: None,
         },
     )]);
     let mut tailer = Tailer::new(log_dir.clone(), store.clone(), Arc::new(resolver)).unwrap();

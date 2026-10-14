@@ -368,14 +368,17 @@
             Type = "simple";
             Slice = "maestro-system.slice";
             MemoryMax = cfg.telemetryMemoryMax;
-            ExecStart = utils.escapeSystemdExecArgs [
+            ExecStart = utils.escapeSystemdExecArgs ([
               "${cfg.package}/bin/maestro"
               "telemetry"
               "--log-dir"
               "${dataDir}/logs"
               "--data-dir"
               "${dataDir}/telemetry"
-            ];
+              "--node-dir"
+              dataDir
+            ]
+            ++ lib.optionals (cfg.configFile != null) ["--config" (toString cfg.configFile)]);
             Restart = "always";
             RestartSec = 5;
           };

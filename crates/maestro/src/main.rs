@@ -53,8 +53,12 @@ enum Command {
         data_dir: PathBuf,
         #[arg(long, default_value = "/run/maestro/telemetry.sock")]
         socket: PathBuf,
-        #[arg(long, default_value = "/run/maestro/api.sock")]
-        api_socket: PathBuf,
+        #[arg(long, default_value = "/run/maestro/replicas.json")]
+        replicas: PathBuf,
+        #[arg(long, default_value = "/var/lib/maestro")]
+        node_dir: PathBuf,
+        #[arg(long)]
+        config: Option<String>,
     },
     Rollout {
         #[arg(short, long, default_value = "maestro.services.jsonc")]
@@ -162,13 +166,18 @@ async fn run_cli() -> anyhow::Result<()> {
             log_dir,
             data_dir,
             socket,
-            api_socket,
+            replicas,
+            node_dir,
+            config,
         } => {
+            let config = server::load_config(config.as_deref())?;
+            let identity = identity::NodeIdentity::load(&node_dir)?;
             let settings = TelemetrySettings {
                 log_dir,
                 data_dir,
                 socket,
-                resolver: agent_resolver::AgentReplicaResolver::spawn(api_socket),
+                resolver: agent_resolver::AgentReplicaResolver::spawn(replicas),
+                datadog: datadog_config(&config, &identity),
                 ..TelemetrySettings::default()
             };
             Ok(maestro_telemetry::run(settings).await?)
@@ -219,6 +228,39 @@ async fn run_cli() -> anyhow::Result<()> {
         } => {
             let endpoint = contexts::resolve(cli.api, cli.token)?;
             client::logs(&endpoint, service.as_deref(), query.as_deref(), limit).await
+        }
+    }
+}
+
+fn datadog_config(
+    config: &maestro_core::ClusterConfig,
+    identity: &identity::NodeIdentity,
+) -> Option<maestro_telemetry::DatadogConfig> {
+    let settings = config.datadog.as_ref()?;
+    match settings
+        .site
+        .as_deref()
+        .map(str::trim)
+        .filter(|site| !site.is_empty())
+    {
+        None => {
+            tracing::warn!("datadog is configured without a site; not shipping logs or metrics");
+            None
+        }
+        Some(site) => {
+            let (logs_url, metrics_url) = maestro_telemetry::DatadogConfig::site_urls(site);
+            Some(maestro_telemetry::DatadogConfig {
+                api_key: settings.api_key.clone(),
+                logs_url,
+                metrics_url,
+                tags: config.tags.clone(),
+                cluster: identity.cluster.name.clone(),
+                node: identity.name.clone(),
+                include_ingress_logs: settings.include_ingress_logs,
+                include_tailscale_logs: settings.include_tailscale_logs,
+                include_healthcheck: settings.logs.include_healthcheck,
+                include_metrics: settings.include_metrics,
+            })
         }
     }
 }

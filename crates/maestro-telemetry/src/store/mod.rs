@@ -18,6 +18,7 @@ mod ingress;
 mod metrics;
 mod query;
 mod rollover;
+mod sinks;
 mod traffic;
 
 use db::Db;
@@ -29,6 +30,7 @@ pub use ingress::{IngressTrafficQuery, TrafficScope};
 pub use metrics::MetricsQuery;
 use query::query_logs;
 use rollover::{remove_stale_exports, rollover_partitions, write_partition_manifest};
+pub use sinks::SinkRecord;
 pub use traffic::TrafficQuery;
 
 const SCHEMA: &str = r#"
@@ -121,10 +123,11 @@ impl LogStore {
             db: Arc::new(Db::open(
                 &data_dir.join("logs.duckdb"),
                 &format!(
-                    "{SCHEMA}{}{}{}",
+                    "{SCHEMA}{}{}{}{}",
                     metrics::METRICS_SCHEMA,
                     traffic::TRAFFIC_SCHEMA,
-                    ingress::INGRESS_SCHEMA
+                    ingress::INGRESS_SCHEMA,
+                    sinks::SINKS_SCHEMA
                 ),
             )?),
             parts_root,

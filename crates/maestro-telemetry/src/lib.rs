@@ -1,5 +1,8 @@
 mod access_log;
 mod api;
+mod datadog;
+mod datadog_metrics;
+mod disks;
 mod error;
 mod log_driver;
 mod metrics;
@@ -14,6 +17,8 @@ mod traffic;
 
 pub use access_log::{IngressTrafficBreakdown, TrafficBreakdownEntry};
 pub use api::router;
+pub use datadog::{DatadogConfig, SinkStats, run_datadog_logs};
+pub use disks::{Disk, disks};
 pub use error::{Result, TelemetryError};
 pub use log_driver::{LogDriverSettings, LogRecord, Stream, container_log_dir, pump};
 pub use metrics::{MetricPoint, MetricsCollector};

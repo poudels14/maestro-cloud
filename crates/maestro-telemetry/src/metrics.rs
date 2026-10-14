@@ -300,6 +300,7 @@ mod tests {
             ReplicaIdentity {
                 service_id: Some("web".to_string()),
                 deployment_id: Some("d1".to_string()),
+                healthcheck_path: None,
             },
         )]);
         let mut collector = MetricsCollector::new(cgroups, proc_root, Arc::new(resolver));

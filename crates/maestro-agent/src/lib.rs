@@ -1,6 +1,5 @@
 mod attach;
 mod build;
-mod disks;
 mod dns;
 mod egress;
 mod error;
@@ -8,6 +7,7 @@ mod health;
 mod ingress;
 mod node;
 mod reconciler;
+mod replica_manifest;
 mod secret_files;
 mod source;
 mod status;
@@ -19,7 +19,6 @@ pub use build::{
     BuildKitBuilder, BuildKitSettings, BuildOutput, BuildRequest, DepotBuild, image_name,
     remote_head,
 };
-pub use disks::{Disk, disks};
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
 pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;
@@ -27,6 +26,7 @@ pub use health::{HealthMonitor, probe};
 pub use ingress::{IngressWriter, serve_denied};
 pub use node::{apply_workload_slice_limits, detect_capacity, system_reserve};
 pub use reconciler::{ImageFetcher, Reconciler, ReconcilerSettings};
+pub use replica_manifest::{LocalReplica, publish_replica_manifest};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
 pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};

@@ -177,15 +177,18 @@ impl NodeService {
                     "this node does not run the control plane",
                 )),
             },
-            NodeRequest::Disks => encode_value(&maestro_agent::disks()),
+            NodeRequest::Disks => encode_value(&maestro_telemetry::disks()),
             NodeRequest::Info => {
-                let telemetry = unix_http::get(&self.telemetry_socket, "/health")
+                let stats = unix_http::get(&self.telemetry_socket, "/stats")
                     .await
-                    .is_ok_and(|(status, _)| status.is_success());
+                    .ok()
+                    .filter(|(status, _)| status.is_success())
+                    .and_then(|(_, body)| serde_json::from_slice::<Value>(&body).ok());
                 Ok(json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "uptimeMs": self.started.elapsed().as_millis() as u64,
-                    "telemetry": telemetry,
+                    "telemetry": stats.is_some(),
+                    "sinks": stats.map(|stats| stats["sinks"].clone()).unwrap_or_else(|| json!([])),
                 }))
             }
             NodeRequest::Telemetry { path } => {
@@ -642,8 +645,8 @@ pub async fn cluster_disks(State(access): State<ClusterAccess>) -> HttpResponse 
     }
 }
 
-pub async fn local_disks() -> Json<Vec<maestro_agent::Disk>> {
-    Json(maestro_agent::disks())
+pub async fn local_disks() -> Json<Vec<maestro_telemetry::Disk>> {
+    Json(maestro_telemetry::disks())
 }
 
 pub async fn call_nodes(

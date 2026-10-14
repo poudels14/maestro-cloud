@@ -3,12 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use maestro_core::ReplicaStatus;
+use maestro_agent::LocalReplica;
 use maestro_telemetry::{DeploymentFromReplicaId, ReplicaIdentity, ReplicaResolver};
 
-use crate::unix_http;
-
-const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const SYSTEM_CONTAINER_PREFIX: &str = "maestro-";
 
 #[derive(Default)]
@@ -17,31 +15,34 @@ pub struct AgentReplicaResolver {
 }
 
 impl AgentReplicaResolver {
-    pub fn spawn(api_socket: PathBuf) -> Arc<Self> {
+    pub fn spawn(manifest: PathBuf) -> Arc<Self> {
         let resolver = Arc::new(Self::default());
         let refreshing = resolver.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(REFRESH_INTERVAL);
             loop {
                 ticker.tick().await;
-                match fetch_replicas(&api_socket).await {
+                match read_manifest(&manifest).await {
                     Ok(replicas) => refreshing.replace(replicas),
-                    Err(error) => tracing::debug!(%error, "failed to refresh replicas from agent"),
+                    Err(error) => {
+                        tracing::debug!(%error, "failed to read the agent replica manifest")
+                    }
                 }
             }
         });
         resolver
     }
 
-    fn replace(&self, replicas: Vec<ReplicaStatus>) {
+    fn replace(&self, replicas: Vec<LocalReplica>) {
         let identities = replicas
             .into_iter()
             .map(|replica| {
                 let identity = ReplicaIdentity {
-                    service_id: Some(replica.service_id.to_string()),
-                    deployment_id: Some(replica.deployment_id.to_string()),
+                    service_id: Some(replica.service_id),
+                    deployment_id: Some(replica.deployment_id),
+                    healthcheck_path: replica.healthcheck_path,
                 };
-                (replica.replica_id.to_string(), identity)
+                (replica.replica_id, identity)
             })
             .collect();
         *self
@@ -72,10 +73,8 @@ impl ReplicaResolver for AgentReplicaResolver {
     }
 }
 
-async fn fetch_replicas(api_socket: &Path) -> anyhow::Result<Vec<ReplicaStatus>> {
-    let (status, body) = unix_http::get(api_socket, "/api/replicas").await?;
-    anyhow::ensure!(status.is_success(), "agent returned {status}");
-    Ok(serde_json::from_slice(&body)?)
+async fn read_manifest(path: &Path) -> anyhow::Result<Vec<LocalReplica>> {
+    Ok(serde_json::from_slice(&tokio::fs::read(path).await?)?)
 }
 
 #[cfg(test)]
@@ -85,9 +84,18 @@ mod tests {
     #[test]
     fn system_containers_stay_live_while_replicas_follow_the_agent() {
         let resolver = AgentReplicaResolver::default();
-        resolver.replace(Vec::new());
+        resolver.replace(vec![LocalReplica {
+            replica_id: "d1-0".to_string(),
+            service_id: "web".to_string(),
+            deployment_id: "d1".to_string(),
+            healthcheck_path: Some("/health".to_string()),
+        }]);
         assert!(resolver.is_live("maestro-traefik"));
-        assert!(resolver.is_live("maestro-admin"));
-        assert!(!resolver.is_live("d1-0"));
+        assert!(resolver.is_live("d1-0"));
+        assert!(!resolver.is_live("d2-0"));
+        assert_eq!(
+            resolver.resolve("d1-0").healthcheck_path.as_deref(),
+            Some("/health")
+        );
     }
 }

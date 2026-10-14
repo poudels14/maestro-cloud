@@ -9,8 +9,8 @@ use maestro_agent::{
     Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
     HostCommandRunner, IngressWriter, MeshConfig, Reconciler, ReconcilerSettings, StatusBoard,
     SystemSupervisor, WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh,
-    apply_workload_slice_limits, detect_capacity, load_or_generate_key, serve_denied,
-    system_reserve, traefik_container, upstream_resolvers,
+    apply_workload_slice_limits, detect_capacity, load_or_generate_key, publish_replica_manifest,
+    serve_denied, system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::ApiAuth;
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
@@ -31,6 +31,7 @@ use crate::unix_http;
 const DEFAULT_ADVERTISE: &str = "127.0.0.1:7400";
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const DNS_PORT: u16 = 53;
+const REPLICA_MANIFEST: &str = "/run/maestro/replicas.json";
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
@@ -207,6 +208,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         NodeClients::new(credentials.clone()),
     )));
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
+    let reconciler_plans = reconciler.plans();
     let egress = EgressFirewall::new(
         HostCommandRunner,
         EgressPolicy {
@@ -223,6 +225,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     tasks.spawn(async move { reconciler.run().await.context("reconciler stopped") });
     tasks.spawn(async move {
         egress.run().await;
+        Ok(())
+    });
+    tasks.spawn(async move {
+        publish_replica_manifest(REPLICA_MANIFEST.into(), reconciler_plans).await;
         Ok(())
     });
     tasks.spawn(async move {
@@ -399,7 +405,7 @@ fn local_router(board: StatusBoard, telemetry_socket: PathBuf) -> axum::Router {
         )
 }
 
-fn load_config(source: Option<&str>) -> anyhow::Result<ClusterConfig> {
+pub fn load_config(source: Option<&str>) -> anyhow::Result<ClusterConfig> {
     match source {
         Some(source) => Ok(ClusterConfig::load_with(
             source,

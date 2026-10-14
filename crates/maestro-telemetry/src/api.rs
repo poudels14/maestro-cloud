@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::access_log::IngressTrafficBreakdown;
+use crate::datadog::SinkStats;
 use crate::error::TelemetryError;
 use crate::metrics::MetricPoint;
 use crate::search::LogSearchQuery;
@@ -50,7 +51,10 @@ struct LogsPage {
     next_cursor: Option<i64>,
 }
 
-pub fn router(store: Arc<LogStore>) -> Router {
+pub fn router(store: Arc<LogStore>, sinks: Vec<Arc<Mutex<SinkStats>>>) -> Router {
+    let stats = Router::new()
+        .route("/stats", get(stats))
+        .with_state(Arc::new(sinks));
     Router::new()
         .route("/health", get(health))
         .route("/logs", get(logs))
@@ -59,6 +63,19 @@ pub fn router(store: Arc<LogStore>) -> Router {
         .route("/traffic", get(traffic))
         .route("/ingress-traffic", get(ingress_traffic))
         .with_state(store)
+        .merge(stats)
+}
+
+async fn stats(State(sinks): State<Arc<Vec<Arc<Mutex<SinkStats>>>>>) -> Json<serde_json::Value> {
+    let sinks = sinks
+        .iter()
+        .map(|sink| {
+            sink.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    Json(json!({ "sinks": sinks }))
 }
 
 async fn health() -> Json<serde_json::Value> {

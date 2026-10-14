@@ -6,6 +6,9 @@ use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::api::router;
+use crate::datadog::{self, DatadogConfig, DatadogLogSink};
+use crate::datadog_metrics::DatadogMetrics;
+use crate::disks::disks;
 use crate::error::Result;
 use crate::metrics::MetricsCollector;
 use crate::resolver::{DeploymentFromReplicaId, ReplicaResolver};
@@ -31,6 +34,7 @@ pub struct TelemetrySettings {
     pub cgroup_root: PathBuf,
     pub proc_root: PathBuf,
     pub resolver: Arc<dyn ReplicaResolver>,
+    pub datadog: Option<DatadogConfig>,
 }
 
 pub async fn run(settings: TelemetrySettings) -> Result<()> {
@@ -43,6 +47,29 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
         tokio::task::spawn_blocking(move || Tailer::new(log_dir, store, resolver)).await??
     };
     let listener = bind_socket(&settings.socket)?;
+    let sink_stats = datadog::new_stats();
+    let datadog_logs = {
+        let sink = settings.datadog.clone().map(|config| {
+            DatadogLogSink::new(
+                config,
+                store.clone(),
+                settings.resolver.clone(),
+                sink_stats.clone(),
+            )
+        });
+        async move {
+            match sink {
+                Some(sink) => sink.run().await,
+                None => std::future::pending().await,
+            }
+        }
+    };
+    let sinks = settings
+        .datadog
+        .is_some()
+        .then(|| sink_stats.clone())
+        .into_iter()
+        .collect::<Vec<_>>();
     let mut terminate = signal(SignalKind::terminate())?;
     tracing::info!(
         log_dir = %settings.log_dir.display(),
@@ -59,6 +86,11 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
                 settings.proc_root.clone(),
                 settings.resolver.clone(),
             ),
+            settings
+                .datadog
+                .clone()
+                .filter(|config| config.include_metrics)
+                .map(|config| DatadogMetrics::new(config, settings.resolver.clone())),
             settings.metrics_interval,
         ) => result,
         result = scrape_traffic(
@@ -66,7 +98,8 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
             settings.traefik_metrics.clone(),
             settings.traffic_interval,
         ) => result,
-        result = axum::serve(listener, router(store)) => Ok(result?),
+        result = datadog_logs => result,
+        result = axum::serve(listener, router(store, sinks)) => Ok(result?),
         _ = tokio::signal::ctrl_c() => Ok(()),
         _ = terminate.recv() => Ok(()),
     }
@@ -87,6 +120,7 @@ impl Default for TelemetrySettings {
             cgroup_root: PathBuf::from("/sys/fs/cgroup/maestro.slice/maestro-workloads.slice"),
             proc_root: PathBuf::from("/proc"),
             resolver: Arc::new(DeploymentFromReplicaId),
+            datadog: None,
         }
     }
 }
@@ -94,6 +128,7 @@ impl Default for TelemetrySettings {
 async fn collect_metrics(
     store: Arc<LogStore>,
     mut collector: MetricsCollector,
+    mut datadog: Option<DatadogMetrics>,
     interval: Duration,
 ) -> Result<()> {
     let mut ticker = tokio::time::interval(interval);
@@ -101,6 +136,9 @@ async fn collect_metrics(
     loop {
         ticker.tick().await;
         let points = collector.collect(now_ms());
+        if let Some(datadog) = datadog.as_mut() {
+            datadog.publish(&points, &disks()).await;
+        }
         let prune = last_prune.elapsed() >= METRICS_PRUNE_INTERVAL;
         let writer = store.clone();
         let written = tokio::task::spawn_blocking(move || {

@@ -20,6 +20,7 @@ fn identity(service_id: &str, deployment_id: &str) -> ReplicaIdentity {
     ReplicaIdentity {
         service_id: Some(service_id.to_string()),
         deployment_id: Some(deployment_id.to_string()),
+        healthcheck_path: None,
     }
 }
 

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct ReplicaIdentity {
     pub service_id: Option<String>,
     pub deployment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healthcheck_path: Option<String>,
 }
 
 pub trait ReplicaResolver: Send + Sync {
@@ -32,6 +34,7 @@ impl ReplicaResolver for DeploymentFromReplicaId {
         ReplicaIdentity {
             service_id: None,
             deployment_id,
+            healthcheck_path: None,
         }
     }
 }
@@ -62,6 +65,7 @@ mod tests {
             ReplicaIdentity {
                 service_id: None,
                 deployment_id: Some("dmv75i2rrmi1h".to_string()),
+                healthcheck_path: None,
             }
         );
         assert_eq!(
