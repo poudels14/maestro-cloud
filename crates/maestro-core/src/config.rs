@@ -436,7 +436,7 @@ fn resolve_relative(current: &str, parent: &str) -> String {
     }
 }
 
-fn read_file_source(source: &str) -> Result<String, ConfigError> {
+pub fn read_file_source(source: &str) -> Result<String, ConfigError> {
     let path = match source.strip_prefix(FILE_SCHEME) {
         Some(path) => Ok(PathBuf::from(path)),
         None if !source.contains("://") => Ok(PathBuf::from(source)),

@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use maestro_core::{
     Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord, NodeState,
-    ReplicaId, ReplicaPhase, ReplicaStatus, ResourceDefaults, ServiceId, UnschedulableReplica,
+    ReplicaId, ReplicaPhase, ReplicaStatus, ResourceDefaults, ServiceId, ServiceSpec,
+    UnschedulableReplica,
 };
 use maestro_store::Mutation;
 
@@ -40,6 +41,11 @@ pub trait ImageBuilder: Send + Sync + 'static {
     fn build(&self, deployment: Deployment) -> impl Future<Output = Result<String, String>> + Send;
 
     fn resolve(&self, image: String) -> impl Future<Output = Result<String, String>> + Send;
+
+    fn resolve_sources(
+        &self,
+        deployment: Deployment,
+    ) -> impl Future<Output = Result<ServiceSpec, String>> + Send;
 }
 
 enum ImageStep {
@@ -129,9 +135,16 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
 
     async fn start_queued(&self) -> Result<(), ControlError> {
         let now = self.now();
-        let (prepared, unresolved): (Vec<_>, Vec<_>) = self
+        let (with_sources, queued): (Vec<_>, Vec<_>) = self
             .state()
             .deployments_with_status(DeploymentStatus::Queued)?
+            .into_iter()
+            .partition(|deployment| deployment.spec.has_secret_sources());
+        with_sources
+            .into_iter()
+            .filter(|deployment| !lock(&self.active_resolutions).contains(&deployment.id))
+            .for_each(|deployment| self.spawn_source_resolution(deployment));
+        let (prepared, unresolved): (Vec<_>, Vec<_>) = queued
             .into_iter()
             .partition(|deployment| deployment.image.is_some());
         unresolved
@@ -163,7 +176,11 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             .collect::<Result<Vec<_>, _>>()?
             .concat()
             .into_iter()
-            .filter(|deployment| deployment.spec.build.is_some() && deployment.image.is_none())
+            .filter(|deployment| {
+                deployment.spec.build.is_some()
+                    && deployment.image.is_none()
+                    && !deployment.spec.has_secret_sources()
+            })
             .filter(|deployment| !self.is_building(&deployment.id))
             .collect::<Vec<_>>();
         waiting.sort_by_key(|deployment| {
@@ -191,6 +208,41 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             self.spawn_image_step(deployment, DeploymentStatus::Building, ImageStep::Build);
         }
         Ok(())
+    }
+
+    fn spawn_source_resolution(&self, deployment: Deployment) {
+        lock(&self.active_resolutions).insert(deployment.id.clone());
+        let writer = self.writer.clone();
+        let builder = self.builder.clone();
+        let tracked = self.active_resolutions.clone();
+        let clock = self.settings.clock.clone();
+        tokio::spawn(async move {
+            let result = builder.resolve_sources(deployment.clone()).await;
+            let still_queued = writer
+                .state()
+                .deployment(&deployment.service_id, &deployment.id)
+                .ok()
+                .flatten()
+                .is_some_and(|current| current.status == DeploymentStatus::Queued);
+            let mutation = match result {
+                Ok(spec) => Mutation::SetDeploymentSpec {
+                    service_id: deployment.service_id.clone(),
+                    deployment_id: deployment.id.clone(),
+                    spec,
+                },
+                Err(reason) => status_change(
+                    &deployment,
+                    DeploymentStatus::Failed,
+                    None,
+                    Some(format!("secret resolution failed: {reason}")),
+                    clock(),
+                ),
+            };
+            if still_queued && let Err(error) = writer.write(vec![mutation]).await {
+                tracing::warn!(deployment = %deployment.id, %error, "failed to record resolved sources");
+            }
+            lock(&tracked).remove(&deployment.id);
+        });
     }
 
     fn spawn_image_step(

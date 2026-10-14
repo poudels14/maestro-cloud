@@ -400,7 +400,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   deployment record, delete service, cluster-wide freeze during upgrades.
 - [x] W2 nodes and scheduling: drain/restore, unschedulable report, affinity and
   volume pinning, node removal, disks per node.
-- [ ] W3 secrets and config sources: `aws-secret://` (JSON or dotenv) for env, secrets,
+- [x] W3 secrets and config sources: `aws-secret://` (JSON or dotenv) for env, secrets,
   build env/secrets, and cluster config; `${VAR}` expansion in the CLI; secrets file
   mounts (`K="v"` lines, 0600, zeroed on stop); `GH_TOKEN` build secret for git auth.
 - [ ] W4 builds: `build.watch` (git ls-remote polling with backoff), Depot, `maestro

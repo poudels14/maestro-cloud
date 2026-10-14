@@ -379,7 +379,10 @@ fn local_router(board: StatusBoard, telemetry_socket: PathBuf) -> axum::Router {
 
 fn load_config(source: Option<&str>) -> anyhow::Result<ClusterConfig> {
     match source {
-        Some(source) => Ok(ClusterConfig::load(source)?),
+        Some(source) => Ok(ClusterConfig::load_with(
+            source,
+            &crate::secret_sources::read_config_source,
+        )?),
         None => Ok(ClusterConfig::default()),
     }
 }

@@ -17,7 +17,9 @@ use maestro_control::{
     AgentHub, ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, require_token, router,
     run_publisher,
 };
-use maestro_core::{ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole, NodeState};
+use maestro_core::{
+    ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole, NodeState, ServiceSpec,
+};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_proto::pb::node_server::NodeServer;
@@ -33,6 +35,7 @@ use crate::node_service::{
     ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_disks, cluster_logs,
     local_disks, remove_cluster_node,
 };
+use crate::secret_sources;
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
@@ -234,24 +237,28 @@ impl ImageBuilder for SealedSpecBuilder {
         let build = spec
             .build
             .ok_or_else(|| "deployment has no build configuration".to_string())?;
-        match (&build.env.source, &build.secrets.source) {
-            (None, None) => {
-                let request = BuildRequest {
-                    deployment_id: deployment.id.to_string(),
-                    service_id: deployment.service_id.to_string(),
-                    repo: build.repo,
-                    branch: build.branch,
-                    context_dir: None,
-                    dockerfile: build.dockerfile,
-                    registry: build.registry,
-                    image: None,
-                    build_args: build.env.items,
-                    secrets: build.secrets.items,
-                };
-                self.builder.build(&request).await
-            }
-            _ => Err("external secret sources are not supported yet".to_string()),
-        }
+        let request = BuildRequest {
+            deployment_id: deployment.id.to_string(),
+            service_id: deployment.service_id.to_string(),
+            repo: build.repo,
+            branch: build.branch,
+            context_dir: None,
+            dockerfile: build.dockerfile,
+            registry: build.registry,
+            image: None,
+            build_args: build.env.items,
+            secrets: build.secrets.items,
+        };
+        self.builder.build(&request).await
+    }
+
+    async fn resolve_sources(&self, deployment: Deployment) -> Result<ServiceSpec, String> {
+        let spec = self
+            .key
+            .open_spec(&deployment.spec)
+            .map_err(|error| error.to_string())?;
+        let resolved = secret_sources::resolve_spec(spec).await?;
+        Ok(self.key.seal_spec(&resolved))
     }
 
     async fn resolve(&self, image: String) -> Result<String, String> {

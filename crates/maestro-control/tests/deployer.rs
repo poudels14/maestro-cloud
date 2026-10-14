@@ -72,10 +72,10 @@ async fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::
         ])
         .unwrap();
     if resolves_image {
-        harness.deployer.tick().await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             while status(harness, deployment_id) == DeploymentStatus::Queued {
-                tokio::task::yield_now().await;
+                harness.deployer.tick().await.unwrap();
+                settle().await;
             }
         })
         .await
@@ -569,4 +569,37 @@ async fn reports_replicas_that_cannot_be_placed() {
         .unwrap();
     harness.deployer.tick().await.unwrap();
     assert!(harness.writer.state().unschedulable().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn resolves_secret_sources_before_deploying() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    let mut spec = image_service(1);
+    spec.deploy.env.source = Some("aws-secret://app".to_string());
+    queue_spec(&harness, "d1", spec).await;
+    let deployment = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(deployment.spec.deploy.env.source, None);
+    assert_eq!(deployment.spec.deploy.env.items["FROM_SOURCE"], "fetched");
+    assert_eq!(deployment.status, DeploymentStatus::Deploying);
+}
+
+#[tokio::test]
+async fn failed_secret_resolution_fails_the_deployment() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    let mut spec = image_service(1);
+    spec.deploy.env.source = Some("aws-secret://missing".to_string());
+    queue_spec(&harness, "d1", spec).await;
+    let deployment = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(deployment.status, DeploymentStatus::Failed);
+    assert!(deployment.failure.unwrap().contains("secret not found"));
 }

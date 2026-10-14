@@ -167,7 +167,9 @@ pub fn join_secret(data_dir: &Path) -> anyhow::Result<String> {
 pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
     let (fingerprint, secret) = parse_token(&args.token)?;
     let config = match &args.config {
-        Some(source) => ClusterConfig::load(source)?,
+        Some(source) => {
+            ClusterConfig::load_with(source, &crate::secret_sources::read_config_source)?
+        }
         None => ClusterConfig::default(),
     };
     let capacity = detect_capacity()?;

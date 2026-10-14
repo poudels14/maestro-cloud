@@ -25,6 +25,11 @@ pub enum Mutation {
         failure: Option<String>,
         at_ms: u64,
     },
+    SetDeploymentSpec {
+        service_id: ServiceId,
+        deployment_id: DeploymentId,
+        spec: ServiceSpec,
+    },
     DeleteDeployment {
         service_id: ServiceId,
         deployment_id: DeploymentId,

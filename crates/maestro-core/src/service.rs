@@ -238,6 +238,19 @@ impl ServicesFile {
 }
 
 impl ServiceSpec {
+    pub fn has_secret_sources(&self) -> bool {
+        let build_sources = self
+            .build
+            .as_ref()
+            .is_some_and(|build| build.env.source.is_some() || build.secrets.source.is_some());
+        let secrets_source = self
+            .deploy
+            .secrets
+            .as_ref()
+            .is_some_and(|secrets| secrets.source.is_some());
+        self.deploy.env.source.is_some() || secrets_source || build_sources
+    }
+
     pub fn validate(&self, service_id: &ServiceId) -> Result<(), SpecError> {
         let problem = self.problems(service_id).into_iter().next();
         match problem {

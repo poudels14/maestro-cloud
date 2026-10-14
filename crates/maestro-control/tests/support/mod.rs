@@ -195,6 +195,22 @@ impl ImageBuilder for FakeBuilder {
             )),
         }
     }
+    async fn resolve_sources(&self, deployment: Deployment) -> Result<ServiceSpec, String> {
+        let mut spec = deployment.spec;
+        match spec.deploy.env.source.take().as_deref() {
+            Some("aws-secret://missing") => Err("secret not found".to_string()),
+            Some(_) => {
+                spec.deploy
+                    .env
+                    .items
+                    .entry("FROM_SOURCE".to_string())
+                    .or_insert_with(|| "fetched".to_string());
+                Ok(spec)
+            }
+            None => Ok(spec),
+        }
+    }
+
     async fn resolve(&self, image: String) -> Result<String, String> {
         match image.starts_with("missing") {
             true => Err("image or tag not found".to_string()),
