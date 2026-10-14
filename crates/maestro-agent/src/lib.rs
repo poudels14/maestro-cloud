@@ -2,6 +2,7 @@ mod attach;
 mod build;
 mod disks;
 mod dns;
+mod egress;
 mod error;
 mod health;
 mod ingress;
@@ -20,6 +21,7 @@ pub use build::{
 };
 pub use disks::{Disk, disks};
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
+pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};
 pub use ingress::{IngressWriter, serve_denied};

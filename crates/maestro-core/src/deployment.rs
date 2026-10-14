@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 use crate::resources::{EffectiveResources, OomPriority};
 use crate::routing::affinity_token;
-use crate::service::{Command, SecretsSpec, ServiceSpec, VolumeMount};
+use crate::service::{Command, EgressRule, SecretsSpec, ServiceSpec, VolumeMount};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +81,8 @@ pub struct ReplicaPlan {
     pub secrets: Option<SecretsSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub egress: Vec<EgressRule>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +131,7 @@ impl ReplicaPlan {
                     ..secrets
                 }),
             image_source: None,
+            egress: deploy.egress.allow.clone(),
         }
     }
 }

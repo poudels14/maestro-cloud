@@ -6,10 +6,11 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    Attachment, DnsRecords, DnsServer, HealthMonitor, IngressWriter, MeshConfig, Reconciler,
-    ReconcilerSettings, StatusBoard, SystemSupervisor, WIREGUARD_INTERFACE, WIREGUARD_PORT,
-    WireGuardMesh, apply_workload_slice_limits, detect_capacity, load_or_generate_key,
-    serve_denied, system_reserve, traefik_container, upstream_resolvers,
+    Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
+    HostCommandRunner, IngressWriter, MeshConfig, Reconciler, ReconcilerSettings, StatusBoard,
+    SystemSupervisor, WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh,
+    apply_workload_slice_limits, detect_capacity, load_or_generate_key, serve_denied,
+    system_reserve, traefik_container, upstream_resolvers,
 };
 use maestro_control::ApiAuth;
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
@@ -206,9 +207,24 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         NodeClients::new(credentials.clone()),
     )));
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
+    let egress = EgressFirewall::new(
+        HostCommandRunner,
+        EgressPolicy {
+            deny: config.egress.deny.clone(),
+            allow: config.egress.allow.clone(),
+            local_subnet: identity.subnet.clone(),
+            cluster_cidr: identity.cluster.cidr.clone(),
+        },
+        board.clone(),
+        reconciler.plans(),
+    );
 
     let mut tasks = JoinSet::new();
     tasks.spawn(async move { reconciler.run().await.context("reconciler stopped") });
+    tasks.spawn(async move {
+        egress.run().await;
+        Ok(())
+    });
     tasks.spawn(async move {
         serve_denied()
             .await

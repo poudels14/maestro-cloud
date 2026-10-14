@@ -264,6 +264,7 @@ mod tests {
             volumes: Vec::new(),
             secrets: None,
             image_source: None,
+            egress: Vec::new(),
         }
     }
 
