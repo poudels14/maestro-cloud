@@ -1,5 +1,6 @@
 mod attach;
 mod build;
+mod cloudflare;
 mod dns;
 mod egress;
 mod error;
@@ -19,6 +20,7 @@ pub use build::{
     BuildKitBuilder, BuildKitSettings, BuildOutput, BuildRequest, DepotBuild, image_name,
     remote_head,
 };
+pub use cloudflare::TunnelConnectors;
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
 pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;

@@ -36,6 +36,7 @@ pub struct Attachment<L: ControlLink> {
     board: StatusBoard,
     plans: watch::Sender<Vec<ReplicaPlan>>,
     initialized: watch::Sender<bool>,
+    attached: watch::Sender<bool>,
     ingress: IngressWriter,
     dns: DnsRecords,
     mesh: Option<(WireGuardMesh, MeshConfig)>,
@@ -65,6 +66,7 @@ impl<L: ControlLink> Attachment<L> {
             board,
             plans,
             initialized,
+            attached: watch::channel(false).0,
             ingress,
             dns,
             mesh,
@@ -74,6 +76,10 @@ impl<L: ControlLink> Attachment<L> {
             initialized: initialized_receiver,
         };
         (attachment, source)
+    }
+
+    pub fn attached(&self) -> watch::Receiver<bool> {
+        self.attached.subscribe()
     }
 
     pub async fn run(mut self) {
@@ -88,7 +94,9 @@ impl<L: ControlLink> Attachment<L> {
             match self.link.connect(&target).await {
                 Ok((sender, receiver)) => {
                     backoff = RECONNECT_MIN;
-                    match self.session(sender, receiver).await {
+                    let ended = self.session(sender, receiver).await;
+                    self.attached.send_replace(false);
+                    match ended {
                         SessionEnd::Redirected(leader) => leader_hint = leader,
                         SessionEnd::Disconnected => {
                             tracing::info!(%target, "control stream closed; reconnecting")
@@ -154,6 +162,7 @@ impl<L: ControlLink> Attachment<L> {
             ControlMessage::Plans { plans } => {
                 self.plans.send_replace(plans);
                 self.initialized.send_replace(true);
+                self.attached.send_replace(true);
             }
             ControlMessage::Routes { table, dns } => {
                 if let Err(error) = self.ingress.write(&table).await {

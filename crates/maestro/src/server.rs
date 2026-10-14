@@ -8,7 +8,7 @@ use clap::Args;
 use maestro_agent::{
     Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
     HostCommandRunner, IngressWriter, MeshConfig, Reconciler, ReconcilerSettings, StatusBoard,
-    SystemSupervisor, WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh,
+    SystemSupervisor, TunnelConnectors, WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh,
     apply_workload_slice_limits, detect_capacity, load_or_generate_key, publish_replica_manifest,
     serve_denied, system_reserve, traefik_container, upstream_resolvers,
 };
@@ -197,6 +197,19 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         dns_records,
         Some((WireGuardMesh::host(), mesh)),
     );
+    let tunnel = TunnelConnectors::new(
+        runtime.clone(),
+        config
+            .cloudflare
+            .as_ref()
+            .map_or("", |cloudflare| cloudflare.tunnel.token.as_str()),
+        config
+            .cloudflare
+            .as_ref()
+            .map_or(0, |cloudflare| cloudflare.tunnel.replicas),
+        attachment.attached(),
+        config.ingress.ports.first().copied().unwrap_or(80),
+    );
     let reconciler = Reconciler::new(
         runtime.clone(),
         Arc::new(source),
@@ -225,6 +238,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     tasks.spawn(async move { reconciler.run().await.context("reconciler stopped") });
     tasks.spawn(async move {
         egress.run().await;
+        Ok(())
+    });
+    tasks.spawn(async move {
+        tunnel.run().await;
         Ok(())
     });
     tasks.spawn(async move {
