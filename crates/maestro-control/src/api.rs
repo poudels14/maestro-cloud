@@ -931,7 +931,7 @@ fn masked_deployment(deployment: Deployment) -> Deployment {
     }
 }
 
-pub(crate) fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deployment {
+pub fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deployment {
     let now = unix_millis();
     let suffix = nanoid::format(nanoid::rngs::default, &DEPLOYMENT_ID_ALPHABET, 4);
     Deployment {

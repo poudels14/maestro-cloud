@@ -12,6 +12,7 @@ mod node_service;
 mod secret_sources;
 mod server;
 mod unix_http;
+mod uploads;
 
 use std::path::PathBuf;
 
@@ -60,7 +61,10 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    Services,
+    Services {
+        #[command(subcommand)]
+        command: Option<ServicesCommand>,
+    },
     #[command(subcommand)]
     Service(client::ServiceCommand),
     Deploy {
@@ -79,6 +83,16 @@ enum Command {
         query: Option<String>,
         #[arg(short = 'n', long, default_value_t = 100)]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServicesCommand {
+    Up {
+        #[arg(long, default_value = "maestro.services.jsonc")]
+        config: PathBuf,
+        #[arg(long, default_value = ".")]
+        context: PathBuf,
     },
 }
 
@@ -148,7 +162,12 @@ async fn run_cli() -> anyhow::Result<()> {
         Command::Rollout { file, apply, force } => {
             client::rollout(&contexts::resolve(cli.api, cli.token)?, &file, apply, force).await
         }
-        Command::Services => client::services(&contexts::resolve(cli.api, cli.token)?).await,
+        Command::Services { command: None } => {
+            client::services(&contexts::resolve(cli.api, cli.token)?).await
+        }
+        Command::Services {
+            command: Some(ServicesCommand::Up { config, context }),
+        } => client::services_up(&contexts::resolve(cli.api, cli.token)?, &config, &context).await,
         Command::Service(command) => {
             client::service(&contexts::resolve(cli.api, cli.token)?, command).await
         }

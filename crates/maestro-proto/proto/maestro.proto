@@ -16,6 +16,11 @@ message Chunk {
   bytes data = 1;
 }
 
+message UploadChunk {
+  bytes metadata = 1;
+  bytes data = 2;
+}
+
 service Raft {
   rpc AppendEntries(Envelope) returns (Envelope);
   rpc Vote(Envelope) returns (Envelope);
@@ -31,4 +36,5 @@ service Node {
   rpc Call(Envelope) returns (Envelope);
   rpc Exec(stream Envelope) returns (stream Envelope);
   rpc FetchImage(ImageRequest) returns (stream Chunk);
+  rpc Upload(stream UploadChunk) returns (Envelope);
 }

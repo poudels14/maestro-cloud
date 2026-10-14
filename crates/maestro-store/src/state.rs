@@ -432,7 +432,7 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
         } => {
             let existing = read_deployment(transaction, service_id, deployment_id)?;
             let updated = Deployment {
-                git_commit: commit.clone(),
+                git_commit: commit.clone().or(existing.git_commit.clone()),
                 built_on: *built_on,
                 ..existing.clone()
             };

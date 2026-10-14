@@ -37,10 +37,12 @@ use crate::node_service::{
 };
 use crate::secret_sources;
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
+use crate::uploads::{self, UploadState, upload_service};
 
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_UPLOAD_BYTES: usize = 1 << 30;
 const MEMBERSHIP_INTERVAL: Duration = Duration::from_secs(5);
 const LEARNER_CATCH_UP: Duration = Duration::from_secs(120);
 const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
@@ -89,6 +91,8 @@ struct GitHeads;
 
 struct SealedSpecBuilder {
     node_id: NodeId,
+    uploads: PathBuf,
+    work_dir: PathBuf,
     builder: BuildKitBuilder,
     registry: RegistryClient,
     key: Arc<SecretKey>,
@@ -121,11 +125,14 @@ pub async fn spawn(
             authority,
             settings.identity.cluster.clone(),
         )))
-        .add_service(NodeServer::new(NodeService::new(
-            settings.telemetry_socket.clone(),
-            Some(consensus.clone()),
-            runtime.clone(),
-        )))
+        .add_service(NodeServer::new(
+            NodeService::new(
+                settings.telemetry_socket.clone(),
+                Some(consensus.clone()),
+                runtime.clone(),
+            )
+            .with_uploads(key.clone(), uploads_dir(&settings.data_dir)),
+        ))
         .serve(settings.grpc_listen);
     tasks.spawn(async move { grpc.await.context("gRPC server stopped") });
     tasks.spawn(publish(
@@ -155,6 +162,8 @@ pub async fn spawn(
         observed.clone(),
         Arc::new(SealedSpecBuilder {
             node_id: settings.identity.id,
+            uploads: uploads_dir(&settings.data_dir),
+            work_dir: settings.data_dir.join("builds/work"),
             builder: BuildKitBuilder::new(buildkit),
             registry: RegistryClient::new(),
             key: key.clone(),
@@ -183,6 +192,19 @@ pub async fn spawn(
             consensus: consensus.clone(),
             clients: clients.clone(),
         });
+    let uploads = axum::Router::new()
+        .route(
+            "/api/services/up",
+            axum::routing::post(upload_service)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .with_state(UploadState {
+            consensus: consensus.clone(),
+            clients: clients.clone(),
+            key: key.clone(),
+            directory: uploads_dir(&settings.data_dir),
+            allowed: settings.config.allow_cli_deployment,
+        });
     let info = axum::Router::new()
         .route("/api/cluster", axum::routing::get(cluster_info))
         .route(
@@ -200,6 +222,7 @@ pub async fn spawn(
         key,
     }))
     .merge(logs)
+    .merge(uploads)
     .merge(info);
     let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));
     let authenticated_api = api
@@ -259,19 +282,45 @@ impl ImageBuilder for SealedSpecBuilder {
             .build
             .ok_or_else(|| "deployment has no build configuration".to_string())?;
         let built_on = build.registry.is_none().then_some(self.node_id);
+        let upload_context = match &build.repo {
+            Some(_) => None,
+            None => {
+                let destination = self.work_dir.join(format!("{}-upload", deployment.id));
+                uploads::unpack(
+                    uploads::archive_path(
+                        &self.uploads,
+                        &deployment.service_id,
+                        deployment.id.as_str(),
+                    ),
+                    destination.clone(),
+                )
+                .await?;
+                Some(destination)
+            }
+        };
         let request = BuildRequest {
             deployment_id: deployment.id.to_string(),
             service_id: deployment.service_id.to_string(),
             repo: build.repo,
             branch: build.branch,
-            context_dir: None,
+            context_dir: upload_context.clone(),
             dockerfile: build.dockerfile,
             registry: build.registry,
             image: None,
             build_args: build.env.items,
             secrets: build.secrets.items,
         };
-        self.builder.build(&request).await.map(|output| BuiltImage {
+        let result = self.builder.build(&request).await;
+        if let Some(context) = upload_context {
+            let _ = tokio::fs::remove_dir_all(context).await;
+            let _ = tokio::fs::remove_file(uploads::archive_path(
+                &self.uploads,
+                &deployment.service_id,
+                deployment.id.as_str(),
+            ))
+            .await;
+        }
+        result.map(|output| BuiltImage {
             image: output.image,
             commit: output.commit,
             built_on,
@@ -468,4 +517,8 @@ async fn run_admin(
             Ok(())
         }
     }
+}
+
+fn uploads_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("uploads")
 }

@@ -16,11 +16,12 @@ use maestro_core::{NodeId, NodeRecord, NodeState};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::node_client::NodeClient;
 use maestro_proto::pb::node_server::Node;
-use maestro_proto::pb::{Chunk, Envelope, ImageRequest};
+use maestro_proto::pb::{Chunk, Envelope, ImageRequest, UploadChunk};
 use maestro_runtime::ContainerdRuntime;
-use maestro_store::{Consensus, ConsensusError, Mutation, StateMachine};
+use maestro_store::{Consensus, ConsensusError, Mutation, SecretKey, StateMachine};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
@@ -30,6 +31,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::cluster_service::{decode, encode};
 use crate::unix_http;
+use crate::uploads::{self, UploadAccepted, UploadSpec};
 
 const IMAGE_CHUNK_BUFFER: usize = 16;
 const NODE_CALL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -75,6 +77,7 @@ pub struct NodeService {
     telemetry_socket: PathBuf,
     consensus: Option<Arc<Consensus>>,
     runtime: Arc<ContainerdRuntime>,
+    uploads: Option<(Arc<SecretKey>, PathBuf)>,
 }
 
 #[derive(Clone)]
@@ -117,6 +120,14 @@ impl NodeService {
             telemetry_socket,
             consensus,
             runtime,
+            uploads: None,
+        }
+    }
+
+    pub fn with_uploads(self, key: Arc<SecretKey>, directory: PathBuf) -> Self {
+        Self {
+            uploads: Some((key, directory)),
+            ..self
         }
     }
 
@@ -213,6 +224,43 @@ impl Node for NodeService {
         }
     }
 
+    async fn upload(
+        &self,
+        request: Request<Streaming<UploadChunk>>,
+    ) -> Result<Response<Envelope>, Status> {
+        let authenticated = request
+            .peer_certs()
+            .is_some_and(|certificates| !certificates.is_empty());
+        match (authenticated, &self.consensus, &self.uploads) {
+            (false, _, _) => Err(Status::unauthenticated("a node certificate is required")),
+            (true, Some(consensus), Some((key, directory))) => {
+                let mut chunks = request.into_inner();
+                let first = chunks
+                    .message()
+                    .await?
+                    .ok_or_else(|| Status::invalid_argument("the upload is empty"))?;
+                let upload: UploadSpec = serde_json::from_slice(&first.metadata)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                tokio::fs::create_dir_all(directory)
+                    .await
+                    .map_err(|error| Status::internal(error.to_string()))?;
+                let incoming = uploads::incoming_path(directory);
+                let received = receive_chunks(&mut chunks, &incoming).await;
+                let accepted = match received {
+                    Ok(()) => {
+                        uploads::accept_upload(consensus, key, directory, upload, &incoming).await
+                    }
+                    Err(status) => Err(status),
+                };
+                let _ = tokio::fs::remove_file(&incoming).await;
+                Ok(Response::new(encode(&accepted?)?))
+            }
+            (true, _, _) => Err(Status::failed_precondition(
+                "this node does not run the control plane",
+            )),
+        }
+    }
+
     async fn exec(
         &self,
         _request: Request<Streaming<Envelope>>,
@@ -232,6 +280,20 @@ impl NodeClients {
     pub async fn call(&self, address: &str, request: &NodeRequest) -> Result<Value, Status> {
         let channel = self.channel(address).await?;
         let reply = NodeClient::new(channel).call(encode(request)?).await?;
+        decode(&reply.into_inner())
+    }
+
+    pub async fn upload(
+        &self,
+        address: &str,
+        upload: &UploadSpec,
+        archive: &std::path::Path,
+    ) -> Result<UploadAccepted, Status> {
+        let chunks = uploads::stream_chunks(upload, archive).await?;
+        let channel = self.channel(address).await?;
+        let reply = NodeClient::new(channel)
+            .upload(ReceiverStream::new(chunks))
+            .await?;
         decode(&reply.into_inner())
     }
 
@@ -543,6 +605,23 @@ async fn call_nodes(
         });
     });
     calls.join_all().await
+}
+
+async fn receive_chunks(
+    chunks: &mut Streaming<UploadChunk>,
+    destination: &std::path::Path,
+) -> Result<(), Status> {
+    let mut file = tokio::fs::File::create(destination)
+        .await
+        .map_err(|error| Status::internal(error.to_string()))?;
+    while let Some(chunk) = chunks.message().await? {
+        file.write_all(&chunk.data)
+            .await
+            .map_err(|error| Status::internal(error.to_string()))?;
+    }
+    file.flush()
+        .await
+        .map_err(|error| Status::internal(error.to_string()))
 }
 
 async fn query_nodes(

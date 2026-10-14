@@ -3,6 +3,8 @@ use std::path::Path;
 use anyhow::Context;
 use clap::Subcommand;
 use maestro_core::{EnvSpec, ServiceSpec, ServicesFile};
+
+use crate::uploads::{self, UploadSpec};
 use serde_json::{Value, json};
 
 pub struct Endpoint {
@@ -206,6 +208,37 @@ pub async fn rollout(
         true => print_list("queued deployments", &plan["deployments"]),
         false => println!("\nrun again with --apply to roll out these changes"),
     }
+    Ok(())
+}
+
+pub async fn services_up(endpoint: &Endpoint, config: &Path, context: &Path) -> anyhow::Result<()> {
+    let manifest = std::fs::read_to_string(config)
+        .with_context(|| format!("failed to read {}", config.display()))?;
+    let mut upload: UploadSpec = json5::from_str(&manifest)
+        .with_context(|| format!("{} is not a valid service manifest", config.display()))?;
+    expand_variables(upload.id.as_str(), &mut upload.spec)?;
+    upload.spec.validate(&upload.id)?;
+    let archive = uploads::pack(context)?;
+    println!("uploading {} KiB of build context", archive.len() / 1024);
+    let form = reqwest::multipart::Form::new()
+        .part(
+            "spec",
+            reqwest::multipart::Part::bytes(serde_json::to_vec(&upload)?)
+                .file_name("spec.json")
+                .mime_str("application/json")?,
+        )
+        .part(
+            "context",
+            reqwest::multipart::Part::bytes(archive)
+                .file_name("context.tar.gz")
+                .mime_str("application/gzip")?,
+        );
+    let accepted = request(endpoint.post("/api/services/up").multipart(form)).await?;
+    println!(
+        "queued deployment {} for {}",
+        text(&accepted["deploymentId"]),
+        text(&accepted["serviceId"])
+    );
     Ok(())
 }
 
