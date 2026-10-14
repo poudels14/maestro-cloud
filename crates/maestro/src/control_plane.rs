@@ -18,8 +18,8 @@ use maestro_control::{
     ImageBuilder, RemoteHeads, require_token, router, run_publisher,
 };
 use maestro_core::{
-    ClusterConfig, ClusterSettings, Deployment, MaintenanceRun, NodeId, NodeRole, NodeState,
-    ServiceSpec,
+    ClusterConfig, ClusterSettings, Deployment, DeploymentId, MaintenanceRun, NodeId, NodeRole,
+    NodeState, ServiceId, ServiceSpec,
 };
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
@@ -39,8 +39,8 @@ use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
 use crate::maintenance;
 use crate::node_service::{
-    ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_disks, cluster_logs,
-    local_disks, remove_cluster_node,
+    BUILD_LOGS_DIR, ClusterAccess, ForwardingWriter, NodeClients, NodeRequest, NodeService,
+    cluster_disks, cluster_logs, local_disks, read_build_log, remove_cluster_node,
 };
 use crate::observability;
 use crate::previews::{PreviewSettings, PreviewWatcher};
@@ -77,6 +77,8 @@ struct InfoState {
     consensus: Arc<Consensus>,
     cluster: ClusterSettings,
     build_logs: PathBuf,
+    config: ClusterConfig,
+    clients: NodeClients,
 }
 
 #[derive(Serialize)]
@@ -163,7 +165,7 @@ pub async fn spawn(
         buildctl: PathBuf::from("buildctl"),
         address: BUILDKIT_ADDRESS.to_string(),
         work_dir: settings.data_dir.join("builds/work"),
-        log_dir: settings.data_dir.join("builds/logs"),
+        log_dir: settings.data_dir.join(BUILD_LOGS_DIR),
         git_token: None,
     };
     tasks.spawn(run_admin(
@@ -211,7 +213,7 @@ pub async fn spawn(
         let archiver = archive::run_archiver(
             consensus.clone(),
             archive,
-            settings.data_dir.join("builds/logs"),
+            settings.data_dir.join(BUILD_LOGS_DIR),
         );
         tasks.spawn(async move {
             archiver.await;
@@ -381,6 +383,7 @@ pub async fn spawn(
         .with_state(slack);
     let info = axum::Router::new()
         .route("/api/cluster", axum::routing::get(cluster_info))
+        .route("/api/config", axum::routing::get(cluster_config))
         .route(
             "/api/services/{service_id}/deployments/{deployment_id}/build-log",
             axum::routing::get(build_log),
@@ -388,7 +391,9 @@ pub async fn spawn(
         .with_state(Arc::new(InfoState {
             consensus: consensus.clone(),
             cluster: settings.identity.cluster.clone(),
-            build_logs: settings.data_dir.join("builds/logs"),
+            build_logs: settings.data_dir.join(BUILD_LOGS_DIR),
+            config: settings.config.masked(),
+            clients: clients.clone(),
         }));
     let api = router(Arc::new(ApiState {
         writer: writer.clone(),
@@ -535,6 +540,10 @@ impl ImageBuilder for SealedSpecBuilder {
     }
 }
 
+async fn cluster_config(State(info): State<Arc<InfoState>>) -> Json<ClusterConfig> {
+    Json(info.config.clone())
+}
+
 async fn cluster_info(State(info): State<Arc<InfoState>>) -> Json<ClusterInfo> {
     let metrics = info.consensus.metrics();
     let members = |members: BTreeMap<NodeId, String>| {
@@ -561,17 +570,12 @@ async fn cluster_info(State(info): State<Arc<InfoState>>) -> Json<ClusterInfo> {
 
 async fn build_log(
     State(info): State<Arc<InfoState>>,
-    axum::extract::Path((_, deployment_id)): axum::extract::Path<(String, String)>,
+    axum::extract::Path((service_id, deployment_id)): axum::extract::Path<(String, String)>,
 ) -> axum::response::Response {
-    let valid = !deployment_id.is_empty()
-        && deployment_id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-');
-    let contents = match valid {
-        true => tokio::fs::read_to_string(info.build_logs.join(format!("{deployment_id}.log")))
-            .await
-            .ok(),
-        false => None,
+    let local = read_build_log(&info.build_logs, &deployment_id).await;
+    let contents = match local {
+        Some(text) => Some(text),
+        None => remote_build_log(&info, &service_id, &deployment_id).await,
     };
     match contents {
         Some(text) => (
@@ -584,10 +588,51 @@ async fn build_log(
             .into_response(),
         None => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no build log on this node for that deployment" })),
+            Json(serde_json::json!({ "error": "no build log found for that deployment" })),
         )
             .into_response(),
     }
+}
+
+async fn remote_build_log(
+    info: &InfoState,
+    service_id: &str,
+    deployment_id: &str,
+) -> Option<String> {
+    let store = info.consensus.state();
+    let built_on = store
+        .deployment(
+            &ServiceId::from(service_id),
+            &DeploymentId::from(deployment_id),
+        )
+        .ok()
+        .flatten()
+        .and_then(|deployment| deployment.built_on);
+    let leader = info.consensus.current_leader().map(|(node_id, _)| node_id);
+    let own = info.consensus.metrics().node_id;
+    let candidates = [built_on, leader]
+        .into_iter()
+        .flatten()
+        .filter(|node_id| *node_id != own)
+        .collect::<std::collections::BTreeSet<_>>();
+    let request = NodeRequest::BuildLog {
+        deployment_id: deployment_id.to_string(),
+    };
+    for node in candidates
+        .iter()
+        .filter_map(|node_id| store.node(*node_id).ok().flatten())
+    {
+        let text = info
+            .clients
+            .call(&node.endpoint, &request)
+            .await
+            .ok()
+            .and_then(|reply| reply["text"].as_str().map(str::to_string));
+        if text.is_some() {
+            return text;
+        }
+    }
+    None
 }
 
 async fn publish(

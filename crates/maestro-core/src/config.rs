@@ -46,6 +46,8 @@ const REPLACED_V1_FIELDS: [(&str, &str); 11] = [
     ),
 ];
 
+const CONFIG_MASK: &str = "********";
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClusterConfig {
@@ -246,6 +248,34 @@ pub enum ConfigError {
 }
 
 impl ClusterConfig {
+    pub fn masked(&self) -> Self {
+        let mask = |value: &mut String| {
+            if !value.is_empty() {
+                *value = CONFIG_MASK.to_string();
+            }
+        };
+        let mut masked = self.clone();
+        if let Some(tailscale) = masked.tailscale.as_mut() {
+            mask(&mut tailscale.auth_key);
+        }
+        if let Some(datadog) = masked.datadog.as_mut() {
+            mask(&mut datadog.api_key);
+        }
+        if let Some(depot) = masked.depot.as_mut() {
+            mask(&mut depot.token);
+        }
+        if let Some(cloudflare) = masked.cloudflare.as_mut() {
+            mask(&mut cloudflare.tunnel.token);
+        }
+        if let Some(slack) = masked.slack.as_mut() {
+            mask(&mut slack.webhook_url);
+        }
+        if let Some(github) = masked.github.as_mut() {
+            mask(&mut github.token);
+        }
+        masked
+    }
+
     pub fn load(source: &str) -> Result<Self, ConfigError> {
         Self::load_with(source, &read_file_source)
     }
@@ -492,6 +522,28 @@ mod tests {
         assert_eq!(config.cluster.cidr, "10.200.0.0/16");
         assert_eq!(config.ingress.ports, [80, 443]);
         assert_eq!(config.defaults.resources, ResourceDefaults::default());
+    }
+
+    #[test]
+    fn masks_credentials() {
+        let config = ClusterConfig::parse(
+            r#"{
+              "tailscale": { "authKey": "tskey-secret" },
+              "datadog": { "apiKey": "dd-secret", "site": "datadoghq.eu" },
+              "github": { "token": "ghp-secret", "previewDomain": "preview.example.com" },
+              "slack": { "webhookUrl": "" },
+            }"#,
+        )
+        .unwrap()
+        .masked();
+        assert_eq!(config.tailscale.unwrap().auth_key, CONFIG_MASK);
+        let datadog = config.datadog.unwrap();
+        assert_eq!(datadog.api_key, CONFIG_MASK);
+        assert_eq!(datadog.site.as_deref(), Some("datadoghq.eu"));
+        let github = config.github.unwrap();
+        assert_eq!(github.token, CONFIG_MASK);
+        assert_eq!(github.preview_domain, "preview.example.com");
+        assert_eq!(config.slack.unwrap().webhook_url, "");
     }
 
     #[test]

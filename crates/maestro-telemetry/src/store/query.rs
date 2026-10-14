@@ -56,6 +56,8 @@ pub(super) fn query_logs(db: &Db, parts_root: &Path, query: &LogQuery) -> Result
             stream: row.get(5)?,
             level: row.get(6)?,
             line: row.get(7)?,
+            message: row.get(8)?,
+            attributes: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
         })
     })?;
     Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)

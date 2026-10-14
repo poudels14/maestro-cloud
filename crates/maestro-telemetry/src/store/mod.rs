@@ -108,6 +108,10 @@ pub struct StoredLog {
     pub stream: String,
     pub level: String,
     pub line: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub attributes: serde_json::Map<String, serde_json::Value>,
 }
 
 pub struct LogStore {

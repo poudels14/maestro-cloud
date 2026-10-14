@@ -36,6 +36,7 @@ use crate::unix_http;
 use crate::uploads::{self, UploadAccepted, UploadSpec};
 
 const IMAGE_CHUNK_BUFFER: usize = 16;
+pub const BUILD_LOGS_DIR: &str = "builds/logs";
 const NODE_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_LOG_LIMIT: usize = 100;
@@ -67,6 +68,9 @@ pub enum NodeRequest {
     Maintain {
         kind: MaintenanceKind,
         run_id: String,
+    },
+    BuildLog {
+        deployment_id: String,
     },
 }
 
@@ -113,6 +117,7 @@ pub struct ClusterLogsParams {
     limit: Option<usize>,
     before_ts: Option<i64>,
     after_ts: Option<i64>,
+    node_id: Option<u64>,
 }
 
 pub struct MeshImageFetcher {
@@ -205,6 +210,9 @@ impl NodeService {
                 node_maintenance::start(self.node_dir.clone(), kind, run_id);
                 Ok(json!({ "accepted": true }))
             }
+            NodeRequest::BuildLog { deployment_id } => Ok(json!({
+                "text": read_build_log(&self.node_dir.join(BUILD_LOGS_DIR), &deployment_id).await,
+            })),
             NodeRequest::Telemetry { path } => {
                 let (status, body) = unix_http::get(&self.telemetry_socket, &path)
                     .await
@@ -514,6 +522,11 @@ pub async fn cluster_logs(
             let active = nodes
                 .into_iter()
                 .filter(|node| node.state != NodeState::Removed)
+                .filter(|node| {
+                    params
+                        .node_id
+                        .is_none_or(|node_id| node.id == NodeId(node_id))
+                })
                 .collect();
             query_nodes(&fan_out.clients, active, params).await
         }
@@ -737,7 +750,11 @@ async fn query_nodes(
             }
             Err(status) => {
                 tracing::warn!(node = %node_name, error = %status.message(), "node log query failed");
-                unavailable.push(node_name);
+                unavailable.push(json!({
+                    "nodeId": node_id,
+                    "nodeName": node_name,
+                    "error": status.message(),
+                }));
             }
         }
     }
@@ -751,10 +768,24 @@ async fn query_nodes(
             Json(json!({
                 "records": records,
                 "nextCursor": next_cursor,
+                "partial": !unavailable.is_empty(),
                 "unavailableNodes": unavailable,
             }))
             .into_response()
         }
+    }
+}
+
+pub async fn read_build_log(directory: &std::path::Path, deployment_id: &str) -> Option<String> {
+    let valid = !deployment_id.is_empty()
+        && deployment_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-');
+    match valid {
+        true => tokio::fs::read_to_string(directory.join(format!("{deployment_id}.log")))
+            .await
+            .ok(),
+        false => None,
     }
 }
 
