@@ -105,6 +105,65 @@ async fn reports_oom_kills() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn ships_images_through_export_and_import() {
+    if enabled() {
+        export_and_import().await;
+    }
+}
+
+async fn export_and_import() {
+    let state = tempfile::tempdir().unwrap();
+    let runtime = runtime(state.path()).await;
+    runtime.pull(IMAGE).await.unwrap();
+    let mut exported = tokio::time::timeout(EVENT_TIMEOUT, runtime.export_image(IMAGE))
+        .await
+        .expect("export did not open")
+        .unwrap();
+    let mut archive = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(EVENT_TIMEOUT, exported.recv())
+        .await
+        .unwrap_or_else(|_| panic!("export stalled after {} bytes", archive.len()))
+    {
+        archive.extend(chunk.unwrap());
+    }
+    assert!(
+        archive.len() > 1 << 20,
+        "archive is only {} bytes",
+        archive.len()
+    );
+    assert!(
+        archive[archive.len() - 1024..]
+            .iter()
+            .all(|byte| *byte == 0),
+        "export ended before the tar trailer"
+    );
+
+    runtime.remove_image(IMAGE).await.unwrap();
+    assert!(!runtime.has_image(IMAGE).await.unwrap());
+    let (chunks, receiver) = tokio::sync::mpsc::channel(4);
+    let feeder = tokio::spawn(async move {
+        for piece in archive.chunks(100_000) {
+            chunks.send(piece.to_vec()).await.unwrap();
+        }
+    });
+    tokio::time::timeout(EVENT_TIMEOUT, runtime.import_image(IMAGE, receiver))
+        .await
+        .expect("import stalled")
+        .unwrap();
+    feeder.await.unwrap();
+    assert!(runtime.has_image(IMAGE).await.unwrap());
+
+    let spec = container("imported-1", &["true"], ByteSize::new(64 << 20));
+    let mut events = runtime.events().await.unwrap();
+    runtime.start(&spec).await.unwrap();
+    assert!(matches!(
+        next_event_for(&mut events, "imported-1").await,
+        RuntimeEvent::Exited { exit_code: 0, .. }
+    ));
+    runtime.remove("imported-1").await.unwrap();
+}
+
 async fn limits_and_exit() {
     let state = tempfile::tempdir().unwrap();
     let runtime = runtime(state.path()).await;

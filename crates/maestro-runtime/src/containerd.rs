@@ -3,12 +3,15 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use containerd_client::services::v1::StreamInit;
 use containerd_client::services::v1::container::Runtime as ContainerRuntime;
 use containerd_client::services::v1::snapshots::{PrepareSnapshotRequest, RemoveSnapshotRequest};
+use containerd_client::services::v1::streaming_client::StreamingClient;
 use containerd_client::services::v1::{
     Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
-    DeleteTaskRequest, GetImageRequest, GetRequest, KillRequest, ListContainersRequest,
-    ReadContentRequest, StartRequest, SubscribeRequest, TransferRequest, WaitRequest,
+    DeleteImageRequest, DeleteTaskRequest, GetImageRequest, GetRequest, KillRequest,
+    ListContainersRequest, ReadContentRequest, StartRequest, SubscribeRequest, TransferRequest,
+    WaitRequest,
 };
 use containerd_client::services::v1::{
     containers_client::ContainersClient, content_client::ContentClient,
@@ -18,13 +21,17 @@ use containerd_client::services::v1::{
 };
 use containerd_client::tonic::transport::Channel;
 use containerd_client::tonic::{Code, Request, Status};
-use containerd_client::types::transfer::{ImageStore, OciRegistry, UnpackConfiguration};
+use containerd_client::types::transfer::{
+    Data, ImageExportStream, ImageImportStream, ImageReference, ImageStore, OciRegistry,
+    UnpackConfiguration, WindowUpdate,
+};
 use containerd_client::types::{Descriptor, Platform};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::cni::CniNetwork;
 use crate::oci;
@@ -45,6 +52,12 @@ const EVENT_RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
 const SIGTERM: u32 = 15;
 const SIGKILL: u32 = 9;
 const KILL_WAIT: Duration = Duration::from_secs(10);
+const STREAM_CHUNK: usize = 32 * 1024;
+const STREAM_BUFFER: usize = 16;
+const EXPORT_WINDOW: i64 = 64 << 20;
+const EXPORT_DRAIN_IDLE: Duration = Duration::from_millis(500);
+const DATA_TYPE: &str = "containerd.types.transfer.Data";
+const WINDOW_TYPE: &str = "containerd.types.transfer.WindowUpdate";
 const INDEX_MEDIA_TYPES: [&str; 2] = [
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -362,6 +375,212 @@ impl ContainerdRuntime {
     }
 }
 
+impl ContainerdRuntime {
+    pub async fn has_image(&self, image: &str) -> Result<bool, RuntimeError> {
+        self.image_exists(&reference::normalize(image)).await
+    }
+
+    pub async fn remove_image(&self, image: &str) -> Result<(), RuntimeError> {
+        ignore_not_found(
+            ImagesClient::new(self.channel.clone())
+                .delete(self.request(DeleteImageRequest {
+                    name: reference::normalize(image),
+                    sync: true,
+                    target: None,
+                }))
+                .await
+                .map(|_| ()),
+        )
+    }
+
+    pub async fn export_image(
+        &self,
+        image: &str,
+    ) -> Result<mpsc::Receiver<Result<Vec<u8>, RuntimeError>>, RuntimeError> {
+        let name = reference::normalize(image);
+        let stream_id = stream_id("export");
+        let (outbound, mut inbound) = self.open_stream(&stream_id).await?;
+        let (chunks, receiver) = mpsc::channel(STREAM_BUFFER);
+        let source = ImageStore {
+            name: name.clone(),
+            ..Default::default()
+        };
+        let destination = ImageExportStream {
+            stream: stream_id,
+            platforms: vec![self.platform.clone()],
+            ..Default::default()
+        };
+        let request = self.request(TransferRequest {
+            source: Some(containerd_client::to_any(&source)),
+            destination: Some(containerd_client::to_any(&destination)),
+            options: None,
+        });
+        let mut client = TransferClient::new(self.channel.clone());
+        let transfer_chunks = chunks.clone();
+        let (done, mut transferred) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let result = client.transfer(request).await;
+            if let Err(status) = &result {
+                let _ = transfer_chunks
+                    .send(Err(image_error(&name, status.message())))
+                    .await;
+            }
+            let _ = done.send(result.is_ok());
+        });
+        tokio::spawn(async move {
+            let mut window = 0i64;
+            let mut finished = false;
+            loop {
+                if window < EXPORT_WINDOW / 2 {
+                    let update = WindowUpdate {
+                        update: EXPORT_WINDOW as i32,
+                    };
+                    if outbound
+                        .send(containerd_client::to_any(&update))
+                        .await
+                        .is_ok()
+                    {
+                        window += EXPORT_WINDOW;
+                    }
+                }
+                let next = tokio::select! {
+                    message = inbound.message() => message,
+                    succeeded = &mut transferred, if !finished => match succeeded {
+                        Ok(true) => {
+                            finished = true;
+                            continue;
+                        }
+                        _ => break,
+                    },
+                    _ = tokio::time::sleep(EXPORT_DRAIN_IDLE), if finished => break,
+                };
+                match next {
+                    Ok(Some(message)) if message.type_url.ends_with(DATA_TYPE) => {
+                        if let Ok(data) = Data::decode(message.value.as_slice()) {
+                            window -= data.data.len() as i64;
+                            if chunks.send(Ok(data.data)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(status) => {
+                        let _ = chunks.send(Err(status.into())).await;
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(receiver)
+    }
+
+    pub async fn import_image(
+        &self,
+        image: &str,
+        mut chunks: mpsc::Receiver<Vec<u8>>,
+    ) -> Result<(), RuntimeError> {
+        let name = reference::normalize(image);
+        let repository = image_repository(&name);
+        let stream_id = stream_id("import");
+        let (outbound, mut inbound) = self.open_stream(&stream_id).await?;
+        let sender = tokio::spawn(async move {
+            let mut window = 0i64;
+            let mut pending = Vec::new();
+            let mut offset = 0usize;
+            let mut source_open = true;
+            loop {
+                if offset == pending.len() && source_open {
+                    match chunks.recv().await {
+                        Some(chunk) => {
+                            pending = chunk;
+                            offset = 0;
+                        }
+                        None => source_open = false,
+                    }
+                }
+                if offset == pending.len() && !source_open {
+                    break;
+                }
+                while window <= 0 {
+                    match inbound.message().await {
+                        Ok(Some(message)) if message.type_url.ends_with(WINDOW_TYPE) => {
+                            window += WindowUpdate::decode(message.value.as_slice())
+                                .map_or(0, |update| update.update as i64);
+                        }
+                        Ok(Some(_)) => {}
+                        _ => return,
+                    }
+                }
+                let length = (pending.len() - offset)
+                    .min(STREAM_CHUNK)
+                    .min(window as usize);
+                let data = Data {
+                    data: pending[offset..offset + length].to_vec(),
+                };
+                if outbound
+                    .send(containerd_client::to_any(&data))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                offset += length;
+                window -= length as i64;
+            }
+            drop(outbound);
+            while let Ok(Some(_)) = inbound.message().await {}
+        });
+        let source = ImageImportStream {
+            stream: stream_id,
+            ..Default::default()
+        };
+        let destination = ImageStore {
+            name: name.clone(),
+            platforms: vec![self.platform.clone()],
+            extra_references: vec![ImageReference {
+                name: repository,
+                is_prefix: true,
+                ..Default::default()
+            }],
+            unpacks: vec![UnpackConfiguration {
+                platform: Some(self.platform.clone()),
+                snapshotter: self.settings.snapshotter.clone(),
+            }],
+            ..Default::default()
+        };
+        let transferred = TransferClient::new(self.channel.clone())
+            .transfer(self.request(TransferRequest {
+                source: Some(containerd_client::to_any(&source)),
+                destination: Some(containerd_client::to_any(&destination)),
+                options: None,
+            }))
+            .await;
+        sender.abort();
+        transferred.map_err(|status| image_error(&name, status.message()))?;
+        Ok(())
+    }
+
+    async fn open_stream(
+        &self,
+        stream_id: &str,
+    ) -> Result<(mpsc::Sender<Any>, containerd_client::tonic::Streaming<Any>), RuntimeError> {
+        let (outbound, outbound_receiver) = mpsc::channel(STREAM_BUFFER);
+        outbound
+            .send(containerd_client::to_any(&StreamInit {
+                id: stream_id.to_string(),
+            }))
+            .await
+            .map_err(|_| RuntimeError::Connect("stream closed before init".to_string()))?;
+        let mut inbound = StreamingClient::new(self.channel.clone())
+            .stream(self.request(ReceiverStream::new(outbound_receiver)))
+            .await?
+            .into_inner();
+        inbound.message().await?;
+        Ok((outbound, inbound))
+    }
+}
+
 impl Runtime for ContainerdRuntime {
     async fn pull(&self, image: &str) -> Result<(), RuntimeError> {
         let name = reference::normalize(image);
@@ -615,6 +834,22 @@ fn file_uri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
+fn stream_id(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    format!("maestro-{prefix}-{nanos}")
+}
+
+fn image_repository(name: &str) -> String {
+    let without_digest = name.split('@').next().unwrap_or(name);
+    let last_segment = without_digest.rfind('/').map_or(0, |index| index + 1);
+    match without_digest[last_segment..].rfind(':') {
+        Some(colon) => without_digest[..last_segment + colon].to_string(),
+        None => without_digest.to_string(),
+    }
+}
+
 fn image_error(image: &str, reason: &str) -> RuntimeError {
     RuntimeError::Image {
         image: image.to_string(),
@@ -684,5 +919,18 @@ mod tests {
         assert!(matches_platform(&candidate(None), &host));
         assert!(matches_platform(&candidate(Some("v8")), &host));
         assert!(!matches_platform(&candidate(Some("v7")), &host));
+    }
+
+    #[test]
+    fn strips_tags_and_digests_from_image_names() {
+        assert_eq!(
+            image_repository("maestro.local/web:d1"),
+            "maestro.local/web"
+        );
+        assert_eq!(
+            image_repository("registry.local:5000/team/api:v2@sha256:abc"),
+            "registry.local:5000/team/api"
+        );
+        assert_eq!(image_repository("localhost:5000/api"), "localhost:5000/api");
     }
 }
