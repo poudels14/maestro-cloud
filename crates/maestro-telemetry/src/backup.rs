@@ -52,16 +52,7 @@ pub async fn run_backup(
     store: Arc<LogStore>,
     stats: Arc<Mutex<BackupStats>>,
 ) -> crate::error::Result<()> {
-    let shared = match &config.region {
-        Some(region) => {
-            aws_config::defaults(BehaviorVersion::latest())
-                .region(aws_config::Region::new(region.clone()))
-                .load()
-                .await
-        }
-        None => aws_config::load_defaults(BehaviorVersion::latest()).await,
-    };
-    let client = Client::new(&shared);
+    let client = s3_client(&config).await;
     let mut ticker = tokio::time::interval(BACKUP_INTERVAL);
     loop {
         ticker.tick().await;
@@ -165,6 +156,41 @@ async fn plan_uploads(
         part["file"] = Value::String(node_file);
     }
     Ok((uploads, rewritten, seq_los))
+}
+
+pub struct S3Archive {
+    client: Client,
+    config: BackupConfig,
+}
+
+impl S3Archive {
+    pub async fn connect(config: BackupConfig) -> Self {
+        Self {
+            client: s3_client(&config).await,
+            config,
+        }
+    }
+
+    pub async fn put(&self, path: &str, bytes: Vec<u8>) -> Result<(), String> {
+        let upload = Upload {
+            key: object_key(&self.config, "", path),
+            bytes,
+        };
+        put_verified(&self.client, &self.config, &upload).await
+    }
+}
+
+async fn s3_client(config: &BackupConfig) -> Client {
+    let shared = match &config.region {
+        Some(region) => {
+            aws_config::defaults(BehaviorVersion::latest())
+                .region(aws_config::Region::new(region.clone()))
+                .load()
+                .await
+        }
+        None => aws_config::load_defaults(BehaviorVersion::latest()).await,
+    };
+    Client::new(&shared)
 }
 
 async fn put_verified(

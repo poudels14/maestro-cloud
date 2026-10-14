@@ -62,6 +62,11 @@ pub enum Mutation {
         id: ServiceId,
         source: Option<PreviewSource>,
     },
+    MarkDeploymentArchived {
+        service_id: ServiceId,
+        deployment_id: DeploymentId,
+        at_ms: u64,
+    },
     PruneDeployments {
         service_id: ServiceId,
         keep: usize,

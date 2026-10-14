@@ -18,7 +18,7 @@ mod traffic;
 
 pub use access_log::{IngressTrafficBreakdown, TrafficBreakdownEntry};
 pub use api::{TelemetryStats, router};
-pub use backup::{BackupConfig, BackupStats};
+pub use backup::{BackupConfig, BackupStats, S3Archive};
 pub use datadog::{DatadogConfig, SinkStats, run_datadog_logs};
 pub use disks::{Disk, disks};
 pub use error::{Result, TelemetryError};

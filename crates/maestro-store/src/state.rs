@@ -23,6 +23,7 @@ const RAFT_META: TableDefinition<&str, &[u8]> = TableDefinition::new("raft_meta"
 const SERVICE_CONTROLS: TableDefinition<&str, &[u8]> = TableDefinition::new("service_controls");
 const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
 const PREVIEW_SOURCES: TableDefinition<&str, &[u8]> = TableDefinition::new("preview_sources");
+const ARCHIVED: TableDefinition<(&str, &str), u64> = TableDefinition::new("archived_deployments");
 
 const VERSION_KEY: &str = "version";
 const FREEZE_KEY: &str = "freeze";
@@ -56,6 +57,8 @@ pub(crate) struct StateExport {
     slack_webhooks: Vec<SlackWebhook>,
     #[serde(default)]
     preview_sources: Vec<(ServiceId, PreviewSource)>,
+    #[serde(default)]
+    archived: Vec<(ServiceId, DeploymentId, u64)>,
 }
 
 impl StateMachine {
@@ -142,6 +145,7 @@ impl StateMachine {
             blocked_ips: self.blocked_ips()?,
             slack_webhooks: self.slack_webhooks()?,
             preview_sources: self.preview_sources()?,
+            archived: self.archived()?,
         })
     }
 
@@ -207,6 +211,15 @@ impl StateMachine {
             SLACK_WEBHOOKS_KEY,
             encode(&export.slack_webhooks)?.as_slice(),
         )?;
+        export
+            .archived
+            .iter()
+            .try_for_each(|(service_id, deployment_id, at_ms)| {
+                transaction
+                    .open_table(ARCHIVED)?
+                    .insert((service_id.as_str(), deployment_id.as_str()), *at_ms)?;
+                Ok::<_, StoreError>(())
+            })?;
         export.preview_sources.iter().try_for_each(|(id, source)| {
             transaction
                 .open_table(PREVIEW_SOURCES)?
@@ -347,6 +360,35 @@ impl StateMachine {
             .map(Option::unwrap_or_default)
     }
 
+    fn archived(&self) -> Result<Vec<(ServiceId, DeploymentId, u64)>> {
+        let transaction = self.database.begin_read()?;
+        let table = transaction.open_table(ARCHIVED)?;
+        table
+            .iter()?
+            .map(|entry| {
+                let (key, value) = entry?;
+                let (service_id, deployment_id) = key.value();
+                Ok((
+                    ServiceId::new(service_id),
+                    DeploymentId::new(deployment_id),
+                    value.value(),
+                ))
+            })
+            .collect()
+    }
+
+    pub fn is_archived(
+        &self,
+        service_id: &ServiceId,
+        deployment_id: &DeploymentId,
+    ) -> Result<bool> {
+        let transaction = self.database.begin_read()?;
+        Ok(transaction
+            .open_table(ARCHIVED)?
+            .get((service_id.as_str(), deployment_id.as_str()))?
+            .is_some())
+    }
+
     pub fn preview_sources(&self) -> Result<Vec<(ServiceId, PreviewSource)>> {
         let transaction = self.database.begin_read()?;
         let table = transaction.open_table(PREVIEW_SOURCES)?;
@@ -395,6 +437,7 @@ fn create_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.open_table(SERVICE_CONTROLS)?;
     transaction.open_table(CLUSTER)?;
     transaction.open_table(PREVIEW_SOURCES)?;
+    transaction.open_table(ARCHIVED)?;
     Ok(())
 }
 
@@ -409,6 +452,7 @@ fn delete_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.delete_table(SERVICE_CONTROLS)?;
     transaction.delete_table(CLUSTER)?;
     transaction.delete_table(PREVIEW_SOURCES)?;
+    transaction.delete_table(ARCHIVED)?;
     Ok(())
 }
 
@@ -535,6 +579,19 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
                 None => table.remove(id.as_str())?,
             };
             Ok(vec![ChangeKey::PreviewSource { id: id.clone() }])
+        }
+        Mutation::MarkDeploymentArchived {
+            service_id,
+            deployment_id,
+            at_ms,
+        } => {
+            transaction
+                .open_table(ARCHIVED)?
+                .insert((service_id.as_str(), deployment_id.as_str()), *at_ms)?;
+            Ok(vec![ChangeKey::Deployment {
+                service_id: service_id.clone(),
+                deployment_id: deployment_id.clone(),
+            }])
         }
         Mutation::PruneDeployments { service_id, keep } => {
             prune_deployments(transaction, service_id, *keep)
@@ -674,6 +731,9 @@ fn remove_deployment(transaction: &WriteTransaction, deployment: &Deployment) ->
         .remove(status_index_key(deployment))?;
     transaction
         .open_table(DEPLOYMENTS)?
+        .remove((deployment.service_id.as_str(), deployment.id.as_str()))?;
+    transaction
+        .open_table(ARCHIVED)?
         .remove((deployment.service_id.as_str(), deployment.id.as_str()))?;
     Ok(())
 }

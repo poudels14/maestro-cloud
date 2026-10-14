@@ -430,3 +430,37 @@ fn blocks_and_unblocks_ips_in_sorted_order() {
     store.apply(&[block("192.0.2.1", false)]).unwrap();
     assert_eq!(store.blocked_ips().unwrap(), ["203.0.113.9"]);
 }
+
+#[test]
+fn marks_deployments_archived_until_they_are_removed() {
+    let (_directory, store) = open_store();
+    store
+        .apply(&[
+            put_service("api"),
+            Mutation::CreateDeployment {
+                deployment: deployment("api", "d1", 1, DeploymentStatus::Stopped),
+            },
+            Mutation::MarkDeploymentArchived {
+                service_id: ServiceId::from("api"),
+                deployment_id: DeploymentId::from("d1"),
+                at_ms: 5,
+            },
+        ])
+        .unwrap();
+    assert!(
+        store
+            .is_archived(&ServiceId::from("api"), &DeploymentId::from("d1"))
+            .unwrap()
+    );
+    store
+        .apply(&[Mutation::DeleteDeployment {
+            service_id: ServiceId::from("api"),
+            deployment_id: DeploymentId::from("d1"),
+        }])
+        .unwrap();
+    assert!(
+        !store
+            .is_archived(&ServiceId::from("api"), &DeploymentId::from("d1"))
+            .unwrap()
+    );
+}

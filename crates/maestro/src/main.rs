@@ -1,4 +1,5 @@
 mod agent_resolver;
+mod archive;
 mod client;
 mod cluster_service;
 mod contexts;

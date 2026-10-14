@@ -25,10 +25,12 @@ use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_runtime::{ContainerdRuntime, RegistryClient, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, SecretKey};
+use maestro_telemetry::{BackupConfig, S3Archive};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
 use tokio::task::JoinSet;
 
+use crate::archive;
 use crate::cluster_service::ClusterService;
 use crate::exec::{ExecState, exec_service};
 use crate::github::GitHub;
@@ -190,6 +192,28 @@ pub async fn spawn(
         },
     );
     tasks.spawn(run_deployer(deployer, consensus.clone()));
+    if let Some(backup) = settings.config.log_backup.clone() {
+        let archive = S3Archive::connect(BackupConfig {
+            bucket: backup.bucket,
+            kms_key_id: backup.kms_key_id,
+            region: backup.region,
+            prefix: backup
+                .prefix
+                .unwrap_or_else(|| settings.identity.cluster.name.clone()),
+            node: settings.identity.name.clone(),
+            retention_days: None,
+        })
+        .await;
+        let archiver = archive::run_archiver(
+            consensus.clone(),
+            archive,
+            settings.data_dir.join("builds/logs"),
+        );
+        tasks.spawn(async move {
+            archiver.await;
+            Ok(())
+        });
+    }
     if let Some(github) = settings.config.github.clone() {
         let watcher = PreviewWatcher::new(
             consensus.clone(),
