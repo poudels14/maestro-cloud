@@ -10,8 +10,8 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use maestro_agent::{
-    ADMIN_CONTAINER_ID, BuildKitBuilder, BuildKitSettings, BuildRequest, SystemSupervisor,
-    admin_container,
+    ADMIN_CONTAINER_ID, BuildKitBuilder, BuildKitSettings, BuildRequest, DepotBuild,
+    SystemSupervisor, admin_container,
 };
 use maestro_control::{
     AgentHub, ApiAuth, ApiState, BuildWatcher, BuiltImage, Deployer, DeployerSettings,
@@ -26,6 +26,7 @@ use maestro_proto::pb::node_server::NodeServer;
 use maestro_runtime::{ContainerdRuntime, RegistryClient, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, SecretKey};
 use serde::Serialize;
+use tokio::io::AsyncReadExt;
 use tokio::task::JoinSet;
 
 use crate::cluster_service::ClusterService;
@@ -43,6 +44,7 @@ const NODE_EXPIRY: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_UPLOAD_BYTES: usize = 1 << 30;
+const ARCHIVE_CHUNK: usize = 1 << 20;
 const MEMBERSHIP_INTERVAL: Duration = Duration::from_secs(5);
 const LEARNER_CATCH_UP: Duration = Duration::from_secs(120);
 const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
@@ -91,6 +93,8 @@ struct GitHeads;
 
 struct SealedSpecBuilder {
     node_id: NodeId,
+    runtime: Arc<ContainerdRuntime>,
+    depot_token: Option<String>,
     uploads: PathBuf,
     work_dir: PathBuf,
     builder: BuildKitBuilder,
@@ -151,7 +155,7 @@ pub async fn spawn(
         git_token: None,
     };
     tasks.spawn(run_admin(
-        runtime,
+        runtime.clone(),
         BuildKitBuilder::new(buildkit.clone()),
         settings.admin_source.clone(),
         settings.api_socket.clone(),
@@ -162,6 +166,12 @@ pub async fn spawn(
         observed.clone(),
         Arc::new(SealedSpecBuilder {
             node_id: settings.identity.id,
+            runtime: runtime.clone(),
+            depot_token: settings
+                .config
+                .depot
+                .as_ref()
+                .map(|depot| depot.token.clone()),
             uploads: uploads_dir(&settings.data_dir),
             work_dir: settings.data_dir.join("builds/work"),
             builder: BuildKitBuilder::new(buildkit),
@@ -309,6 +319,14 @@ impl ImageBuilder for SealedSpecBuilder {
             image: None,
             build_args: build.env.items,
             secrets: build.secrets.items,
+            depot: build
+                .depot
+                .zip(self.depot_token.clone())
+                .filter(|(depot, _)| !depot.project.trim().is_empty())
+                .map(|(depot, token)| DepotBuild {
+                    project: depot.project,
+                    token,
+                }),
         };
         let result = self.builder.build(&request).await;
         if let Some(context) = upload_context {
@@ -320,7 +338,13 @@ impl ImageBuilder for SealedSpecBuilder {
             ))
             .await;
         }
-        result.map(|output| BuiltImage {
+        let output = result?;
+        if let Some(archive) = &output.archive {
+            let imported = import_archive(&self.runtime, &output.image, archive).await;
+            let _ = tokio::fs::remove_file(archive).await;
+            imported?;
+        }
+        Ok(BuiltImage {
             image: output.image,
             commit: output.commit,
             built_on,
@@ -505,6 +529,7 @@ async fn run_admin(
                     image: Some(image.clone()),
                     build_args: Default::default(),
                     secrets: Default::default(),
+                    depot: None,
                 };
                 if let Err(error) = builder.build(&request).await {
                     tracing::warn!(%error, "admin UI image build failed; retrying");
@@ -517,6 +542,30 @@ async fn run_admin(
             Ok(())
         }
     }
+}
+
+async fn import_archive(
+    runtime: &ContainerdRuntime,
+    image: &str,
+    archive: &Path,
+) -> Result<(), String> {
+    let mut file = tokio::fs::File::open(archive)
+        .await
+        .map_err(|error| format!("failed to open the depot image archive: {error}"))?;
+    let (chunks, receiver) = tokio::sync::mpsc::channel(16);
+    let reader = tokio::spawn(async move {
+        let mut buffer = vec![0u8; ARCHIVE_CHUNK];
+        while let Ok(read) = file.read(&mut buffer).await
+            && read > 0
+            && chunks.send(buffer[..read].to_vec()).await.is_ok()
+        {}
+    });
+    let imported = runtime
+        .import_image(image, receiver)
+        .await
+        .map_err(|error| format!("failed to import the depot image: {error}"));
+    let _ = reader.await;
+    imported
 }
 
 fn uploads_dir(data_dir: &Path) -> PathBuf {

@@ -10,6 +10,8 @@ use tokio::process::Command;
 const LOCAL_REGISTRY: &str = "maestro.local";
 const FAILURE_TAIL_LINES: usize = 20;
 const GIT_TOKEN_SECRET: &str = "GH_TOKEN";
+const DEPOT_PROGRAM: &str = "depot";
+const DEPOT_TOKEN_ENV: &str = "DEPOT_TOKEN";
 
 #[derive(Clone, Debug)]
 pub struct BuildKitSettings {
@@ -32,12 +34,20 @@ pub struct BuildRequest {
     pub image: Option<String>,
     pub build_args: BTreeMap<String, String>,
     pub secrets: BTreeMap<String, String>,
+    pub depot: Option<DepotBuild>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DepotBuild {
+    pub project: String,
+    pub token: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildOutput {
     pub image: String,
     pub commit: Option<GitCommit>,
+    pub archive: Option<PathBuf>,
 }
 
 pub struct BuildKitBuilder {
@@ -100,19 +110,40 @@ impl BuildKitBuilder {
             (None, None) => Err("build needs a repo or a local context".to_string())?,
         };
         let image = image_name(request);
-        let arguments = buildctl_args(&self.settings.address, request, &context, &image);
-        let status = Command::new(&self.settings.buildctl)
+        let archive = (request.depot.is_some() && request.registry.is_none()).then(|| {
+            self.settings
+                .work_dir
+                .join(format!("{}.oci.tar", request.deployment_id))
+        });
+        let (program, arguments, token) = match &request.depot {
+            Some(depot) => (
+                PathBuf::from(DEPOT_PROGRAM),
+                depot_args(request, depot, &context, &image, archive.as_deref()),
+                Some(depot.token.clone()),
+            ),
+            None => (
+                self.settings.buildctl.clone(),
+                buildctl_args(&self.settings.address, request, &context, &image),
+                None,
+            ),
+        };
+        let status = Command::new(&program)
             .args(&arguments)
             .envs(&request.secrets)
+            .envs(token.map(|token| (DEPOT_TOKEN_ENV, token)))
             .stdin(Stdio::null())
             .stdout(clone_handle(&log)?)
             .stderr(clone_handle(&log)?)
             .status()
             .await
-            .map_err(|error| format!("failed to run buildctl: {error}"))?;
+            .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         match status.success() {
-            true => Ok(BuildOutput { image, commit }),
-            false => Err(format!("buildctl exited with {status}")),
+            true => Ok(BuildOutput {
+                image,
+                commit,
+                archive,
+            }),
+            false => Err(format!("{} exited with {status}", program.display())),
         }
     }
 }
@@ -173,6 +204,56 @@ fn buildctl_args(
         ),
     ])
     .collect()
+}
+
+fn depot_args(
+    request: &BuildRequest,
+    depot: &DepotBuild,
+    context: &Path,
+    image: &str,
+    archive: Option<&Path>,
+) -> Vec<String> {
+    let output = match archive {
+        Some(archive) => vec![
+            "--output".to_string(),
+            format!("type=oci,dest={},name={image}", archive.display()),
+        ],
+        None => vec!["--push".to_string()],
+    };
+    let build_args = request
+        .build_args
+        .iter()
+        .flat_map(|(name, value)| ["--build-arg".to_string(), format!("{name}={value}")]);
+    let secrets = request
+        .secrets
+        .keys()
+        .flat_map(|name| ["--secret".to_string(), format!("id={name},env={name}")]);
+    [
+        "build".to_string(),
+        "--project".to_string(),
+        depot.project.clone(),
+        "--platform".to_string(),
+        host_platform(),
+        "-t".to_string(),
+        image.to_string(),
+        "-f".to_string(),
+        context.join(&request.dockerfile).display().to_string(),
+    ]
+    .into_iter()
+    .chain(output)
+    .chain(build_args)
+    .chain(secrets)
+    .chain([context.display().to_string()])
+    .collect()
+}
+
+fn host_platform() -> String {
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("linux/{architecture}")
 }
 
 async fn clone_repo(
@@ -304,6 +385,7 @@ mod tests {
             image: None,
             build_args: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
             secrets: BTreeMap::from([("NPM_TOKEN".to_string(), "secret".to_string())]),
+            depot: None,
         }
     }
 
@@ -358,5 +440,35 @@ mod tests {
         let (url, env) = git_auth("https://gitlab.com/acme/api.git", None);
         assert_eq!(url, "https://gitlab.com/acme/api.git");
         assert!(env.is_empty());
+    }
+
+    #[test]
+    fn builds_depot_arguments_for_push_and_archive_output() {
+        let depot = DepotBuild {
+            project: "proj1".to_string(),
+            token: "tok".to_string(),
+        };
+        let context = Path::new("/work/src");
+        let archived = depot_args(
+            &request(),
+            &depot,
+            context,
+            "maestro.local/api:d1",
+            Some(Path::new("/work/d1.oci.tar")),
+        )
+        .join(" ");
+        assert!(archived.starts_with("build --project proj1 --platform linux/"));
+        assert!(archived.contains("-t maestro.local/api:d1"));
+        assert!(
+            archived.contains("--output type=oci,dest=/work/d1.oci.tar,name=maestro.local/api:d1")
+        );
+        assert!(archived.contains("--build-arg RUST_LOG=info"));
+        assert!(archived.contains("--secret id=NPM_TOKEN,env=NPM_TOKEN"));
+        assert!(archived.ends_with(" /work/src"));
+        assert!(!archived.contains("tok"));
+
+        let pushed = depot_args(&request(), &depot, context, "ghcr.io/acme/api:d1", None).join(" ");
+        assert!(pushed.contains("--push"));
+        assert!(!pushed.contains("--output"));
     }
 }
