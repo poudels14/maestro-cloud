@@ -389,6 +389,8 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - Node roles are `voter` and `worker` (renamed from `agent`). Voters always run
   workloads; v1's quorum-only `voter` role is intentionally not carried over, and v1's
   `master` and `hybrid` both map to a voter.
+- There is no v1 → v3 migration: v3 clusters start fresh and services are re-applied
+  from their services files.
 - Service ids stay lowercase DNS labels (v1 also allowed uppercase and `_`).
 - `deploy.command` is applied as the container entrypoint and args (v1 ignored it).
 - v1 bugs not carried over: `secrets.source` now reaches every node, and changes to any
