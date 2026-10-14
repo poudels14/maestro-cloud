@@ -176,7 +176,7 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
                     let rank = match (node.role, Some(node.id) == leader) {
                         (_, true) => 2,
                         (NodeRole::Voter, false) => 1,
-                        (NodeRole::Agent, false) => 0,
+                        (NodeRole::Worker, false) => 0,
                     };
                     (rank, node.id)
                 });
@@ -706,7 +706,7 @@ mod tests {
             node(1, NodeRole::Voter),
             node(2, NodeRole::Voter),
             node(3, NodeRole::Voter),
-            node(4, NodeRole::Agent),
+            node(4, NodeRole::Worker),
         ];
         let (orchestrator, _directory) = orchestrator(&nodes, FakeNodes::default());
         let run = orchestrator
@@ -757,8 +757,8 @@ mod tests {
     async fn stops_and_unfreezes_when_a_node_fails_to_upgrade() {
         let nodes = [
             node(1, NodeRole::Voter),
-            node(2, NodeRole::Agent),
-            node(3, NodeRole::Agent),
+            node(2, NodeRole::Worker),
+            node(3, NodeRole::Worker),
         ];
         let fake = FakeNodes {
             failing: Some(NodeId(2)),

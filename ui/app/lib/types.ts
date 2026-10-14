@@ -176,7 +176,7 @@ export type NodeCapacity = {
 export type ClusterNode = {
   id: number;
   name: string;
-  role: "voter" | "agent";
+  role: "voter" | "worker";
   endpoint: string;
   subnet?: string | null;
   runsWorkloads: boolean;

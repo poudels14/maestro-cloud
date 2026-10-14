@@ -183,8 +183,8 @@
           };
 
           role = lib.mkOption {
-            type = lib.types.enum ["voter" "agent"];
-            default = "agent";
+            type = lib.types.enum ["voter" "worker"];
+            default = "worker";
             description = "Role of a joining node.";
           };
         };

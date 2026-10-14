@@ -10,7 +10,8 @@ use crate::resources::NodeCapacity;
 #[serde(rename_all = "camelCase")]
 pub enum NodeRole {
     Voter,
-    Agent,
+    #[serde(alias = "agent")]
+    Worker,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,5 +58,22 @@ impl NodeRecord {
 
     pub fn is_schedulable(&self) -> bool {
         self.runs_workloads && self.state == NodeState::Active
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_workers_stored_under_the_old_agent_name() {
+        assert_eq!(
+            serde_json::from_str::<NodeRole>("\"agent\"").unwrap(),
+            NodeRole::Worker
+        );
+        assert_eq!(
+            serde_json::to_string(&NodeRole::Worker).unwrap(),
+            "\"worker\""
+        );
     }
 }

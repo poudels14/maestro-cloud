@@ -29,7 +29,7 @@ pub struct JoinArgs {
     token: String,
     #[arg(long)]
     advertise: String,
-    #[arg(long, value_parser = parse_role, default_value = "agent")]
+    #[arg(long, value_parser = parse_role, default_value = "worker")]
     role: NodeRole,
     #[arg(long, default_value = "/var/lib/maestro")]
     data_dir: PathBuf,
@@ -115,7 +115,7 @@ impl JoinAuthority {
             .map_err(internal)?;
         let voter_secrets = match request.role {
             NodeRole::Voter => Some(self.voter_secrets().map_err(internal)?),
-            NodeRole::Agent => None,
+            NodeRole::Worker => None,
         };
         let voters = consensus.metrics().voters.into_values().collect();
         Ok(JoinResponse {
@@ -260,8 +260,8 @@ fn parse_token(token: &str) -> anyhow::Result<(String, String)> {
 fn parse_role(value: &str) -> Result<NodeRole, String> {
     match value {
         "voter" => Ok(NodeRole::Voter),
-        "agent" => Ok(NodeRole::Agent),
-        other => Err(format!("unknown role {other}; use voter or agent")),
+        "worker" | "agent" => Ok(NodeRole::Worker),
+        other => Err(format!("unknown role {other}; use voter or worker")),
     }
 }
 

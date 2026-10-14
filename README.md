@@ -165,7 +165,7 @@ ranges, `AND`/`OR`/`NOT`/`-`, and `*`/`?` wildcards.
 maestro dev up|reload|down|status        local cluster in a Lima VM
 maestro server init                      initialize a cluster on this node
 maestro server join-token                print a token for joining nodes
-maestro join --server … --token … --advertise IP:7400 [--role voter|agent]
+maestro join --server … --token … --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
 maestro token create                     mint an API token (on a voter)
@@ -182,15 +182,15 @@ override the active context.
 
 ## Multi-node clusters
 
-A Maestro cluster has 1, 3, or 5 **voters** and any number of **agents**.
+A Maestro cluster has 1, 3, or 5 **voters** and any number of **workers**.
 
 - **Voters** run the control plane (Raft over mTLS gRPC with redb storage, the API,
   the scheduler, the deployer, and the build queue) and also run workloads.
-- **Agents** run workloads only. They hold no cluster state and receive exactly the
+- **Workers** run workloads only. They hold no cluster state and receive exactly the
   replica plans, routes, DNS records, and mesh peers they need from the leader.
 
 Use three voters for production; the cluster stays writable while a majority of
-voters is up. Agents can scale to hundreds of nodes.
+voters is up. Workers can scale to hundreds of nodes.
 
 ### Ports
 
@@ -230,7 +230,7 @@ and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and
 
    ```bash
    sudo maestro join --server 10.20.0.11:7400 --token "$TOKEN" \
-     --advertise 10.20.0.12:7400 --role voter   # or agent (default)
+     --advertise 10.20.0.12:7400 --role voter   # or worker (default)
    sudo systemctl start maestro
    ```
 

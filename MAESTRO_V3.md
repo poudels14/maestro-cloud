@@ -59,9 +59,10 @@ cached. No other image is built at startup.
 ### Node roles
 
 - `voter`: forms the Raft quorum and runs the control plane, plus workloads.
-- `agent`: runs workloads only. Holds no Raft state and never sees other nodes' data.
+- `worker`: runs workloads only. Holds no Raft state and never sees other nodes' data.
+  (Renamed from `agent`; stored records with the old name still load.)
 
-A cluster has 1, 3, or 5 voters. Every other node is an agent. A single-node install is
+A cluster has 1, 3, or 5 voters. Every other node is a worker. A single-node install is
 a one-voter cluster; there is no separate standalone mode.
 
 ```
@@ -73,7 +74,7 @@ a one-voter cluster; there is no separate standalone mode.
       (assignments down, │                  │  (heartbeat/health/status up)
        status up)        │                  │
    ┌─────────────┐  ┌────┴────────┐   ┌─────┴───────┐
-   │ agent node  │  │ agent node  │…  │ agent node  │   up to ~1000
+   │ worker node │  │ worker node │…  │ worker node │   up to ~1000
    │ containerd  │  │ containerd  │   │ containerd  │
    │ traefik     │  │ traefik     │   │ traefik     │
    └─────────────┘  └─────────────┘   └─────────────┘
@@ -264,7 +265,7 @@ v3 design (decisions approved):
 - All internal traffic is mTLS with cluster-issued node certificates.
 - Joining: `maestro server init` prints a join token (cluster id + CA fingerprint +
   HMAC secret). `maestro join <addr> --token <token>` verifies the CA, receives a
-  node certificate, and is admitted as agent or voter.
+  node certificate, and is admitted as worker or voter.
 - API auth: JWT signed with a key derived from the cluster secret.
 - Secrets are encrypted before entering the Raft log.
 
@@ -308,7 +309,7 @@ CLI flags on the daemon: `--config`, `--data-dir`, `--role`.
 ```
 maestro dev [up|down|status]          local cluster in a Lima VM (macOS) or directly (Linux)
 maestro server init                   create a cluster on this node, print join token
-maestro join <addr> --token <t>       join as agent (default) or --role voter
+maestro join <addr> --token <t>       join as worker (default) or --role voter
 maestro agent | maestro telemetry     long-running units (systemd)
 maestro nodes ls|drain|remove
 maestro services ls|rollout [--apply]|redeploy|cancel
@@ -374,7 +375,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - Cloudflare tunnel connectors run per node (`replicas` each) on the host network
   against local Traefik, stopped while the node is not attached to the leader or
   Traefik is down.
-- Rolling upgrades on NixOS follow v1: the leader drains each node (agents, then
+- Rolling upgrades on NixOS follow v1: the leader drains each node (workers, then
   followers, then itself), the node runs `nix flake update --flake /etc/maestro`,
   `nixos-rebuild boot`, and reboots, and the leader waits for the target version before
   restoring it and moving on.
@@ -478,7 +479,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - [x] WireGuard mesh between nodes, subnet allocation at join, agent-owned NAT
 - [ ] Routing deltas instead of full tables (needed before ~100 nodes)
 - [x] Drain, remove, rolling upgrades, NixOS module with slices
-- [ ] Scale test: 3 voters + simulated 1000 agents
+- [ ] Scale test: 3 voters + simulated 1000 workers
 
 ### Phase 4: remaining features and cutover
 

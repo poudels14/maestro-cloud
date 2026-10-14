@@ -333,7 +333,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             };
             Some(control_plane::spawn(&mut tasks, settings, runtime).await?)
         }
-        NodeRole::Agent => {
+        NodeRole::Worker => {
             let node_grpc = tonic::transport::Server::builder()
                 .tls_config(credentials.server_tls())?
                 .add_service(NodeServer::new(NodeService::new(
