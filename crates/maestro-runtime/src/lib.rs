@@ -6,6 +6,7 @@ mod oci;
 mod reference;
 mod registry;
 mod spec;
+mod user;
 
 pub use cni::CniNetwork;
 pub use containerd::{ContainerdRuntime, ContainerdSettings};

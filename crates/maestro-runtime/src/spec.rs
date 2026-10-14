@@ -123,7 +123,7 @@ pub enum RuntimeError {
     NotFound(String),
     #[error("container network setup failed: {0}")]
     Network(String),
-    #[error("unsupported image user {0:?}: only numeric uid[:gid] or root is supported")]
+    #[error("cannot resolve image user {0}")]
     UnsupportedUser(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),

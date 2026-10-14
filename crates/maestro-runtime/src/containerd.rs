@@ -41,6 +41,7 @@ use crate::spec::{
     ContainerFiles, ContainerSpec, ContainerState, ContainerStatus, ExecRequest, ExecSession,
     ImageConfig, NetworkMode, Runtime, RuntimeError, RuntimeEvent, StartedContainer,
 };
+use crate::user::{AccountFiles, ProcessUser, numeric_user, read_account_files, resolve_user};
 
 const NAMESPACE_HEADER: &str = "containerd-namespace";
 const SPEC_TYPE_URL: &str = "types.containerd.io/opencontainers/runtime-spec/1/Spec";
@@ -80,6 +81,7 @@ pub struct ContainerdRuntime {
     settings: ContainerdSettings,
     network: CniNetwork,
     platform: Platform,
+    users: std::sync::Mutex<HashMap<(String, String), ProcessUser>>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -109,6 +111,8 @@ struct ManifestPlatform {
 #[derive(Deserialize)]
 struct Manifest {
     config: ManifestConfig,
+    #[serde(default)]
+    layers: Vec<ManifestConfig>,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +147,7 @@ impl ContainerdRuntime {
             settings,
             network,
             platform: host_platform(),
+            users: std::sync::Mutex::default(),
         })
     }
 
@@ -167,6 +172,44 @@ impl ContainerdRuntime {
         }
     }
 
+    async fn process_user(
+        &self,
+        image_user: Option<&str>,
+        chain_id: &str,
+        layers: &[String],
+    ) -> Result<ProcessUser, RuntimeError> {
+        let cache_key = (
+            chain_id.to_string(),
+            image_user.unwrap_or_default().to_string(),
+        );
+        let cached = self.lock_users().get(&cache_key).cloned();
+        match (numeric_user(image_user), cached) {
+            (Some(user), _) | (None, Some(user)) => Ok(user),
+            (None, None) => {
+                let mut files = AccountFiles::default();
+                for layer in layers.iter().rev() {
+                    if files.passwd.is_none() || files.group.is_none() {
+                        let blob = self.read_blob(layer).await?;
+                        files = tokio::task::spawn_blocking(move || {
+                            read_account_files(&blob, &mut files).map(|()| files)
+                        })
+                        .await
+                        .map_err(|error| RuntimeError::Io(std::io::Error::other(error)))??;
+                    }
+                }
+                let user = resolve_user(image_user.unwrap_or_default(), &files)?;
+                self.lock_users().insert(cache_key, user.clone());
+                Ok(user)
+            }
+        }
+    }
+
+    fn lock_users(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), ProcessUser>> {
+        self.users
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     async fn read_blob(&self, digest: &str) -> Result<Vec<u8>, RuntimeError> {
         let mut stream = ContentClient::new(self.channel.clone())
             .read(self.request(ReadContentRequest {
@@ -183,7 +226,10 @@ impl ContainerdRuntime {
         Ok(blob)
     }
 
-    async fn image_config(&self, image: &str) -> Result<(ImageConfig, String), RuntimeError> {
+    async fn image_config(
+        &self,
+        image: &str,
+    ) -> Result<(ImageConfig, String, Vec<String>), RuntimeError> {
         let target = ImagesClient::new(self.channel.clone())
             .get(self.request(GetImageRequest {
                 name: image.to_string(),
@@ -199,7 +245,12 @@ impl ContainerdRuntime {
             serde_json::from_slice(&self.read_blob(&manifest.config.digest).await?)?;
         let chain_id = chain_id(&blob.rootfs.diff_ids)
             .ok_or_else(|| image_error(image, "image has no layers"))?;
-        Ok((blob.config, chain_id))
+        let layers = manifest
+            .layers
+            .into_iter()
+            .map(|layer| layer.digest)
+            .collect();
+        Ok((blob.config, chain_id, layers))
     }
 
     async fn platform_manifest(
@@ -240,9 +291,12 @@ impl ContainerdRuntime {
         spec: &ContainerSpec,
         image: &str,
     ) -> Result<StartedContainer, RuntimeError> {
-        let (image_config, chain_id) = self.image_config(image).await?;
+        let (image_config, chain_id, layers) = self.image_config(image).await?;
+        let user = self
+            .process_user(image_config.user.as_deref(), &chain_id, &layers)
+            .await?;
         let files = self.write_container_files(&spec.id).await?;
-        let oci_spec = oci::build_spec(spec, &image_config, &files)?;
+        let oci_spec = oci::build_spec(spec, &image_config, &files, &user);
         let mounts = SnapshotsClient::new(self.channel.clone())
             .prepare(self.request(PrepareSnapshotRequest {
                 snapshotter: self.settings.snapshotter.clone(),

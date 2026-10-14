@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
-use crate::spec::{ContainerFiles, ContainerSpec, ImageConfig, NetworkMode, RuntimeError};
+use crate::spec::{ContainerFiles, ContainerSpec, ImageConfig, NetworkMode};
+use crate::user::ProcessUser;
 
 const CPU_PERIOD_MICROS: u64 = 100_000;
 const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -49,17 +50,21 @@ pub fn build_spec(
     container: &ContainerSpec,
     image: &ImageConfig,
     files: &ContainerFiles,
-) -> Result<Value, RuntimeError> {
-    let (uid, gid) = parse_user(image.user.as_deref())?;
+    user: &ProcessUser,
+) -> Value {
     let limits = container.limits;
     let cpu_quota = u64::from(limits.cpu.get()) * CPU_PERIOD_MICROS / 1000;
     let memory_limit = limits.memory.bytes();
     let capabilities = DEFAULT_CAPABILITIES.to_vec();
-    Ok(json!({
+    json!({
         "ociVersion": "1.1.0",
         "process": {
             "terminal": false,
-            "user": { "uid": uid, "gid": gid },
+            "user": {
+                "uid": user.uid,
+                "gid": user.gid,
+                "additionalGids": user.additional_gids,
+            },
             "args": process_args(container, image),
             "env": process_env(container, image),
             "cwd": image.working_dir.as_deref().filter(|dir| !dir.is_empty()).unwrap_or("/"),
@@ -87,7 +92,7 @@ pub fn build_spec(
             "maskedPaths": MASKED_PATHS,
             "readonlyPaths": READONLY_PATHS,
         },
-    }))
+    })
 }
 
 fn namespaces(network: NetworkMode) -> Vec<Value> {
@@ -184,22 +189,6 @@ fn hostname(container_id: &str) -> String {
     container_id.chars().take(MAX_HOSTNAME_LENGTH).collect()
 }
 
-fn parse_user(user: Option<&str>) -> Result<(u32, u32), RuntimeError> {
-    let trimmed = user.unwrap_or_default().trim();
-    let (uid_text, gid_text) = trimmed.split_once(':').unwrap_or((trimmed, ""));
-    let uid = match uid_text {
-        "" | "root" => Some(0),
-        numeric => numeric.parse::<u32>().ok(),
-    };
-    let gid = match gid_text {
-        "" => uid,
-        "root" => Some(0),
-        numeric => numeric.parse::<u32>().ok(),
-    };
-    uid.zip(gid)
-        .ok_or_else(|| RuntimeError::UnsupportedUser(trimmed.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -242,6 +231,14 @@ mod tests {
         }
     }
 
+    fn image_user() -> ProcessUser {
+        ProcessUser {
+            uid: 101,
+            gid: 101,
+            additional_gids: Vec::new(),
+        }
+    }
+
     fn image() -> ImageConfig {
         ImageConfig {
             env: Some(vec![
@@ -257,7 +254,7 @@ mod tests {
 
     #[test]
     fn applies_resource_limits_and_cgroup_parent() {
-        let spec = build_spec(&container(), &image(), &files()).unwrap();
+        let spec = build_spec(&container(), &image(), &files(), &image_user());
         let resources = &spec["linux"]["resources"];
         assert_eq!(resources["cpu"]["quota"], 250_000);
         assert_eq!(resources["cpu"]["period"], 100_000);
@@ -273,7 +270,7 @@ mod tests {
 
     #[test]
     fn merges_process_from_image_and_container() {
-        let spec = build_spec(&container(), &image(), &files()).unwrap();
+        let spec = build_spec(&container(), &image(), &files(), &image_user());
         assert_eq!(
             spec["process"]["args"],
             json!(["/docker-entrypoint.sh", "nginx", "-g"])
@@ -283,18 +280,21 @@ mod tests {
             json!(["PATH=/usr/bin", "RUST_LOG=info"])
         );
         assert_eq!(spec["process"]["cwd"], "/srv");
-        assert_eq!(spec["process"]["user"], json!({ "uid": 101, "gid": 101 }));
+        assert_eq!(
+            spec["process"]["user"],
+            json!({ "uid": 101, "gid": 101, "additionalGids": [] })
+        );
     }
 
     #[test]
     fn container_entrypoint_drops_image_cmd() {
         let mut overridden = container();
         overridden.entrypoint = Some(vec!["/bin/server".to_string()]);
-        let spec = build_spec(&overridden, &image(), &files()).unwrap();
+        let spec = build_spec(&overridden, &image(), &files(), &image_user());
         assert_eq!(spec["process"]["args"], json!(["/bin/server"]));
 
         overridden.args = Some(vec!["--port".to_string(), "80".to_string()]);
-        let spec = build_spec(&overridden, &image(), &files()).unwrap();
+        let spec = build_spec(&overridden, &image(), &files(), &image_user());
         assert_eq!(
             spec["process"]["args"],
             json!(["/bin/server", "--port", "80"])
@@ -303,15 +303,23 @@ mod tests {
 
     #[test]
     fn adds_default_path_when_missing() {
-        let spec = build_spec(&container(), &ImageConfig::default(), &files()).unwrap();
+        let spec = build_spec(
+            &container(),
+            &ImageConfig::default(),
+            &files(),
+            &ProcessUser::default(),
+        );
         assert_eq!(spec["process"]["env"][0], DEFAULT_PATH);
-        assert_eq!(spec["process"]["user"], json!({ "uid": 0, "gid": 0 }));
+        assert_eq!(
+            spec["process"]["user"],
+            json!({ "uid": 0, "gid": 0, "additionalGids": [] })
+        );
         assert_eq!(spec["process"]["cwd"], "/");
     }
 
     #[test]
     fn mounts_container_files_and_user_binds() {
-        let spec = build_spec(&container(), &image(), &files()).unwrap();
+        let spec = build_spec(&container(), &image(), &files(), &image_user());
         let mounts = spec["mounts"].as_array().unwrap();
         let resolv = mounts
             .iter()
@@ -328,9 +336,9 @@ mod tests {
     #[test]
     fn host_network_shares_the_host_namespace() {
         let mut host = container();
-        let bridged = build_spec(&host, &image(), &files()).unwrap();
+        let bridged = build_spec(&host, &image(), &files(), &image_user());
         host.network = NetworkMode::Host;
-        let shared = build_spec(&host, &image(), &files()).unwrap();
+        let shared = build_spec(&host, &image(), &files(), &image_user());
         let has_network = |spec: &Value| {
             spec["linux"]["namespaces"]
                 .as_array()
@@ -340,15 +348,5 @@ mod tests {
         };
         assert!(has_network(&bridged));
         assert!(!has_network(&shared));
-    }
-
-    #[test]
-    fn rejects_named_users() {
-        let mut named = image();
-        named.user = Some("node".to_string());
-        assert!(matches!(
-            build_spec(&container(), &named, &files()),
-            Err(RuntimeError::UnsupportedUser(_))
-        ));
     }
 }
