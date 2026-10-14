@@ -31,6 +31,7 @@ pub enum Mutation {
         deployment_id: DeploymentId,
         spec: ServiceSpec,
     },
+    #[serde(alias = "setDeploymentCommit")]
     SetDeploymentBuild {
         service_id: ServiceId,
         deployment_id: DeploymentId,
@@ -120,4 +121,32 @@ pub enum ChangeKey {
 pub struct Change {
     pub version: u64,
     pub keys: Vec<ChangeKey>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_mutations_written_under_earlier_names() {
+        let entry = serde_json::json!({
+            "type": "setDeploymentCommit",
+            "service_id": "web",
+            "deployment_id": "d1",
+            "commit": { "reference": "abc123", "message": "Fix login" }
+        });
+        let decoded: Mutation = serde_json::from_value(entry).unwrap();
+        assert_eq!(
+            decoded,
+            Mutation::SetDeploymentBuild {
+                service_id: ServiceId::from("web"),
+                deployment_id: DeploymentId::from("d1"),
+                commit: Some(GitCommit {
+                    reference: "abc123".to_string(),
+                    message: "Fix login".to_string(),
+                }),
+                built_on: None,
+            }
+        );
+    }
 }
