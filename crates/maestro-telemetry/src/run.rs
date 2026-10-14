@@ -7,11 +7,14 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::api::router;
 use crate::error::Result;
+use crate::metrics::MetricsCollector;
 use crate::resolver::{DeploymentFromReplicaId, ReplicaResolver};
 use crate::store::LogStore;
 use crate::tailer::Tailer;
 
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+const METRICS_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+const METRICS_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Clone)]
 pub struct TelemetrySettings {
@@ -21,6 +24,9 @@ pub struct TelemetrySettings {
     pub poll_interval: Duration,
     pub idle_retention: Duration,
     pub rollover_interval: Duration,
+    pub metrics_interval: Duration,
+    pub cgroup_root: PathBuf,
+    pub proc_root: PathBuf,
     pub resolver: Arc<dyn ReplicaResolver>,
 }
 
@@ -43,6 +49,15 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
     tokio::select! {
         result = tail(tailer, settings.poll_interval, settings.idle_retention) => result,
         result = rollover(store.clone(), settings.rollover_interval) => result,
+        result = collect_metrics(
+            store.clone(),
+            MetricsCollector::new(
+                settings.cgroup_root.clone(),
+                settings.proc_root.clone(),
+                settings.resolver.clone(),
+            ),
+            settings.metrics_interval,
+        ) => result,
         result = axum::serve(listener, router(store)) => Ok(result?),
         _ = tokio::signal::ctrl_c() => Ok(()),
         _ = terminate.recv() => Ok(()),
@@ -58,9 +73,47 @@ impl Default for TelemetrySettings {
             poll_interval: Duration::from_millis(500),
             idle_retention: Duration::from_secs(3600),
             rollover_interval: Duration::from_secs(3600),
+            metrics_interval: Duration::from_secs(15),
+            cgroup_root: PathBuf::from("/sys/fs/cgroup/maestro.slice/maestro-workloads.slice"),
+            proc_root: PathBuf::from("/proc"),
             resolver: Arc::new(DeploymentFromReplicaId),
         }
     }
+}
+
+async fn collect_metrics(
+    store: Arc<LogStore>,
+    mut collector: MetricsCollector,
+    interval: Duration,
+) -> Result<()> {
+    let mut ticker = tokio::time::interval(interval);
+    let mut last_prune = Instant::now();
+    loop {
+        ticker.tick().await;
+        let points = collector.collect(now_ms());
+        let prune = last_prune.elapsed() >= METRICS_PRUNE_INTERVAL;
+        let writer = store.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            writer.insert_metrics(&points)?;
+            if prune {
+                writer.prune_metrics(now_ms() - METRICS_RETENTION_MS)?;
+            }
+            Ok::<_, crate::error::TelemetryError>(())
+        })
+        .await?;
+        if let Err(error) = written {
+            tracing::warn!(%error, "failed to record metrics");
+        }
+        if prune {
+            last_prune = Instant::now();
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
 async fn tail(mut tailer: Tailer, poll_interval: Duration, idle_retention: Duration) -> Result<()> {

@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::error::TelemetryError;
+use crate::metrics::MetricPoint;
 use crate::search::LogSearchQuery;
-use crate::store::{LogQuery, LogStore, StoredLog};
+use crate::store::{LogQuery, LogStore, MetricsQuery, StoredLog};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1_000;
@@ -35,6 +36,7 @@ pub fn router(store: Arc<LogStore>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/logs", get(logs))
+        .route("/metrics", get(metrics))
         .with_state(store)
 }
 
@@ -70,6 +72,13 @@ async fn logs(
         records,
         next_cursor,
     }))
+}
+
+async fn metrics(
+    State(store): State<Arc<LogStore>>,
+    Query(query): Query<MetricsQuery>,
+) -> Result<Json<Vec<MetricPoint>>, TelemetryError> {
+    Ok(Json(store.read_metrics(query).await?))
 }
 
 impl IntoResponse for TelemetryError {

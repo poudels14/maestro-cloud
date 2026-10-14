@@ -12,10 +12,12 @@ use crate::resolver::ReplicaIdentity;
 use crate::search::LogSearchQuery;
 
 mod db;
+mod metrics;
 mod query;
 mod rollover;
 
 use db::Db;
+pub use metrics::MetricsQuery;
 use query::query_logs;
 use rollover::{remove_stale_exports, rollover_partitions, write_partition_manifest};
 
@@ -105,7 +107,10 @@ impl LogStore {
         std::fs::create_dir_all(&parts_root)?;
         remove_stale_exports(&parts_root)?;
         let store = Self {
-            db: Arc::new(Db::open(&data_dir.join("logs.duckdb"), SCHEMA)?),
+            db: Arc::new(Db::open(
+                &data_dir.join("logs.duckdb"),
+                &format!("{SCHEMA}{}", metrics::METRICS_SCHEMA),
+            )?),
             parts_root,
             rollover_lock: Arc::new(Mutex::new(())),
         };

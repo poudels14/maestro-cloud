@@ -57,6 +57,9 @@ pub enum NodeRequest {
         node_id: NodeId,
     },
     Disks,
+    Telemetry {
+        path: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -165,6 +168,16 @@ impl NodeService {
                 )),
             },
             NodeRequest::Disks => encode_value(&maestro_agent::disks()),
+            NodeRequest::Telemetry { path } => {
+                let (status, body) = unix_http::get(&self.telemetry_socket, &path)
+                    .await
+                    .map_err(|error| Status::unavailable(format!("telemetry: {error}")))?;
+                match status.is_success() {
+                    true => serde_json::from_slice(&body)
+                        .map_err(|error| Status::internal(error.to_string())),
+                    false => Err(Status::invalid_argument(telemetry_error(&body))),
+                }
+            }
             NodeRequest::RemoveNode { node_id } => match &self.consensus {
                 Some(consensus) => remove_node(consensus, node_id)
                     .await
@@ -613,7 +626,7 @@ pub async fn local_disks() -> Json<Vec<maestro_agent::Disk>> {
     Json(maestro_agent::disks())
 }
 
-async fn call_nodes(
+pub async fn call_nodes(
     clients: &NodeClients,
     nodes: Vec<NodeRecord>,
     request: NodeRequest,
@@ -741,7 +754,7 @@ fn record_ts(record: &Value) -> i64 {
     record["ts"].as_i64().unwrap_or(0)
 }
 
-fn url_query(pairs: &[(&str, String)]) -> String {
+pub fn url_query(pairs: &[(&str, String)]) -> String {
     pairs
         .iter()
         .map(|(key, value)| format!("{key}={}", percent_encode(value)))

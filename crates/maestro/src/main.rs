@@ -10,6 +10,7 @@ mod identity;
 mod join;
 mod log_driver;
 mod node_service;
+mod observability;
 mod secret_sources;
 mod server;
 mod unix_http;

@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use maestro_telemetry::{
-    LogQuery, LogRecord, LogStore, ReplicaIdentity, StoredLog, Stream, TailCheckpoint,
+    LogQuery, LogRecord, LogStore, MetricPoint, MetricsQuery, ReplicaIdentity, StoredLog, Stream,
+    TailCheckpoint,
 };
 
 const OLD_TS: u64 = 1_700_000_000_000;
@@ -376,4 +377,48 @@ async fn reopen_cleans_stale_temp_exports() {
     let reopened = LogStore::open(directory.path()).unwrap();
     assert!(!stale.exists());
     assert_eq!(search(&reopened, "cold").await.len(), 1);
+}
+
+#[tokio::test]
+async fn stores_filters_and_prunes_metrics() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let point = |ts: i64, source: &str| MetricPoint {
+        ts,
+        source: source.to_string(),
+        cpu_percent: 12.5,
+        memory_bytes: 1024,
+        memory_limit_bytes: 4096,
+        net_rx_bytes: 1,
+        net_tx_bytes: 2,
+    };
+    store
+        .insert_metrics(&[
+            point(100, "node"),
+            point(100, "container:d1-0"),
+            point(200, "container:d1-1"),
+            point(300, "node"),
+        ])
+        .unwrap();
+    let node = store
+        .read_metrics(MetricsQuery {
+            source: Some("node".to_string()),
+            source_prefix: None,
+            from: 0,
+            to: 250,
+        })
+        .await
+        .unwrap();
+    assert_eq!(node, [point(100, "node")]);
+    let containers = store
+        .read_metrics(MetricsQuery {
+            source: None,
+            source_prefix: Some("container:".to_string()),
+            from: 0,
+            to: 1000,
+        })
+        .await
+        .unwrap();
+    assert_eq!(containers.len(), 2);
+    assert_eq!(store.prune_metrics(250).unwrap(), 3);
 }

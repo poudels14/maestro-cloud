@@ -37,6 +37,7 @@ use crate::node_service::{
     ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_disks, cluster_logs,
     local_disks, remove_cluster_node,
 };
+use crate::observability;
 use crate::secret_sources;
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 use crate::uploads::{self, UploadState, upload_service};
@@ -195,6 +196,22 @@ pub async fn spawn(
         .route("/api/logs", axum::routing::get(cluster_logs))
         .route("/api/disks", axum::routing::get(local_disks))
         .route("/api/disks/nodes", axum::routing::get(cluster_disks))
+        .route(
+            "/api/metrics/node",
+            axum::routing::get(observability::node_metrics),
+        )
+        .route(
+            "/api/metrics/cluster",
+            axum::routing::get(observability::cluster_metrics),
+        )
+        .route(
+            "/api/services/{service_id}/metrics",
+            axum::routing::get(observability::service_metrics),
+        )
+        .route(
+            "/api/services/{service_id}/metrics/containers",
+            axum::routing::get(observability::container_metrics),
+        )
         .route(
             "/api/cluster/nodes/{node_id}",
             axum::routing::delete(remove_cluster_node),
