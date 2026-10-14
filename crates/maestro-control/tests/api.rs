@@ -477,3 +477,47 @@ async fn lists_routes_and_node_summaries() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(nodes, json!([]));
 }
+
+#[tokio::test]
+async fn drains_and_restores_nodes_and_reports_unschedulable_replicas() {
+    let (writer, app) = app();
+    writer
+        .write(vec![maestro_store::Mutation::PutNode {
+            node: support::node(7, 8, 32),
+        }])
+        .await
+        .unwrap();
+    let (status, body) = call(&app, "POST", "/api/cluster/nodes/7/drain", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "nodeId": 7, "unschedulable": true }));
+    assert_eq!(
+        writer
+            .state()
+            .node(maestro_core::NodeId(7))
+            .unwrap()
+            .unwrap()
+            .state,
+        maestro_core::NodeState::Draining
+    );
+    let (_, body) = call(&app, "POST", "/api/cluster/nodes/7/restore", None).await;
+    assert_eq!(body["unschedulable"], false);
+    let (status, _) = call(&app, "POST", "/api/cluster/nodes/8/drain", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    writer
+        .write(vec![maestro_store::Mutation::SetUnschedulable {
+            replicas: vec![maestro_core::UnschedulableReplica {
+                service_id: ServiceId::from("api"),
+                deployment_id: maestro_core::DeploymentId::from("d1"),
+                replica_index: 2,
+                reason: "no schedulable nodes".to_string(),
+            }],
+        }])
+        .await
+        .unwrap();
+    let (_, body) = call(&app, "GET", "/api/cluster/unschedulable", None).await;
+    assert_eq!(
+        body,
+        json!([{ "serviceId": "api", "deploymentId": "d1", "replicaIndex": 2, "reason": "no schedulable nodes" }])
+    );
+}

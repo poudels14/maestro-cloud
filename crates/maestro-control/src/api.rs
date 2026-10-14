@@ -7,8 +7,8 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maestro_core::{
     Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, MAX_REPLICAS_OVERRIDE,
-    Millicores, NodeCapacity, NodeRecord, ReplicaId, ReplicaStatus, RouteTable, ServiceControls,
-    ServiceId, ServiceSpec, ServicesFile, SpecError,
+    Millicores, NodeCapacity, NodeId, NodeRecord, NodeState, ReplicaId, ReplicaStatus, RouteTable,
+    ServiceControls, ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,13 @@ struct ReplicasResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NodeDrainState {
+    node_id: NodeId,
+    unschedulable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StoppedDeployment {
     service_id: ServiceId,
     deployment_id: DeploymentId,
@@ -181,6 +188,18 @@ pub fn router<W: StoreWriter, O: ObservedReplicas>(state: Arc<ApiState<W, O>>) -
             patch(set_replicas::<W, O>).delete(clear_replicas::<W, O>),
         )
         .route("/api/cluster/unfreeze", post(unfreeze_cluster::<W, O>))
+        .route(
+            "/api/cluster/unschedulable",
+            get(list_unschedulable::<W, O>),
+        )
+        .route(
+            "/api/cluster/nodes/{node_id}/drain",
+            post(drain_node::<W, O>),
+        )
+        .route(
+            "/api/cluster/nodes/{node_id}/restore",
+            post(restore_node::<W, O>),
+        )
         .route("/api/rollout", post(rollout::<W, O>))
         .route("/api/replicas", get(list_replicas::<W, O>))
         .route("/api/nodes", get(list_nodes::<W, O>))
@@ -650,6 +669,26 @@ async fn clear_replicas<W: StoreWriter, O: ObservedReplicas>(
     }))
 }
 
+async fn list_unschedulable<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+) -> Result<Json<Vec<UnschedulableReplica>>, ControlError> {
+    Ok(Json(state.writer.state().unschedulable()?))
+}
+
+async fn drain_node<W: StoreWriter, O: ObservedReplicas>(
+    state: State<Arc<ApiState<W, O>>>,
+    node_id: Path<String>,
+) -> Result<Json<NodeDrainState>, ControlError> {
+    set_node_state(state, node_id, NodeState::Draining).await
+}
+
+async fn restore_node<W: StoreWriter, O: ObservedReplicas>(
+    state: State<Arc<ApiState<W, O>>>,
+    node_id: Path<String>,
+) -> Result<Json<NodeDrainState>, ControlError> {
+    set_node_state(state, node_id, NodeState::Active).await
+}
+
 async fn unfreeze_cluster<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
 ) -> Result<StatusCode, ControlError> {
@@ -725,6 +764,42 @@ impl IntoResponse for ControlError {
             }
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
+    }
+}
+
+async fn set_node_state<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(node_id): Path<String>,
+    next: NodeState,
+) -> Result<Json<NodeDrainState>, ControlError> {
+    let node = node_id
+        .parse()
+        .ok()
+        .map(NodeId)
+        .map(|id| state.writer.state().node(id))
+        .transpose()?
+        .flatten()
+        .ok_or_else(|| ControlError::NotFound(format!("node {node_id}")))?;
+    match node.state {
+        NodeState::Removed => Err(ControlError::Conflict(format!(
+            "node {node_id} has been removed"
+        ))),
+        _ => {
+            let node_id = node.id;
+            state
+                .writer
+                .write(vec![Mutation::PutNode {
+                    node: NodeRecord {
+                        state: next,
+                        ..node
+                    },
+                }])
+                .await?;
+            Ok(Json(NodeDrainState {
+                node_id,
+                unschedulable: next == NodeState::Draining,
+            }))
+        }
     }
 }
 

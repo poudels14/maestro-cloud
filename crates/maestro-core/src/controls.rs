@@ -26,3 +26,12 @@ impl ServiceControls {
             .map_or(configured, |replicas| replicas.max(configured))
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnschedulableReplica {
+    pub service_id: crate::ServiceId,
+    pub deployment_id: crate::DeploymentId,
+    pub replica_index: u32,
+    pub reason: String,
+}

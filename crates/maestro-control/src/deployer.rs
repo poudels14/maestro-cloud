@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use maestro_core::{
-    Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, ReplicaId, ReplicaPhase,
-    ReplicaStatus, ResourceDefaults, ServiceId,
+    Assignment, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord, NodeState,
+    ReplicaId, ReplicaPhase, ReplicaStatus, ResourceDefaults, ServiceId, UnschedulableReplica,
 };
 use maestro_store::Mutation;
 
@@ -63,6 +63,7 @@ pub struct Deployer<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> {
     builder: Arc<B>,
     active_builds: Arc<Mutex<HashSet<DeploymentId>>>,
     active_resolutions: Arc<Mutex<HashSet<DeploymentId>>>,
+    unschedulable: Mutex<Vec<UnschedulableReplica>>,
     settings: DeployerSettings,
 }
 
@@ -79,11 +80,13 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             builder,
             active_builds: Arc::default(),
             active_resolutions: Arc::default(),
+            unschedulable: Mutex::default(),
             settings,
         }
     }
 
     pub async fn tick(&self) -> Result<(), ControlError> {
+        lock_report(&self.unschedulable).clear();
         self.start_queued().await?;
         self.run_builds().await?;
         self.reschedule_lost().await?;
@@ -92,7 +95,36 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.settle_deploying().await?;
         self.drain_superseded().await?;
         self.stop_drained().await?;
-        self.release_inactive().await
+        self.release_inactive().await?;
+        self.publish_unschedulable().await
+    }
+
+    async fn publish_unschedulable(&self) -> Result<(), ControlError> {
+        let replicas = lock_report(&self.unschedulable).clone();
+        match self.state().unschedulable()? == replicas {
+            true => Ok(()),
+            false => {
+                self.write(vec![Mutation::SetUnschedulable { replicas }])
+                    .await
+            }
+        }
+    }
+
+    fn note_unschedulable(&self, requests: &[PlacementRequest], failures: &[(ReplicaId, String)]) {
+        let mut report = lock_report(&self.unschedulable);
+        failures.iter().for_each(|(replica_id, reason)| {
+            if let Some(request) = requests
+                .iter()
+                .find(|request| &request.replica_id == replica_id)
+            {
+                report.push(UnschedulableReplica {
+                    service_id: request.service_id.clone(),
+                    deployment_id: request.deployment_id.clone(),
+                    replica_index: request.index,
+                    reason: reason.clone(),
+                });
+            }
+        });
     }
 
     async fn start_queued(&self) -> Result<(), ControlError> {
@@ -246,11 +278,12 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         if !requests.is_empty() {
             let current = existing.values().flatten().cloned().collect::<Vec<_>>();
             let placement = scheduler::place(
-                &self.state().nodes()?,
+                &self.available_nodes()?,
                 &current,
                 &requests,
                 &self.settings.defaults,
             );
+            self.note_unschedulable(&requests, &placement.unschedulable);
             let failed_deployments = unplaced
                 .iter()
                 .filter_map(|deployment| {
@@ -341,14 +374,8 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                         .iter()
                         .find(|deployment| deployment.id == assignment.deployment_id)?;
                     let index = next_index.entry(deployment.id.clone()).or_default();
-                    let request = PlacementRequest {
-                        replica_id: ReplicaId::for_deployment(&deployment.id, *index),
-                        service_id: deployment.service_id.clone(),
-                        deployment_id: deployment.id.clone(),
-                        index: *index,
-                        image: assignment.image.clone(),
-                        resources: deployment.spec.deploy.resources.clone(),
-                    };
+                    let request =
+                        PlacementRequest::for_replica(deployment, *index, assignment.image.clone());
                     *index += 1;
                     Some(request)
                 })
@@ -368,9 +395,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 &requests,
                 &self.settings.defaults,
             );
-            placement.unschedulable.iter().for_each(|(replica_id, reason)| {
-                tracing::warn!(%replica_id, %reason, "cannot reschedule a replica from a lost node");
-            });
+            self.note_unschedulable(&requests, &placement.unschedulable);
             let mut next = existing;
             next.iter_mut()
                 .filter(|(node_id, _)| lost_nodes.contains(node_id))
@@ -450,60 +475,77 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
     async fn scale_active(&self) -> Result<(), ControlError> {
         let existing = self.all_assignments()?;
         let current = existing.values().flatten().cloned().collect::<Vec<_>>();
+        let draining_nodes = self
+            .state()
+            .nodes()?
+            .into_iter()
+            .filter(|node| node.state == NodeState::Draining)
+            .map(|node| node.id)
+            .collect::<Vec<_>>();
         let active = [DeploymentStatus::Deploying, DeploymentStatus::Ready]
             .iter()
             .map(|status| self.state().deployments_with_status(*status))
             .collect::<Result<Vec<_>, _>>()?
             .concat();
-        let mut surplus = Vec::new();
+        let mut released = Vec::new();
         let mut requests = Vec::new();
         for deployment in &active {
-            let mut assigned = current
+            let assigned = current
                 .iter()
                 .filter(|assignment| assignment.deployment_id == deployment.id)
                 .collect::<Vec<_>>();
-            let target = self.target_replicas(deployment)? as usize;
-            if !assigned.is_empty() && assigned.len() != target {
-                assigned.sort_by_key(|assignment| assignment.index);
-                let next_index = assigned.last().map_or(0, |assignment| assignment.index + 1);
-                let image = assigned[0].image.clone();
-                surplus.extend(
-                    assigned
+            if let Some(first) = assigned.first() {
+                let (mut serving, draining): (Vec<&Assignment>, Vec<&Assignment>) = assigned
+                    .iter()
+                    .copied()
+                    .partition(|assignment| !draining_nodes.contains(&assignment.node_id));
+                serving.sort_by_key(|assignment| assignment.index);
+                let target = self.target_replicas(deployment)? as usize;
+                let next_index = assigned
+                    .iter()
+                    .map(|assignment| assignment.index + 1)
+                    .max()
+                    .unwrap_or_default();
+                let healthy_serving = serving
+                    .iter()
+                    .take(target)
+                    .filter(|assignment| self.is_healthy(&assignment.replica_id))
+                    .count();
+                released.extend(
+                    serving
                         .iter()
                         .skip(target)
                         .map(|assignment| assignment.replica_id.clone()),
                 );
+                if healthy_serving >= target {
+                    released.extend(
+                        draining
+                            .iter()
+                            .map(|assignment| assignment.replica_id.clone()),
+                    );
+                }
                 requests.extend(
-                    (0..target.saturating_sub(assigned.len()) as u32).map(|offset| {
-                        let index = next_index + offset;
-                        PlacementRequest {
-                            replica_id: ReplicaId::for_deployment(&deployment.id, index),
-                            service_id: deployment.service_id.clone(),
-                            deployment_id: deployment.id.clone(),
-                            index,
-                            image: image.clone(),
-                            resources: deployment.spec.deploy.resources.clone(),
-                        }
+                    (0..target.saturating_sub(serving.len()) as u32).map(|offset| {
+                        PlacementRequest::for_replica(
+                            deployment,
+                            next_index + offset,
+                            first.image.clone(),
+                        )
                     }),
                 );
             }
         }
-        if !surplus.is_empty() || !requests.is_empty() {
+        if !released.is_empty() || !requests.is_empty() {
             let placement = scheduler::place(
-                &self.state().nodes()?,
+                &self.available_nodes()?,
                 &current,
                 &requests,
                 &self.settings.defaults,
             );
-            placement
-                .unschedulable
-                .iter()
-                .for_each(|(replica_id, reason)| {
-                    tracing::warn!(%replica_id, %reason, "cannot place an added replica");
-                });
+            self.note_unschedulable(&requests, &placement.unschedulable);
             let mut next = existing;
             next.values_mut().for_each(|assignments| {
-                assignments.retain(|assignment| !surplus.contains(&assignment.replica_id))
+                assignments.retain(|assignment| !released.contains(&assignment.replica_id))
             });
             placement.assignments.into_iter().for_each(|assignment| {
                 next.entry(assignment.node_id).or_default().push(assignment)
@@ -609,6 +651,21 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.write(mutations).await
     }
 
+    fn available_nodes(&self) -> Result<Vec<NodeRecord>, ControlError> {
+        Ok(self
+            .state()
+            .nodes()?
+            .into_iter()
+            .filter(|node| self.observed.node_available(node.id))
+            .collect())
+    }
+
+    fn is_healthy(&self, replica_id: &ReplicaId) -> bool {
+        self.observed
+            .replica(replica_id)
+            .is_some_and(|status| status.phase == ReplicaPhase::Healthy)
+    }
+
     fn target_replicas(&self, deployment: &Deployment) -> Result<u32, ControlError> {
         Ok(self
             .state()
@@ -660,14 +717,7 @@ fn placement_requests(deployment: &Deployment, replicas: u32) -> Vec<PlacementRe
         .or_else(|| deployment.spec.image.clone())
         .unwrap_or_default();
     (0..replicas)
-        .map(|index| PlacementRequest {
-            replica_id: ReplicaId::for_deployment(&deployment.id, index),
-            service_id: deployment.service_id.clone(),
-            deployment_id: deployment.id.clone(),
-            index,
-            image: image.clone(),
-            resources: deployment.spec.deploy.resources.clone(),
-        })
+        .map(|index| PlacementRequest::for_replica(deployment, index, image.clone()))
         .collect()
 }
 
@@ -686,6 +736,14 @@ fn status_change(
         failure,
         at_ms,
     }
+}
+
+fn lock_report(
+    report: &Mutex<Vec<UnschedulableReplica>>,
+) -> std::sync::MutexGuard<'_, Vec<UnschedulableReplica>> {
+    report
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn lock(set: &Mutex<HashSet<DeploymentId>>) -> std::sync::MutexGuard<'_, HashSet<DeploymentId>> {

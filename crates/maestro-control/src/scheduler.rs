@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use maestro_core::{
-    Assignment, ByteSize, DeploymentId, Millicores, NodeCapacity, NodeId, NodeRecord, ReplicaId,
-    ResourceDefaults, ResourceSpec, ServiceId,
+    Assignment, ByteSize, Deployment, DeploymentId, Millicores, NodeAffinity, NodeCapacity, NodeId,
+    NodeRecord, ReplicaId, ResourceDefaults, ResourceSpec, ServiceId,
 };
 
 #[derive(Clone, Debug)]
@@ -13,6 +13,8 @@ pub struct PlacementRequest {
     pub index: u32,
     pub image: String,
     pub resources: ResourceSpec,
+    pub affinity: Option<NodeAffinity>,
+    pub writable_volume: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -57,8 +59,37 @@ fn place_one(
     request: &PlacementRequest,
     defaults: &ResourceDefaults,
 ) -> Result<Assignment, String> {
-    let candidates = loads
+    let pinned_node = request
+        .affinity
+        .as_ref()
+        .and_then(|affinity| affinity.node.as_ref());
+    let eligible = loads
         .values()
+        .filter(|load| request.matches(load.node))
+        .map(|load| load.node.id)
+        .collect::<Vec<_>>();
+    match (
+        request.writable_volume && pinned_node.is_none(),
+        eligible.is_empty(),
+    ) {
+        (true, _) => Err("writable host volumes require deploy.nodeAffinity.node".to_string()),
+        (false, true) if request.affinity.is_some() && !loads.is_empty() => {
+            Err("node affinity matches no schedulable node".to_string())
+        }
+        _ => place_on_eligible(loads, eligible, request, defaults),
+    }
+}
+
+fn place_on_eligible(
+    loads: &mut BTreeMap<NodeId, NodeLoad>,
+    eligible: Vec<NodeId>,
+    request: &PlacementRequest,
+    defaults: &ResourceDefaults,
+) -> Result<Assignment, String> {
+    let no_candidates = eligible.is_empty();
+    let candidates = eligible
+        .iter()
+        .filter_map(|node_id| loads.get(node_id))
         .map(|load| {
             let resolved = request
                 .resources
@@ -103,8 +134,38 @@ fn place_one(
             })
         }
         (None, Some(error)) => Err(error),
-        (None, None) if loads.is_empty() => Err("no schedulable nodes".to_string()),
+        (None, None) if no_candidates => Err("no schedulable nodes".to_string()),
         (None, None) => Err("insufficient cpu or memory on every node".to_string()),
+    }
+}
+
+impl PlacementRequest {
+    pub fn for_replica(deployment: &Deployment, index: u32, image: String) -> Self {
+        let deploy = &deployment.spec.deploy;
+        Self {
+            replica_id: ReplicaId::for_deployment(&deployment.id, index),
+            service_id: deployment.service_id.clone(),
+            deployment_id: deployment.id.clone(),
+            index,
+            image,
+            resources: deploy.resources.clone(),
+            affinity: deploy.node_affinity.clone(),
+            writable_volume: deploy.volumes.iter().any(|volume| !volume.read_only),
+        }
+    }
+
+    fn matches(&self, node: &NodeRecord) -> bool {
+        self.affinity.as_ref().is_none_or(|affinity| {
+            let node_matches = affinity
+                .node
+                .as_ref()
+                .is_none_or(|pinned| *pinned == node.name || *pinned == node.id.to_string());
+            let labels_match = affinity
+                .labels
+                .iter()
+                .all(|(key, value)| node.labels.get(key) == Some(value));
+            node_matches && labels_match
+        })
     }
 }
 
@@ -211,6 +272,8 @@ mod tests {
                 }),
                 ..ResourceSpec::default()
             },
+            affinity: None,
+            writable_volume: false,
         }
     }
 
@@ -336,5 +399,80 @@ mod tests {
             &ResourceDefaults::default(),
         );
         assert_eq!(placement.unschedulable[0].1, "no schedulable nodes");
+    }
+
+    #[test]
+    fn honors_node_and_label_affinity() {
+        let mut labelled = node(2, 8, 32);
+        labelled.labels.insert("gpu".to_string(), "a10".to_string());
+        let nodes = [node(1, 8, 32), labelled];
+        let by_label = PlacementRequest {
+            affinity: Some(NodeAffinity {
+                node: None,
+                labels: [("gpu".to_string(), "a10".to_string())].into(),
+            }),
+            ..request("ml", 0, None)
+        };
+        let by_name = PlacementRequest {
+            affinity: Some(NodeAffinity {
+                node: Some("node1".to_string()),
+                labels: Default::default(),
+            }),
+            ..request("db", 0, None)
+        };
+        let placement = place(
+            &nodes,
+            &[],
+            &[by_label, by_name],
+            &ResourceDefaults::default(),
+        );
+        let placed = placement
+            .assignments
+            .iter()
+            .map(|assignment| (assignment.service_id.to_string(), assignment.node_id.0))
+            .collect::<Vec<_>>();
+        assert_eq!(placed, [("ml".to_string(), 2), ("db".to_string(), 1)]);
+
+        let unmatched = PlacementRequest {
+            affinity: Some(NodeAffinity {
+                node: Some("node9".to_string()),
+                labels: Default::default(),
+            }),
+            ..request("db", 0, None)
+        };
+        let placement = place(&nodes, &[], &[unmatched], &ResourceDefaults::default());
+        assert_eq!(
+            placement.unschedulable[0].1,
+            "node affinity matches no schedulable node"
+        );
+    }
+
+    #[test]
+    fn writable_volumes_need_a_pinned_node() {
+        let nodes = [node(1, 8, 32)];
+        let unpinned = PlacementRequest {
+            writable_volume: true,
+            ..request("db", 0, None)
+        };
+        let pinned = PlacementRequest {
+            writable_volume: true,
+            affinity: Some(NodeAffinity {
+                node: Some("1".to_string()),
+                labels: Default::default(),
+            }),
+            ..request("cache", 0, None)
+        };
+        let placement = place(
+            &nodes,
+            &[],
+            &[unpinned, pinned],
+            &ResourceDefaults::default(),
+        );
+        assert_eq!(placement.assignments.len(), 1);
+        assert_eq!(
+            placement.assignments[0].service_id,
+            ServiceId::from("cache")
+        );
+        assert!(placement.unschedulable[0].1.contains("nodeAffinity.node"));
     }
 }

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use maestro_core::{
     Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
-    ServiceControls, ServiceId, ServiceSpec,
+    ServiceControls, ServiceId, ServiceSpec, UnschedulableReplica,
 };
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction};
 use serde::de::DeserializeOwned;
@@ -25,6 +25,7 @@ const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
 
 const VERSION_KEY: &str = "version";
 const FREEZE_KEY: &str = "freeze";
+const UNSCHEDULABLE_KEY: &str = "unschedulable";
 const KEY_MAX: &str = "\u{10FFFF}";
 const CHANGE_BUFFER: usize = 1024;
 
@@ -311,6 +312,16 @@ impl StateMachine {
             .transpose()
     }
 
+    pub fn unschedulable(&self) -> Result<Vec<UnschedulableReplica>> {
+        let transaction = self.database.begin_read()?;
+        let cluster = transaction.open_table(CLUSTER)?;
+        cluster
+            .get(UNSCHEDULABLE_KEY)?
+            .map(|guard| decode(guard.value()))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
     pub fn assignments(&self, node_id: NodeId) -> Result<Vec<Assignment>> {
         let transaction = self.database.begin_read()?;
         let assignments = transaction.open_table(ASSIGNMENTS)?;
@@ -411,6 +422,12 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
                 None => table.remove(FREEZE_KEY)?,
             };
             Ok(vec![ChangeKey::ClusterFreeze])
+        }
+        Mutation::SetUnschedulable { replicas } => {
+            transaction
+                .open_table(CLUSTER)?
+                .insert(UNSCHEDULABLE_KEY, encode(replicas)?.as_slice())?;
+            Ok(vec![ChangeKey::Unschedulable])
         }
         Mutation::PruneDeployments { service_id, keep } => {
             prune_deployments(transaction, service_id, *keep)

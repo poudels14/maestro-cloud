@@ -1,6 +1,6 @@
 use maestro_core::{
     Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
-    ServiceControls, ServiceId, ServiceSpec,
+    ServiceControls, ServiceId, ServiceSpec, UnschedulableReplica,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,9 @@ pub enum Mutation {
     },
     SetClusterFreeze {
         freeze: Option<ClusterFreeze>,
+    },
+    SetUnschedulable {
+        replicas: Vec<UnschedulableReplica>,
     },
     PruneDeployments {
         service_id: ServiceId,
@@ -72,6 +75,7 @@ pub enum ChangeKey {
         id: ServiceId,
     },
     ClusterFreeze,
+    Unschedulable,
     Everything,
 }
 

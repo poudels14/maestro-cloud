@@ -475,3 +475,98 @@ fn set_override(harness: &Harness, replicas: Option<u32>) {
         }])
         .unwrap();
 }
+
+#[tokio::test]
+async fn draining_a_node_replaces_its_replicas_before_releasing_them() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    queue(&harness, "d1", 2).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.observed.set("d1-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    let on_one = harness.writer.state().assignments(NodeId(1)).unwrap()[0]
+        .replica_id
+        .to_string();
+
+    let mut draining = node(1, 8, 32);
+    draining.state = maestro_core::NodeState::Draining;
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::PutNode { node: draining }])
+        .unwrap();
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1", "d1-2"]);
+    assert_eq!(
+        harness.writer.state().assignments(NodeId(2)).unwrap().len(),
+        2
+    );
+
+    harness.deployer.tick().await.unwrap();
+    assert!(assigned_replicas(&harness).contains(&on_one));
+
+    harness.observed.set("d1-2", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert!(
+        harness
+            .writer
+            .state()
+            .assignments(NodeId(1))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(assigned_replicas(&harness).len(), 2);
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+}
+
+#[tokio::test]
+async fn new_deployments_skip_unreachable_nodes() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    harness.observed.lose_node(NodeId(2));
+    queue(&harness, "d1", 2).await;
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(
+        harness.writer.state().assignments(NodeId(1)).unwrap().len(),
+        2
+    );
+    assert!(
+        harness
+            .writer
+            .state()
+            .assignments(NodeId(2))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn reports_replicas_that_cannot_be_placed() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue(&harness, "d1", 1).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+
+    let mut draining = node(1, 8, 32);
+    draining.state = maestro_core::NodeState::Draining;
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::PutNode { node: draining }])
+        .unwrap();
+    harness.deployer.tick().await.unwrap();
+    let report = harness.writer.state().unschedulable().unwrap();
+    assert_eq!(report.len(), 1);
+    assert_eq!(report[0].reason, "no schedulable nodes");
+    assert_eq!(assigned_replicas(&harness), ["d1-0"]);
+
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::PutNode {
+            node: node(2, 8, 32),
+        }])
+        .unwrap();
+    harness.deployer.tick().await.unwrap();
+    assert!(harness.writer.state().unschedulable().unwrap().is_empty());
+}
