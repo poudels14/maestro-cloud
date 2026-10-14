@@ -340,6 +340,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
                     args.telemetry_socket.clone(),
                     None,
                     runtime.clone(),
+                    args.data_dir.clone(),
                 )))
                 .serve(grpc_listen);
             tasks.spawn(async move { node_grpc.await.context("node gRPC server stopped") });

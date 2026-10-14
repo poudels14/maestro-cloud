@@ -18,7 +18,8 @@ use maestro_control::{
     ImageBuilder, RemoteHeads, require_token, router, run_publisher,
 };
 use maestro_core::{
-    ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole, NodeState, ServiceSpec,
+    ClusterConfig, ClusterSettings, Deployment, MaintenanceRun, NodeId, NodeRole, NodeState,
+    ServiceSpec,
 };
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
@@ -36,6 +37,7 @@ use crate::exec::{ExecState, exec_service};
 use crate::github::GitHub;
 use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
+use crate::maintenance;
 use crate::node_service::{
     ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_disks, cluster_logs,
     local_disks, remove_cluster_node,
@@ -88,6 +90,7 @@ struct ClusterInfo {
     leader: Option<ClusterMember>,
     voters: Vec<ClusterMember>,
     learners: Vec<ClusterMember>,
+    maintenance: Option<MaintenanceRun>,
 }
 
 #[derive(Serialize)]
@@ -142,6 +145,7 @@ pub async fn spawn(
                 settings.telemetry_socket.clone(),
                 Some(consensus.clone()),
                 runtime.clone(),
+                settings.data_dir.clone(),
             )
             .with_uploads(key.clone(), uploads_dir(&settings.data_dir)),
         ))
@@ -317,6 +321,31 @@ pub async fn spawn(
             allowed: settings.config.allow_exec,
         });
     let writer = Arc::new(ForwardingWriter::new(consensus.clone(), clients.clone()));
+    let orchestrator = Arc::new(maintenance::Orchestrator::new(
+        writer.clone(),
+        maintenance::ClusterNodes {
+            consensus: consensus.clone(),
+            clients: clients.clone(),
+            hub: observed.as_ref().clone(),
+        },
+    ));
+    tasks.spawn({
+        let runner = maintenance::run(orchestrator.clone(), consensus.clone());
+        async move {
+            runner.await;
+            Ok(())
+        }
+    });
+    let maintenance = axum::Router::new()
+        .route(
+            "/api/cluster/upgrade",
+            axum::routing::post(maintenance::upgrade),
+        )
+        .route(
+            "/api/cluster/restart",
+            axum::routing::post(maintenance::restart),
+        )
+        .with_state(orchestrator);
     let slack = SlackState {
         writer: writer.clone(),
         key: key.clone(),
@@ -370,6 +399,7 @@ pub async fn spawn(
     .merge(uploads)
     .merge(webhooks)
     .merge(exec)
+    .merge(maintenance)
     .merge(info);
     let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));
     let authenticated_api = api
@@ -525,6 +555,7 @@ async fn cluster_info(State(info): State<Arc<InfoState>>) -> Json<ClusterInfo> {
             .map(|(id, address)| ClusterMember { id, address }),
         voters: members(metrics.voters),
         learners: members(metrics.learners),
+        maintenance: info.consensus.state().maintenance_run().ok().flatten(),
     })
 }
 

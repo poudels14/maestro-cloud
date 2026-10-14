@@ -71,3 +71,86 @@ pub struct PreviewSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported: Option<String>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaintenanceKind {
+    Upgrade,
+    Restart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MaintenancePhase {
+    Draining,
+    Requested,
+    Verifying,
+    Restoring,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeStepStatus {
+    Pending,
+    Draining,
+    Upgrading,
+    Verifying,
+    Restoring,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceStep {
+    pub node_id: crate::NodeId,
+    pub node_name: String,
+    pub from_version: Option<String>,
+    pub status: NodeStepStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceEvent {
+    pub at_ms: u64,
+    pub phase: MaintenancePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<crate::NodeId>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceRun {
+    pub run_id: String,
+    pub kind: MaintenanceKind,
+    pub target_version: String,
+    pub requested_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub phase: MaintenancePhase,
+    pub phase_started_at_ms: u64,
+    pub current_node_index: usize,
+    pub nodes: Vec<MaintenanceStep>,
+    pub history: Vec<MaintenanceEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+impl MaintenanceRun {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.phase,
+            MaintenancePhase::Succeeded | MaintenancePhase::Failed
+        )
+    }
+}

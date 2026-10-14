@@ -1,7 +1,7 @@
 use maestro_core::{
-    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, GitCommit, NodeId,
-    NodeRecord, PreviewSource, ServiceControls, ServiceId, ServiceSpec, SlackWebhook,
-    UnschedulableReplica,
+    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, GitCommit,
+    MaintenanceRun, NodeId, NodeRecord, PreviewSource, ServiceControls, ServiceId, ServiceSpec,
+    SlackWebhook, UnschedulableReplica,
 };
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +62,9 @@ pub enum Mutation {
         id: ServiceId,
         source: Option<PreviewSource>,
     },
+    SetMaintenanceRun {
+        run: Option<MaintenanceRun>,
+    },
     MarkDeploymentArchived {
         service_id: ServiceId,
         deployment_id: DeploymentId,
@@ -106,6 +109,7 @@ pub enum ChangeKey {
     Unschedulable,
     Blocklist,
     SlackWebhooks,
+    MaintenanceRun,
     PreviewSource {
         id: ServiceId,
     },

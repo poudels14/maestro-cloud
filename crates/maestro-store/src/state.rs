@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use maestro_core::{
-    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
-    PreviewSource, ServiceControls, ServiceId, ServiceSpec, SlackWebhook, UnschedulableReplica,
+    Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, MaintenanceRun, NodeId,
+    NodeRecord, PreviewSource, ServiceControls, ServiceId, ServiceSpec, SlackWebhook,
+    UnschedulableReplica,
 };
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction};
 use serde::de::DeserializeOwned;
@@ -30,6 +31,7 @@ const FREEZE_KEY: &str = "freeze";
 const UNSCHEDULABLE_KEY: &str = "unschedulable";
 const BLOCKED_IPS_KEY: &str = "blocked_ips";
 const SLACK_WEBHOOKS_KEY: &str = "slack_webhooks";
+const MAINTENANCE_KEY: &str = "maintenance_run";
 const KEY_MAX: &str = "\u{10FFFF}";
 const CHANGE_BUFFER: usize = 1024;
 
@@ -59,6 +61,8 @@ pub(crate) struct StateExport {
     preview_sources: Vec<(ServiceId, PreviewSource)>,
     #[serde(default)]
     archived: Vec<(ServiceId, DeploymentId, u64)>,
+    #[serde(default)]
+    maintenance_run: Option<MaintenanceRun>,
 }
 
 impl StateMachine {
@@ -146,6 +150,7 @@ impl StateMachine {
             slack_webhooks: self.slack_webhooks()?,
             preview_sources: self.preview_sources()?,
             archived: self.archived()?,
+            maintenance_run: self.maintenance_run()?,
         })
     }
 
@@ -211,6 +216,11 @@ impl StateMachine {
             SLACK_WEBHOOKS_KEY,
             encode(&export.slack_webhooks)?.as_slice(),
         )?;
+        if let Some(run) = &export.maintenance_run {
+            transaction
+                .open_table(CLUSTER)?
+                .insert(MAINTENANCE_KEY, encode(run)?.as_slice())?;
+        }
         export
             .archived
             .iter()
@@ -375,6 +385,15 @@ impl StateMachine {
                 ))
             })
             .collect()
+    }
+
+    pub fn maintenance_run(&self) -> Result<Option<MaintenanceRun>> {
+        let transaction = self.database.begin_read()?;
+        transaction
+            .open_table(CLUSTER)?
+            .get(MAINTENANCE_KEY)?
+            .map(|guard| decode(guard.value()))
+            .transpose()
     }
 
     pub fn is_archived(
@@ -579,6 +598,14 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
                 None => table.remove(id.as_str())?,
             };
             Ok(vec![ChangeKey::PreviewSource { id: id.clone() }])
+        }
+        Mutation::SetMaintenanceRun { run } => {
+            let mut table = transaction.open_table(CLUSTER)?;
+            match run {
+                Some(run) => table.insert(MAINTENANCE_KEY, encode(run)?.as_slice())?,
+                None => table.remove(MAINTENANCE_KEY)?,
+            };
+            Ok(vec![ChangeKey::MaintenanceRun])
         }
         Mutation::MarkDeploymentArchived {
             service_id,

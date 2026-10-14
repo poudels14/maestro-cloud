@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response as HttpResponse};
 
 use maestro_agent::ImageFetcher;
 use maestro_control::StoreWriter;
-use maestro_core::{NodeId, NodeRecord, NodeState};
+use maestro_core::{MaintenanceKind, NodeId, NodeRecord, NodeState};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::node_client::NodeClient;
 use maestro_proto::pb::node_server::Node;
@@ -31,6 +31,7 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::cluster_service::{decode, encode};
 use crate::exec::{ExecLimiter, serve_node_exec};
+use crate::node_maintenance;
 use crate::unix_http;
 use crate::uploads::{self, UploadAccepted, UploadSpec};
 
@@ -63,6 +64,10 @@ pub enum NodeRequest {
         path: String,
     },
     Info,
+    Maintain {
+        kind: MaintenanceKind,
+        run_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -86,6 +91,7 @@ pub struct NodeService {
     uploads: Option<(Arc<SecretKey>, PathBuf)>,
     exec_limiter: ExecLimiter,
     started: std::time::Instant,
+    node_dir: PathBuf,
 }
 
 #[derive(Clone)]
@@ -124,6 +130,7 @@ impl NodeService {
         telemetry_socket: PathBuf,
         consensus: Option<Arc<Consensus>>,
         runtime: Arc<ContainerdRuntime>,
+        node_dir: PathBuf,
     ) -> Self {
         Self {
             telemetry_socket,
@@ -132,6 +139,7 @@ impl NodeService {
             uploads: None,
             exec_limiter: ExecLimiter::default(),
             started: std::time::Instant::now(),
+            node_dir,
         }
     }
 
@@ -187,10 +195,15 @@ impl NodeService {
                 Ok(json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "uptimeMs": self.started.elapsed().as_millis() as u64,
+                    "maintenance": node_maintenance::progress(&self.node_dir),
                     "telemetry": stats.is_some(),
                     "sinks": stats.as_ref().map(|stats| stats["sinks"].clone()).unwrap_or_else(|| json!([])),
                     "backup": stats.map(|stats| stats["backup"].clone()).unwrap_or(Value::Null),
                 }))
+            }
+            NodeRequest::Maintain { kind, run_id } => {
+                node_maintenance::start(self.node_dir.clone(), kind, run_id);
+                Ok(json!({ "accepted": true }))
             }
             NodeRequest::Telemetry { path } => {
                 let (status, body) = unix_http::get(&self.telemetry_socket, &path)

@@ -86,6 +86,46 @@ pub enum NodeCommand {
     Remove { node: String },
 }
 
+#[derive(Subcommand)]
+pub enum ClusterCommand {
+    Upgrade {
+        version: String,
+    },
+    Restart {
+        #[arg(long)]
+        node: Option<u64>,
+    },
+    Unfreeze,
+}
+
+pub async fn cluster(endpoint: &Endpoint, command: ClusterCommand) -> anyhow::Result<()> {
+    match command {
+        ClusterCommand::Upgrade { version } => {
+            let run = request(
+                endpoint
+                    .post("/api/cluster/upgrade")
+                    .json(&json!({ "targetVersion": version })),
+            )
+            .await?;
+            follow_maintenance(endpoint, run).await
+        }
+        ClusterCommand::Restart { node } => {
+            let run = request(
+                endpoint
+                    .post("/api/cluster/restart")
+                    .json(&json!({ "nodeId": node })),
+            )
+            .await?;
+            follow_maintenance(endpoint, run).await
+        }
+        ClusterCommand::Unfreeze => {
+            request(endpoint.post("/api/cluster/unfreeze")).await?;
+            println!("cluster deploys are unfrozen");
+            Ok(())
+        }
+    }
+}
+
 pub async fn node(endpoint: &Endpoint, command: NodeCommand) -> anyhow::Result<()> {
     match command {
         NodeCommand::Drain { node } => {
@@ -408,6 +448,52 @@ async fn set_frozen(endpoint: &Endpoint, service: &str, frozen: bool) -> anyhow:
         false => println!("{service} is unfrozen"),
     }
     Ok(())
+}
+
+async fn follow_maintenance(endpoint: &Endpoint, run: Value) -> anyhow::Result<()> {
+    let run_id = text(&run["runId"]);
+    let order = run["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|step| text(&step["nodeName"]))
+        .collect::<Vec<_>>();
+    println!("started {run_id} on {}", order.join(", "));
+    let mut printed = 0;
+    let mut latest = run;
+    loop {
+        let history = latest["history"].as_array().cloned().unwrap_or_default();
+        history.iter().skip(printed).for_each(|event| {
+            let node = latest["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|step| step["nodeId"] == event["nodeId"])
+                .map(|step| format!(" {}", text(&step["nodeName"])))
+                .unwrap_or_default();
+            println!(
+                "{}{node}: {}",
+                text(&event["phase"]),
+                text(&event["message"])
+            );
+        });
+        printed = printed.max(history.len());
+        match latest["phase"].as_str() {
+            Some("succeeded") => break Ok(()),
+            Some("failed") => break Err(anyhow::anyhow!("{}", text(&latest["failure"]))),
+            _ => {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let current = request(endpoint.get("/api/cluster"))
+                    .await
+                    .ok()
+                    .map(|cluster| cluster["maintenance"].clone())
+                    .filter(|maintenance| text(&maintenance["runId"]) == run_id);
+                if let Some(current) = current {
+                    latest = current;
+                }
+            }
+        }
+    }
 }
 
 async fn request(builder: reqwest::RequestBuilder) -> anyhow::Result<Value> {

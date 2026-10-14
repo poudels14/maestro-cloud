@@ -11,6 +11,8 @@ mod github;
 mod identity;
 mod join;
 mod log_driver;
+mod maintenance;
+mod node_maintenance;
 mod node_service;
 mod observability;
 mod previews;
@@ -97,6 +99,8 @@ enum Command {
     },
     #[command(subcommand)]
     Node(client::NodeCommand),
+    #[command(subcommand)]
+    Cluster(client::ClusterCommand),
     Logs {
         #[arg(long)]
         service: Option<String>,
@@ -237,6 +241,9 @@ async fn run_cli() -> anyhow::Result<()> {
         }
         Command::Node(command) => {
             client::node(&contexts::resolve(cli.api, cli.token)?, command).await
+        }
+        Command::Cluster(command) => {
+            client::cluster(&contexts::resolve(cli.api, cli.token)?, command).await
         }
         Command::Logs {
             service,

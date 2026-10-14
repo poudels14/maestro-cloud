@@ -42,7 +42,8 @@ impl LocalPlanSource {
             | ChangeKey::Unschedulable
             | ChangeKey::Blocklist
             | ChangeKey::SlackWebhooks
-            | ChangeKey::PreviewSource { .. } => false,
+            | ChangeKey::PreviewSource { .. }
+            | ChangeKey::MaintenanceRun => false,
         })
     }
 }

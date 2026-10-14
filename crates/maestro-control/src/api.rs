@@ -7,9 +7,9 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maestro_core::{
     Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, MAX_REPLICAS_OVERRIDE,
-    Millicores, NodeCapacity, NodeId, NodeRecord, NodeState, PreviewSource, ReplicaId,
-    ReplicaStatus, RouteTable, ServiceControls, ServiceId, ServiceSpec, ServicesFile, SpecError,
-    UnschedulableReplica,
+    MaintenanceEvent, MaintenancePhase, Millicores, NodeCapacity, NodeId, NodeRecord, NodeState,
+    NodeStepStatus, PreviewSource, ReplicaId, ReplicaStatus, RouteTable, ServiceControls,
+    ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,8 @@ const CANCELLABLE_STATUSES: [DeploymentStatus; 3] = [
     DeploymentStatus::Building,
     DeploymentStatus::Deploying,
 ];
+
+const MAINTENANCE_STALE_MS: u64 = 30_000;
 
 const STOPPABLE_STATUSES: [DeploymentStatus; 2] =
     [DeploymentStatus::Deploying, DeploymentStatus::Ready];
@@ -732,11 +734,59 @@ async fn restore_node<W: StoreWriter, O: ObservedReplicas>(
 async fn unfreeze_cluster<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
 ) -> Result<StatusCode, ControlError> {
-    state
-        .writer
-        .write(vec![Mutation::SetClusterFreeze { freeze: None }])
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
+    let store = state.writer.state();
+    let now = unix_millis();
+    let active_run = store.maintenance_run()?.filter(|run| !run.is_terminal());
+    let mut mutations = vec![Mutation::SetClusterFreeze { freeze: None }];
+    match active_run {
+        Some(run) if now.saturating_sub(run.updated_at_ms) < MAINTENANCE_STALE_MS => {
+            Err(ControlError::Conflict(format!(
+                "maintenance run {} is still progressing; wait for it to finish",
+                run.run_id
+            )))
+        }
+        Some(mut run) => {
+            let message = "manually unfrozen by an operator".to_string();
+            let node_id = run
+                .nodes
+                .get(run.current_node_index)
+                .map(|step| step.node_id);
+            if let Some(step) = run.nodes.get_mut(run.current_node_index) {
+                step.status = NodeStepStatus::Failed;
+                step.error = Some(message.clone());
+            }
+            if let Some(node) = node_id
+                .map(|node_id| store.node(node_id))
+                .transpose()?
+                .flatten()
+                .filter(|node| node.state == NodeState::Draining)
+            {
+                mutations.push(Mutation::PutNode {
+                    node: NodeRecord {
+                        state: NodeState::Active,
+                        ..node
+                    },
+                });
+            }
+            run.phase = MaintenancePhase::Failed;
+            run.phase_started_at_ms = now;
+            run.updated_at_ms = now;
+            run.failure = Some(message.clone());
+            run.history.push(MaintenanceEvent {
+                at_ms: now,
+                phase: MaintenancePhase::Failed,
+                node_id,
+                message,
+            });
+            mutations.push(Mutation::SetMaintenanceRun { run: Some(run) });
+            state.writer.write(mutations).await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        None => {
+            state.writer.write(mutations).await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+    }
 }
 
 async fn list_nodes<W: StoreWriter, O: ObservedReplicas>(
