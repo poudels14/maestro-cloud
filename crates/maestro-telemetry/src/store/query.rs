@@ -19,26 +19,7 @@ const PROJECTION: &str = r#"
 "#;
 
 pub(super) fn query_logs(db: &Db, parts_root: &Path, query: &LogQuery) -> Result<Vec<StoredLog>> {
-    let hot = format!("SELECT {PROJECTION} FROM logs");
-    let union = match contains_parquet(parts_root) {
-        true => {
-            let glob = parts_root.join("date=*").join("part-*.parquet");
-            format!(
-                r#"
-                    {hot}
-                    UNION ALL
-                    SELECT {PROJECTION}
-                    FROM read_parquet(
-                        {},
-                        hive_partitioning = true,
-                        union_by_name = true
-                    )
-                "#,
-                sql_literal(&glob.to_string_lossy())
-            )
-        }
-        false => hot,
-    };
+    let union = log_source(parts_root);
     let mut sql = format!("SELECT {PROJECTION} FROM ({union}) q WHERE true");
     let mut values = Vec::new();
     if let Some(search) = &query.search {
@@ -54,6 +35,10 @@ pub(super) fn query_logs(db: &Db, parts_root: &Path, query: &LogQuery) -> Result
     if let Some(before_ts) = query.before_ts {
         sql.push_str(" AND ts < ?");
         values.push(Value::BigInt(before_ts));
+    }
+    if let Some(after_ts) = query.after_ts {
+        sql.push_str(" AND ts >= ?");
+        values.push(Value::BigInt(after_ts));
     }
     sql.push_str(" ORDER BY ts DESC, seq DESC LIMIT ?");
     values.push(Value::BigInt(
@@ -74,4 +59,27 @@ pub(super) fn query_logs(db: &Db, parts_root: &Path, query: &LogQuery) -> Result
         })
     })?;
     Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+}
+
+pub(super) fn log_source(parts_root: &Path) -> String {
+    let hot = format!("SELECT {PROJECTION} FROM logs");
+    match contains_parquet(parts_root) {
+        true => {
+            let glob = parts_root.join("date=*").join("part-*.parquet");
+            format!(
+                r#"
+                    {hot}
+                    UNION ALL
+                    SELECT {PROJECTION}
+                    FROM read_parquet(
+                        {},
+                        hive_partitioning = true,
+                        union_by_name = true
+                    )
+                "#,
+                sql_literal(&glob.to_string_lossy())
+            )
+        }
+        false => hot,
+    }
 }

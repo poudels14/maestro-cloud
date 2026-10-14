@@ -49,6 +49,8 @@ pub enum NodeRequest {
         query: String,
         limit: usize,
         before_ts: Option<i64>,
+        #[serde(default)]
+        after_ts: Option<i64>,
     },
     Write {
         mutations: Vec<Mutation>,
@@ -102,6 +104,7 @@ pub struct ClusterLogsParams {
     query: Option<String>,
     limit: Option<usize>,
     before_ts: Option<i64>,
+    after_ts: Option<i64>,
 }
 
 pub struct MeshImageFetcher {
@@ -142,10 +145,14 @@ impl NodeService {
                 query,
                 limit,
                 before_ts,
+                after_ts,
             } => {
                 let mut search = url_query(&[("query", query), ("limit", limit.to_string())]);
                 if let Some(before_ts) = before_ts {
                     search.push_str(&format!("&beforeTs={before_ts}"));
+                }
+                if let Some(after_ts) = after_ts {
+                    search.push_str(&format!("&afterTs={after_ts}"));
                 }
                 let (status, body) =
                     unix_http::get(&self.telemetry_socket, &format!("/logs?{search}"))
@@ -676,6 +683,7 @@ async fn query_nodes(
         query: params.query.unwrap_or_default(),
         limit: limit + 1,
         before_ts: params.before_ts,
+        after_ts: params.after_ts,
     };
     let mut records = Vec::new();
     let mut unavailable = Vec::new();

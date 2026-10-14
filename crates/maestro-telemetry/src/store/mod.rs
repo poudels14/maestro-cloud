@@ -13,6 +13,7 @@ use crate::resolver::ReplicaIdentity;
 use crate::search::LogSearchQuery;
 
 mod db;
+mod histogram;
 mod ingress;
 mod metrics;
 mod query;
@@ -20,6 +21,10 @@ mod rollover;
 mod traffic;
 
 use db::Db;
+pub use histogram::{
+    HistogramBucket, HistogramGroup, HistogramQuery, LogHistogram, MAX_HISTOGRAM_RANGE_MS,
+    histogram_bucket,
+};
 pub use ingress::{IngressTrafficQuery, TrafficScope};
 pub use metrics::MetricsQuery;
 use query::query_logs;
@@ -84,6 +89,7 @@ pub struct LogQuery {
     pub search: Option<LogSearchQuery>,
     pub before: Option<i64>,
     pub before_ts: Option<i64>,
+    pub after_ts: Option<i64>,
     pub limit: usize,
 }
 

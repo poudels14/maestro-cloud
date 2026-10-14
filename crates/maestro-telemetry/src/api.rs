@@ -13,12 +13,14 @@ use crate::error::TelemetryError;
 use crate::metrics::MetricPoint;
 use crate::search::LogSearchQuery;
 use crate::store::{
-    IngressTrafficQuery, LogQuery, LogStore, MetricsQuery, StoredLog, TrafficQuery,
+    HistogramGroup, HistogramQuery, IngressTrafficQuery, LogHistogram, LogQuery, LogStore,
+    MAX_HISTOGRAM_RANGE_MS, MetricsQuery, StoredLog, TrafficQuery, histogram_bucket,
 };
 use crate::traffic::TrafficPoint;
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1_000;
+const DEFAULT_HISTOGRAM_RANGE_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +29,18 @@ struct LogsParams {
     limit: Option<usize>,
     before: Option<i64>,
     before_ts: Option<i64>,
+    after_ts: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistogramParams {
+    query: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
+    bucket_ms: Option<i64>,
+    #[serde(default)]
+    group_by: HistogramGroup,
 }
 
 #[derive(Serialize)]
@@ -40,6 +54,7 @@ pub fn router(store: Arc<LogStore>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/logs", get(logs))
+        .route("/logs/histogram", get(histogram))
         .route("/metrics", get(metrics))
         .route("/traffic", get(traffic))
         .route("/ingress-traffic", get(ingress_traffic))
@@ -68,6 +83,7 @@ async fn logs(
             search,
             before: params.before,
             before_ts: params.before_ts,
+            after_ts: params.after_ts,
             limit,
         })
         .await?;
@@ -78,6 +94,44 @@ async fn logs(
         records,
         next_cursor,
     }))
+}
+
+async fn histogram(
+    State(store): State<Arc<LogStore>>,
+    Query(params): Query<HistogramParams>,
+) -> Result<Json<LogHistogram>, TelemetryError> {
+    let to = params.to.unwrap_or_else(now_ms);
+    let from = params.from.unwrap_or(to - DEFAULT_HISTOGRAM_RANGE_MS);
+    let search = params
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(str::parse::<LogSearchQuery>)
+        .transpose()
+        .map_err(TelemetryError::Query)?;
+    match from <= to && to - from <= MAX_HISTOGRAM_RANGE_MS {
+        false => Err(TelemetryError::Query(
+            "the histogram range must be at most 7 days with from <= to".to_string(),
+        )),
+        true => Ok(Json(
+            store
+                .log_histogram(HistogramQuery {
+                    search,
+                    from,
+                    to,
+                    bucket_ms: histogram_bucket(from, to, params.bucket_ms),
+                    group_by: params.group_by,
+                })
+                .await?,
+        )),
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
 async fn metrics(

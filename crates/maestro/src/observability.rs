@@ -6,7 +6,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId};
 use maestro_telemetry::{
-    IngressTrafficBreakdown, MetricPoint, TrafficBreakdownEntry, TrafficPoint,
+    HistogramBucket, IngressTrafficBreakdown, LogHistogram, MetricPoint, TrafficBreakdownEntry,
+    TrafficPoint, histogram_bucket,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -141,6 +142,103 @@ pub async fn service_traffic_breakdown(
     range: Query<RangeQuery>,
 ) -> Response {
     traffic_breakdown(state, range, "service", Some(service_id)).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramParams {
+    query: Option<String>,
+    from: Option<i64>,
+    to: Option<i64>,
+    bucket_ms: Option<i64>,
+    group_by: Option<String>,
+    node_id: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterHistogram {
+    #[serde(flatten)]
+    histogram: LogHistogram,
+    partial: bool,
+    unavailable_nodes: Vec<Value>,
+}
+
+pub async fn log_histogram(
+    State(access): State<ClusterAccess>,
+    Query(params): Query<HistogramParams>,
+) -> Response {
+    let to = params.to.unwrap_or_else(now_ms);
+    let from = params.from.unwrap_or(to - DEFAULT_RANGE_MS);
+    let bucket_ms = histogram_bucket(from, to, params.bucket_ms);
+    match nodes(&access) {
+        Err(error) => respond::<()>(Err(error)),
+        Ok(nodes) => {
+            let selected = nodes
+                .into_iter()
+                .filter(|node| {
+                    params
+                        .node_id
+                        .is_none_or(|node_id| node.id == NodeId(node_id))
+                })
+                .collect::<Vec<_>>();
+            let mut pairs = vec![
+                ("from", from.to_string()),
+                ("to", to.to_string()),
+                ("bucketMs", bucket_ms.to_string()),
+                ("query", params.query.clone().unwrap_or_default()),
+            ];
+            pairs.extend(params.group_by.clone().map(|group| ("groupBy", group)));
+            let path = format!("/logs/histogram?{}", url_query(&pairs));
+            let replies =
+                call_nodes(&access.clients, selected, NodeRequest::Telemetry { path }).await;
+            let rejection = replies.iter().find_map(|(_, _, reply)| match reply {
+                Err(status) if status.code() == tonic::Code::InvalidArgument => {
+                    Some(status.message().to_string())
+                }
+                _ => None,
+            });
+            let mut histogram = LogHistogram {
+                from,
+                to,
+                bucket_ms,
+                buckets: Vec::new(),
+            };
+            let mut unavailable_nodes = Vec::new();
+            let mut totals = BTreeMap::<i64, HistogramBucket>::new();
+            replies.into_iter().for_each(|(node_id, node_name, reply)| {
+                match reply.map(serde_json::from_value::<LogHistogram>) {
+                    Ok(Ok(node_histogram)) => node_histogram.buckets.into_iter().for_each(|bucket| {
+                        let total = totals.entry(bucket.ts).or_insert_with(|| HistogramBucket {
+                            ts: bucket.ts,
+                            ..HistogramBucket::default()
+                        });
+                        total.count += bucket.count;
+                        bucket.levels.into_iter().for_each(|(level, count)| {
+                            *total.levels.entry(level).or_default() += count;
+                        });
+                    }),
+                    Ok(Err(error)) => unavailable_nodes
+                        .push(json!({ "nodeId": node_id, "nodeName": node_name, "error": error.to_string() })),
+                    Err(status) => unavailable_nodes.push(
+                        json!({ "nodeId": node_id, "nodeName": node_name, "error": status.message() }),
+                    ),
+                }
+            });
+            histogram.buckets = totals.into_values().collect();
+            match rejection {
+                Some(message) => {
+                    (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+                }
+                None => Json(ClusterHistogram {
+                    histogram,
+                    partial: !unavailable_nodes.is_empty(),
+                    unavailable_nodes,
+                })
+                .into_response(),
+            }
+        }
+    }
 }
 
 async fn traffic_breakdown(

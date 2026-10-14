@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use maestro_telemetry::{
-    IngressTrafficQuery, LogQuery, LogRecord, LogStore, MetricPoint, MetricsQuery, ReplicaIdentity,
-    StoredLog, Stream, TailCheckpoint, TrafficScope,
+    HistogramGroup, HistogramQuery, IngressTrafficQuery, LogQuery, LogRecord, LogStore,
+    MetricPoint, MetricsQuery, ReplicaIdentity, StoredLog, Stream, TailCheckpoint, TrafficScope,
 };
 
 const OLD_TS: u64 = 1_700_000_000_000;
@@ -41,6 +41,7 @@ async fn search(store: &LogStore, query: &str) -> Vec<StoredLog> {
     store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             search: Some(query.parse().unwrap()),
             before: None,
             limit: 100,
@@ -87,6 +88,7 @@ async fn reads_newest_first_with_identity_and_cursor() {
     let first_page = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             search: None,
             before: None,
             limit: 2,
@@ -102,6 +104,7 @@ async fn reads_newest_first_with_identity_and_cursor() {
     let second_page = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             search: None,
             before: Some(first_page[1].seq),
             limit: 10,
@@ -141,6 +144,7 @@ async fn ingest_persists_checkpoints_atomically() {
     let logs = reopened
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -260,6 +264,7 @@ async fn rollover_keeps_old_logs_queryable_from_parquet() {
     let everything = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -282,6 +287,7 @@ async fn rollover_exports_late_arrivals_as_additional_parts() {
     let logs = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -318,6 +324,7 @@ async fn rollover_replaces_an_uncommitted_export() {
     let logs = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -349,6 +356,7 @@ async fn rollover_and_ingest_can_run_concurrently_without_losing_rows() {
     let logs = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             limit: 500,
             ..LogQuery::default()
         })
@@ -486,4 +494,62 @@ async fn counts_ingress_traffic_by_ip_and_path_per_scope() {
         .unwrap();
     assert_eq!(blocked.by_ip[0].value, "198.51.100.9");
     assert_eq!(blocked.by_ip[0].status_code, 403);
+}
+
+#[tokio::test]
+async fn buckets_log_counts_by_level_and_status_class() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    let lines = [
+        r#"{"level":"error","msg":"boom"}"#.to_string(),
+        r#"{"level":"info","msg":"ok","status":200}"#.to_string(),
+        r#"{"level":"info","msg":"missing","DownstreamStatus":404}"#.to_string(),
+    ];
+    let records = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| record(OLD_TS + index as u64 * 61_000, line))
+        .collect::<Vec<_>>();
+    store
+        .ingest(
+            "d1-0",
+            &ReplicaIdentity::default(),
+            &records,
+            TailCheckpoint {
+                inode: 1,
+                offset: 1,
+            },
+        )
+        .unwrap();
+    let from = OLD_TS as i64;
+    let query = |group_by: HistogramGroup| HistogramQuery {
+        search: None,
+        from,
+        to: from + 180_000,
+        bucket_ms: 60_000,
+        group_by,
+    };
+    let levels = store
+        .log_histogram(query(HistogramGroup::Level))
+        .await
+        .unwrap();
+    assert_eq!(
+        levels
+            .buckets
+            .iter()
+            .map(|bucket| bucket.count)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(levels.buckets[0].levels.get("error"), Some(&1));
+    let statuses = store
+        .log_histogram(query(HistogramGroup::Status))
+        .await
+        .unwrap();
+    let classes = statuses
+        .buckets
+        .iter()
+        .flat_map(|bucket| bucket.levels.keys().cloned())
+        .collect::<Vec<_>>();
+    assert_eq!(classes, ["2xx", "4xx"]);
 }

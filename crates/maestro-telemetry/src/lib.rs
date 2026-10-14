@@ -21,8 +21,9 @@ pub use resolver::{DeploymentFromReplicaId, ReplicaIdentity, ReplicaResolver};
 pub use run::{TelemetrySettings, run};
 pub use search::LogSearchQuery;
 pub use store::{
-    IngressTrafficQuery, LogQuery, LogStore, MetricsQuery, StoredLog, TailCheckpoint, TrafficQuery,
-    TrafficScope,
+    HistogramBucket, HistogramGroup, HistogramQuery, IngressTrafficQuery, LogHistogram, LogQuery,
+    LogStore, MAX_HISTOGRAM_RANGE_MS, MetricsQuery, StoredLog, TailCheckpoint, TrafficQuery,
+    TrafficScope, histogram_bucket,
 };
 pub use tailer::Tailer;
 pub use traffic::{TrafficPoint, TrafficScraper};

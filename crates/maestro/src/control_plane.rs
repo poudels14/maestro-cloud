@@ -201,6 +201,10 @@ pub async fn spawn(
             axum::routing::get(observability::node_metrics),
         )
         .route(
+            "/api/logs/histogram",
+            axum::routing::get(observability::log_histogram),
+        )
+        .route(
             "/api/metrics/cluster",
             axum::routing::get(observability::cluster_metrics),
         )

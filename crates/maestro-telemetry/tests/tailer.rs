@@ -54,6 +54,7 @@ impl Harness {
             .store
             .read_logs(LogQuery {
                 before_ts: None,
+                after_ts: None,
                 limit: 10_000,
                 ..LogQuery::default()
             })
@@ -116,6 +117,7 @@ async fn ingests_existing_and_newly_discovered_container_dirs() {
         .store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             search: Some("replica:dep2-0".parse().unwrap()),
             before: None,
             limit: 10,
@@ -204,6 +206,7 @@ async fn reopening_the_store_restores_checkpoints() {
     let logs = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             limit: 10,
             ..LogQuery::default()
         })
@@ -279,6 +282,7 @@ async fn resolves_service_and_deployment_identity() {
     let api = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             search: Some("service:api".parse().unwrap()),
             before: None,
             limit: 10,
@@ -290,6 +294,7 @@ async fn resolves_service_and_deployment_identity() {
     let unresolved = store
         .read_logs(LogQuery {
             before_ts: None,
+            after_ts: None,
             search: Some("replica:other".parse().unwrap()),
             before: None,
             limit: 10,
