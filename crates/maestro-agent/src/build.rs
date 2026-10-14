@@ -2,10 +2,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use tokio::process::Command;
 
 const LOCAL_REGISTRY: &str = "maestro.local";
 const FAILURE_TAIL_LINES: usize = 20;
+const GIT_TOKEN_SECRET: &str = "GH_TOKEN";
 
 #[derive(Clone, Debug)]
 pub struct BuildKitSettings {
@@ -77,8 +80,11 @@ impl BuildKitBuilder {
         let context = match (&request.repo, &request.context_dir) {
             (Some(repo), _) => {
                 let checkout = workspace.join("src");
-                self.clone_repo(repo, request.branch.as_deref(), &checkout, &log)
-                    .await?;
+                let token = request
+                    .secrets
+                    .get(GIT_TOKEN_SECRET)
+                    .or(self.settings.git_token.as_ref());
+                clone_repo(repo, request.branch.as_deref(), token, &checkout, &log).await?;
                 checkout
             }
             (None, Some(context_dir)) => context_dir.clone(),
@@ -98,35 +104,6 @@ impl BuildKitBuilder {
         match status.success() {
             true => Ok(image),
             false => Err(format!("buildctl exited with {status}")),
-        }
-    }
-
-    async fn clone_repo(
-        &self,
-        repo: &str,
-        branch: Option<&str>,
-        destination: &Path,
-        log: &std::fs::File,
-    ) -> Result<(), String> {
-        let url = authenticated_url(repo, self.settings.git_token.as_deref());
-        let branch_args = branch
-            .map(|branch| vec!["--branch".to_string(), branch.to_string()])
-            .unwrap_or_default();
-        let status = Command::new("git")
-            .args(["clone", "--depth", "1", "--single-branch"])
-            .args(branch_args)
-            .arg(url)
-            .arg(destination)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
-            .stdout(clone_handle(log)?)
-            .stderr(clone_handle(log)?)
-            .status()
-            .await
-            .map_err(|error| format!("failed to run git: {error}"))?;
-        match status.success() {
-            true => Ok(()),
-            false => Err(format!("git clone of {repo} failed")),
         }
     }
 }
@@ -189,10 +166,63 @@ fn buildctl_args(
     .collect()
 }
 
-fn authenticated_url(repo: &str, token: Option<&str>) -> String {
-    match (repo.strip_prefix("https://github.com/"), token) {
-        (Some(path), Some(token)) => format!("https://x-access-token:{token}@github.com/{path}"),
-        _ => repo.to_string(),
+async fn clone_repo(
+    repo: &str,
+    branch: Option<&str>,
+    token: Option<&String>,
+    destination: &Path,
+    log: &std::fs::File,
+) -> Result<(), String> {
+    let (url, auth_env) = git_auth(repo, token);
+    let branch_args = branch
+        .map(|branch| vec!["--branch".to_string(), branch.to_string()])
+        .unwrap_or_default();
+    let status = Command::new("git")
+        .args(["clone", "--depth", "1", "--single-branch"])
+        .args(branch_args)
+        .arg(url)
+        .arg(destination)
+        .envs(auth_env)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(clone_handle(log)?)
+        .stderr(clone_handle(log)?)
+        .status()
+        .await
+        .map_err(|error| format!("failed to run git: {error}"))?;
+    match status.success() {
+        true => Ok(()),
+        false => Err(format!("git clone of {repo} failed")),
+    }
+}
+
+fn git_auth(repo: &str, token: Option<&String>) -> (String, Vec<(String, String)>) {
+    let https = repo
+        .strip_prefix("git@")
+        .and_then(|rest| rest.split_once(':'))
+        .map(|(host, path)| format!("https://{host}/{path}"))
+        .unwrap_or_else(|| repo.to_string());
+    let host = https
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .map(str::to_string);
+    match (token, host) {
+        (Some(token), Some(host)) => {
+            let credentials = BASE64.encode(format!("x-access-token:{token}"));
+            let env = vec![
+                ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
+                (
+                    "GIT_CONFIG_KEY_0".to_string(),
+                    format!("http.https://{host}/.extraHeader"),
+                ),
+                (
+                    "GIT_CONFIG_VALUE_0".to_string(),
+                    format!("Authorization: basic {credentials}"),
+                ),
+            ];
+            (https, env)
+        }
+        _ => (repo.to_string(), Vec::new()),
     }
 }
 
@@ -256,18 +286,26 @@ mod tests {
     }
 
     #[test]
-    fn adds_token_only_to_github_https_urls() {
+    fn authenticates_git_with_an_extra_header() {
+        let token = "tok".to_string();
+        let (url, env) = git_auth("git@github.com:acme/api.git", Some(&token));
+        assert_eq!(url, "https://github.com/acme/api.git");
         assert_eq!(
-            authenticated_url("https://github.com/acme/api.git", Some("tok")),
-            "https://x-access-token:tok@github.com/acme/api.git"
+            env[1],
+            (
+                "GIT_CONFIG_KEY_0".to_string(),
+                "http.https://github.com/.extraHeader".to_string()
+            )
         );
         assert_eq!(
-            authenticated_url("git@github.com:acme/api.git", Some("tok")),
-            "git@github.com:acme/api.git"
+            env[2].1,
+            format!(
+                "Authorization: basic {}",
+                BASE64.encode("x-access-token:tok")
+            )
         );
-        assert_eq!(
-            authenticated_url("https://github.com/acme/api.git", None),
-            "https://github.com/acme/api.git"
-        );
+        let (url, env) = git_auth("https://gitlab.com/acme/api.git", None);
+        assert_eq!(url, "https://gitlab.com/acme/api.git");
+        assert!(env.is_empty());
     }
 }

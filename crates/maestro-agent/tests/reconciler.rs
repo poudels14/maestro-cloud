@@ -218,10 +218,12 @@ async fn recreates_replica_when_plan_changes() {
         Millicores::new(3000)
     );
 
-    harness.reconciler.record_event(maestro_runtime::RuntimeEvent::Exited {
-        id: "d1-0".to_string(),
-        exit_code: 0,
-    });
+    harness
+        .reconciler
+        .record_event(maestro_runtime::RuntimeEvent::Exited {
+            id: "d1-0".to_string(),
+            exit_code: 0,
+        });
     assert_eq!(phase(&harness, "d1-0"), Some(ReplicaPhase::Healthy));
 }
 
