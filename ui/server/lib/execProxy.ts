@@ -53,11 +53,18 @@ export function openExecProxy(peer: ExecProxyPeer, WebSocketClient: ExecUpstream
     forwardUpstreamMessage(peer, event.data);
   });
   upstream.addEventListener("close", (event) => {
-    peer.close(event.code || 1000, event.reason);
+    peer.close(sendableCloseCode(event.code), event.reason);
   });
   upstream.addEventListener("error", () => {
     peer.close(1011, "Maestro exec relay failed");
   });
+}
+
+function sendableCloseCode(code: number | undefined) {
+  const reserved = code === 1004 || code === 1005 || code === 1006 || code === 1015;
+  const valid =
+    code !== undefined && ((code >= 1000 && code <= 1014) || (code >= 3000 && code <= 4999));
+  return valid && !reserved ? code : 1000;
 }
 
 export function forwardExecProxyMessage(

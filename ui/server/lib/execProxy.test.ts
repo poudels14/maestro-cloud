@@ -88,3 +88,22 @@ test("exec relay authenticates upstream and preserves messages in both direction
   closeExecProxy(peer);
   assert.equal(upstream.closed, true);
 });
+
+test("exec relay turns reserved upstream close codes into a normal close", () => {
+  const context: ExecProxyContext = { url: "ws://controller/exec", pending: [] };
+  const closes: Array<[number | undefined, string | undefined]> = [];
+  const peer: ExecProxyPeer = {
+    context,
+    send: () => {},
+    close: (code, reason) => closes.push([code, reason])
+  };
+
+  openExecProxy(peer, FakeUpstream);
+  FakeUpstream.instance.emit("close", { code: 1005, reason: "" });
+  FakeUpstream.instance.emit("close", { code: 4001, reason: "exec disabled" });
+  assert.deepEqual(closes, [
+    [1000, ""],
+    [4001, "exec disabled"]
+  ]);
+  assert.deepEqual(FakeUpstream.instance.options.headers, {});
+});
