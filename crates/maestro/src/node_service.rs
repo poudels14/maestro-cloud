@@ -26,7 +26,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::cluster_service::{decode, encode};
 use crate::unix_http;
 
-const NODE_LOG_TIMEOUT: Duration = Duration::from_secs(10);
+const NODE_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_LOG_LIMIT: usize = 100;
 const MAX_LOG_LIMIT: usize = 1_000;
@@ -47,6 +47,7 @@ pub enum NodeRequest {
     RemoveNode {
         node_id: NodeId,
     },
+    Disks,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -132,6 +133,7 @@ impl NodeService {
                     "this node does not run the control plane",
                 )),
             },
+            NodeRequest::Disks => encode_value(&maestro_agent::disks()),
             NodeRequest::RemoveNode { node_id } => match &self.consensus {
                 Some(consensus) => remove_node(consensus, node_id)
                     .await
@@ -369,6 +371,58 @@ fn encode_value<T: Serialize>(value: &T) -> Result<Value, Status> {
     serde_json::to_value(value).map_err(internal)
 }
 
+pub async fn cluster_disks(State(access): State<ClusterAccess>) -> HttpResponse {
+    match access.consensus.state().nodes() {
+        Ok(nodes) => {
+            let active = nodes
+                .into_iter()
+                .filter(|node| node.state != NodeState::Removed)
+                .collect();
+            let disks = call_nodes(&access.clients, active, NodeRequest::Disks)
+                .await
+                .into_iter()
+                .filter_map(|(node_id, node_name, reply)| match reply {
+                    Ok(disks) => Some((node_id.to_string(), disks)),
+                    Err(status) => {
+                        tracing::warn!(node = %node_name, error = %status.message(), "node disk query failed");
+                        None
+                    }
+                })
+                .collect::<serde_json::Map<_, _>>();
+            Json(disks).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn local_disks() -> Json<Vec<maestro_agent::Disk>> {
+    Json(maestro_agent::disks())
+}
+
+async fn call_nodes(
+    clients: &NodeClients,
+    nodes: Vec<NodeRecord>,
+    request: NodeRequest,
+) -> Vec<(NodeId, String, Result<Value, Status>)> {
+    let mut calls = JoinSet::new();
+    nodes.into_iter().for_each(|node| {
+        let clients = clients.clone();
+        let request = request.clone();
+        calls.spawn(async move {
+            let reply =
+                tokio::time::timeout(NODE_CALL_TIMEOUT, clients.call(&node.endpoint, &request))
+                    .await
+                    .unwrap_or_else(|_| Err(Status::deadline_exceeded("node call timed out")));
+            (node.id, node.name, reply)
+        });
+    });
+    calls.join_all().await
+}
+
 async fn query_nodes(
     clients: &NodeClients,
     nodes: Vec<NodeRecord>,
@@ -383,22 +437,10 @@ async fn query_nodes(
         limit: limit + 1,
         before_ts: params.before_ts,
     };
-    let mut queries = JoinSet::new();
-    nodes.into_iter().for_each(|node| {
-        let clients = clients.clone();
-        let request = request.clone();
-        queries.spawn(async move {
-            let reply =
-                tokio::time::timeout(NODE_LOG_TIMEOUT, clients.call(&node.endpoint, &request))
-                    .await
-                    .unwrap_or_else(|_| Err(Status::deadline_exceeded("log query timed out")));
-            (node.id, node.name, reply)
-        });
-    });
     let mut records = Vec::new();
     let mut unavailable = Vec::new();
     let mut rejection = None;
-    while let Some(Ok((node_id, node_name, reply))) = queries.join_next().await {
+    for (node_id, node_name, reply) in call_nodes(clients, nodes, request).await {
         match reply {
             Ok(page) => records.extend(
                 page["records"]

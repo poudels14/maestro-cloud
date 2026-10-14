@@ -30,7 +30,8 @@ use crate::cluster_service::ClusterService;
 use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
 use crate::node_service::{
-    ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_logs, remove_cluster_node,
+    ClusterAccess, ForwardingWriter, NodeClients, NodeService, cluster_disks, cluster_logs,
+    local_disks, remove_cluster_node,
 };
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 
@@ -159,6 +160,8 @@ pub async fn spawn(
     let clients = NodeClients::new(settings.credentials.clone());
     let logs = axum::Router::new()
         .route("/api/logs", axum::routing::get(cluster_logs))
+        .route("/api/disks", axum::routing::get(local_disks))
+        .route("/api/disks/nodes", axum::routing::get(cluster_disks))
         .route(
             "/api/cluster/nodes/{node_id}",
             axum::routing::delete(remove_cluster_node),

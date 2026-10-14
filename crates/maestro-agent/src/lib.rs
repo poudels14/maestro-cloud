@@ -1,5 +1,6 @@
 mod attach;
 mod build;
+mod disks;
 mod dns;
 mod error;
 mod health;
@@ -13,6 +14,7 @@ mod wireguard;
 
 pub use attach::{Attachment, ControlLink, StreamPlanSource};
 pub use build::{BuildKitBuilder, BuildKitSettings, BuildRequest, image_name};
+pub use disks::{Disk, disks};
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};

@@ -393,7 +393,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   `force`), replicas override (configured..25, in place without redeploy), redeploy
   (rebuild from stored config), restart (reuse last image), stop deployment, delete
   deployment record, delete service, cluster-wide freeze during upgrades.
-- [ ] W2 nodes and scheduling: drain/restore, unschedulable report, affinity and
+- [x] W2 nodes and scheduling: drain/restore, unschedulable report, affinity and
   volume pinning, node removal, disks per node.
 - [ ] W3 secrets and config sources: `aws-secret://` (JSON or dotenv) for env, secrets,
   build env/secrets, and cluster config; `${VAR}` expansion in the CLI; secrets file

@@ -361,6 +361,10 @@ fn local_router(board: StatusBoard, telemetry_socket: PathBuf) -> axum::Router {
                 async move { axum::Json(board.snapshot()) }
             }),
         )
+        .route(
+            "/api/disks",
+            axum::routing::get(crate::node_service::local_disks),
+        )
         .merge(
             axum::Router::new()
                 .route("/api/logs", axum::routing::get(proxy_logs))
