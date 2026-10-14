@@ -299,6 +299,7 @@ async fn mounts_volumes_and_a_private_secrets_file() {
         deploy,
         ReconcilerSettings {
             secrets_dir: secrets_dir.clone(),
+            volume_roots: vec![scratch.path().to_path_buf()],
             ..ReconcilerSettings::default()
         },
     );

@@ -16,24 +16,6 @@ const DEFAULT_CLOSE_GRACE_PERIOD: &str = "1d";
 const PREVIEW_ID_SUFFIX: &str = "-pr-99999";
 const PREVIEW_ID_MARKER: &str = "-pr-";
 const MAX_LABEL_LENGTH: usize = 63;
-const DENIED_HOST_PATHS: [&str; 10] = [
-    "/",
-    "/etc",
-    "/proc",
-    "/sys",
-    "/dev",
-    "/boot",
-    "/root",
-    "/var/lib/docker",
-    "/var/lib/containerd",
-    "/run/containerd",
-];
-const DENIED_SOCKETS: [&str; 3] = [
-    "/var/run/docker.sock",
-    "/run/docker.sock",
-    "/run/containerd/containerd.sock",
-];
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicesFile {
     pub services: BTreeMap<ServiceId, ServiceSpec>,
@@ -378,15 +360,17 @@ impl IngressSpec {
 }
 
 fn volume_problems(volume: &VolumeMount) -> Vec<String> {
-    let host = volume.host_path.trim_end_matches('/');
-    let denied = DENIED_HOST_PATHS
-        .iter()
-        .any(|denied| host == denied.trim_end_matches('/') || (host.is_empty() && *denied == "/"))
-        || DENIED_SOCKETS.contains(&host);
+    let segments = volume.host_path.split('/').skip(1).collect::<Vec<_>>();
+    let well_formed = segments.len() >= 2 && segments.iter().all(|segment| !segment.is_empty());
     [
         absolute_path_problem("volume hostPath", &volume.host_path),
         absolute_path_problem("volume mountPath", &volume.mount_path),
-        denied.then(|| format!("volume hostPath {} is not allowed", volume.host_path)),
+        (!well_formed).then(|| {
+            format!(
+                "volume hostPath {} must be a directory inside a volume root such as /data",
+                volume.host_path
+            )
+        }),
     ]
     .into_iter()
     .flatten()
@@ -556,7 +540,7 @@ mod tests {
                     "flags": ["--verbose"],
                     "env": { "items": { "RUST_LOG": "info" } },
                     "secrets": { "mountPath": "/app/.env", "items": { "TOKEN": "x" } },
-                    "volumes": [{ "hostPath": "/data/api", "mountPath": "/var/lib/api", "owner": { "uid": 1000 } }],
+                    "volumes": [{ "hostPath": "/var/lib/maestro-volumes/api", "mountPath": "/var/lib/api", "owner": { "uid": 1000 } }],
                     "nodeAffinity": { "node-id": "node1", "labels": { "zone": "a" } },
                     "egress": { "allow": [{ "cidr": "10.0.10.0/24", "ports": [5432] }] },
                     "resources": { "cpu": 2, "memory": "8Gi" },
@@ -620,8 +604,11 @@ mod tests {
             r#"{ "services": { "api-pr-1": { "name": "x", "image": "nginx" } } }"#,
             r#"{ "services": { "api": { "name": " ", "image": "nginx" } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "replicas": 2, "volumes": [{ "hostPath": "/data", "mountPath": "/data" }] } } } }"#,
-            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "volumes": [{ "hostPath": "/etc", "mountPath": "/data", "readOnly": true }] } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "volumes": [{ "hostPath": "/", "mountPath": "/data", "readOnly": true }] } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "volumes": [{ "hostPath": "/data/../etc", "mountPath": "/data" }] } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "volumes": [{ "hostPath": "/var/lib/maestro-volumes/../maestro/keys", "mountPath": "/data" }] } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "volumes": [{ "hostPath": "//var/lib/maestro-volumes/a", "mountPath": "/data" }] } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "volumes": [{ "hostPath": "/var/lib/maestro-volumes//a", "mountPath": "/data" }] } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "egress": { "allow": [{ "cidr": "10.0.10.1/24" }] } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a`b" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "Dockerfile", "watch": true } } } }"#,

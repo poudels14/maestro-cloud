@@ -126,11 +126,16 @@ safely. The default system reserve is `max(2 GiB, 10%)` of memory and one CPU.
   "ingress": { "ports": [80, 443] },
   "defaults": {
     "resources": { "cpu": 4, "memory": "50%", "request": { "cpu": 0.25, "memory": "512Mi" } }
-  }
+  },
+  "volumeRoots": ["/var/lib/maestro-volumes", "/data"]   // the default
 }
 ```
 
 Each node is allocated a `/24` from `cluster.cidr` when it joins.
+
+A service's `volumes[].hostPath` must be a directory inside one of `volumeRoots`. Each node
+checks this after resolving symlinks, so a volume can never reach the node's keys, `/etc`,
+or the container runtime.
 
 ## Networking
 

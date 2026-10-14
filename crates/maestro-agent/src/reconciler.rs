@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +35,7 @@ pub struct ReconcilerSettings {
     pub pids_limit: u32,
     pub cgroup_parent: String,
     pub secrets_dir: PathBuf,
+    pub volume_roots: Vec<PathBuf>,
 }
 
 pub struct Reconciler<R: Runtime, S: PlanSource> {
@@ -370,10 +371,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             .volumes
             .iter()
             .map(|volume| {
-                let host_path = PathBuf::from(&volume.host_path);
-                std::fs::create_dir_all(&host_path).map_err(|error| {
-                    format!("failed to create volume {}: {error}", volume.host_path)
-                })?;
+                let host_path = contained_volume(&self.settings.volume_roots, &volume.host_path)?;
                 if let Some(owner) = &volume.owner {
                     std::os::unix::fs::chown(&host_path, Some(owner.uid), owner.gid).map_err(
                         |error| format!("failed to chown volume {}: {error}", volume.host_path),
@@ -449,11 +447,79 @@ impl Default for ReconcilerSettings {
             pids_limit: 4096,
             cgroup_parent: "maestro-workloads.slice".to_string(),
             secrets_dir: PathBuf::from("/run/maestro/secrets"),
+            volume_roots: maestro_core::ClusterConfig::default()
+                .volume_roots
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
         }
+    }
+}
+
+fn contained_volume(roots: &[PathBuf], host_path: &str) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(host_path);
+    let outside = || {
+        format!(
+            "volume {host_path} is outside the allowed volume roots ({})",
+            roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let root = roots
+        .iter()
+        .find(|root| requested.starts_with(root) && requested != **root)
+        .ok_or_else(outside)?;
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("failed to create {}: {error}", root.display()))?;
+    let resolved_root = root
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", root.display()))?;
+    let inside = |path: &Path| path.starts_with(&resolved_root) && path != resolved_root;
+    let existing_ancestor = requested
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .and_then(|ancestor| ancestor.canonicalize().ok())
+        .filter(|ancestor| ancestor.starts_with(&resolved_root))
+        .ok_or_else(outside)?;
+    std::fs::create_dir_all(&requested)
+        .map_err(|error| format!("failed to create volume {host_path}: {error}"))?;
+    let resolved = requested
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve volume {host_path}: {error}"))?;
+    match inside(&resolved) && resolved.starts_with(&existing_ancestor) {
+        true => Ok(resolved),
+        false => Err(outside()),
     }
 }
 
 fn plan_hash(plan: &ReplicaPlan) -> String {
     let encoded = serde_json::to_vec(plan).unwrap_or_default();
     hex::encode(Sha256::digest(encoded))[..16].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volumes_stay_inside_their_root_even_through_symlinks() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("volumes");
+        let elsewhere = scratch.path().join("keys");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("escape")).unwrap();
+        let roots = vec![root.clone()];
+        let path = |relative: &str| root.join(relative).to_string_lossy().to_string();
+
+        assert!(contained_volume(&roots, &path("api/data")).is_ok());
+        assert!(contained_volume(&roots, &path("escape")).is_err());
+        assert!(contained_volume(&roots, &path("escape/nested")).is_err());
+        assert!(contained_volume(&roots, &root.to_string_lossy()).is_err());
+        assert!(contained_volume(&roots, &elsewhere.to_string_lossy()).is_err());
+        assert!(!elsewhere.join("nested").exists());
+    }
 }

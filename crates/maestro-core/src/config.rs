@@ -47,6 +47,7 @@ const REPLACED_V1_FIELDS: [(&str, &str); 11] = [
 ];
 
 const CONFIG_MASK: &str = "********";
+const DEFAULT_VOLUME_ROOTS: [&str; 2] = ["/var/lib/maestro-volumes", "/data"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,6 +84,15 @@ pub struct ClusterConfig {
     pub allow_cli_deployment: bool,
     #[serde(default, alias = "allow-exec")]
     pub allow_exec: bool,
+    #[serde(default = "default_volume_roots")]
+    pub volume_roots: Vec<String>,
+}
+
+fn default_volume_roots() -> Vec<String> {
+    DEFAULT_VOLUME_ROOTS
+        .iter()
+        .map(|root| root.to_string())
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

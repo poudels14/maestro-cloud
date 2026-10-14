@@ -242,7 +242,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         runtime.clone(),
         Arc::new(source),
         board.clone(),
-        ReconcilerSettings::default(),
+        ReconcilerSettings {
+            volume_roots: config.volume_roots.iter().map(PathBuf::from).collect(),
+            ..ReconcilerSettings::default()
+        },
     )
     .with_image_fetcher(Arc::new(MeshImageFetcher::new(
         runtime.clone(),

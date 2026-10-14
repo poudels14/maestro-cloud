@@ -389,6 +389,8 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - Node roles are `voter` and `worker` (renamed from `agent`). Voters always run
   workloads; v1's quorum-only `voter` role is intentionally not carried over, and v1's
   `master` and `hybrid` both map to a voter.
+- Host volumes must live inside a configured volume root (`volumeRoots`, default
+  `/var/lib/maestro-volumes` and `/data`), enforced on each node after resolving symlinks.
 - There is no v1 → v3 migration: v3 clusters start fresh and services are re-applied
   from their services files.
 - Service ids stay lowercase DNS labels (v1 also allowed uppercase and `_`).
