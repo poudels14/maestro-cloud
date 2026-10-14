@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use clap::Subcommand;
-use maestro_core::ServicesFile;
+use maestro_core::{EnvSpec, ServiceSpec, ServicesFile};
 use serde_json::{Value, json};
 
 pub struct Endpoint {
@@ -187,7 +187,11 @@ pub async fn rollout(
 ) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read {}", file.display()))?;
-    let services = ServicesFile::parse(&text)?;
+    let mut services = ServicesFile::parse(&text)?;
+    services
+        .services
+        .iter_mut()
+        .try_for_each(|(id, spec)| expand_variables(id.as_str(), spec))?;
     let plan = request(
         endpoint
             .post(&format!("/api/rollout?apply={apply}&force={force}"))
@@ -313,6 +317,46 @@ pub async fn logs(
     Ok(())
 }
 
+fn expand_variables(service: &str, spec: &mut ServiceSpec) -> anyhow::Result<()> {
+    let deploy_secrets = spec
+        .deploy
+        .secrets
+        .as_mut()
+        .map(|secrets| ("deploy.secrets", &mut secrets.source, &mut secrets.items));
+    let (build_env, build_secrets) = match spec.build.as_mut() {
+        Some(build) => (Some(&mut build.env), Some(&mut build.secrets)),
+        None => (None, None),
+    };
+    let env_specs = [
+        Some(("deploy.env", &mut spec.deploy.env)),
+        build_env.map(|env| ("build.env", env)),
+        build_secrets.map(|secrets| ("build.secrets", secrets)),
+        spec.preview
+            .as_mut()
+            .map(|preview| ("preview.env", &mut preview.env)),
+    ];
+    env_specs
+        .into_iter()
+        .flatten()
+        .map(|(field, EnvSpec { source, items })| (field, source, items))
+        .chain(deploy_secrets)
+        .try_for_each(|(field, source, items)| {
+            if let Some(source) = source {
+                *source = expand(service, field, "source", source)?;
+            }
+            items.iter_mut().try_for_each(|(key, value)| {
+                *value = expand(service, field, key, value)?;
+                Ok(())
+            })
+        })
+}
+
+fn expand(service: &str, field: &str, key: &str, value: &str) -> anyhow::Result<String> {
+    shellexpand::env(value)
+        .map(|expanded| expanded.into_owned())
+        .map_err(|error| anyhow::anyhow!("service `{service}` {field} `{key}`: {error}"))
+}
+
 async fn queue(endpoint: &Endpoint, path: &str) -> anyhow::Result<()> {
     let queued = request(endpoint.post(path)).await?;
     println!("queued deployment {}", text(&queued["deploymentId"]));
@@ -363,5 +407,41 @@ fn text(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Null => "-".to_string(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_environment_variables_in_env_and_secret_values() {
+        let mut spec: ServiceSpec = serde_json::from_value(serde_json::json!({
+            "name": "API",
+            "image": "api:1",
+            "deploy": {
+                "env": { "items": { "HOME_DIR": "${HOME}", "PLAIN": "x", "FALLBACK": "${MAESTRO_TEST_UNSET:-dflt}" } },
+                "secrets": { "mountPath": "/run/app.env", "items": { "TOKEN": "$HOME" } }
+            }
+        }))
+        .unwrap();
+        expand_variables("api", &mut spec).unwrap();
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(spec.deploy.env.items["HOME_DIR"], home);
+        assert_eq!(spec.deploy.env.items["PLAIN"], "x");
+        assert_eq!(spec.deploy.env.items["FALLBACK"], "dflt");
+        assert_eq!(spec.deploy.secrets.unwrap().items["TOKEN"], home);
+    }
+
+    #[test]
+    fn missing_variables_are_errors() {
+        let mut spec: ServiceSpec = serde_json::from_value(serde_json::json!({
+            "name": "API",
+            "image": "api:1",
+            "deploy": { "env": { "items": { "KEY": "${MAESTRO_TEST_UNSET}" } } }
+        }))
+        .unwrap();
+        let error = expand_variables("api", &mut spec).unwrap_err().to_string();
+        assert!(error.contains("service `api` deploy.env `KEY`"), "{error}");
     }
 }
