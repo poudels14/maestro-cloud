@@ -426,7 +426,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   headers) returning 403, session affinity, ingress routes view.
 - [x] W7 exec: WebSocket API and CLI (`maestro exec`), framing, resize, 8 sessions per
   node, 30-minute idle timeout, audit log lines, `allowExec` + `deploy.exec`.
-- [ ] W8 integrations: Slack webhooks (CRUD, test, event templates, node down/recovered),
+- [x] W8 integrations (Datadog, S3 backup, and Tailscale are unit-tested but not yet exercised against the real services): Slack webhooks (CRUD, test, event templates, node down/recovered),
   Datadog logs (healthcheck filter, dead letters) and metrics, S3 log backup
   (SSE-KMS, checksums, retention), egress firewall (nftables per replica IP),
   Tailscale, Cloudflare tunnel (gated on node readiness).
