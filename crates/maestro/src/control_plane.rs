@@ -30,6 +30,7 @@ use tokio::io::AsyncReadExt;
 use tokio::task::JoinSet;
 
 use crate::cluster_service::ClusterService;
+use crate::exec::{ExecState, exec_service};
 use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
 use crate::node_service::{
@@ -215,6 +216,16 @@ pub async fn spawn(
             directory: uploads_dir(&settings.data_dir),
             allowed: settings.config.allow_cli_deployment,
         });
+    let exec = axum::Router::new()
+        .route(
+            "/api/services/{service_id}/exec",
+            axum::routing::get(exec_service),
+        )
+        .with_state(ExecState {
+            consensus: consensus.clone(),
+            clients: clients.clone(),
+            allowed: settings.config.allow_exec,
+        });
     let info = axum::Router::new()
         .route("/api/cluster", axum::routing::get(cluster_info))
         .route(
@@ -233,6 +244,7 @@ pub async fn spawn(
     }))
     .merge(logs)
     .merge(uploads)
+    .merge(exec)
     .merge(info);
     let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));
     let authenticated_api = api

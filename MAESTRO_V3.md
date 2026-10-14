@@ -416,7 +416,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   warnings, 7-day metric retention, Parquet partitioning by service/deployment/date.
 - [x] W6 ingress: IP blocklist enforced by Traefik routers (ClientIP and forwarded
   headers) returning 403, session affinity, ingress routes view.
-- [ ] W7 exec: WebSocket API and CLI (`maestro exec`), framing, resize, 8 sessions per
+- [x] W7 exec: WebSocket API and CLI (`maestro exec`), framing, resize, 8 sessions per
   node, 30-minute idle timeout, audit log lines, `allowExec` + `deploy.exec`.
 - [ ] W8 integrations: Slack webhooks (CRUD, test, event templates, node down/recovered),
   Datadog logs (healthcheck filter, dead letters) and metrics, S3 log backup

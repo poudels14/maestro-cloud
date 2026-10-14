@@ -5,6 +5,7 @@ mod contexts;
 mod control_link;
 mod control_plane;
 mod dev;
+mod exec;
 mod identity;
 mod join;
 mod log_driver;
@@ -74,6 +75,17 @@ enum Command {
     },
     Replicas,
     Nodes,
+    Exec {
+        service: String,
+        #[arg(short, long)]
+        replica: Option<u32>,
+        #[arg(long)]
+        deployment: Option<String>,
+        #[arg(long)]
+        no_tty: bool,
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
     #[command(subcommand)]
     Node(client::NodeCommand),
     Logs {
@@ -176,6 +188,25 @@ async fn run_cli() -> anyhow::Result<()> {
         }
         Command::Replicas => client::replicas(&contexts::resolve(cli.api, cli.token)?).await,
         Command::Nodes => client::nodes(&contexts::resolve(cli.api, cli.token)?).await,
+        Command::Exec {
+            service,
+            replica,
+            deployment,
+            no_tty,
+            command,
+        } => {
+            let endpoint = contexts::resolve(cli.api, cli.token)?;
+            let code = exec::run_cli(
+                &endpoint,
+                &service,
+                replica,
+                deployment.as_deref(),
+                !no_tty,
+                command,
+            )
+            .await?;
+            std::process::exit(code)
+        }
         Command::Node(command) => {
             client::node(&contexts::resolve(cli.api, cli.token)?, command).await
         }

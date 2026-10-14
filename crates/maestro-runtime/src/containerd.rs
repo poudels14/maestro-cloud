@@ -673,37 +673,38 @@ impl ContainerdRuntime {
         Ok(())
     }
 
-    pub async fn close_exec_stdin(&self, session: &mut ExecSession) -> Result<(), RuntimeError> {
-        session.stdin = None;
+    pub async fn close_exec_stdin(
+        &self,
+        container_id: &str,
+        exec_id: &str,
+    ) -> Result<(), RuntimeError> {
         TasksClient::new(self.channel.clone())
             .close_io(self.request(CloseIoRequest {
-                container_id: session.container_id.clone(),
-                exec_id: session.exec_id.clone(),
+                container_id: container_id.to_string(),
+                exec_id: exec_id.to_string(),
                 stdin: true,
             }))
             .await?;
         Ok(())
     }
 
-    pub async fn remove_exec(&self, session: ExecSession) {
+    pub async fn remove_exec(&self, container_id: &str, exec_id: &str) {
         let mut tasks = TasksClient::new(self.channel.clone());
         let _ = tasks
             .kill(self.request(KillRequest {
-                container_id: session.container_id.clone(),
-                exec_id: session.exec_id.clone(),
+                container_id: container_id.to_string(),
+                exec_id: exec_id.to_string(),
                 signal: SIGKILL,
                 all: false,
             }))
             .await;
         let _ = tasks
             .delete_process(self.request(DeleteProcessRequest {
-                container_id: session.container_id.clone(),
-                exec_id: session.exec_id.clone(),
+                container_id: container_id.to_string(),
+                exec_id: exec_id.to_string(),
             }))
             .await;
-        let _ =
-            tokio::fs::remove_dir_all(self.settings.state_dir.join("exec").join(&session.exec_id))
-                .await;
+        let _ = tokio::fs::remove_dir_all(self.settings.state_dir.join("exec").join(exec_id)).await;
     }
 
     async fn exec_process(&self, request: &ExecRequest) -> Result<Any, RuntimeError> {

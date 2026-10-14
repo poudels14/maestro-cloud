@@ -16,6 +16,11 @@ message Chunk {
   bytes data = 1;
 }
 
+// One exec protocol frame: a type byte followed by its payload.
+message ExecFrame {
+  bytes data = 1;
+}
+
 message UploadChunk {
   bytes metadata = 1;
   bytes data = 2;
@@ -34,7 +39,7 @@ service Cluster {
 
 service Node {
   rpc Call(Envelope) returns (Envelope);
-  rpc Exec(stream Envelope) returns (stream Envelope);
+  rpc Exec(stream ExecFrame) returns (stream ExecFrame);
   rpc FetchImage(ImageRequest) returns (stream Chunk);
   rpc Upload(stream UploadChunk) returns (Envelope);
 }

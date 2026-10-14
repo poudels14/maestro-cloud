@@ -202,7 +202,9 @@ async fn exec_in_container() {
         output.contains("out") && output.contains("err"),
         "{output:?}"
     );
-    runtime.remove_exec(session).await;
+    runtime
+        .remove_exec(&session.container_id, &session.exec_id)
+        .await;
 
     let mut session = runtime
         .exec(ExecRequest {
@@ -225,7 +227,9 @@ async fn exec_in_container() {
     let output = drain(&mut session.output).await;
     assert_eq!(exit, 5);
     assert!(output.contains("40 120"), "{output:?}");
-    runtime.remove_exec(session).await;
+    runtime
+        .remove_exec(&session.container_id, &session.exec_id)
+        .await;
     runtime
         .stop("exec-1", Duration::from_secs(1))
         .await

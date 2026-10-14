@@ -16,7 +16,7 @@ use maestro_core::{NodeId, NodeRecord, NodeState};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::node_client::NodeClient;
 use maestro_proto::pb::node_server::Node;
-use maestro_proto::pb::{Chunk, Envelope, ImageRequest, UploadChunk};
+use maestro_proto::pb::{Chunk, Envelope, ExecFrame, ImageRequest, UploadChunk};
 use maestro_runtime::ContainerdRuntime;
 use maestro_store::{Consensus, ConsensusError, Mutation, SecretKey, StateMachine};
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,7 @@ use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::cluster_service::{decode, encode};
+use crate::exec::{ExecLimiter, serve_node_exec};
 use crate::unix_http;
 use crate::uploads::{self, UploadAccepted, UploadSpec};
 
@@ -39,7 +40,6 @@ const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_LOG_LIMIT: usize = 100;
 const MAX_LOG_LIMIT: usize = 1_000;
 
-type EnvelopeStream = Pin<Box<dyn Stream<Item = Result<Envelope, Status>> + Send>>;
 type ChunkStream = Pin<Box<dyn Stream<Item = Result<Chunk, Status>> + Send>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -78,6 +78,7 @@ pub struct NodeService {
     consensus: Option<Arc<Consensus>>,
     runtime: Arc<ContainerdRuntime>,
     uploads: Option<(Arc<SecretKey>, PathBuf)>,
+    exec_limiter: ExecLimiter,
 }
 
 #[derive(Clone)]
@@ -121,6 +122,7 @@ impl NodeService {
             consensus,
             runtime,
             uploads: None,
+            exec_limiter: ExecLimiter::default(),
         }
     }
 
@@ -177,7 +179,7 @@ impl NodeService {
 
 #[tonic::async_trait]
 impl Node for NodeService {
-    type ExecStream = EnvelopeStream;
+    type ExecStream = ReceiverStream<Result<ExecFrame, Status>>;
     type FetchImageStream = ChunkStream;
 
     async fn call(&self, request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
@@ -263,9 +265,21 @@ impl Node for NodeService {
 
     async fn exec(
         &self,
-        _request: Request<Streaming<Envelope>>,
+        request: Request<Streaming<ExecFrame>>,
     ) -> Result<Response<Self::ExecStream>, Status> {
-        Err(Status::unimplemented("exec is not available yet"))
+        let authenticated = request
+            .peer_certs()
+            .is_some_and(|certificates| !certificates.is_empty());
+        match authenticated {
+            false => Err(Status::unauthenticated("a node certificate is required")),
+            true => serve_node_exec(
+                self.runtime.clone(),
+                &self.exec_limiter,
+                request.into_inner(),
+            )
+            .await
+            .map(Response::new),
+        }
     }
 }
 
@@ -295,6 +309,18 @@ impl NodeClients {
             .upload(ReceiverStream::new(chunks))
             .await?;
         decode(&reply.into_inner())
+    }
+
+    pub async fn exec(
+        &self,
+        address: &str,
+        frames: mpsc::Receiver<ExecFrame>,
+    ) -> Result<Streaming<ExecFrame>, Status> {
+        let channel = self.channel(address).await?;
+        let response = NodeClient::new(channel)
+            .exec(ReceiverStream::new(frames))
+            .await?;
+        Ok(response.into_inner())
     }
 
     pub async fn fetch_image(
