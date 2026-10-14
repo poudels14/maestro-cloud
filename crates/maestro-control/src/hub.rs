@@ -29,6 +29,7 @@ struct HubState {
     links: HashMap<NodeId, AgentLink>,
     replicas: HashMap<NodeId, NodeReplicas>,
     next_session: u64,
+    serving_since: Option<Instant>,
 }
 
 struct AgentLink {
@@ -42,6 +43,7 @@ struct AgentLink {
 struct NodeReplicas {
     statuses: Vec<ReplicaStatus>,
     disconnected_at: Option<Instant>,
+    reported_at: Instant,
 }
 
 pub struct AgentSession {
@@ -64,6 +66,9 @@ impl AgentHub {
         let (sender, messages) = mpsc::channel(AGENT_BUFFER);
         let session = {
             let mut state = self.lock();
+            if state.links.is_empty() {
+                state.serving_since = Some(Instant::now());
+            }
             state.next_session += 1;
             let session = state.next_session;
             state.links.insert(
@@ -94,6 +99,9 @@ impl AgentHub {
                 .is_some_and(|link| link.session == session);
             if current {
                 state.links.remove(&node_id);
+                if state.links.is_empty() {
+                    state.serving_since = None;
+                }
                 if let Some(replicas) = state.replicas.get_mut(&node_id) {
                     replicas.disconnected_at = Some(Instant::now());
                 }
@@ -113,6 +121,7 @@ impl AgentHub {
                 NodeReplicas {
                     statuses: statuses.clone(),
                     disconnected_at: None,
+                    reported_at: Instant::now(),
                 },
             );
             previous.is_none_or(|previous| previous.statuses != statuses)
@@ -124,6 +133,19 @@ impl AgentHub {
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+
+    pub fn awaiting_reports(&self, nodes: &[NodeId]) -> bool {
+        let state = self.lock();
+        match state.serving_since {
+            Some(since) if since.elapsed() < self.node_expiry => nodes.iter().any(|node_id| {
+                state
+                    .replicas
+                    .get(node_id)
+                    .is_none_or(|replicas| replicas.reported_at < since)
+            }),
+            _ => false,
+        }
     }
 
     pub fn connected_nodes(&self) -> Vec<NodeId> {
@@ -230,19 +252,23 @@ pub async fn run_publisher(
             .collect::<BTreeMap<_, _>>();
         let observed = |replica_id: &ReplicaId| statuses.get(replica_id).cloned();
         let routes = cluster_routes(&state, &observed, &previous_routes)
-            .and_then(|table| Ok((table, cluster_dns(&state, &observed, &cluster)?)));
+            .and_then(|table| Ok((table, cluster_dns(&state, &observed, &cluster)?)))
+            .and_then(|(table, dns)| Ok((table, dns, assigned_nodes(&state)?)));
         match routes {
-            Ok((table, dns)) => {
+            Ok((table, dns, assigned)) => {
+                let routes_ready = !hub.awaiting_reports(&assigned);
                 for node_id in hub.connected_nodes() {
                     match replica_plans(&state, &key, node_id) {
                         Ok(plans) => hub.publish(node_id, ControlMessage::Plans { plans }).await,
                         Err(error) => tracing::warn!(%node_id, %error, "failed to build plans"),
                     }
-                    let message = ControlMessage::Routes {
-                        table: table.clone(),
-                        dns: dns.clone(),
-                    };
-                    hub.publish(node_id, message).await;
+                    if routes_ready {
+                        let message = ControlMessage::Routes {
+                            table: table.clone(),
+                            dns: dns.clone(),
+                        };
+                        hub.publish(node_id, message).await;
+                    }
                     match mesh_peers(&state, node_id) {
                         Ok(peers) => hub.publish(node_id, ControlMessage::Mesh { peers }).await,
                         Err(error) => {
@@ -250,7 +276,9 @@ pub async fn run_publisher(
                         }
                     }
                 }
-                previous_routes = table;
+                if routes_ready {
+                    previous_routes = table;
+                }
             }
             Err(error) => tracing::warn!(%error, "failed to compute routes"),
         }
@@ -260,6 +288,23 @@ pub async fn run_publisher(
             _ = tokio::time::sleep(PUBLISH_RESYNC) => {}
         }
     }
+}
+
+fn assigned_nodes(state: &StateMachine) -> Result<Vec<NodeId>, StoreError> {
+    Ok(state
+        .nodes()?
+        .into_iter()
+        .filter(|node| node.state != NodeState::Removed)
+        .map(|node| {
+            state
+                .assignments(node.id)
+                .map(|assignments| (node.id, assignments))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|(_, assignments)| !assignments.is_empty())
+        .map(|(node_id, _)| node_id)
+        .collect())
 }
 
 fn mesh_peers(state: &StateMachine, node_id: NodeId) -> Result<Vec<MeshPeer>, StoreError> {
@@ -339,6 +384,27 @@ mod tests {
         assert!(hub.node_available(NodeId(1)));
         tokio::time::advance(Duration::from_secs(25)).await;
         assert!(!hub.node_available(NodeId(1)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn holds_routes_until_every_assigned_node_reports_to_a_new_leader() {
+        let hub = AgentHub::new(Duration::from_secs(30));
+        let nodes = [NodeId(1), NodeId(2)];
+        assert!(!hub.awaiting_reports(&nodes));
+        hub.record_replicas(NodeId(2), vec![]);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let _first = hub.register(NodeId(1));
+        assert!(hub.awaiting_reports(&nodes));
+        hub.record_replicas(NodeId(1), vec![]);
+        assert!(hub.awaiting_reports(&nodes));
+        hub.record_replicas(NodeId(2), vec![]);
+        assert!(!hub.awaiting_reports(&nodes));
+
+        let silent = AgentHub::new(Duration::from_secs(30));
+        let _link = silent.register(NodeId(1));
+        assert!(silent.awaiting_reports(&nodes));
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert!(!silent.awaiting_reports(&nodes));
     }
 
     #[tokio::test]
