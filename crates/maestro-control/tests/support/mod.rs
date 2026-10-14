@@ -195,6 +195,12 @@ impl ImageBuilder for FakeBuilder {
             )),
         }
     }
+    async fn resolve(&self, image: String) -> Result<String, String> {
+        match image.starts_with("missing") {
+            true => Err("image or tag not found".to_string()),
+            false => Ok(format!("{image}@sha256:feed")),
+        }
+    }
 }
 
 pub fn build_service(replicas: u32) -> ServiceSpec {

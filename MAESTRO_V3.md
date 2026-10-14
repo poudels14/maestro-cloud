@@ -385,7 +385,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   config and `$extends`. Accept v1 kebab-case keys as aliases.
 - [x] W0c: node gRPC service on every node (mTLS) for exec, log/metric/traffic/disk
   fan-out, and node-local operations; API on any voter forwards writes to the leader.
-- [ ] W0d: image digest pinning at pull (restart requires immutable images).
+- [x] W0d: image digest pinning at pull (restart requires immutable images).
 
 ### Workstreams
 

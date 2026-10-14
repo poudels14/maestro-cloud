@@ -4,6 +4,7 @@ mod containerd;
 mod fake;
 mod oci;
 mod reference;
+mod registry;
 mod spec;
 
 pub use cni::CniNetwork;
@@ -12,6 +13,7 @@ pub use containerd::{ContainerdRuntime, ContainerdSettings};
 pub use fake::FakeRuntime;
 pub use oci::build_spec;
 pub use reference::normalize as normalize_image_reference;
+pub use registry::{RegistryClient, RegistryError};
 pub use spec::{
     BindMount, ContainerFiles, ContainerLimits, ContainerSpec, ContainerState, ContainerStatus,
     ImageConfig, NetworkMode, Runtime, RuntimeError, RuntimeEvent, StartedContainer,

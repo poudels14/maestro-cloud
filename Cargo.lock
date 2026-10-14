@@ -1948,6 +1948,7 @@ dependencies = [
  "maestro-core",
  "prost",
  "prost-types",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

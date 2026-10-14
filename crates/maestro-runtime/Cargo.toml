@@ -9,6 +9,7 @@ hex = "0.4.3"
 maestro-core = { version = "3.0.0", path = "../maestro-core" }
 prost = "0.14"
 prost-types = "0.14.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

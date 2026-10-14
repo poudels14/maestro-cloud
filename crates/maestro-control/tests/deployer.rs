@@ -43,11 +43,12 @@ fn harness(nodes: Vec<maestro_core::NodeRecord>) -> Harness {
     }
 }
 
-fn queue(harness: &Harness, deployment_id: &str, replicas: u32) {
-    queue_spec(harness, deployment_id, image_service(replicas));
+async fn queue(harness: &Harness, deployment_id: &str, replicas: u32) {
+    queue_spec(harness, deployment_id, image_service(replicas)).await;
 }
 
-fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::ServiceSpec) {
+async fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::ServiceSpec) {
+    let resolves_image = spec.image.is_some();
     harness
         .writer
         .state()
@@ -70,6 +71,16 @@ fn queue_spec(harness: &Harness, deployment_id: &str, spec: maestro_core::Servic
             },
         ])
         .unwrap();
+    if resolves_image {
+        harness.deployer.tick().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while status(harness, deployment_id) == DeploymentStatus::Queued {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }
 
 fn status(harness: &Harness, deployment_id: &str) -> DeploymentStatus {
@@ -99,7 +110,7 @@ fn assigned_replicas(harness: &Harness) -> Vec<String> {
 #[tokio::test]
 async fn deploys_image_service_until_ready() {
     let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
-    queue(&harness, "d1", 2);
+    queue(&harness, "d1", 2).await;
 
     harness.deployer.tick().await.unwrap();
     assert_eq!(status(&harness, "d1"), DeploymentStatus::Deploying);
@@ -120,13 +131,13 @@ async fn deploys_image_service_until_ready() {
 #[tokio::test]
 async fn new_deployment_replaces_old_after_drain_grace() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue(&harness, "d1", 1);
+    queue(&harness, "d1", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d1-0", ReplicaPhase::Healthy);
     harness.deployer.tick().await.unwrap();
 
     harness.clock.advance(1_000);
-    queue(&harness, "d2", 1);
+    queue(&harness, "d2", 1).await;
     harness.deployer.tick().await.unwrap();
     assert_eq!(assigned_replicas(&harness), ["d1-0", "d2-0"]);
     assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
@@ -148,13 +159,13 @@ async fn new_deployment_replaces_old_after_drain_grace() {
 #[tokio::test]
 async fn failed_replica_fails_deployment_and_keeps_old_one() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue(&harness, "d1", 1);
+    queue(&harness, "d1", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d1-0", ReplicaPhase::Healthy);
     harness.deployer.tick().await.unwrap();
 
     harness.clock.advance(1_000);
-    queue(&harness, "d2", 1);
+    queue(&harness, "d2", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d2-0", ReplicaPhase::Failed);
     harness.deployer.tick().await.unwrap();
@@ -167,7 +178,7 @@ async fn failed_replica_fails_deployment_and_keeps_old_one() {
 #[tokio::test]
 async fn times_out_unhealthy_deployments() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue(&harness, "d1", 1);
+    queue(&harness, "d1", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d1-0", ReplicaPhase::Unhealthy);
 
@@ -189,7 +200,7 @@ async fn times_out_unhealthy_deployments() {
 #[tokio::test]
 async fn unschedulable_deployment_fails_without_partial_placement() {
     let harness = harness(vec![node(1, 2, 32)]);
-    queue(&harness, "d1", 5);
+    queue(&harness, "d1", 5).await;
     harness.deployer.tick().await.unwrap();
 
     let deployment = harness
@@ -212,7 +223,7 @@ async fn settle() {
 #[tokio::test]
 async fn builds_images_before_deploying() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue_spec(&harness, "d1", build_service(1));
+    queue_spec(&harness, "d1", build_service(1)).await;
 
     harness.deployer.tick().await.unwrap();
     settle().await;
@@ -243,7 +254,7 @@ async fn builds_images_before_deploying() {
 async fn failed_builds_fail_the_deployment() {
     let harness = harness(vec![node(1, 8, 32)]);
     harness.builder.fail("d1");
-    queue_spec(&harness, "d1", build_service(1));
+    queue_spec(&harness, "d1", build_service(1)).await;
     harness.deployer.tick().await.unwrap();
     harness.builder.release(1);
     settle().await;
@@ -264,11 +275,11 @@ async fn failed_builds_fail_the_deployment() {
 #[tokio::test]
 async fn limits_concurrent_builds() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue_spec(&harness, "d1", build_service(1));
+    queue_spec(&harness, "d1", build_service(1)).await;
     harness.clock.advance(1);
-    queue_spec(&harness, "d2", build_service(1));
+    queue_spec(&harness, "d2", build_service(1)).await;
     harness.clock.advance(1);
-    queue_spec(&harness, "d3", build_service(1));
+    queue_spec(&harness, "d3", build_service(1)).await;
 
     harness.deployer.tick().await.unwrap();
     settle().await;
@@ -285,12 +296,12 @@ async fn limits_concurrent_builds() {
 #[tokio::test]
 async fn newer_ready_deployment_cancels_older_in_flight_ones() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue(&harness, "d1", 1);
+    queue(&harness, "d1", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d1-0", ReplicaPhase::Restarting);
 
     harness.clock.advance(1_000);
-    queue(&harness, "d2", 1);
+    queue(&harness, "d2", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d2-0", ReplicaPhase::Healthy);
     harness.deployer.tick().await.unwrap();
@@ -304,12 +315,12 @@ async fn newer_ready_deployment_cancels_older_in_flight_ones() {
 #[tokio::test]
 async fn cancelled_build_result_is_ignored() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue_spec(&harness, "d1", build_service(1));
+    queue_spec(&harness, "d1", build_service(1)).await;
     harness.deployer.tick().await.unwrap();
     settle().await;
 
     harness.clock.advance(1_000);
-    queue(&harness, "d2", 1);
+    queue(&harness, "d2", 1).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d2-0", ReplicaPhase::Healthy);
     harness.deployer.tick().await.unwrap();
@@ -323,7 +334,7 @@ async fn cancelled_build_result_is_ignored() {
 #[tokio::test]
 async fn reschedules_replicas_from_lost_nodes() {
     let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
-    queue(&harness, "d1", 2);
+    queue(&harness, "d1", 2).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.set("d1-0", ReplicaPhase::Healthy);
     harness.observed.set("d1-1", ReplicaPhase::Healthy);
@@ -352,7 +363,7 @@ async fn reschedules_replicas_from_lost_nodes() {
 #[tokio::test]
 async fn deploying_counts_actual_assignments_after_rescheduling() {
     let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
-    queue(&harness, "d1", 2);
+    queue(&harness, "d1", 2).await;
     harness.deployer.tick().await.unwrap();
     harness.observed.lose_node(NodeId(2));
     harness.deployer.tick().await.unwrap();
@@ -363,4 +374,23 @@ async fn deploying_counts_actual_assignments_after_rescheduling() {
         .for_each(|replica| harness.observed.set(replica, ReplicaPhase::Healthy));
     harness.deployer.tick().await.unwrap();
     assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+}
+
+#[tokio::test]
+async fn image_deployments_pin_the_resolved_digest() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    queue(&harness, "d1", 1).await;
+    harness.deployer.tick().await.unwrap();
+    let assignments = harness.writer.state().assignments(NodeId(1)).unwrap();
+    assert_eq!(assignments[0].image, "nginx:1.27@sha256:feed");
+}
+
+#[tokio::test]
+async fn unresolvable_image_fails_the_deployment() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    let mut spec = image_service(1);
+    spec.image = Some("missing:1".to_string());
+    queue_spec(&harness, "d1", spec).await;
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Failed);
+    assert!(assigned_replicas(&harness).is_empty());
 }

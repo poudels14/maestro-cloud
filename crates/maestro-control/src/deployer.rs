@@ -38,6 +38,13 @@ pub trait ObservedReplicas: Send + Sync + 'static {
 
 pub trait ImageBuilder: Send + Sync + 'static {
     fn build(&self, deployment: Deployment) -> impl Future<Output = Result<String, String>> + Send;
+
+    fn resolve(&self, image: String) -> impl Future<Output = Result<String, String>> + Send;
+}
+
+enum ImageStep {
+    Build,
+    Resolve(String),
 }
 
 #[derive(Clone)]
@@ -55,6 +62,7 @@ pub struct Deployer<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> {
     observed: Arc<O>,
     builder: Arc<B>,
     active_builds: Arc<Mutex<HashSet<DeploymentId>>>,
+    active_resolutions: Arc<Mutex<HashSet<DeploymentId>>>,
     settings: DeployerSettings,
 }
 
@@ -70,6 +78,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             observed,
             builder,
             active_builds: Arc::default(),
+            active_resolutions: Arc::default(),
             settings,
         }
     }
@@ -86,24 +95,20 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
     }
 
     async fn start_queued(&self) -> Result<(), ControlError> {
-        let now = self.now();
-        let mutations = self
-            .state()
+        self.state()
             .deployments_with_status(DeploymentStatus::Queued)?
             .into_iter()
-            .filter_map(|deployment| {
-                deployment.spec.image.clone().map(|image| {
-                    status_change(
-                        &deployment,
-                        DeploymentStatus::Deploying,
-                        Some(image),
-                        None,
-                        now,
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        self.write(mutations).await
+            .filter(|deployment| !lock(&self.active_resolutions).contains(&deployment.id))
+            .for_each(|deployment| {
+                if let Some(image) = deployment.spec.image.clone() {
+                    self.spawn_image_step(
+                        deployment,
+                        DeploymentStatus::Queued,
+                        ImageStep::Resolve(image),
+                    );
+                }
+            });
+        Ok(())
     }
 
     async fn run_builds(&self) -> Result<(), ControlError> {
@@ -126,7 +131,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         let capacity = self
             .settings
             .max_concurrent_builds
-            .saturating_sub(self.lock_builds().len());
+            .saturating_sub(lock(&self.active_builds).len());
         for deployment in waiting.into_iter().take(capacity) {
             if deployment.status == DeploymentStatus::Queued {
                 let now = self.now();
@@ -139,34 +144,47 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 )])
                 .await?;
             }
-            self.spawn_build(deployment);
+            self.spawn_image_step(deployment, DeploymentStatus::Building, ImageStep::Build);
         }
         Ok(())
     }
 
-    fn spawn_build(&self, deployment: Deployment) {
-        self.lock_builds().insert(deployment.id.clone());
+    fn spawn_image_step(
+        &self,
+        deployment: Deployment,
+        expected: DeploymentStatus,
+        step: ImageStep,
+    ) {
+        let tracked = match step {
+            ImageStep::Build => self.active_builds.clone(),
+            ImageStep::Resolve(_) => self.active_resolutions.clone(),
+        };
+        lock(&tracked).insert(deployment.id.clone());
         let writer = self.writer.clone();
         let builder = self.builder.clone();
-        let active_builds = self.active_builds.clone();
         let clock = self.settings.clock.clone();
         tokio::spawn(async move {
-            let result = builder.build(deployment.clone()).await;
+            let (result, failure_prefix) = match step {
+                ImageStep::Build => (builder.build(deployment.clone()).await, "build failed"),
+                ImageStep::Resolve(image) => {
+                    (builder.resolve(image).await, "image resolution failed")
+                }
+            };
             let (status, image, failure) = match result {
                 Ok(image) => (DeploymentStatus::Deploying, Some(image), None),
                 Err(reason) => (
                     DeploymentStatus::Failed,
                     None,
-                    Some(format!("build failed: {reason}")),
+                    Some(format!("{failure_prefix}: {reason}")),
                 ),
             };
-            let still_building = writer
+            let unchanged = writer
                 .state()
                 .deployment(&deployment.service_id, &deployment.id)
                 .ok()
                 .flatten()
-                .is_some_and(|current| current.status == DeploymentStatus::Building);
-            let written = match still_building {
+                .is_some_and(|current| current.status == expected);
+            let written = match unchanged {
                 true => writer
                     .write(vec![status_change(
                         &deployment,
@@ -180,23 +198,14 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 false => Ok(()),
             };
             if let Err(error) = written {
-                tracing::warn!(deployment = %deployment.id, %error, "failed to record build result");
+                tracing::warn!(deployment = %deployment.id, %error, "failed to record image result");
             }
-            active_builds
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(&deployment.id);
+            lock(&tracked).remove(&deployment.id);
         });
     }
 
     fn is_building(&self, deployment_id: &DeploymentId) -> bool {
-        self.lock_builds().contains(deployment_id)
-    }
-
-    fn lock_builds(&self) -> std::sync::MutexGuard<'_, HashSet<DeploymentId>> {
-        self.active_builds
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock(&self.active_builds).contains(deployment_id)
     }
 
     async fn place_deploying(&self) -> Result<(), ControlError> {
@@ -578,6 +587,10 @@ fn status_change(
         failure,
         at_ms,
     }
+}
+
+fn lock(set: &Mutex<HashSet<DeploymentId>>) -> std::sync::MutexGuard<'_, HashSet<DeploymentId>> {
+    set.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub(crate) fn unix_millis() -> u64 {

@@ -21,7 +21,7 @@ use maestro_core::{ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole}
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_proto::pb::node_server::NodeServer;
-use maestro_runtime::{ContainerdRuntime, Runtime};
+use maestro_runtime::{ContainerdRuntime, RegistryClient, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, SecretKey};
 use serde::Serialize;
 use tokio::task::JoinSet;
@@ -80,6 +80,7 @@ struct ClusterMember {
 
 struct SealedSpecBuilder {
     builder: BuildKitBuilder,
+    registry: RegistryClient,
     key: Arc<SecretKey>,
 }
 
@@ -143,6 +144,7 @@ pub async fn spawn(
         observed.clone(),
         Arc::new(SealedSpecBuilder {
             builder: BuildKitBuilder::new(buildkit),
+            registry: RegistryClient::new(),
             key: key.clone(),
         }),
         DeployerSettings {
@@ -241,6 +243,13 @@ impl ImageBuilder for SealedSpecBuilder {
             }
             _ => Err("external secret sources are not supported yet".to_string()),
         }
+    }
+
+    async fn resolve(&self, image: String) -> Result<String, String> {
+        self.registry
+            .pin(&image)
+            .await
+            .map_err(|error| error.to_string())
     }
 }
 
