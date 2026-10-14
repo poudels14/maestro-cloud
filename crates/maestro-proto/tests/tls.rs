@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::raft_client::RaftClient;
 use maestro_proto::pb::raft_server::{Raft, RaftServer};
-use maestro_proto::{ClusterCa, NodeCredentials, connect_pinned};
+use maestro_proto::{CertRole, ClusterCa, NodeCredentials, connect_pinned};
 use tokio::net::TcpListener;
 use tonic::transport::{Channel, Server};
 use tonic::{Request, Response, Status};
@@ -76,8 +76,10 @@ async fn mtls_channel(
 #[tokio::test]
 async fn nodes_authenticate_each_other_with_cluster_certificates() {
     let ca = ClusterCa::generate("test").unwrap();
-    let server = ca.issue_node(1, &["127.0.0.1".parse().unwrap()]).unwrap();
-    let client = ca.issue_node(2, &[]).unwrap();
+    let server = ca
+        .issue_node(1, CertRole::Voter, &["127.0.0.1".parse().unwrap()])
+        .unwrap();
+    let client = ca.issue_node(2, CertRole::Voter, &[]).unwrap();
     let address = serve(&server).await;
 
     let channel = mtls_channel(address, &client).await.unwrap();
@@ -87,7 +89,7 @@ async fn nodes_authenticate_each_other_with_cluster_certificates() {
 #[tokio::test]
 async fn joining_nodes_pin_the_ca_fingerprint() {
     let ca = ClusterCa::generate("test").unwrap();
-    let server = ca.issue_node(1, &[]).unwrap();
+    let server = ca.issue_node(1, CertRole::Voter, &[]).unwrap();
     let address = serve(&server).await;
 
     let channel = connect_pinned(&address.to_string(), &ca.fingerprint().unwrap())
@@ -107,11 +109,11 @@ async fn joining_nodes_pin_the_ca_fingerprint() {
 #[tokio::test]
 async fn rejects_certificates_from_another_cluster() {
     let ca = ClusterCa::generate("test").unwrap();
-    let server = ca.issue_node(1, &[]).unwrap();
+    let server = ca.issue_node(1, CertRole::Voter, &[]).unwrap();
     let address = serve(&server).await;
     let foreign = ClusterCa::generate("other")
         .unwrap()
-        .issue_node(9, &[])
+        .issue_node(9, CertRole::Voter, &[])
         .unwrap();
 
     let connected = mtls_channel(address, &foreign).await;
@@ -129,10 +131,28 @@ fn persists_ca_and_node_credentials() {
     ca.save(directory.path()).unwrap();
     let loaded = ClusterCa::load(directory.path()).unwrap();
     assert_eq!(loaded.fingerprint().unwrap(), ca.fingerprint().unwrap());
-    let credentials = loaded.issue_node(3, &[]).unwrap();
+    let credentials = loaded.issue_node(3, CertRole::Voter, &[]).unwrap();
     credentials.save(&directory.path().join("node")).unwrap();
     assert_eq!(
         NodeCredentials::load(&directory.path().join("node")).unwrap(),
         credentials
+    );
+}
+
+#[test]
+fn node_certificates_carry_their_identity() {
+    let ca = ClusterCa::generate("prod").unwrap();
+    let voter = ca.issue_node(7, CertRole::Voter, &[]).unwrap();
+    let worker = ca.issue_node(9, CertRole::Worker, &[]).unwrap();
+    assert_eq!(
+        voter.identity(),
+        Some(maestro_proto::PeerIdentity {
+            node_id: 7,
+            role: Some(CertRole::Voter),
+        })
+    );
+    assert_eq!(
+        worker.identity().map(|identity| identity.role),
+        Some(Some(CertRole::Worker))
     );
 }

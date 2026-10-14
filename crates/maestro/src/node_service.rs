@@ -12,11 +12,11 @@ use axum::response::{IntoResponse, Response as HttpResponse};
 
 use maestro_agent::ImageFetcher;
 use maestro_control::{AgentHub, StoreWriter};
-use maestro_core::{MaintenanceKind, NodeId, NodeRecord, NodeState};
-use maestro_proto::NodeCredentials;
+use maestro_core::{MaintenanceKind, NodeId, NodeRecord, NodeRole, NodeState};
 use maestro_proto::pb::node_client::NodeClient;
 use maestro_proto::pb::node_server::Node;
 use maestro_proto::pb::{Chunk, Envelope, ExecFrame, ImageRequest, UploadChunk};
+use maestro_proto::{CertRole, NodeCredentials, peer_identity};
 use maestro_runtime::ContainerdRuntime;
 use maestro_store::{Consensus, ConsensusError, Mutation, SecretKey, StateMachine};
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,12 @@ struct RemovalResponse {
     state: RemovalState,
 }
 
+#[derive(Clone, Copy)]
+enum CallerRole {
+    Voter,
+    Member,
+}
+
 pub struct NodeService {
     telemetry_socket: PathBuf,
     consensus: Option<Arc<Consensus>>,
@@ -148,6 +154,37 @@ impl NodeService {
             started: std::time::Instant::now(),
             node_dir,
             hub: None,
+        }
+    }
+
+    fn authorize<T>(&self, request: &Request<T>, required: CallerRole) -> Result<(), Status> {
+        let identity = request
+            .peer_certs()
+            .and_then(|certificates| peer_identity(&certificates))
+            .ok_or_else(|| Status::unauthenticated("a node certificate is required"))?;
+        let role = match &self.consensus {
+            Some(consensus) => consensus
+                .state()
+                .node(NodeId(identity.node_id))
+                .map_err(internal)?
+                .filter(|node| node.state != NodeState::Removed)
+                .map(|node| node.role)
+                .ok_or_else(|| {
+                    Status::permission_denied(format!(
+                        "node {} is not a member of this cluster",
+                        identity.node_id
+                    ))
+                })?,
+            None => match identity.role {
+                Some(CertRole::Voter) => NodeRole::Voter,
+                _ => NodeRole::Worker,
+            },
+        };
+        match (required, role) {
+            (CallerRole::Member, _) | (CallerRole::Voter, NodeRole::Voter) => Ok(()),
+            (CallerRole::Voter, NodeRole::Worker) => Err(Status::permission_denied(
+                "only voters may make this request",
+            )),
         }
     }
 
@@ -257,34 +294,24 @@ impl Node for NodeService {
     type FetchImageStream = ChunkStream;
 
     async fn call(&self, request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
-        let authenticated = request
-            .peer_certs()
-            .is_some_and(|certificates| !certificates.is_empty());
-        match authenticated {
-            false => Err(Status::unauthenticated("a node certificate is required")),
-            true => {
-                let node_request: NodeRequest = decode(request.get_ref())?;
-                let reply = self.handle(node_request).await?;
-                Ok(Response::new(encode(&reply)?))
-            }
-        }
+        self.authorize(&request, CallerRole::Voter)?;
+        let node_request: NodeRequest = decode(request.get_ref())?;
+        let reply = self.handle(node_request).await?;
+        Ok(Response::new(encode(&reply)?))
     }
 
     async fn fetch_image(
         &self,
         request: Request<ImageRequest>,
     ) -> Result<Response<Self::FetchImageStream>, Status> {
-        let authenticated = request
-            .peer_certs()
-            .is_some_and(|certificates| !certificates.is_empty());
+        self.authorize(&request, CallerRole::Member)?;
         let image = request.into_inner().image;
-        match (authenticated, self.runtime.has_image(&image).await) {
-            (false, _) => Err(Status::unauthenticated("a node certificate is required")),
-            (true, Ok(false)) => Err(Status::not_found(format!(
+        match self.runtime.has_image(&image).await {
+            Ok(false) => Err(Status::not_found(format!(
                 "image {image} is not on this node"
             ))),
-            (true, Err(error)) => Err(Status::unavailable(error.to_string())),
-            (true, Ok(true)) => {
+            Err(error) => Err(Status::unavailable(error.to_string())),
+            Ok(true) => {
                 let chunks = self
                     .runtime
                     .export_image(&image)
@@ -304,12 +331,9 @@ impl Node for NodeService {
         &self,
         request: Request<Streaming<UploadChunk>>,
     ) -> Result<Response<Envelope>, Status> {
-        let authenticated = request
-            .peer_certs()
-            .is_some_and(|certificates| !certificates.is_empty());
-        match (authenticated, &self.consensus, &self.uploads) {
-            (false, _, _) => Err(Status::unauthenticated("a node certificate is required")),
-            (true, Some(consensus), Some((key, directory))) => {
+        self.authorize(&request, CallerRole::Voter)?;
+        match (&self.consensus, &self.uploads) {
+            (Some(consensus), Some((key, directory))) => {
                 let mut chunks = request.into_inner();
                 let first = chunks
                     .message()
@@ -331,7 +355,7 @@ impl Node for NodeService {
                 let _ = tokio::fs::remove_file(&incoming).await;
                 Ok(Response::new(encode(&accepted?)?))
             }
-            (true, _, _) => Err(Status::failed_precondition(
+            _ => Err(Status::failed_precondition(
                 "this node does not run the control plane",
             )),
         }
@@ -341,19 +365,14 @@ impl Node for NodeService {
         &self,
         request: Request<Streaming<ExecFrame>>,
     ) -> Result<Response<Self::ExecStream>, Status> {
-        let authenticated = request
-            .peer_certs()
-            .is_some_and(|certificates| !certificates.is_empty());
-        match authenticated {
-            false => Err(Status::unauthenticated("a node certificate is required")),
-            true => serve_node_exec(
-                self.runtime.clone(),
-                &self.exec_limiter,
-                request.into_inner(),
-            )
-            .await
-            .map(Response::new),
-        }
+        self.authorize(&request, CallerRole::Voter)?;
+        serve_node_exec(
+            self.runtime.clone(),
+            &self.exec_limiter,
+            request.into_inner(),
+        )
+        .await
+        .map(Response::new)
     }
 }
 

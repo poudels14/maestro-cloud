@@ -5,7 +5,7 @@ use std::time::Duration;
 use maestro_core::{DeploySpec, NodeId, ServiceId, ServiceSpec};
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::raft_client::RaftClient;
-use maestro_proto::{ClusterCa, NODE_SERVER_NAME, NodeCredentials};
+use maestro_proto::{CertRole, ClusterCa, NODE_SERVER_NAME, NodeCredentials};
 use maestro_store::{Consensus, ConsensusError, ConsensusSettings, Mutation};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -177,7 +177,7 @@ async fn start_cluster(
 
 async fn start_node(ca: &ClusterCa, node_id: u64, snapshot_every_logs: Option<u64>) -> TestNode {
     let credentials: NodeCredentials = ca
-        .issue_node(node_id, &["127.0.0.1".parse().unwrap()])
+        .issue_node(node_id, CertRole::Voter, &["127.0.0.1".parse().unwrap()])
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap().to_string();

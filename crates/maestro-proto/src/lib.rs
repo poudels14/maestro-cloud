@@ -7,6 +7,7 @@ pub mod pb {
 
 pub use join_client::connect_pinned;
 pub use pki::{
-    ClusterCa, NODE_SERVER_NAME, NodeCredentials, PkiError, fingerprint_of_pem,
-    install_crypto_provider, pinned_client_config,
+    CertRole, ClusterCa, NODE_SERVER_NAME, NodeCredentials, PeerIdentity, PkiError,
+    VOTER_SERVER_NAME, fingerprint_of_pem, install_crypto_provider, peer_identity,
+    pinned_client_config,
 };

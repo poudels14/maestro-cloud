@@ -5,6 +5,7 @@ use maestro_control::AgentHub;
 use maestro_core::{AgentMessage, ClusterSettings, ControlMessage, JoinRequest, NodeId, NodeState};
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::cluster_server::Cluster;
+use maestro_proto::peer_identity;
 use maestro_store::{Consensus, StateMachine};
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
@@ -57,23 +58,25 @@ impl Cluster for ClusterService {
         &self,
         request: Request<Streaming<Envelope>>,
     ) -> Result<Response<Self::AttachStream>, Status> {
-        let authenticated = request
+        let caller = request
             .peer_certs()
-            .is_some_and(|certificates| !certificates.is_empty());
-        match (authenticated, self.consensus.is_leader()) {
-            (false, _) => Err(Status::unauthenticated("a node certificate is required")),
-            (true, false) => {
+            .and_then(|certificates| peer_identity(&certificates))
+            .map(|identity| NodeId(identity.node_id));
+        match (caller, self.consensus.is_leader()) {
+            (None, _) => Err(Status::unauthenticated("a node certificate is required")),
+            (Some(_), false) => {
                 let leader = self.consensus.current_leader().map(|(_, address)| address);
                 let redirect = encode(&ControlMessage::NotLeader { leader })?;
                 let stream: EnvelopeStream = Box::pin(tokio_stream::once(Ok(redirect)));
                 Ok(Response::new(stream))
             }
-            (true, true) => {
+            (Some(caller), true) => {
                 let inbound = request.into_inner();
                 let (outbound_sender, outbound_receiver) = mpsc::channel(OUTBOUND_BUFFER);
                 tokio::spawn(serve_agent(
                     self.hub.clone(),
                     self.consensus.state_handle(),
+                    caller,
                     inbound,
                     outbound_sender,
                 ));
@@ -87,6 +90,7 @@ impl Cluster for ClusterService {
 async fn serve_agent(
     hub: AgentHub,
     state: Arc<StateMachine>,
+    caller: NodeId,
     mut inbound: Streaming<Envelope>,
     outbound: mpsc::Sender<Result<Envelope, Status>>,
 ) {
@@ -104,6 +108,13 @@ async fn serve_agent(
             .is_some_and(|node| node.state != NodeState::Removed)
     };
     match hello {
+        Some(Ok(AgentMessage::Hello { node_id })) if node_id != caller => {
+            let _ = outbound
+                .send(Err(Status::permission_denied(format!(
+                    "this certificate belongs to node {caller}, not node {node_id}"
+                ))))
+                .await;
+        }
         Some(Ok(AgentMessage::Hello { node_id })) if !member(node_id) => {
             let _ = outbound
                 .send(Err(Status::permission_denied(format!(
@@ -123,7 +134,17 @@ async fn serve_agent(
             });
             while let Ok(Some(envelope)) = inbound.message().await {
                 if let Ok(AgentMessage::Replicas { statuses }) = decode(&envelope) {
-                    hub.record_replicas(node_id, statuses);
+                    let assigned = state
+                        .assignments(node_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|assignment| assignment.replica_id)
+                        .collect::<Vec<_>>();
+                    let own = statuses
+                        .into_iter()
+                        .filter(|status| assigned.contains(&status.replica_id))
+                        .collect();
+                    hub.record_replicas(node_id, own);
                 }
             }
             hub.unregister(node_id, session_id);

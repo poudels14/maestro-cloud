@@ -10,7 +10,7 @@ use maestro_core::{
     VoterSecrets, WireGuardInfo,
 };
 use maestro_proto::pb::cluster_client::ClusterClient;
-use maestro_proto::{ClusterCa, NodeCredentials, connect_pinned};
+use maestro_proto::{CertRole, ClusterCa, NodeCredentials, connect_pinned};
 use maestro_store::{Consensus, Mutation};
 use tonic::{Code, Status};
 
@@ -111,7 +111,7 @@ impl JoinAuthority {
             .collect::<Vec<_>>();
         let credentials = self
             .ca
-            .issue_node(node_id.0, &addresses)
+            .issue_node(node_id.0, cert_role(request.role), &addresses)
             .map_err(internal)?;
         let voter_secrets = match request.role {
             NodeRole::Voter => Some(self.voter_secrets().map_err(internal)?),
@@ -254,6 +254,13 @@ fn parse_token(token: &str) -> anyhow::Result<(String, String)> {
     match token.trim().splitn(3, '.').collect::<Vec<_>>().as_slice() {
         [TOKEN_PREFIX, fingerprint, secret] => Ok((fingerprint.to_string(), secret.to_string())),
         _ => anyhow::bail!("invalid join token; expected {TOKEN_PREFIX}.<ca-fingerprint>.<secret>"),
+    }
+}
+
+fn cert_role(role: NodeRole) -> CertRole {
+    match role {
+        NodeRole::Voter => CertRole::Voter,
+        NodeRole::Worker => CertRole::Worker,
     }
 }
 

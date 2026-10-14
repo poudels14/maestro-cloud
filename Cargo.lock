@@ -2838,6 +2838,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tower",
+ "x509-parser",
 ]
 
 [[package]]

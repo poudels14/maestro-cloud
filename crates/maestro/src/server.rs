@@ -16,7 +16,7 @@ use maestro_agent::{
 use maestro_control::ApiAuth;
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
 use maestro_proto::pb::node_server::NodeServer;
-use maestro_proto::{ClusterCa, NodeCredentials};
+use maestro_proto::{CertRole, ClusterCa, NodeCredentials};
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::{Mutation, SecretKey};
 use tokio::task::JoinSet;
@@ -82,7 +82,7 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
         let addresses = advertise_ip(&identity.advertise)
             .into_iter()
             .collect::<Vec<_>>();
-        ca.issue_node(identity.id.0, &addresses)?
+        ca.issue_node(identity.id.0, CertRole::Voter, &addresses)?
             .save(&pki_dir.join("node"))?;
     }
     let credentials = NodeCredentials::load(&pki_dir.join("node"))?;
@@ -131,7 +131,7 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
 pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let config = load_config(args.config.as_deref())?;
     let identity = NodeIdentity::load(&args.data_dir)?;
-    let credentials = NodeCredentials::load(&args.data_dir.join("pki").join("node"))?;
+    let credentials = role_certified_credentials(&args.data_dir, &identity)?;
     let capacity = detect_capacity()?;
     let reserved = system_reserve(&capacity, &config.node.reserve);
     if let Err(error) = apply_workload_slice_limits(&capacity, &reserved).await {
@@ -472,6 +472,30 @@ pub fn load_config(source: Option<&str>) -> anyhow::Result<ClusterConfig> {
             &crate::secret_sources::read_config_source,
         )?),
         None => Ok(ClusterConfig::default()),
+    }
+}
+
+fn role_certified_credentials(
+    data_dir: &Path,
+    identity: &NodeIdentity,
+) -> anyhow::Result<NodeCredentials> {
+    let pki_dir = data_dir.join("pki");
+    let credentials = NodeCredentials::load(&pki_dir.join("node"))?;
+    let missing_role = credentials
+        .identity()
+        .is_some_and(|peer| peer.role.is_none());
+    match (missing_role, pki_dir.join("ca.key").exists()) {
+        (true, true) => {
+            let addresses = advertise_ip(&identity.advertise)
+                .into_iter()
+                .collect::<Vec<_>>();
+            ClusterCa::load(&pki_dir)?
+                .issue_node(identity.id.0, CertRole::Voter, &addresses)?
+                .save(&pki_dir.join("node"))?;
+            tracing::info!("reissued this voter's certificate with its role");
+            Ok(NodeCredentials::load(&pki_dir.join("node"))?)
+        }
+        _ => Ok(credentials),
     }
 }
 

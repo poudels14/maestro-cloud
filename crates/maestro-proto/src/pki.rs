@@ -16,6 +16,9 @@ use thiserror::Error;
 use tonic::transport::{Certificate, ClientTlsConfig, Identity, ServerTlsConfig};
 
 pub const NODE_SERVER_NAME: &str = "node.maestro.internal";
+pub const VOTER_SERVER_NAME: &str = "voter.maestro.internal";
+
+const NODE_NAME_PREFIX: &str = "maestro-node-";
 
 const CA_CERT_FILE: &str = "ca.crt";
 const CA_KEY_FILE: &str = "ca.key";
@@ -35,6 +38,18 @@ pub enum PkiError {
 pub struct ClusterCa {
     cert_pem: String,
     key_pem: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CertRole {
+    Voter,
+    Worker,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerIdentity {
+    pub node_id: u64,
+    pub role: Option<CertRole>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,17 +111,26 @@ impl ClusterCa {
     pub fn issue_node(
         &self,
         node_id: u64,
+        role: CertRole,
         addresses: &[IpAddr],
     ) -> Result<NodeCredentials, PkiError> {
         let ca_key = KeyPair::from_pem(&self.key_pem)?;
         let issuer = Issuer::from_ca_cert_pem(&self.cert_pem, ca_key)?;
         let node_key = KeyPair::generate()?;
+        let role_names = match role {
+            CertRole::Voter => vec![VOTER_SERVER_NAME.to_string()],
+            CertRole::Worker => Vec::new(),
+        };
         let names = [NODE_SERVER_NAME.to_string()]
             .into_iter()
+            .chain(role_names)
             .chain(addresses.iter().map(ToString::to_string))
             .collect::<Vec<_>>();
         let mut params = CertificateParams::new(names)?;
-        params.distinguished_name = distinguished_name(&format!("maestro-node-{node_id}"));
+        params.distinguished_name = distinguished_name(&format!("{NODE_NAME_PREFIX}{node_id}"));
+        params
+            .distinguished_name
+            .push(DnType::OrganizationalUnitName, role.as_str());
         params.key_usages = vec![
             KeyUsagePurpose::DigitalSignature,
             KeyUsagePurpose::KeyEncipherment,
@@ -144,6 +168,12 @@ impl NodeCredentials {
         write_private(&directory.join(NODE_KEY_FILE), &self.key_pem)
     }
 
+    pub fn identity(&self) -> Option<PeerIdentity> {
+        let der: CertificateDer<'static> =
+            rustls::pki_types::pem::PemObject::from_pem_slice(self.cert_pem.as_bytes()).ok()?;
+        peer_identity(&[der])
+    }
+
     pub fn server_tls(&self) -> ServerTlsConfig {
         install_crypto_provider();
         let chain = format!("{}{}", self.cert_pem, self.ca_pem);
@@ -159,6 +189,42 @@ impl NodeCredentials {
             .ca_certificate(Certificate::from_pem(&self.ca_pem))
             .identity(Identity::from_pem(&self.cert_pem, &self.key_pem))
             .domain_name(NODE_SERVER_NAME)
+    }
+}
+
+pub fn peer_identity(certificates: &[CertificateDer<'_>]) -> Option<PeerIdentity> {
+    let (_, certificate) = x509_parser::parse_x509_certificate(certificates.first()?).ok()?;
+    let subject = certificate.subject();
+    let node_id = subject
+        .iter_common_name()
+        .next()?
+        .as_str()
+        .ok()?
+        .strip_prefix(NODE_NAME_PREFIX)?
+        .parse()
+        .ok()?;
+    let role = subject
+        .iter_organizational_unit()
+        .next()
+        .and_then(|unit| unit.as_str().ok())
+        .and_then(CertRole::parse);
+    Some(PeerIdentity { node_id, role })
+}
+
+impl CertRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Voter => "voter",
+            Self::Worker => "worker",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "voter" => Some(Self::Voter),
+            "worker" => Some(Self::Worker),
+            _ => None,
+        }
     }
 }
 
