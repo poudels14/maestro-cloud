@@ -7,6 +7,7 @@ mod health;
 mod ingress;
 mod node;
 mod reconciler;
+mod secret_files;
 mod source;
 mod status;
 mod system;

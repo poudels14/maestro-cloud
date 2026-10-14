@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 use crate::resources::{EffectiveResources, OomPriority};
 use crate::routing::affinity_token;
-use crate::service::{Command, ServiceSpec};
+use crate::service::{Command, SecretsSpec, ServiceSpec, VolumeMount};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +64,10 @@ pub struct ReplicaPlan {
     pub healthcheck: Option<HealthcheckPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_restarts: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<VolumeMount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<SecretsSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +106,15 @@ impl ReplicaPlan {
             env: replica_env(assignment, &deploy.env.items),
             healthcheck,
             max_restarts: deploy.max_restarts,
+            volumes: deploy.volumes.clone(),
+            secrets: deploy
+                .secrets
+                .clone()
+                .filter(|secrets| !secrets.items.is_empty())
+                .map(|secrets| SecretsSpec {
+                    source: None,
+                    ..secrets
+                }),
         }
     }
 }
@@ -111,9 +124,18 @@ fn replica_env(
     items: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::from([
-        ("MAESTRO_NODE_ID".to_string(), assignment.node_id.to_string()),
-        ("MAESTRO_REPLICA_INDEX".to_string(), assignment.index.to_string()),
-        ("MAESTRO_REPLICA_ID".to_string(), assignment.replica_id.to_string()),
+        (
+            "MAESTRO_NODE_ID".to_string(),
+            assignment.node_id.to_string(),
+        ),
+        (
+            "MAESTRO_REPLICA_INDEX".to_string(),
+            assignment.index.to_string(),
+        ),
+        (
+            "MAESTRO_REPLICA_ID".to_string(),
+            assignment.replica_id.to_string(),
+        ),
         (
             "MAESTRO_AFFINITY_TOKEN".to_string(),
             affinity_token(&assignment.replica_id),

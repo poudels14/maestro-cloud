@@ -1,17 +1,19 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use maestro_core::{ReplicaId, ReplicaPhase, ReplicaPlan, ReplicaStatus};
 use maestro_runtime::{
-    ContainerLimits, ContainerSpec, ContainerState, ContainerStatus, NetworkMode, Runtime,
-    RuntimeEvent,
+    BindMount, ContainerLimits, ContainerSpec, ContainerState, ContainerStatus, NetworkMode,
+    Runtime, RuntimeEvent,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::error::AgentError;
+use crate::secret_files;
 use crate::source::PlanSource;
 use crate::status::StatusBoard;
 
@@ -30,6 +32,7 @@ pub struct ReconcilerSettings {
     pub resync_interval: Duration,
     pub pids_limit: u32,
     pub cgroup_parent: String,
+    pub secrets_dir: PathBuf,
 }
 
 pub struct Reconciler<R: Runtime, S: PlanSource> {
@@ -108,6 +111,10 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
         for replica_id in actual.keys().filter(|id| !desired.contains_key(*id)) {
             self.retire(replica_id).await;
         }
+        secret_files::sweep(
+            &self.settings.secrets_dir,
+            &actual.keys().cloned().collect::<BTreeSet<_>>(),
+        );
         let stale_records = self
             .board
             .snapshot()
@@ -171,8 +178,15 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             phase: ReplicaPhase::Starting,
             ..self.status_for(plan)
         });
-        let started = match self.runtime.pull(&plan.image).await {
-            Ok(()) => self.runtime.start(&self.container_spec(plan, hash)).await,
+        let started = match self.prepare_mounts(plan) {
+            Ok(mounts) => match self.runtime.pull(&plan.image).await {
+                Ok(()) => self
+                    .runtime
+                    .start(&self.container_spec(plan, hash, mounts))
+                    .await
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            },
             Err(error) => Err(error),
         };
         match started {
@@ -199,7 +213,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             Err(error) => {
                 tracing::warn!(replica = %plan.replica_id, %error, "failed to start replica");
                 let _ = self.runtime.remove(plan.replica_id.as_str()).await;
-                self.schedule_restart(plan, error.to_string());
+                self.schedule_restart(plan, error);
             }
         }
     }
@@ -226,6 +240,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
 
     async fn handle_exit(&mut self, plan: &ReplicaPlan, exit_code: Option<u32>) {
         let _ = self.runtime.remove(plan.replica_id.as_str()).await;
+        secret_files::remove_for(&self.settings.secrets_dir, &plan.replica_id);
         let reason = exit_code.map_or_else(
             || "container is not running".to_string(),
             |code| format!("exited with code {code}"),
@@ -277,6 +292,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             .stop(replica_id.as_str(), self.settings.stop_grace)
             .await;
         let removed = self.runtime.remove(replica_id.as_str()).await;
+        secret_files::remove_for(&self.settings.secrets_dir, replica_id);
         match stopped.and(removed) {
             Ok(()) => {
                 self.board.remove(replica_id);
@@ -319,7 +335,49 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
         }
     }
 
-    fn container_spec(&self, plan: &ReplicaPlan, hash: &str) -> ContainerSpec {
+    fn prepare_mounts(&self, plan: &ReplicaPlan) -> Result<Vec<BindMount>, String> {
+        let volumes = plan
+            .volumes
+            .iter()
+            .map(|volume| {
+                let host_path = PathBuf::from(&volume.host_path);
+                std::fs::create_dir_all(&host_path).map_err(|error| {
+                    format!("failed to create volume {}: {error}", volume.host_path)
+                })?;
+                if let Some(owner) = &volume.owner {
+                    std::os::unix::fs::chown(&host_path, Some(owner.uid), owner.gid).map_err(
+                        |error| format!("failed to chown volume {}: {error}", volume.host_path),
+                    )?;
+                }
+                Ok(BindMount {
+                    source: host_path,
+                    destination: volume.mount_path.clone(),
+                    read_only: volume.read_only,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let secrets = plan
+            .secrets
+            .as_ref()
+            .map(|secrets| {
+                secret_files::write(&self.settings.secrets_dir, &plan.replica_id, &secrets.items)
+                    .map(|source| BindMount {
+                        source,
+                        destination: secrets.mount_path.clone(),
+                        read_only: true,
+                    })
+                    .map_err(|error| format!("failed to write the secrets file: {error}"))
+            })
+            .transpose()?;
+        Ok(volumes.into_iter().chain(secrets).collect())
+    }
+
+    fn container_spec(
+        &self,
+        plan: &ReplicaPlan,
+        hash: &str,
+        mounts: Vec<BindMount>,
+    ) -> ContainerSpec {
         let labels = BTreeMap::from([
             (REPLICA_LABEL.to_string(), plan.replica_id.to_string()),
             (SERVICE_LABEL.to_string(), plan.service_id.to_string()),
@@ -343,7 +401,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
                 oom_score_adj: plan.oom_priority.oom_score_adj(),
             },
             cgroup_parent: self.settings.cgroup_parent.clone(),
-            mounts: Vec::new(),
+            mounts,
             network: NetworkMode::Bridge,
         }
     }
@@ -360,6 +418,7 @@ impl Default for ReconcilerSettings {
             resync_interval: Duration::from_secs(10),
             pids_limit: 4096,
             cgroup_parent: "maestro-workloads.slice".to_string(),
+            secrets_dir: PathBuf::from("/run/maestro/secrets"),
         }
     }
 }

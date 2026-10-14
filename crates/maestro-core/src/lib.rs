@@ -15,9 +15,7 @@ pub use config::{
     IngressSettings, LogBackupSettings, NodeSettings, ReserveSettings, SlackSettings,
     TailscaleSettings,
 };
-pub use controls::{
-    ClusterFreeze, MAX_REPLICAS_OVERRIDE, ServiceControls, UnschedulableReplica,
-};
+pub use controls::{ClusterFreeze, MAX_REPLICAS_OVERRIDE, ServiceControls, UnschedulableReplica};
 pub use deployment::{Assignment, Deployment, DeploymentStatus, HealthcheckPlan, ReplicaPlan};
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo};

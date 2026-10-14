@@ -4,8 +4,8 @@ use std::time::Duration;
 use maestro_agent::{LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard};
 use maestro_core::{
     Assignment, ByteSize, DeploySpec, Deployment, DeploymentId, DeploymentStatus,
-    EffectiveResources, Millicores, NodeId, ReplicaId, ReplicaPhase, ResolvedRequest, ServiceId,
-    ServiceSpec,
+    EffectiveResources, Millicores, NodeId, ReplicaId, ReplicaPhase, ResolvedRequest, SecretsSpec,
+    ServiceId, ServiceSpec, VolumeMount,
 };
 use maestro_runtime::FakeRuntime;
 use maestro_store::{Mutation, StateMachine};
@@ -23,16 +23,23 @@ struct Harness {
 }
 
 fn harness(max_restarts: Option<u32>) -> Harness {
+    harness_with(
+        DeploySpec {
+            max_restarts,
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    )
+}
+
+fn harness_with(deploy: DeploySpec, settings: ReconcilerSettings) -> Harness {
     let directory = tempfile::tempdir().unwrap();
     let state = Arc::new(StateMachine::open(directory.path().join("state.redb")).unwrap());
     let spec = ServiceSpec {
         name: "API".to_string(),
         image: Some(IMAGE.to_string()),
         build: None,
-        deploy: DeploySpec {
-            max_restarts,
-            ..DeploySpec::default()
-        },
+        deploy,
         ingress: None,
         preview: None,
     };
@@ -62,7 +69,7 @@ fn harness(max_restarts: Option<u32>) -> Harness {
         runtime.clone(),
         Arc::new(LocalPlanSource::new(state.clone(), test_key(), NODE)),
         board.clone(),
-        ReconcilerSettings::default(),
+        settings,
     );
     Harness {
         _directory: directory,
@@ -264,4 +271,49 @@ async fn adopts_running_replicas_after_agent_restart() {
     assert_eq!(adopted.phase, ReplicaPhase::Healthy);
     assert_eq!(adopted.ip, ip);
     assert_eq!(harness.runtime.start_count("d1-0"), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn mounts_volumes_and_a_private_secrets_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let secrets_dir = scratch.path().join("secrets");
+    let volume = scratch.path().join("data");
+    let deploy = DeploySpec {
+        volumes: vec![VolumeMount {
+            host_path: volume.to_string_lossy().to_string(),
+            mount_path: "/data".to_string(),
+            read_only: false,
+            owner: None,
+        }],
+        secrets: Some(SecretsSpec {
+            mount_path: "/run/app.env".to_string(),
+            source: None,
+            items: [("TOKEN".to_string(), "s3cret".to_string())].into(),
+        }),
+        ..DeploySpec::default()
+    };
+    let mut harness = harness_with(
+        deploy,
+        ReconcilerSettings {
+            secrets_dir: secrets_dir.clone(),
+            ..ReconcilerSettings::default()
+        },
+    );
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+
+    let mounts = harness.runtime.spec("d1-0").unwrap().mounts;
+    assert!(volume.is_dir());
+    assert_eq!(mounts[0].destination, "/data");
+    assert!(!mounts[0].read_only);
+    assert_eq!(mounts[1].destination, "/run/app.env");
+    assert!(mounts[1].read_only);
+    assert_eq!(
+        std::fs::read_to_string(&mounts[1].source).unwrap(),
+        "TOKEN=\"s3cret\"\n"
+    );
+
+    assign(&harness, vec![]);
+    harness.reconciler.reconcile().await.unwrap();
+    assert!(!mounts[1].source.exists());
 }

@@ -261,6 +261,8 @@ mod tests {
             env: BTreeMap::new(),
             healthcheck: None,
             max_restarts: None,
+            volumes: Vec::new(),
+            secrets: None,
         }
     }
 
