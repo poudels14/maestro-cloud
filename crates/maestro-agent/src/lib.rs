@@ -13,6 +13,7 @@ mod secret_files;
 mod source;
 mod status;
 mod system;
+mod tailscale;
 mod wireguard;
 
 pub use attach::{Attachment, ControlLink, StreamPlanSource};
@@ -21,7 +22,7 @@ pub use build::{
     remote_head,
 };
 pub use cloudflare::TunnelConnectors;
-pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
+pub use dns::{DnsRecords, DnsServer, PeerClusters, upstream_resolvers};
 pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};
@@ -32,6 +33,9 @@ pub use replica_manifest::{LocalReplica, publish_replica_manifest};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
 pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};
+pub use tailscale::{
+    TAILSCALE_CONTAINER_ID, TailscaleNode, discover_peer_clusters, tailscale_container,
+};
 pub use wireguard::{
     CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,
     DEFAULT_LISTEN_PORT as WIREGUARD_PORT, HostCommandRunner, MeshConfig, NodeKey, WireGuardMesh,

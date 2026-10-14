@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,10 +7,11 @@ use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
     Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
-    HostCommandRunner, IngressWriter, MeshConfig, Reconciler, ReconcilerSettings, StatusBoard,
-    SystemSupervisor, TunnelConnectors, WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh,
-    apply_workload_slice_limits, detect_capacity, load_or_generate_key, publish_replica_manifest,
-    serve_denied, system_reserve, traefik_container, upstream_resolvers,
+    HostCommandRunner, IngressWriter, MeshConfig, PeerClusters, Reconciler, ReconcilerSettings,
+    StatusBoard, SystemSupervisor, TailscaleNode, TunnelConnectors, WIREGUARD_INTERFACE,
+    WIREGUARD_PORT, WireGuardMesh, apply_workload_slice_limits, detect_capacity,
+    discover_peer_clusters, load_or_generate_key, publish_replica_manifest, serve_denied,
+    system_reserve, tailscale_container, traefik_container, upstream_resolvers,
 };
 use maestro_control::ApiAuth;
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
@@ -32,6 +33,7 @@ const DEFAULT_ADVERTISE: &str = "127.0.0.1:7400";
 const LEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const DNS_PORT: u16 = 53;
 const REPLICA_MANIFEST: &str = "/run/maestro/replicas.json";
+const TAILSCALE_SOCKET_DIR: &str = "/run/maestro/tailscale";
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
@@ -167,16 +169,42 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         .await?,
     );
     let ingress = IngressWriter::new(args.data_dir.join("traefik"), &config.ingress.ports);
+    let tailscale = config.tailscale.as_ref().map(|tailscale| TailscaleNode {
+        auth_key: tailscale.auth_key.clone(),
+        cluster: identity.cluster.name.clone(),
+        node_id: identity.id.to_string(),
+        routes: std::iter::once(identity.subnet.clone())
+            .chain(tailscale.advertise_routes.iter().cloned())
+            .collect(),
+        state_dir: args.data_dir.join("tailscale"),
+        socket_dir: PathBuf::from(TAILSCALE_SOCKET_DIR),
+    });
+    if let Some(node) = &tailscale {
+        std::fs::create_dir_all(&node.state_dir)?;
+        std::fs::create_dir_all(&node.socket_dir)?;
+    }
     let system = SystemSupervisor::new(
         runtime.clone(),
-        vec![traefik_container(
+        std::iter::once(traefik_container(
             ingress.directory(),
             &config.ingress.ports,
             &identity.cluster.cidr,
-        )],
+        ))
+        .chain(tailscale.as_ref().map(tailscale_container))
+        .collect(),
     );
     let dns_records = DnsRecords::default();
-    let dns = DnsServer::new(dns_records.clone(), upstream_resolvers(&host_resolv));
+    let peer_clusters = PeerClusters::default();
+    let dns_server = |records: &DnsRecords| {
+        DnsServer::new(
+            records.clone(),
+            upstream_resolvers(&host_resolv),
+            identity.cluster.name.clone(),
+            peer_clusters.clone(),
+        )
+    };
+    let dns = dns_server(&dns_records);
+    let tailnet_dns = tailscale.as_ref().map(|_| dns_server(&dns_records));
     let wireguard_key = load_or_generate_key(&args.data_dir.join("keys")).await?;
     let mesh = MeshConfig {
         interface: WIREGUARD_INTERFACE.to_string(),
@@ -265,6 +293,20 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         dns.run(SocketAddr::new(gateway, DNS_PORT)).await;
         Ok(())
     });
+    if let Some(tailnet_dns) = tailnet_dns {
+        tasks.spawn(async move {
+            tailnet_dns
+                .run(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DNS_PORT))
+                .await;
+            Ok(())
+        });
+        let cluster = identity.cluster.name.clone();
+        tasks.spawn(async move {
+            discover_peer_clusters(PathBuf::from(TAILSCALE_SOCKET_DIR), cluster, peer_clusters)
+                .await;
+            Ok(())
+        });
+    }
     tasks.spawn(async move {
         attachment.run().await;
         Ok(())

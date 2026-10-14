@@ -19,9 +19,33 @@ pub struct DnsRecords {
     names: Arc<RwLock<HashMap<String, Vec<IpAddr>>>>,
 }
 
+#[derive(Clone, Default)]
+pub struct PeerClusters {
+    clusters: Arc<RwLock<HashMap<String, Vec<SocketAddr>>>>,
+}
+
 pub struct DnsServer {
     records: DnsRecords,
     upstreams: Vec<SocketAddr>,
+    cluster: String,
+    peers: PeerClusters,
+}
+
+impl PeerClusters {
+    pub fn replace(&self, clusters: HashMap<String, Vec<SocketAddr>>) {
+        *self
+            .clusters
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = clusters;
+    }
+
+    fn servers(&self, cluster: &str) -> Option<Vec<SocketAddr>> {
+        self.clusters
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cluster)
+            .cloned()
+    }
 }
 
 impl DnsRecords {
@@ -46,8 +70,18 @@ impl DnsRecords {
 }
 
 impl DnsServer {
-    pub fn new(records: DnsRecords, upstreams: Vec<SocketAddr>) -> Self {
-        Self { records, upstreams }
+    pub fn new(
+        records: DnsRecords,
+        upstreams: Vec<SocketAddr>,
+        cluster: String,
+        peers: PeerClusters,
+    ) -> Self {
+        Self {
+            records,
+            upstreams,
+            cluster,
+            peers,
+        }
     }
 
     pub async fn run(self, bind: SocketAddr) {
@@ -88,8 +122,21 @@ impl DnsServer {
         let message = Message::from_vec(request).ok()?;
         let query = message.queries.first()?.clone();
         let name = normalize(&query.name().to_ascii());
-        match is_internal(&name) {
-            true => {
+        let peer_servers = cluster_label(&name)
+            .filter(|cluster| *cluster != self.cluster)
+            .and_then(|cluster| self.peers.servers(cluster));
+        match (peer_servers, is_internal(&name)) {
+            (Some(servers), _) => match self.forward_to(request, &servers).await {
+                Some(response) => Some(response),
+                None => Message::error_msg(
+                    message.metadata.id,
+                    message.metadata.op_code,
+                    ResponseCode::ServFail,
+                )
+                .to_vec()
+                .ok(),
+            },
+            (None, true) => {
                 let mut response = Message::response(message.metadata.id, message.metadata.op_code);
                 response.metadata.authoritative = true;
                 response.metadata.recursion_desired = message.metadata.recursion_desired;
@@ -115,8 +162,8 @@ impl DnsServer {
                 }
                 response.to_vec().ok()
             }
-            false => {
-                let forwarded = self.forward(request).await;
+            (None, false) => {
+                let forwarded = self.forward_to(request, &self.upstreams).await;
                 match forwarded {
                     Some(response) => Some(response),
                     None => Message::error_msg(
@@ -131,8 +178,8 @@ impl DnsServer {
         }
     }
 
-    async fn forward(&self, request: &[u8]) -> Option<Vec<u8>> {
-        for upstream in &self.upstreams {
+    async fn forward_to(&self, request: &[u8], servers: &[SocketAddr]) -> Option<Vec<u8>> {
+        for upstream in servers {
             let local = match upstream {
                 SocketAddr::V4(_) => "0.0.0.0:0",
                 SocketAddr::V6(_) => "[::]:0",
@@ -150,6 +197,18 @@ impl DnsServer {
             }
         }
         None
+    }
+}
+
+fn cluster_label(name: &str) -> Option<&str> {
+    let labels = name
+        .strip_suffix(INTERNAL_SUFFIX)?
+        .trim_end_matches('.')
+        .rsplit('.')
+        .collect::<Vec<_>>();
+    match labels.as_slice() {
+        [cluster, _, ..] => Some(cluster),
+        _ => None,
     }
 }
 
@@ -197,7 +256,12 @@ mod tests {
 
     #[tokio::test]
     async fn answers_internal_names_authoritatively() {
-        let server = DnsServer::new(records(), vec![]);
+        let server = DnsServer::new(
+            records(),
+            vec![],
+            "dev".to_string(),
+            PeerClusters::default(),
+        );
         let response = server
             .answer(&query_bytes("web.maestro.internal.", RecordType::A))
             .await
@@ -215,7 +279,12 @@ mod tests {
 
     #[tokio::test]
     async fn returns_nxdomain_for_unknown_internal_names() {
-        let server = DnsServer::new(records(), vec![]);
+        let server = DnsServer::new(
+            records(),
+            vec![],
+            "dev".to_string(),
+            PeerClusters::default(),
+        );
         let response = server
             .answer(&query_bytes("missing.maestro.internal.", RecordType::A))
             .await
@@ -243,13 +312,49 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let server = DnsServer::new(records(), vec![upstream_address]);
+        let server = DnsServer::new(
+            records(),
+            vec![upstream_address],
+            "dev".to_string(),
+            PeerClusters::default(),
+        );
         let response = server
             .answer(&query_bytes("example.com.", RecordType::A))
             .await
             .unwrap();
         let message = Message::from_vec(&response).unwrap();
         assert_eq!(message.answers[0].data.to_string(), "93.184.216.34");
+    }
+
+    #[tokio::test]
+    async fn forwards_other_clusters_to_their_peers() {
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let peer_address = peer.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; MAX_PACKET];
+            let (length, client) = peer.recv_from(&mut buffer).await.unwrap();
+            let request = Message::from_vec(&buffer[..length]).unwrap();
+            let mut reply = Message::response(request.metadata.id, OpCode::Query);
+            reply.add_answer(Record::from_rdata(
+                Name::from_str("api.prod.maestro.internal.").unwrap(),
+                5,
+                RData::A(A("10.200.9.4".parse().unwrap())),
+            ));
+            peer.send_to(&reply.to_vec().unwrap(), client)
+                .await
+                .unwrap();
+        });
+        let peers = PeerClusters::default();
+        peers.replace(HashMap::from([("prod".to_string(), vec![peer_address])]));
+        let server = DnsServer::new(records(), vec![], "dev".to_string(), peers);
+        let response = server
+            .answer(&query_bytes("api.prod.maestro.internal.", RecordType::A))
+            .await
+            .unwrap();
+        let message = Message::from_vec(&response).unwrap();
+        assert_eq!(message.answers[0].data.to_string(), "10.200.9.4");
+        assert_eq!(cluster_label("api.dev.maestro.internal"), Some("dev"));
+        assert_eq!(cluster_label("api.maestro.internal"), None);
     }
 
     #[test]
