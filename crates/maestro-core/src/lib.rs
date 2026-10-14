@@ -16,8 +16,8 @@ pub use config::{
     TailscaleSettings, read_file_source,
 };
 pub use controls::{
-    ClusterFreeze, MAX_REPLICAS_OVERRIDE, ServiceControls, SlackCategory, SlackWebhook,
-    UnschedulableReplica,
+    ClusterFreeze, MAX_REPLICAS_OVERRIDE, PreviewSource, ServiceControls, SlackCategory,
+    SlackWebhook, UnschedulableReplica,
 };
 pub use deployment::{
     Assignment, Deployment, DeploymentStatus, GitCommit, HealthcheckPlan, ReplicaPlan,

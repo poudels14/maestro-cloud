@@ -52,3 +52,22 @@ pub struct SlackWebhook {
     pub categories: Vec<SlackCategory>,
     pub enabled: bool,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSource {
+    pub base_service_id: crate::ServiceId,
+    pub pr_number: u64,
+    pub head_ref: String,
+    pub head_sha: String,
+    pub title: String,
+    pub created_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_deployment_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported: Option<String>,
+}

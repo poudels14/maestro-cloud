@@ -9,7 +9,7 @@ mod subnets;
 mod watcher;
 mod writer;
 
-pub use api::{ApiState, new_deployment, router};
+pub use api::{ApiState, new_deployment, router, service_deletion};
 pub use auth::{ApiAuth, require_token};
 pub use deployer::{BuiltImage, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas};
 pub use error::ControlError;

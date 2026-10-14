@@ -2734,6 +2734,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",
  "axum",
+ "chrono",
  "clap",
  "crossterm",
  "dotenvy",

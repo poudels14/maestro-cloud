@@ -374,6 +374,10 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - Cloudflare tunnel connectors run per node (`replicas` each) on the host network
   against local Traefik, stopped while the node is not attached to the leader or
   Traefik is down.
+- Rolling upgrades on NixOS follow v1: the leader drains each node (agents, then
+  followers, then itself), the node runs `nix flake update --flake /etc/maestro`,
+  `nixos-rebuild boot`, and reboots, and the leader waits for the target version before
+  restoring it and moving on.
 - The IP blocklist routes matching requests (ClientIP, CF-Connecting-IP, X-Real-IP,
   X-Forwarded-For) to a loopback 403 responder in the agent instead of v1's probe
   container.

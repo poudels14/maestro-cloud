@@ -31,6 +31,7 @@ use tokio::task::JoinSet;
 
 use crate::cluster_service::ClusterService;
 use crate::exec::{ExecState, exec_service};
+use crate::github::GitHub;
 use crate::identity::NodeIdentity;
 use crate::join::JoinAuthority;
 use crate::node_service::{
@@ -38,6 +39,7 @@ use crate::node_service::{
     local_disks, remove_cluster_node,
 };
 use crate::observability;
+use crate::previews::{PreviewSettings, PreviewWatcher};
 use crate::secret_sources;
 use crate::server::{api_secret, bind_api_socket, encryption_key_path};
 use crate::slack::{self, SlackState};
@@ -46,6 +48,7 @@ use crate::uploads::{self, UploadState, upload_service};
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_INTERVAL: Duration = Duration::from_secs(30);
+const GITHUB_API: &str = "https://api.github.com";
 const MAX_UPLOAD_BYTES: usize = 1 << 30;
 const ARCHIVE_CHUNK: usize = 1 << 20;
 const MEMBERSHIP_INTERVAL: Duration = Duration::from_secs(5);
@@ -187,6 +190,27 @@ pub async fn spawn(
         },
     );
     tasks.spawn(run_deployer(deployer, consensus.clone()));
+    if let Some(github) = settings.config.github.clone() {
+        let watcher = PreviewWatcher::new(
+            consensus.clone(),
+            key.clone(),
+            GitHub::new(GITHUB_API.to_string(), github.token.clone()),
+            PreviewSettings {
+                domain: github.preview_domain.clone(),
+                max_concurrent: github.max_concurrent_previews as usize,
+                homepage: settings
+                    .config
+                    .homepage
+                    .clone()
+                    .map(|homepage| homepage.trim_end_matches('/').to_string()),
+            },
+        );
+        tasks.spawn(run_previews(
+            watcher,
+            consensus.clone(),
+            Duration::from_secs(github.poll_interval_secs),
+        ));
+    }
     tasks.spawn(run_watcher(
         BuildWatcher::new(consensus.clone(), Arc::new(GitHeads), key.clone()),
         consensus.clone(),
@@ -572,6 +596,23 @@ async fn run_deployer(
             && let Err(error) = deployer.tick().await
         {
             tracing::warn!(%error, "deployer tick failed");
+        }
+    }
+}
+
+async fn run_previews(
+    mut watcher: PreviewWatcher<Consensus>,
+    consensus: Arc<Consensus>,
+    interval: Duration,
+) -> anyhow::Result<()> {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        if consensus.is_leader()
+            && let Err(error) = watcher.poll().await
+        {
+            tracing::warn!(%error, "preview poll failed");
         }
     }
 }

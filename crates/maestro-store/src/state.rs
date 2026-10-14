@@ -2,7 +2,7 @@ use std::path::Path;
 
 use maestro_core::{
     Assignment, ClusterFreeze, Deployment, DeploymentId, DeploymentStatus, NodeId, NodeRecord,
-    ServiceControls, ServiceId, ServiceSpec, SlackWebhook, UnschedulableReplica,
+    PreviewSource, ServiceControls, ServiceId, ServiceSpec, SlackWebhook, UnschedulableReplica,
 };
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction};
 use serde::de::DeserializeOwned;
@@ -22,6 +22,7 @@ const ASSIGNMENTS: TableDefinition<(u64, &str), &[u8]> = TableDefinition::new("a
 const RAFT_META: TableDefinition<&str, &[u8]> = TableDefinition::new("raft_meta");
 const SERVICE_CONTROLS: TableDefinition<&str, &[u8]> = TableDefinition::new("service_controls");
 const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
+const PREVIEW_SOURCES: TableDefinition<&str, &[u8]> = TableDefinition::new("preview_sources");
 
 const VERSION_KEY: &str = "version";
 const FREEZE_KEY: &str = "freeze";
@@ -53,6 +54,8 @@ pub(crate) struct StateExport {
     blocked_ips: Vec<String>,
     #[serde(default)]
     slack_webhooks: Vec<SlackWebhook>,
+    #[serde(default)]
+    preview_sources: Vec<(ServiceId, PreviewSource)>,
 }
 
 impl StateMachine {
@@ -138,6 +141,7 @@ impl StateMachine {
             cluster_freeze: self.cluster_freeze()?,
             blocked_ips: self.blocked_ips()?,
             slack_webhooks: self.slack_webhooks()?,
+            preview_sources: self.preview_sources()?,
         })
     }
 
@@ -203,6 +207,12 @@ impl StateMachine {
             SLACK_WEBHOOKS_KEY,
             encode(&export.slack_webhooks)?.as_slice(),
         )?;
+        export.preview_sources.iter().try_for_each(|(id, source)| {
+            transaction
+                .open_table(PREVIEW_SOURCES)?
+                .insert(id.as_str(), encode(source)?.as_slice())?;
+            Ok::<_, StoreError>(())
+        })?;
         record(&transaction)?;
         transaction.commit()?;
         let _ = self.changes.send(Change {
@@ -337,6 +347,18 @@ impl StateMachine {
             .map(Option::unwrap_or_default)
     }
 
+    pub fn preview_sources(&self) -> Result<Vec<(ServiceId, PreviewSource)>> {
+        let transaction = self.database.begin_read()?;
+        let table = transaction.open_table(PREVIEW_SOURCES)?;
+        table
+            .iter()?
+            .map(|entry| {
+                let (key, value) = entry?;
+                Ok((ServiceId::new(key.value()), decode(value.value())?))
+            })
+            .collect()
+    }
+
     pub fn slack_webhooks(&self) -> Result<Vec<SlackWebhook>> {
         let transaction = self.database.begin_read()?;
         transaction
@@ -372,6 +394,7 @@ fn create_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.open_table(RAFT_META)?;
     transaction.open_table(SERVICE_CONTROLS)?;
     transaction.open_table(CLUSTER)?;
+    transaction.open_table(PREVIEW_SOURCES)?;
     Ok(())
 }
 
@@ -385,6 +408,7 @@ fn delete_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.delete_table(RAFT_META)?;
     transaction.delete_table(SERVICE_CONTROLS)?;
     transaction.delete_table(CLUSTER)?;
+    transaction.delete_table(PREVIEW_SOURCES)?;
     Ok(())
 }
 
@@ -504,6 +528,14 @@ fn apply_mutation(transaction: &WriteTransaction, mutation: &Mutation) -> Result
                 .insert(SLACK_WEBHOOKS_KEY, encode(webhooks)?.as_slice())?;
             Ok(vec![ChangeKey::SlackWebhooks])
         }
+        Mutation::SetPreviewSource { id, source } => {
+            let mut table = transaction.open_table(PREVIEW_SOURCES)?;
+            match source {
+                Some(source) => table.insert(id.as_str(), encode(source)?.as_slice())?,
+                None => table.remove(id.as_str())?,
+            };
+            Ok(vec![ChangeKey::PreviewSource { id: id.clone() }])
+        }
         Mutation::PruneDeployments { service_id, keep } => {
             prune_deployments(transaction, service_id, *keep)
         }
@@ -535,6 +567,9 @@ fn delete_service(transaction: &WriteTransaction, id: &ServiceId) -> Result<Vec<
     transaction.open_table(SERVICES)?.remove(id.as_str())?;
     transaction
         .open_table(SERVICE_CONTROLS)?
+        .remove(id.as_str())?;
+    transaction
+        .open_table(PREVIEW_SOURCES)?
         .remove(id.as_str())?;
     let deployment_keys = service_deployments(transaction, id)?
         .iter()

@@ -7,8 +7,9 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maestro_core::{
     Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, MAX_REPLICAS_OVERRIDE,
-    Millicores, NodeCapacity, NodeId, NodeRecord, NodeState, ReplicaId, ReplicaStatus, RouteTable,
-    ServiceControls, ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica,
+    Millicores, NodeCapacity, NodeId, NodeRecord, NodeState, PreviewSource, ReplicaId,
+    ReplicaStatus, RouteTable, ServiceControls, ServiceId, ServiceSpec, ServicesFile, SpecError,
+    UnschedulableReplica,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,8 @@ struct ServiceSummary {
     deploy_frozen: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     replicas_override: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_source: Option<PreviewSource>,
 }
 
 #[derive(Default, Serialize)]
@@ -231,6 +234,10 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
 ) -> Result<Json<Vec<ServiceSummary>>, ControlError> {
     let store = state.writer.state();
+    let previews = store
+        .preview_sources()?
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
     store
         .services()?
         .into_iter()
@@ -241,7 +248,9 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
                 .max_by_key(|deployment| deployment.created_at_ms)
                 .map(masked_deployment);
             let controls = store.service_controls(&id)?;
+            let preview_source = previews.get(&id).cloned();
             Ok(ServiceSummary {
+                preview_source,
                 spec: mask_spec(&spec),
                 latest_deployment,
                 deploy_frozen: controls.frozen,
@@ -278,36 +287,7 @@ async fn delete_service<W: StoreWriter, O: ObservedReplicas>(
     match store.service(&id)? {
         None => Err(ControlError::NotFound(format!("service {id}"))),
         Some(_) => {
-            let now = unix_millis();
-            let stops = store
-                .deployments(&id)?
-                .into_iter()
-                .filter(|deployment| !deployment.status.is_terminal())
-                .map(|deployment| Mutation::SetDeploymentStatus {
-                    service_id: id.clone(),
-                    deployment_id: deployment.id,
-                    status: DeploymentStatus::Cancelled,
-                    image: None,
-                    failure: None,
-                    at_ms: now,
-                });
-            let releases = store
-                .nodes()?
-                .iter()
-                .map(|node| {
-                    let kept = store
-                        .assignments(node.id)?
-                        .into_iter()
-                        .filter(|assignment| assignment.service_id != id)
-                        .collect();
-                    Ok(Mutation::SetNodeAssignments {
-                        node_id: node.id,
-                        assignments: kept,
-                    })
-                })
-                .collect::<Result<Vec<_>, ControlError>>()?;
-            let deletion = Mutation::DeleteService { id: id.clone() };
-            let mutations = stops.chain(releases).chain([deletion]).collect();
+            let mutations = service_deletion(store, &id)?;
             state.writer.write(mutations).await?;
             Ok(StatusCode::NO_CONTENT)
         }
@@ -642,7 +622,12 @@ async fn set_replicas<W: StoreWriter, O: ObservedReplicas>(
         .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
     let configured = spec.deploy.replicas;
     let writable_volume = spec.deploy.volumes.iter().any(|volume| !volume.read_only);
+    let preview = store
+        .preview_sources()?
+        .iter()
+        .any(|(preview, _)| *preview == id);
     let problem = match request.replicas {
+        _ if preview => Some("preview services are fixed at 1 replica".to_string()),
         0 => Some("replicas must be at least 1".to_string()),
         replicas if replicas > MAX_REPLICAS_OVERRIDE => {
             Some(format!("replicas cannot exceed {MAX_REPLICAS_OVERRIDE}"))
@@ -875,6 +860,44 @@ async fn write_replicas_override<W: StoreWriter, O: ObservedReplicas>(
         }])
         .await?;
     Ok(())
+}
+
+pub fn service_deletion(
+    store: &maestro_store::StateMachine,
+    id: &ServiceId,
+) -> Result<Vec<Mutation>, ControlError> {
+    let now = unix_millis();
+    let stops = store
+        .deployments(id)?
+        .into_iter()
+        .filter(|deployment| !deployment.status.is_terminal())
+        .map(|deployment| Mutation::SetDeploymentStatus {
+            service_id: id.clone(),
+            deployment_id: deployment.id,
+            status: DeploymentStatus::Cancelled,
+            image: None,
+            failure: None,
+            at_ms: now,
+        });
+    let releases = store
+        .nodes()?
+        .iter()
+        .map(|node| {
+            let kept = store
+                .assignments(node.id)?
+                .into_iter()
+                .filter(|assignment| &assignment.service_id != id)
+                .collect();
+            Ok(Mutation::SetNodeAssignments {
+                node_id: node.id,
+                assignments: kept,
+            })
+        })
+        .collect::<Result<Vec<_>, ControlError>>()?;
+    Ok(stops
+        .chain(releases)
+        .chain([Mutation::DeleteService { id: id.clone() }])
+        .collect())
 }
 
 fn reject_frozen(
