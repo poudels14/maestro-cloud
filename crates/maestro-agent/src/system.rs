@@ -8,9 +8,12 @@ use maestro_runtime::{
     BindMount, ContainerLimits, ContainerSpec, ContainerState, NetworkMode, Runtime,
 };
 
+use sha2::{Digest, Sha256};
+
 use crate::ingress::entry_point_name;
 
 const SYSTEM_LABEL: &str = "maestro.system";
+const SPEC_HASH_LABEL: &str = "maestro.spec-hash";
 const SYSTEM_SLICE: &str = "maestro-system.slice";
 const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(10);
@@ -29,7 +32,7 @@ impl<R: Runtime> SystemSupervisor<R> {
     pub fn new(runtime: Arc<R>, containers: Vec<ContainerSpec>) -> Self {
         Self {
             runtime,
-            containers,
+            containers: containers.into_iter().map(with_spec_hash).collect(),
         }
     }
 
@@ -46,18 +49,23 @@ impl<R: Runtime> SystemSupervisor<R> {
             Ok(containers) => containers
                 .into_iter()
                 .filter(|container| container.state == ContainerState::Running)
-                .map(|container| container.id)
+                .map(|container| (container.id, container.labels.get(SPEC_HASH_LABEL).cloned()))
                 .collect::<Vec<_>>(),
             Err(error) => {
                 tracing::warn!(%error, "failed to list system containers");
                 Vec::new()
             }
         };
-        for spec in self
-            .containers
-            .iter()
-            .filter(|spec| !running.contains(&spec.id))
-        {
+        let current = |spec: &ContainerSpec| {
+            running.iter().any(|(id, hash)| {
+                *id == spec.id && hash.as_ref() == spec.labels.get(SPEC_HASH_LABEL)
+            })
+        };
+        for spec in self.containers.iter().filter(|spec| !current(spec)) {
+            if running.iter().any(|(id, _)| *id == spec.id) {
+                tracing::info!(container = %spec.id, "replacing system container with a changed spec");
+                let _ = self.runtime.stop(&spec.id, STOP_GRACE).await;
+            }
             let started = match self.runtime.pull(&spec.image).await {
                 Ok(()) => self.runtime.start(spec).await.map(|_| ()),
                 Err(error) => Err(error),
@@ -146,6 +154,15 @@ pub fn admin_container(image: &str, api_socket: &Path) -> ContainerSpec {
     }
 }
 
+fn with_spec_hash(mut spec: ContainerSpec) -> ContainerSpec {
+    let digest = Sha256::digest(format!("{spec:?}").as_bytes());
+    spec.labels.insert(
+        SPEC_HASH_LABEL.to_string(),
+        hex::encode(digest)[..16].to_string(),
+    );
+    spec
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +188,24 @@ mod tests {
         assert_eq!(spec.cgroup_parent, "maestro-system.slice");
         assert_eq!(spec.network, NetworkMode::Host);
         assert_eq!(spec.mounts[0].destination, TRAEFIK_CONFIG_MOUNT);
+    }
+
+    #[tokio::test]
+    async fn replaces_system_containers_whose_spec_changed() {
+        let runtime = Arc::new(maestro_runtime::FakeRuntime::default());
+        let original = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80]);
+        SystemSupervisor::new(runtime.clone(), vec![original.clone()])
+            .ensure_running()
+            .await;
+        SystemSupervisor::new(runtime.clone(), vec![original])
+            .ensure_running()
+            .await;
+        assert_eq!(runtime.start_count("maestro-traefik"), 1);
+
+        let changed = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80, 443]);
+        SystemSupervisor::new(runtime.clone(), vec![changed])
+            .ensure_running()
+            .await;
+        assert_eq!(runtime.start_count("maestro-traefik"), 2);
     }
 }
