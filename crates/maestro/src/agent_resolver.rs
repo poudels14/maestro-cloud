@@ -9,6 +9,7 @@ use maestro_telemetry::{DeploymentFromReplicaId, ReplicaIdentity, ReplicaResolve
 use crate::unix_http;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const SYSTEM_CONTAINER_PREFIX: &str = "maestro-";
 
 #[derive(Default)]
 pub struct AgentReplicaResolver {
@@ -61,11 +62,13 @@ impl ReplicaResolver for AgentReplicaResolver {
     }
 
     fn is_live(&self, replica_id: &str) -> bool {
-        self.replicas
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref()
-            .is_none_or(|replicas| replicas.contains_key(replica_id))
+        replica_id.starts_with(SYSTEM_CONTAINER_PREFIX)
+            || self
+                .replicas
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .is_none_or(|replicas| replicas.contains_key(replica_id))
     }
 }
 
@@ -73,4 +76,18 @@ async fn fetch_replicas(api_socket: &Path) -> anyhow::Result<Vec<ReplicaStatus>>
     let (status, body) = unix_http::get(api_socket, "/api/replicas").await?;
     anyhow::ensure!(status.is_success(), "agent returned {status}");
     Ok(serde_json::from_slice(&body)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_containers_stay_live_while_replicas_follow_the_agent() {
+        let resolver = AgentReplicaResolver::default();
+        resolver.replace(Vec::new());
+        assert!(resolver.is_live("maestro-traefik"));
+        assert!(resolver.is_live("maestro-admin"));
+        assert!(!resolver.is_live("d1-0"));
+    }
 }
