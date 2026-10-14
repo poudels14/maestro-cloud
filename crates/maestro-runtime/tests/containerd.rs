@@ -7,7 +7,7 @@ use std::time::Duration;
 use maestro_core::{ByteSize, Millicores};
 use maestro_runtime::{
     CniNetwork, ContainerLimits, ContainerSpec, ContainerState, ContainerdRuntime,
-    ContainerdSettings, NetworkMode, Runtime, RuntimeEvent,
+    ContainerdSettings, ExecRequest, NetworkMode, Runtime, RuntimeEvent,
 };
 
 const IMAGE: &str = "busybox:1.36";
@@ -162,6 +162,85 @@ async fn export_and_import() {
         RuntimeEvent::Exited { exit_code: 0, .. }
     ));
     runtime.remove("imported-1").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn execs_commands_in_running_containers() {
+    if enabled() {
+        exec_in_container().await;
+    }
+}
+
+async fn exec_in_container() {
+    let state = tempfile::tempdir().unwrap();
+    let runtime = runtime(state.path()).await;
+    runtime.pull(IMAGE).await.unwrap();
+    let spec = container("exec-1", &["sleep", "3600"], ByteSize::new(64 << 20));
+    runtime.start(&spec).await.unwrap();
+
+    let mut session = runtime
+        .exec(ExecRequest {
+            container_id: "exec-1".to_string(),
+            argv: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo out; echo err >&2; exit 3".to_string(),
+            ],
+            tty: false,
+            size: None,
+        })
+        .await
+        .unwrap();
+    let exit = tokio::time::timeout(EVENT_TIMEOUT, &mut session.exit)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let output = drain(&mut session.output).await;
+    assert_eq!(exit, 3);
+    assert!(
+        output.contains("out") && output.contains("err"),
+        "{output:?}"
+    );
+    runtime.remove_exec(session).await;
+
+    let mut session = runtime
+        .exec(ExecRequest {
+            container_id: "exec-1".to_string(),
+            argv: vec!["sh".to_string()],
+            tty: true,
+            size: Some((120, 40)),
+        })
+        .await
+        .unwrap();
+    let stdin = session.stdin.as_mut().unwrap();
+    tokio::io::AsyncWriteExt::write_all(stdin, b"stty size; exit 5\n")
+        .await
+        .unwrap();
+    let exit = tokio::time::timeout(EVENT_TIMEOUT, &mut session.exit)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let output = drain(&mut session.output).await;
+    assert_eq!(exit, 5);
+    assert!(output.contains("40 120"), "{output:?}");
+    runtime.remove_exec(session).await;
+    runtime
+        .stop("exec-1", Duration::from_secs(1))
+        .await
+        .unwrap();
+    runtime.remove("exec-1").await.unwrap();
+}
+
+async fn drain(output: &mut tokio::sync::mpsc::Receiver<Vec<u8>>) -> String {
+    let mut collected = Vec::new();
+    while let Ok(Some(chunk)) =
+        tokio::time::timeout(Duration::from_millis(300), output.recv()).await
+    {
+        collected.extend(chunk);
+    }
+    String::from_utf8_lossy(&collected).to_string()
 }
 
 async fn limits_and_exit() {

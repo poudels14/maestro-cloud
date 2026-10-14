@@ -16,5 +16,6 @@ pub use reference::normalize as normalize_image_reference;
 pub use registry::{RegistryClient, RegistryError};
 pub use spec::{
     BindMount, ContainerFiles, ContainerLimits, ContainerSpec, ContainerState, ContainerStatus,
-    ImageConfig, NetworkMode, Runtime, RuntimeError, RuntimeEvent, StartedContainer,
+    ExecRequest, ExecSession, ImageConfig, NetworkMode, Runtime, RuntimeError, RuntimeEvent,
+    StartedContainer,
 };

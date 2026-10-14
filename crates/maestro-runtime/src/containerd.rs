@@ -8,9 +8,10 @@ use containerd_client::services::v1::container::Runtime as ContainerRuntime;
 use containerd_client::services::v1::snapshots::{PrepareSnapshotRequest, RemoveSnapshotRequest};
 use containerd_client::services::v1::streaming_client::StreamingClient;
 use containerd_client::services::v1::{
-    Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
-    DeleteImageRequest, DeleteTaskRequest, GetImageRequest, GetRequest, KillRequest,
-    ListContainersRequest, ReadContentRequest, StartRequest, SubscribeRequest, TransferRequest,
+    CloseIoRequest, Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
+    DeleteImageRequest, DeleteProcessRequest, DeleteTaskRequest, ExecProcessRequest,
+    GetContainerRequest, GetImageRequest, GetRequest, KillRequest, ListContainersRequest,
+    ReadContentRequest, ResizePtyRequest, StartRequest, SubscribeRequest, TransferRequest,
     WaitRequest,
 };
 use containerd_client::services::v1::{
@@ -37,8 +38,8 @@ use crate::cni::CniNetwork;
 use crate::oci;
 use crate::reference;
 use crate::spec::{
-    ContainerFiles, ContainerSpec, ContainerState, ContainerStatus, ImageConfig, NetworkMode,
-    Runtime, RuntimeError, RuntimeEvent, StartedContainer,
+    ContainerFiles, ContainerSpec, ContainerState, ContainerStatus, ExecRequest, ExecSession,
+    ImageConfig, NetworkMode, Runtime, RuntimeError, RuntimeEvent, StartedContainer,
 };
 
 const NAMESPACE_HEADER: &str = "containerd-namespace";
@@ -53,6 +54,7 @@ const SIGTERM: u32 = 15;
 const SIGKILL: u32 = 9;
 const KILL_WAIT: Duration = Duration::from_secs(10);
 const STREAM_CHUNK: usize = 32 * 1024;
+const PROCESS_TYPE_URL: &str = "types.containerd.io/opencontainers/runtime-spec/1/Process";
 const STREAM_BUFFER: usize = 16;
 const EXPORT_WINDOW: i64 = 64 << 20;
 const EXPORT_DRAIN_IDLE: Duration = Duration::from_millis(500);
@@ -581,6 +583,154 @@ impl ContainerdRuntime {
     }
 }
 
+impl ContainerdRuntime {
+    pub async fn exec(&self, request: ExecRequest) -> Result<ExecSession, RuntimeError> {
+        let exec_id = stream_id("exec");
+        let directory = self.settings.state_dir.join("exec").join(&exec_id);
+        tokio::fs::create_dir_all(&directory).await?;
+        let stdin_path = directory.join("stdin");
+        let stdout_path = directory.join("stdout");
+        let stderr_path = directory.join("stderr");
+        let fifos = match request.tty {
+            true => vec![&stdin_path, &stdout_path],
+            false => vec![&stdin_path, &stdout_path, &stderr_path],
+        };
+        fifos.into_iter().try_for_each(|path| make_fifo(path))?;
+        let process = self.exec_process(&request).await?;
+        let stdin = open_fifo_sender(&stdin_path)?;
+        let (output_sender, output) = mpsc::channel(STREAM_BUFFER);
+        let readers = match request.tty {
+            true => vec![&stdout_path],
+            false => vec![&stdout_path, &stderr_path],
+        };
+        for path in readers {
+            let receiver = open_fifo_receiver(path)?;
+            tokio::spawn(forward_output(receiver, output_sender.clone()));
+        }
+        let mut tasks = TasksClient::new(self.channel.clone());
+        tasks
+            .exec(self.request(ExecProcessRequest {
+                container_id: request.container_id.clone(),
+                stdin: stdin_path.to_string_lossy().to_string(),
+                stdout: stdout_path.to_string_lossy().to_string(),
+                stderr: match request.tty {
+                    true => String::new(),
+                    false => stderr_path.to_string_lossy().to_string(),
+                },
+                terminal: request.tty,
+                spec: Some(process),
+                exec_id: exec_id.clone(),
+            }))
+            .await?;
+        let (exit_sender, exit) = tokio::sync::oneshot::channel();
+        let mut waiter = TasksClient::new(self.channel.clone());
+        let wait_request = self.request(WaitRequest {
+            container_id: request.container_id.clone(),
+            exec_id: exec_id.clone(),
+        });
+        tokio::spawn(async move {
+            let status = waiter
+                .wait(wait_request)
+                .await
+                .map(|response| response.into_inner().exit_status)
+                .map_err(RuntimeError::from);
+            let _ = exit_sender.send(status);
+        });
+        tasks
+            .start(self.request(StartRequest {
+                container_id: request.container_id.clone(),
+                exec_id: exec_id.clone(),
+            }))
+            .await?;
+        if let Some((cols, rows)) = request.size {
+            self.resize_exec(&request.container_id, &exec_id, cols, rows)
+                .await?;
+        }
+        Ok(ExecSession {
+            container_id: request.container_id,
+            exec_id,
+            stdin: Some(stdin),
+            output,
+            exit,
+        })
+    }
+
+    pub async fn resize_exec(
+        &self,
+        container_id: &str,
+        exec_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), RuntimeError> {
+        TasksClient::new(self.channel.clone())
+            .resize_pty(self.request(ResizePtyRequest {
+                container_id: container_id.to_string(),
+                exec_id: exec_id.to_string(),
+                width: cols.into(),
+                height: rows.into(),
+            }))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn close_exec_stdin(&self, session: &mut ExecSession) -> Result<(), RuntimeError> {
+        session.stdin = None;
+        TasksClient::new(self.channel.clone())
+            .close_io(self.request(CloseIoRequest {
+                container_id: session.container_id.clone(),
+                exec_id: session.exec_id.clone(),
+                stdin: true,
+            }))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_exec(&self, session: ExecSession) {
+        let mut tasks = TasksClient::new(self.channel.clone());
+        let _ = tasks
+            .kill(self.request(KillRequest {
+                container_id: session.container_id.clone(),
+                exec_id: session.exec_id.clone(),
+                signal: SIGKILL,
+                all: false,
+            }))
+            .await;
+        let _ = tasks
+            .delete_process(self.request(DeleteProcessRequest {
+                container_id: session.container_id.clone(),
+                exec_id: session.exec_id.clone(),
+            }))
+            .await;
+        let _ =
+            tokio::fs::remove_dir_all(self.settings.state_dir.join("exec").join(&session.exec_id))
+                .await;
+    }
+
+    async fn exec_process(&self, request: &ExecRequest) -> Result<Any, RuntimeError> {
+        let container = ContainersClient::new(self.channel.clone())
+            .get(self.request(GetContainerRequest {
+                id: request.container_id.clone(),
+            }))
+            .await?
+            .into_inner()
+            .container
+            .ok_or_else(|| RuntimeError::NotFound(request.container_id.clone()))?;
+        let spec: serde_json::Value = serde_json::from_slice(
+            &container
+                .spec
+                .ok_or_else(|| RuntimeError::NotFound(request.container_id.clone()))?
+                .value,
+        )?;
+        let mut process = spec["process"].clone();
+        process["args"] = serde_json::json!(request.argv);
+        process["terminal"] = serde_json::json!(request.tty);
+        Ok(Any {
+            type_url: PROCESS_TYPE_URL.to_string(),
+            value: serde_json::to_vec(&process)?,
+        })
+    }
+}
+
 impl Runtime for ContainerdRuntime {
     async fn pull(&self, image: &str) -> Result<(), RuntimeError> {
         let name = reference::normalize(image);
@@ -832,6 +982,61 @@ fn matches_platform(candidate: &ManifestPlatform, host: &Platform) -> bool {
 
 fn file_uri(path: &Path) -> String {
     format!("file://{}", path.display())
+}
+
+#[cfg(target_os = "linux")]
+fn make_fifo(path: &Path) -> std::io::Result<()> {
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(target_os = "linux")]
+fn open_fifo_sender(path: &Path) -> std::io::Result<tokio::net::unix::pipe::Sender> {
+    tokio::net::unix::pipe::OpenOptions::new()
+        .read_write(true)
+        .open_sender(path)
+}
+
+#[cfg(target_os = "linux")]
+fn open_fifo_receiver(path: &Path) -> std::io::Result<tokio::net::unix::pipe::Receiver> {
+    tokio::net::unix::pipe::OpenOptions::new()
+        .read_write(true)
+        .open_receiver(path)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn make_fifo(_path: &Path) -> std::io::Result<()> {
+    Err(exec_unsupported())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_fifo_sender(_path: &Path) -> std::io::Result<tokio::net::unix::pipe::Sender> {
+    Err(exec_unsupported())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_fifo_receiver(_path: &Path) -> std::io::Result<tokio::net::unix::pipe::Receiver> {
+    Err(exec_unsupported())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn exec_unsupported() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Unsupported, "exec needs Linux")
+}
+
+async fn forward_output(
+    mut receiver: tokio::net::unix::pipe::Receiver,
+    output: mpsc::Sender<Vec<u8>>,
+) {
+    let mut buffer = vec![0u8; STREAM_CHUNK];
+    while let Ok(read) = tokio::io::AsyncReadExt::read(&mut receiver, &mut buffer).await
+        && read > 0
+        && output.send(buffer[..read].to_vec()).await.is_ok()
+    {}
 }
 
 fn stream_id(prefix: &str) -> String {

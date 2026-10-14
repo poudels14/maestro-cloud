@@ -23,6 +23,22 @@ pub struct ContainerSpec {
     pub network: NetworkMode,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecRequest {
+    pub container_id: String,
+    pub argv: Vec<String>,
+    pub tty: bool,
+    pub size: Option<(u16, u16)>,
+}
+
+pub struct ExecSession {
+    pub container_id: String,
+    pub exec_id: String,
+    pub stdin: Option<tokio::net::unix::pipe::Sender>,
+    pub output: mpsc::Receiver<Vec<u8>>,
+    pub exit: tokio::sync::oneshot::Receiver<Result<u32, RuntimeError>>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NetworkMode {
     #[default]
