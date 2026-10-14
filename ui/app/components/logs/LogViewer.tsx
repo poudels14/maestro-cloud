@@ -497,7 +497,7 @@ function LogViewer(props: {
       })}
     >
       <Show when={props.showHistogram}>
-        <div class="shrink-0 border-b border-gray-100 px-3 pt-3 pb-1.5">
+        <div class="shrink-0 border-b border-gray-100 px-3 pt-2 pb-1">
           <div class="flex flex-wrap items-center justify-between gap-2 px-1">
             <div class="flex items-center gap-2 min-w-0">
               <Show when={histogram()}>
@@ -537,7 +537,7 @@ function LogViewer(props: {
                     type="button"
                     onClick={() => selectRange(range.ms)}
                     class={clsx(
-                      "text-[11px] px-2.5 py-1 rounded outline-none tabular-nums transition-[transform,color,background-color,box-shadow] duration-150 ease-out-strong active:scale-[0.96]",
+                      "text-[11px] px-2.5 py-0.5 rounded outline-none tabular-nums transition-[transform,color,background-color,box-shadow] duration-150 ease-out-strong active:scale-[0.96]",
                       {
                         "bg-white text-gray-900 shadow-sm font-medium": rangeMs() === range.ms,
                         "text-gray-500 hover:text-gray-700": rangeMs() !== range.ms
@@ -553,7 +553,7 @@ function LogViewer(props: {
           <Show when={histogramError()}>
             <div
               class={clsx("flex items-center justify-center gap-2 text-xs text-red-500", {
-                "h-28": !histogram(),
+                "h-20": !histogram(),
                 "pt-2": histogram()
               })}
             >
@@ -568,7 +568,7 @@ function LogViewer(props: {
             </div>
           </Show>
           <Show when={!histogramError() && histogramLoading() && !histogram()}>
-            <div class="h-28 flex items-center justify-center text-gray-400">
+            <div class="h-20 flex items-center justify-center text-gray-400">
               <Loader2 class="size-4 animate-spin" />
             </div>
           </Show>

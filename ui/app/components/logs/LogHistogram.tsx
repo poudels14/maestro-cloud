@@ -60,8 +60,8 @@ function LogHistogramChart(props: {
 }) {
   let containerRef: HTMLDivElement | undefined;
   let svgRef: SVGSVGElement | undefined;
-  const height = 132;
-  const margin = { top: 12, right: 12, bottom: 26, left: 42 };
+  const height = 80;
+  const margin = { top: 6, right: 12, bottom: 20, left: 42 };
 
   const render = () => {
     if (!containerRef || !svgRef) return;
@@ -105,7 +105,7 @@ function LogHistogramChart(props: {
       .call(
         d3
           .axisLeft(yScale)
-          .ticks(3)
+          .ticks(2)
           .tickFormat((value) => d3.format("~s")(value.valueOf()))
       )
       .call((axis) => axis.select(".domain").remove())
