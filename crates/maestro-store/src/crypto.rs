@@ -117,6 +117,17 @@ fn map_env_values<E>(
     };
     let mut mapped = spec.clone();
     mapped.deploy.env = map_env(&spec.deploy.env)?;
+    if let (Some(original), Some(secrets)) = (&spec.deploy.secrets, mapped.deploy.secrets.as_mut())
+    {
+        secrets.items = map_env(&EnvSpec {
+            source: None,
+            items: original.items.clone(),
+        })?
+        .items;
+    }
+    if let (Some(original), Some(preview)) = (&spec.preview, mapped.preview.as_mut()) {
+        preview.env = map_env(&original.env)?;
+    }
     if let (Some(original), Some(build)) = (&spec.build, mapped.build.as_mut()) {
         build.env = map_env(&original.env)?;
         build.secrets = map_env(&original.secrets)?;
@@ -137,7 +148,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use maestro_core::{BuildSpec, DeploySpec};
+    use maestro_core::{BuildSpec, DeploySpec, PreviewSpec, SecretsSpec};
 
     use super::*;
 
@@ -167,10 +178,23 @@ mod tests {
                     source: Some("aws-secret://prod/api".to_string()),
                     items: BTreeMap::from([("DB_PASSWORD".to_string(), "hunter2".to_string())]),
                 },
+                secrets: Some(SecretsSpec {
+                    mount_path: "/run/secrets".to_string(),
+                    source: None,
+                    items: BTreeMap::from([("tls.key".to_string(), "private".to_string())]),
+                }),
                 ..DeploySpec::default()
             },
             ingress: None,
-            preview: None,
+            preview: Some(PreviewSpec {
+                enabled: true,
+                close_grace_period: "1h".to_string(),
+                replicas: 1,
+                env: EnvSpec {
+                    source: None,
+                    items: BTreeMap::from([("PREVIEW_TOKEN".to_string(), "preview".to_string())]),
+                },
+            }),
         }
     }
 
@@ -205,7 +229,15 @@ mod tests {
             Some("aws-secret://prod/api")
         );
         assert_eq!(key.open_spec(&sealed).unwrap(), spec());
-        assert_eq!(mask_spec(&sealed).deploy.env.items["DB_PASSWORD"], MASK);
+        let secret_files = &sealed.deploy.secrets.as_ref().unwrap().items;
+        assert!(secret_files["tls.key"].starts_with(SEALED_PREFIX));
+        assert!(
+            sealed.preview.as_ref().unwrap().env.items["PREVIEW_TOKEN"].starts_with(SEALED_PREFIX)
+        );
+        let masked = mask_spec(&sealed);
+        assert_eq!(masked.deploy.env.items["DB_PASSWORD"], MASK);
+        assert_eq!(masked.deploy.secrets.unwrap().items["tls.key"], MASK);
+        assert_eq!(masked.preview.unwrap().env.items["PREVIEW_TOKEN"], MASK);
     }
 
     #[test]
