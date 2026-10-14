@@ -410,7 +410,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   mounts (`K="v"` lines, 0600, zeroed on stop); `GH_TOKEN` build secret for git auth.
 - [x] W4 builds: `build.watch` (git ls-remote polling with backoff), Depot, `maestro
   services up` (tar.gz upload honoring .gitignore/.dockerignore, `allowCliDeployment`).
-- [ ] W5 observability: container and node metrics from cgroups, disk usage, Traefik
+- [x] W5 observability (maestro's own agent/telemetry logs stay in journald for now): container and node metrics from cgroups, disk usage, Traefik
   Prometheus traffic metrics, access-log analytics (client IP rules, per-minute
   ip/path buckets), log histograms, cluster/system log fan-out, cluster stats with
   warnings, 7-day metric retention, Parquet partitioning by service/deployment/date.

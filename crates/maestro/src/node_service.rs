@@ -62,6 +62,7 @@ pub enum NodeRequest {
     Telemetry {
         path: String,
     },
+    Info,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -84,6 +85,7 @@ pub struct NodeService {
     runtime: Arc<ContainerdRuntime>,
     uploads: Option<(Arc<SecretKey>, PathBuf)>,
     exec_limiter: ExecLimiter,
+    started: std::time::Instant,
 }
 
 #[derive(Clone)]
@@ -129,6 +131,7 @@ impl NodeService {
             runtime,
             uploads: None,
             exec_limiter: ExecLimiter::default(),
+            started: std::time::Instant::now(),
         }
     }
 
@@ -175,6 +178,16 @@ impl NodeService {
                 )),
             },
             NodeRequest::Disks => encode_value(&maestro_agent::disks()),
+            NodeRequest::Info => {
+                let telemetry = unix_http::get(&self.telemetry_socket, "/health")
+                    .await
+                    .is_ok_and(|(status, _)| status.is_success());
+                Ok(json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "uptimeMs": self.started.elapsed().as_millis() as u64,
+                    "telemetry": telemetry,
+                }))
+            }
             NodeRequest::Telemetry { path } => {
                 let (status, body) = unix_http::get(&self.telemetry_socket, &path)
                     .await

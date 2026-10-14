@@ -125,6 +125,136 @@ pub async fn container_metrics(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeStats {
+    node_id: NodeId,
+    node_name: String,
+    version: Option<String>,
+    uptime_ms: Option<u64>,
+    available: bool,
+    telemetry: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsWarning {
+    code: String,
+    severity: &'static str,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterStats {
+    generated_at_ms: i64,
+    term: u64,
+    leader: Option<NodeId>,
+    nodes: Vec<NodeStats>,
+    warnings: Vec<StatsWarning>,
+}
+
+pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
+    match nodes(&access) {
+        Err(error) => respond::<()>(Err(error)),
+        Ok(nodes) => {
+            let metrics = access.consensus.metrics();
+            let leader = access.consensus.current_leader().map(|(leader, _)| leader);
+            let records = nodes
+                .iter()
+                .map(|node| (node.id, node.state))
+                .collect::<BTreeMap<_, _>>();
+            let mut stats = call_nodes(&access.clients, nodes, NodeRequest::Info)
+                .await
+                .into_iter()
+                .map(|(node_id, node_name, reply)| {
+                    let info = reply.ok();
+                    NodeStats {
+                        node_id,
+                        node_name,
+                        version: info
+                            .as_ref()
+                            .and_then(|info| info["version"].as_str().map(str::to_string)),
+                        uptime_ms: info.as_ref().and_then(|info| info["uptimeMs"].as_u64()),
+                        available: info.is_some(),
+                        telemetry: info
+                            .as_ref()
+                            .is_some_and(|info| info["telemetry"].as_bool() == Some(true)),
+                    }
+                })
+                .collect::<Vec<_>>();
+            stats.sort_by(|left, right| left.node_name.cmp(&right.node_name));
+            let warnings = stats_warnings(&stats, &records, leader);
+            Json(ClusterStats {
+                generated_at_ms: now_ms(),
+                term: metrics.term,
+                leader,
+                nodes: stats,
+                warnings,
+            })
+            .into_response()
+        }
+    }
+}
+
+fn stats_warnings(
+    stats: &[NodeStats],
+    states: &BTreeMap<NodeId, NodeState>,
+    leader: Option<NodeId>,
+) -> Vec<StatsWarning> {
+    let warning = |code: String, severity: &'static str, message: String| StatsWarning {
+        code,
+        severity,
+        message,
+    };
+    let unreachable = stats
+        .iter()
+        .filter(|node| !node.available && states.get(&node.node_id) == Some(&NodeState::Active))
+        .map(|node| {
+            warning(
+                format!("node-{}-unreachable", node.node_id),
+                "error",
+                format!("node {} is not responding", node.node_name),
+            )
+        });
+    let telemetry = stats
+        .iter()
+        .filter(|node| node.available && !node.telemetry)
+        .map(|node| {
+            warning(
+                format!("node-{}-telemetry-unreachable", node.node_id),
+                "error",
+                format!("telemetry is not running on node {}", node.node_name),
+            )
+        });
+    let versions = stats
+        .iter()
+        .filter_map(|node| node.version.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mismatch = (versions.len() > 1).then(|| {
+        warning(
+            "version-mismatch".to_string(),
+            "warning",
+            format!(
+                "nodes run different maestro versions: {}",
+                versions.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        )
+    });
+    let no_leader = leader.is_none().then(|| {
+        warning(
+            "no-leader".to_string(),
+            "error",
+            "the control plane has no leader".to_string(),
+        )
+    });
+    unreachable
+        .chain(telemetry)
+        .chain(mismatch)
+        .chain(no_leader)
+        .collect()
+}
+
 pub async fn ingress_traffic(state: State<ClusterAccess>, range: Query<RangeQuery>) -> Response {
     traffic_breakdown(state, range, "cluster", None).await
 }
@@ -545,6 +675,43 @@ mod tests {
         assert_eq!(
             summary,
             [("a", 200, 5, 5), ("a", 404, 1, 3), ("b", 200, 4, 2)]
+        );
+    }
+
+    #[test]
+    fn warns_about_unreachable_nodes_telemetry_versions_and_leadership() {
+        let node = |id: u64, version: Option<&str>, available: bool, telemetry: bool| NodeStats {
+            node_id: NodeId(id),
+            node_name: format!("node{id}"),
+            version: version.map(str::to_string),
+            uptime_ms: None,
+            available,
+            telemetry,
+        };
+        let stats = [
+            node(1, Some("3.0.0"), true, true),
+            node(2, Some("3.0.1"), true, false),
+            node(3, None, false, false),
+            node(4, None, false, false),
+        ];
+        let states = BTreeMap::from([
+            (NodeId(1), NodeState::Active),
+            (NodeId(2), NodeState::Active),
+            (NodeId(3), NodeState::Active),
+            (NodeId(4), NodeState::Draining),
+        ]);
+        let codes = stats_warnings(&stats, &states, None)
+            .into_iter()
+            .map(|warning| warning.code)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            [
+                "node-3-unreachable",
+                "node-2-telemetry-unreachable",
+                "version-mismatch",
+                "no-leader"
+            ]
         );
     }
 }
