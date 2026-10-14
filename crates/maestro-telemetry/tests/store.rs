@@ -6,7 +6,7 @@ use maestro_telemetry::{
 };
 
 const OLD_TS: u64 = 1_700_000_000_000;
-const OLD_PARTITION: &str = "date=2023-11-14";
+const OLD_PARTITION: &str = "service_id=api/deployment_id=dep1/date=2023-11-14";
 
 fn record(ts: u64, line: &str) -> LogRecord {
     LogRecord {
@@ -552,4 +552,53 @@ async fn buckets_log_counts_by_level_and_status_class() {
         .flat_map(|bucket| bucket.levels.keys().cloned())
         .collect::<Vec<_>>();
     assert_eq!(classes, ["2xx", "4xx"]);
+}
+
+#[tokio::test]
+async fn partitions_parquet_by_service_deployment_and_date() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    ingest(
+        &store,
+        "dep1-0",
+        &identity("api", "dep1"),
+        &[record(OLD_TS, "api line")],
+    );
+    ingest(
+        &store,
+        "dep2-0",
+        &identity("worker", "dep2"),
+        &[record(OLD_TS, "worker line")],
+    );
+    ingest(
+        &store,
+        "maestro-traefik",
+        &ReplicaIdentity::default(),
+        &[record(OLD_TS, "system line")],
+    );
+    store.rollover().await.unwrap();
+
+    let parts = directory.path().join("parts");
+    for partition in [
+        "service_id=api/deployment_id=dep1/date=2023-11-14",
+        "service_id=worker/deployment_id=dep2/date=2023-11-14",
+        "service_id=_system/deployment_id=_none/date=2023-11-14",
+    ] {
+        assert_eq!(
+            parquet_files(&parts.join(partition)).len(),
+            1,
+            "{partition}"
+        );
+    }
+    let logs = store
+        .read_logs(LogQuery {
+            search: None,
+            before: None,
+            before_ts: None,
+            after_ts: None,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(logs.len(), 3);
 }

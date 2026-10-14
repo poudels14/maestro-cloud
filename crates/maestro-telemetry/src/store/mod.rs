@@ -245,8 +245,11 @@ impl LogStore {
     }
 }
 
-fn partition_directory(parts_root: &Path, date: &str) -> PathBuf {
-    parts_root.join(format!("date={date}"))
+fn partition_directory(parts_root: &Path, partition_key: &str) -> PathBuf {
+    match partition_key.contains('=') {
+        true => parts_root.join(partition_key),
+        false => parts_root.join(format!("date={partition_key}")),
+    }
 }
 
 fn contains_parquet(root: &Path) -> bool {

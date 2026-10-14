@@ -65,7 +65,7 @@ pub(super) fn log_source(parts_root: &Path) -> String {
     let hot = format!("SELECT {PROJECTION} FROM logs");
     match contains_parquet(parts_root) {
         true => {
-            let glob = parts_root.join("date=*").join("part-*.parquet");
+            let glob = parts_root.join("**").join("part-*.parquet");
             format!(
                 r#"
                     {hot}
@@ -73,7 +73,7 @@ pub(super) fn log_source(parts_root: &Path) -> String {
                     SELECT {PROJECTION}
                     FROM read_parquet(
                         {},
-                        hive_partitioning = true,
+                        hive_partitioning = false,
                         union_by_name = true
                     )
                 "#,

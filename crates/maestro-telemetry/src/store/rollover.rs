@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 use super::{Db, now_ms, partition_directory, sql_literal};
 use crate::error::{Result, TelemetryError};
 
+const SYSTEM_PARTITION: &str = "_system";
+const NO_DEPLOYMENT_PARTITION: &str = "_none";
+
 #[derive(Serialize)]
 struct PartitionManifest {
     version: u8,
@@ -29,6 +32,8 @@ struct PartitionManifestPart {
 
 struct RolloverGroup {
     date: String,
+    service_id: Option<String>,
+    deployment_id: Option<String>,
     row_count: i64,
     seq_lo: i64,
     seq_hi: i64,
@@ -41,8 +46,17 @@ struct ExportPaths {
 }
 
 impl RolloverGroup {
+    fn partition_key(&self) -> String {
+        format!(
+            "service_id={}/deployment_id={}/date={}",
+            partition_value(self.service_id.as_deref(), SYSTEM_PARTITION),
+            partition_value(self.deployment_id.as_deref(), NO_DEPLOYMENT_PARTITION),
+            self.date
+        )
+    }
+
     fn export_paths(&self, parts_root: &Path) -> ExportPaths {
-        let directory = partition_directory(parts_root, &self.date);
+        let directory = partition_directory(parts_root, &self.partition_key());
         let name = format!("part-{}-{}.parquet", self.seq_lo, self.seq_hi);
         ExportPaths {
             final_path: directory.join(&name),
@@ -68,6 +82,8 @@ impl RolloverGroup {
                         attributes
                     FROM logs
                     WHERE date = CAST({} AS DATE)
+                      AND service_id IS NOT DISTINCT FROM {}
+                      AND deployment_id IS NOT DISTINCT FROM {}
                       AND seq BETWEEN {} AND {}
                     ORDER BY seq
                 ) TO {} (
@@ -76,6 +92,8 @@ impl RolloverGroup {
                 )
             "#,
             sql_literal(&self.date),
+            optional_literal(self.service_id.as_deref()),
+            optional_literal(self.deployment_id.as_deref()),
             self.seq_lo,
             self.seq_hi,
             sql_literal(&destination.to_string_lossy())
@@ -170,19 +188,21 @@ fn load_groups(db: &Db) -> Result<Vec<RolloverGroup>> {
     let connection = db.reader()?;
     let mut statement = connection.prepare(
         r#"
-            SELECT date::VARCHAR, count(*), min(seq), max(seq)
+            SELECT date::VARCHAR, service_id, deployment_id, count(*), min(seq), max(seq)
             FROM logs
             WHERE date < CAST(? AS DATE)
             GROUP BY ALL
-            ORDER BY 1
+            ORDER BY 1, 2, 3
         "#,
     )?;
     let rows = statement.query_map(params![today], |row| {
         Ok(RolloverGroup {
             date: row.get(0)?,
-            row_count: row.get(1)?,
-            seq_lo: row.get(2)?,
-            seq_hi: row.get(3)?,
+            service_id: row.get(1)?,
+            deployment_id: row.get(2)?,
+            row_count: row.get(3)?,
+            seq_lo: row.get(4)?,
+            seq_hi: row.get(5)?,
         })
     })?;
     Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
@@ -201,13 +221,13 @@ fn export_group(db: &Db, parts_root: &Path, group: &RolloverGroup) -> Result<()>
     match finalized {
         Err(error) if created => {
             tracing::error!(
-                partition = group.date,
+                partition = group.partition_key(),
                 seq_lo = group.seq_lo,
                 seq_hi = group.seq_hi,
                 %error,
                 "parquet rollover commit failed"
             );
-            hide_failed_export(db, &paths, &group.date).map_err(|cleanup_error| {
+            hide_failed_export(db, &paths, &group.partition_key()).map_err(|cleanup_error| {
                 TelemetryError::Storage(format!(
                     "{error}; also failed to hide uncommitted export: {cleanup_error}"
                 ))
@@ -220,7 +240,7 @@ fn export_group(db: &Db, parts_root: &Path, group: &RolloverGroup) -> Result<()>
 
 fn stage_export(db: &Db, group: &RolloverGroup, paths: &ExportPaths) -> Result<bool> {
     let connection = db.maintenance()?;
-    remove_uncommitted_parts(&connection, &paths.directory, &group.date)?;
+    remove_uncommitted_parts(&connection, &paths.directory, &group.partition_key())?;
     let created = !paths.final_path.exists();
     if created {
         if paths.temp_path.exists() {
@@ -247,7 +267,7 @@ fn finalize_export(
     {
         let connection = db.maintenance()?;
         verify_parquet(&connection, &paths.final_path, group)?;
-        write_partition_manifest(&connection, &paths.directory, &group.date)?;
+        write_partition_manifest(&connection, &paths.directory, &group.partition_key())?;
     }
     let mut connection = db.writer()?;
     let transaction = connection.transaction()?;
@@ -263,7 +283,7 @@ fn finalize_export(
                 updated_at_ms = excluded.updated_at_ms
         "#,
         params![
-            group.date,
+            group.partition_key(),
             group.row_count,
             group.seq_lo,
             group.seq_hi,
@@ -272,8 +292,15 @@ fn finalize_export(
         ],
     )?;
     transaction.execute(
-        "DELETE FROM logs WHERE date = CAST(? AS DATE) AND seq BETWEEN ? AND ?",
-        params![group.date, group.seq_lo, group.seq_hi],
+        "DELETE FROM logs WHERE date = CAST(? AS DATE) AND service_id IS NOT DISTINCT FROM ? \
+         AND deployment_id IS NOT DISTINCT FROM ? AND seq BETWEEN ? AND ?",
+        params![
+            group.date,
+            group.service_id,
+            group.deployment_id,
+            group.seq_lo,
+            group.seq_hi
+        ],
     )?;
     transaction.commit()?;
     Ok(())
@@ -285,6 +312,24 @@ fn hide_failed_export(db: &Db, paths: &ExportPaths, partition_key: &str) -> Resu
         sync_path(&paths.directory)?;
     }
     write_partition_manifest(&*db.maintenance()?, &paths.directory, partition_key)
+}
+
+fn partition_value(value: Option<&str>, missing: &str) -> String {
+    value
+        .map(|value| {
+            value
+                .chars()
+                .map(|character| match character {
+                    '%' | '/' | '=' => format!("%{:02X}", character as u32),
+                    other => other.to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| missing.to_string())
+}
+
+fn optional_literal(value: Option<&str>) -> String {
+    value.map_or_else(|| "NULL".to_string(), sql_literal)
 }
 
 fn verify_parquet(connection: &Connection, path: &Path, group: &RolloverGroup) -> Result<()> {
