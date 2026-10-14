@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +38,7 @@ pub struct Reconciler<R: Runtime, S: PlanSource> {
     board: StatusBoard,
     settings: ReconcilerSettings,
     restarts: HashMap<ReplicaId, RestartState>,
+    replaced: HashSet<ReplicaId>,
     plans: watch::Sender<Vec<ReplicaPlan>>,
 }
 
@@ -62,6 +63,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             board,
             settings,
             restarts: HashMap::new(),
+            replaced: HashSet::new(),
             plans,
         }
     }
@@ -137,6 +139,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
                 }
             }
             Some((ContainerState::Running, false)) => {
+                self.replaced.insert(plan.replica_id.clone());
                 self.retire(&plan.replica_id).await;
                 self.restarts.remove(&plan.replica_id);
                 self.launch(plan, &hash).await;
@@ -283,18 +286,21 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
         }
     }
 
-    fn record_event(&mut self, event: RuntimeEvent) {
+    pub fn record_event(&mut self, event: RuntimeEvent) {
         match event {
             RuntimeEvent::OomKilled { id } => self.board.update(&id.as_str().into(), |status| {
                 status.last_error = Some("killed: out of memory".to_string());
             }),
             RuntimeEvent::Exited { id, exit_code } => {
-                self.board.update(&id.as_str().into(), |status| {
-                    if status.phase.is_live() {
-                        status.phase = ReplicaPhase::Restarting;
-                        status.last_error = Some(format!("exited with code {exit_code}"));
-                    }
-                })
+                let replica_id = ReplicaId::from(id.as_str());
+                if !self.replaced.remove(&replica_id) {
+                    self.board.update(&replica_id, |status| {
+                        if status.phase.is_live() {
+                            status.phase = ReplicaPhase::Restarting;
+                            status.last_error = Some(format!("exited with code {exit_code}"));
+                        }
+                    })
+                }
             }
         }
     }
