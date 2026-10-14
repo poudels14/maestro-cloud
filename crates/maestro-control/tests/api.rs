@@ -224,3 +224,97 @@ async fn token_middleware_guards_everything_but_health() {
     let response = guarded.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn returns_service_detail_and_scales_with_a_new_deployment() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+
+    let (status, detail) = call(&app, "GET", "/api/services/api", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["spec"]["deploy"]["replicas"], 2);
+    assert_eq!(detail["deployments"].as_array().unwrap().len(), 1);
+
+    let (status, queued) = call(
+        &app,
+        "POST",
+        "/api/services/api/scale",
+        Some(json!({ "replicas": 5 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert!(queued["deploymentId"].is_string());
+    let stored = writer
+        .state()
+        .service(&ServiceId::from("api"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.deploy.replicas, 5);
+    assert_eq!(
+        writer
+            .state()
+            .deployments(&ServiceId::from("api"))
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn cancels_only_in_flight_deployments() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    let deployment = writer.state().deployments(&ServiceId::from("api")).unwrap()[0]
+        .id
+        .to_string();
+    let path = format!("/api/services/api/deployments/{deployment}/cancel");
+
+    let (status, _) = call(&app, "POST", &path, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = call(&app, "POST", &path, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("can no longer be cancelled")
+    );
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/services/api/deployments/missing/cancel",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn lists_routes_and_node_summaries() {
+    let (_, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    let (status, routes) = call(&app, "GET", "/api/routes", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(routes["routes"].is_object());
+    let (status, nodes) = call(&app, "GET", "/api/nodes", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(nodes, json!([]));
+}

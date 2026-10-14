@@ -1,10 +1,14 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use maestro_agent::{
     ADMIN_CONTAINER_ID, BuildKitBuilder, BuildKitSettings, BuildRequest, SystemSupervisor,
     admin_container,
@@ -13,11 +17,12 @@ use maestro_control::{
     AgentHub, ApiAuth, ApiState, Deployer, DeployerSettings, ImageBuilder, require_token, router,
     run_publisher,
 };
-use maestro_core::{ClusterConfig, Deployment, NodeRole};
+use maestro_core::{ClusterConfig, ClusterSettings, Deployment, NodeId, NodeRole};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_runtime::{ContainerdRuntime, Runtime};
 use maestro_store::{Consensus, ConsensusSettings, SecretKey};
+use serde::Serialize;
 use tokio::task::JoinSet;
 
 use crate::cluster_service::ClusterService;
@@ -43,6 +48,32 @@ pub struct ControlPlaneSettings {
     pub api_socket: PathBuf,
     pub telemetry_socket: PathBuf,
     pub admin_source: Option<PathBuf>,
+}
+
+struct InfoState {
+    consensus: Arc<Consensus>,
+    cluster: ClusterSettings,
+    build_logs: PathBuf,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterInfo {
+    name: String,
+    cidr: String,
+    version: &'static str,
+    node_id: NodeId,
+    term: u64,
+    leader: Option<ClusterMember>,
+    voters: Vec<ClusterMember>,
+    learners: Vec<ClusterMember>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterMember {
+    id: NodeId,
+    address: String,
 }
 
 struct SealedSpecBuilder {
@@ -118,12 +149,24 @@ pub async fn spawn(
     let logs = axum::Router::new()
         .route("/api/logs", axum::routing::get(proxy_logs))
         .with_state(Arc::new(settings.telemetry_socket.clone()));
+    let info = axum::Router::new()
+        .route("/api/cluster", axum::routing::get(cluster_info))
+        .route(
+            "/api/services/{service_id}/deployments/{deployment_id}/build-log",
+            axum::routing::get(build_log),
+        )
+        .with_state(Arc::new(InfoState {
+            consensus: consensus.clone(),
+            cluster: settings.identity.cluster.clone(),
+            build_logs: settings.data_dir.join("builds/logs"),
+        }));
     let api = router(Arc::new(ApiState {
         writer: consensus.clone(),
         observed,
         key,
     }))
-    .merge(logs);
+    .merge(logs)
+    .merge(info);
     let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));
     let authenticated_api = api
         .clone()
@@ -188,6 +231,60 @@ impl ImageBuilder for SealedSpecBuilder {
             }
             _ => Err("external secret sources are not supported yet".to_string()),
         }
+    }
+}
+
+async fn cluster_info(State(info): State<Arc<InfoState>>) -> Json<ClusterInfo> {
+    let metrics = info.consensus.metrics();
+    let members = |members: BTreeMap<NodeId, String>| {
+        members
+            .into_iter()
+            .map(|(id, address)| ClusterMember { id, address })
+            .collect::<Vec<_>>()
+    };
+    Json(ClusterInfo {
+        name: info.cluster.name.clone(),
+        cidr: info.cluster.cidr.clone(),
+        version: env!("CARGO_PKG_VERSION"),
+        node_id: metrics.node_id,
+        term: metrics.term,
+        leader: info
+            .consensus
+            .current_leader()
+            .map(|(id, address)| ClusterMember { id, address }),
+        voters: members(metrics.voters),
+        learners: members(metrics.learners),
+    })
+}
+
+async fn build_log(
+    State(info): State<Arc<InfoState>>,
+    axum::extract::Path((_, deployment_id)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    let valid = !deployment_id.is_empty()
+        && deployment_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-');
+    let contents = match valid {
+        true => tokio::fs::read_to_string(info.build_logs.join(format!("{deployment_id}.log")))
+            .await
+            .ok(),
+        false => None,
+    };
+    match contents {
+        Some(text) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            text,
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no build log on this node for that deployment" })),
+        )
+            .into_response(),
     }
 }
 

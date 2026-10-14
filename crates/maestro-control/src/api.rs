@@ -3,11 +3,12 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use maestro_core::{
-    Deployment, DeploymentId, DeploymentStatus, NodeRecord, ReplicaStatus, ServiceId, ServiceSpec,
-    ServicesFile, SpecError,
+    Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, Millicores, NodeCapacity,
+    NodeRecord, ReplicaId, ReplicaStatus, RouteTable, ServiceId, ServiceSpec, ServicesFile,
+    SpecError,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,14 @@ use serde_json::json;
 
 use crate::deployer::{ObservedReplicas, unix_millis};
 use crate::error::ControlError;
+use crate::routing::cluster_routes;
 use crate::writer::StoreWriter;
+
+const CANCELLABLE_STATUSES: [DeploymentStatus; 3] = [
+    DeploymentStatus::Queued,
+    DeploymentStatus::Building,
+    DeploymentStatus::Deploying,
+];
 
 const DEPLOYMENT_ID_ALPHABET: [char; 36] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
@@ -47,6 +55,31 @@ struct RolloutPlan {
     applied: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceDetail {
+    id: ServiceId,
+    spec: ServiceSpec,
+    deployments: Vec<Deployment>,
+    replicas: Vec<ReplicaStatus>,
+    assignments: Vec<Assignment>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeSummary {
+    #[serde(flatten)]
+    node: NodeRecord,
+    available: bool,
+    replicas: usize,
+    allocated: NodeCapacity,
+}
+
+#[derive(Deserialize)]
+struct ScaleRequest {
+    replicas: u32,
+}
+
 #[derive(Deserialize)]
 struct RolloutQuery {
     #[serde(default)]
@@ -65,15 +98,26 @@ pub fn router<W: StoreWriter, O: ObservedReplicas>(state: Arc<ApiState<W, O>>) -
         .route("/api/services", get(list_services::<W, O>))
         .route(
             "/api/services/{service_id}",
-            put(put_service::<W, O>).delete(delete_service::<W, O>),
+            get(get_service::<W, O>)
+                .put(put_service::<W, O>)
+                .delete(delete_service::<W, O>),
         )
         .route(
             "/api/services/{service_id}/deployments",
             get(list_deployments::<W, O>).post(queue_deployment::<W, O>),
         )
+        .route(
+            "/api/services/{service_id}/deployments/{deployment_id}/cancel",
+            post(cancel_deployment::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/scale",
+            post(scale_service::<W, O>),
+        )
         .route("/api/rollout", post(rollout::<W, O>))
         .route("/api/replicas", get(list_replicas::<W, O>))
         .route("/api/nodes", get(list_nodes::<W, O>))
+        .route("/api/routes", get(list_routes::<W, O>))
         .with_state(state)
 }
 
@@ -271,10 +315,147 @@ async fn list_replicas<W: StoreWriter, O: ObservedReplicas>(
     Json(state.observed.replicas())
 }
 
+async fn get_service<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+) -> Result<Json<ServiceDetail>, ControlError> {
+    let id = ServiceId::new(service_id);
+    let store = state.writer.state();
+    let spec = store
+        .service(&id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    let mut deployments = store
+        .deployments(&id)?
+        .into_iter()
+        .map(masked_deployment)
+        .collect::<Vec<_>>();
+    deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at_ms));
+    let replicas = state
+        .observed
+        .replicas()
+        .into_iter()
+        .filter(|replica| replica.service_id == id)
+        .collect();
+    let assignments = all_assignments(store)?
+        .into_iter()
+        .filter(|assignment| assignment.service_id == id)
+        .collect();
+    Ok(Json(ServiceDetail {
+        id,
+        spec: mask_spec(&spec),
+        deployments,
+        replicas,
+        assignments,
+    }))
+}
+
+async fn cancel_deployment<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path((service_id, deployment_id)): Path<(String, String)>,
+) -> Result<StatusCode, ControlError> {
+    let service_id = ServiceId::new(service_id);
+    let deployment_id = DeploymentId::new(deployment_id);
+    let deployment = state
+        .writer
+        .state()
+        .deployment(&service_id, &deployment_id)?
+        .ok_or_else(|| ControlError::NotFound(format!("deployment {deployment_id}")))?;
+    match CANCELLABLE_STATUSES.contains(&deployment.status) {
+        false => Err(ControlError::Conflict(format!(
+            "deployment {deployment_id} is {:?} and can no longer be cancelled",
+            deployment.status
+        ))),
+        true => {
+            state
+                .writer
+                .write(vec![Mutation::SetDeploymentStatus {
+                    service_id,
+                    deployment_id,
+                    status: DeploymentStatus::Cancelled,
+                    image: None,
+                    failure: None,
+                    at_ms: unix_millis(),
+                }])
+                .await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+    }
+}
+
+async fn scale_service<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+    Json(request): Json<ScaleRequest>,
+) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
+    let id = ServiceId::new(service_id);
+    let mut spec = state
+        .writer
+        .state()
+        .service(&id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    spec.deploy.replicas = request.replicas;
+    let deployment = new_deployment(&id, spec.clone());
+    let deployment_id = deployment.id.clone();
+    state
+        .writer
+        .write(vec![
+            Mutation::PutService { id, spec },
+            Mutation::CreateDeployment { deployment },
+        ])
+        .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(QueuedDeployment { deployment_id }),
+    ))
+}
+
 async fn list_nodes<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
-) -> Result<Json<Vec<NodeRecord>>, ControlError> {
-    Ok(Json(state.writer.state().nodes()?))
+) -> Result<Json<Vec<NodeSummary>>, ControlError> {
+    let store = state.writer.state();
+    let assignments = all_assignments(store)?;
+    let nodes = store
+        .nodes()?
+        .into_iter()
+        .map(|node| {
+            let on_node = assignments
+                .iter()
+                .filter(|assignment| assignment.node_id == node.id)
+                .collect::<Vec<_>>();
+            let allocated = NodeCapacity {
+                cpu: Millicores::new(
+                    on_node
+                        .iter()
+                        .map(|assignment| assignment.resources.request.cpu.get())
+                        .sum(),
+                ),
+                memory: ByteSize::new(
+                    on_node
+                        .iter()
+                        .map(|assignment| assignment.resources.request.memory.bytes())
+                        .sum(),
+                ),
+            };
+            NodeSummary {
+                available: state.observed.node_available(node.id),
+                replicas: on_node.len(),
+                allocated,
+                node,
+            }
+        })
+        .collect();
+    Ok(Json(nodes))
+}
+
+async fn list_routes<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+) -> Result<Json<RouteTable>, ControlError> {
+    let observed = |replica_id: &ReplicaId| state.observed.replica(replica_id);
+    Ok(Json(cluster_routes(
+        state.writer.state(),
+        &observed,
+        &RouteTable::default(),
+    )?))
 }
 
 impl IntoResponse for ControlError {
@@ -284,6 +465,7 @@ impl IntoResponse for ControlError {
                 StatusCode::BAD_REQUEST
             }
             ControlError::NotFound(_) => StatusCode::NOT_FOUND,
+            ControlError::Conflict(_) => StatusCode::CONFLICT,
             ControlError::Secret(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ControlError::Consensus(ConsensusError::Rejected(_)) => StatusCode::CONFLICT,
             ControlError::Store(_) | ControlError::Consensus(_) => {
@@ -292,6 +474,15 @@ impl IntoResponse for ControlError {
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }
+}
+
+fn all_assignments(store: &maestro_store::StateMachine) -> Result<Vec<Assignment>, ControlError> {
+    Ok(store
+        .nodes()?
+        .iter()
+        .map(|node| store.assignments(node.id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat())
 }
 
 fn masked_deployment(deployment: Deployment) -> Deployment {

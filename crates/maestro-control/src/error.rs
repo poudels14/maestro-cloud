@@ -14,4 +14,6 @@ pub enum ControlError {
     Secret(#[from] SecretError),
     #[error("{0} not found")]
     NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
 }
