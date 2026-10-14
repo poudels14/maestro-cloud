@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId};
 use maestro_telemetry::{
-    HistogramBucket, IngressTrafficBreakdown, LogHistogram, MetricPoint, SinkStats,
+    BackupStats, HistogramBucket, IngressTrafficBreakdown, LogHistogram, MetricPoint, SinkStats,
     TrafficBreakdownEntry, TrafficPoint, histogram_bucket,
 };
 use serde::{Deserialize, Serialize};
@@ -136,6 +136,7 @@ struct NodeStats {
     available: bool,
     telemetry: bool,
     sinks: Vec<SinkStats>,
+    backup: Option<BackupStats>,
 }
 
 #[derive(Serialize)]
@@ -186,6 +187,9 @@ pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
                             .as_ref()
                             .and_then(|info| serde_json::from_value(info["sinks"].clone()).ok())
                             .unwrap_or_default(),
+                        backup: info
+                            .as_ref()
+                            .and_then(|info| serde_json::from_value(info["backup"].clone()).ok()),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -301,11 +305,31 @@ fn stats_warnings(
             failing.into_iter().chain(behind).chain(dead_letters)
         })
     });
+    let backups = stats.iter().filter_map(|node| {
+        let backup = node.backup.as_ref().filter(|backup| backup.configured)?;
+        let failing = backup.last_error_at_ms.is_some_and(|error| {
+            backup
+                .last_success_at_ms
+                .is_none_or(|success| error > success)
+        });
+        failing.then(|| {
+            warning(
+                format!("log-backup-{}-failing", node.node_id),
+                "error",
+                format!(
+                    "log backup on {} is failing: {}",
+                    node.node_name,
+                    backup.last_error.clone().unwrap_or_default()
+                ),
+            )
+        })
+    });
     unreachable
         .chain(telemetry)
         .chain(mismatch)
         .chain(no_leader)
         .chain(sinks)
+        .chain(backups)
         .collect()
 }
 
@@ -742,6 +766,7 @@ mod tests {
             available,
             telemetry,
             sinks: Vec::new(),
+            backup: None,
         };
         let stats = [
             node(1, Some("3.0.0"), true, true),

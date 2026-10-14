@@ -188,7 +188,8 @@ impl NodeService {
                     "version": env!("CARGO_PKG_VERSION"),
                     "uptimeMs": self.started.elapsed().as_millis() as u64,
                     "telemetry": stats.is_some(),
-                    "sinks": stats.map(|stats| stats["sinks"].clone()).unwrap_or_else(|| json!([])),
+                    "sinks": stats.as_ref().map(|stats| stats["sinks"].clone()).unwrap_or_else(|| json!([])),
+                    "backup": stats.map(|stats| stats["backup"].clone()).unwrap_or(Value::Null),
                 }))
             }
             NodeRequest::Telemetry { path } => {

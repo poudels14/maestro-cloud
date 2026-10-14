@@ -1,5 +1,6 @@
 mod access_log;
 mod api;
+mod backup;
 mod datadog;
 mod datadog_metrics;
 mod disks;
@@ -16,7 +17,8 @@ mod tailer;
 mod traffic;
 
 pub use access_log::{IngressTrafficBreakdown, TrafficBreakdownEntry};
-pub use api::router;
+pub use api::{TelemetryStats, router};
+pub use backup::{BackupConfig, BackupStats};
 pub use datadog::{DatadogConfig, SinkStats, run_datadog_logs};
 pub use disks::{Disk, disks};
 pub use error::{Result, TelemetryError};

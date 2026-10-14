@@ -603,3 +603,32 @@ async fn partitions_parquet_by_service_deployment_and_date() {
         .unwrap();
     assert_eq!(logs.len(), 3);
 }
+
+#[tokio::test]
+async fn tracks_backups_and_prunes_backed_up_partitions() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LogStore::open(directory.path()).unwrap();
+    ingest(
+        &store,
+        "dep1-0",
+        &identity("api", "dep1"),
+        &[record(OLD_TS, "old line")],
+    );
+    store.rollover().await.unwrap();
+
+    let pending = store.partitions_pending_backup().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].key, OLD_PARTITION);
+    assert!(pending[0].directory.join("manifest.json").exists());
+    assert_eq!(store.prune_backed_up_before("2099-01-01").unwrap(), 0);
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(pending[0].directory.join("manifest.json")).unwrap())
+            .unwrap();
+    let seq_lo = manifest["parts"][0]["seq_lo"].as_i64().unwrap();
+    store.mark_backed_up(&pending[0].key, &[seq_lo]).unwrap();
+    assert!(store.partitions_pending_backup().unwrap().is_empty());
+    assert_eq!(store.prune_backed_up_before("2000-01-01").unwrap(), 0);
+    assert_eq!(store.prune_backed_up_before("2099-01-01").unwrap(), 1);
+    assert!(!pending[0].directory.exists());
+}

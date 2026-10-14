@@ -4,11 +4,14 @@ version = "3.0.0"
 edition = "2024"
 
 [dependencies]
+aws-config = { version = "1.12.0", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
+aws-sdk-s3 = { version = "1.152.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }
 axum = "0.8.9"
+base64 = "0.22"
 chrono = "0.4.45"
 duckdb = { version = "=1.4.1", features = ["bundled", "json", "parquet"] }
 flate2 = "1.1.10"
-hex = "0.4.3"
+hex = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustix = { version = "1.1.5", features = ["fs"] }
 serde = { version = "1.0.229", features = ["derive"] }

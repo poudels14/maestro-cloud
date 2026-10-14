@@ -12,6 +12,7 @@ use crate::parse::parse_log_line;
 use crate::resolver::ReplicaIdentity;
 use crate::search::LogSearchQuery;
 
+mod backup;
 mod db;
 mod histogram;
 mod ingress;
@@ -21,6 +22,7 @@ mod rollover;
 mod sinks;
 mod traffic;
 
+pub use backup::PendingPartition;
 use db::Db;
 pub use histogram::{
     HistogramBucket, HistogramGroup, HistogramQuery, LogHistogram, MAX_HISTOGRAM_RANGE_MS,

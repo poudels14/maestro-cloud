@@ -178,6 +178,20 @@ async fn run_cli() -> anyhow::Result<()> {
                 socket,
                 resolver: agent_resolver::AgentReplicaResolver::spawn(replicas),
                 datadog: datadog_config(&config, &identity),
+                backup: config
+                    .log_backup
+                    .as_ref()
+                    .map(|backup| maestro_telemetry::BackupConfig {
+                        bucket: backup.bucket.clone(),
+                        kms_key_id: backup.kms_key_id.clone(),
+                        region: backup.region.clone(),
+                        prefix: backup
+                            .prefix
+                            .clone()
+                            .unwrap_or_else(|| identity.cluster.name.clone()),
+                        node: identity.name.clone(),
+                        retention_days: backup.retention_days,
+                    }),
                 ..TelemetrySettings::default()
             };
             Ok(maestro_telemetry::run(settings).await?)

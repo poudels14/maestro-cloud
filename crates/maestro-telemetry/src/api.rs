@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::access_log::IngressTrafficBreakdown;
+use crate::backup::BackupStats;
 use crate::datadog::SinkStats;
 use crate::error::TelemetryError;
 use crate::metrics::MetricPoint;
@@ -51,10 +52,16 @@ struct LogsPage {
     next_cursor: Option<i64>,
 }
 
-pub fn router(store: Arc<LogStore>, sinks: Vec<Arc<Mutex<SinkStats>>>) -> Router {
+#[derive(Clone, Default)]
+pub struct TelemetryStats {
+    pub sinks: Vec<Arc<Mutex<SinkStats>>>,
+    pub backup: Arc<Mutex<BackupStats>>,
+}
+
+pub fn router(store: Arc<LogStore>, telemetry: TelemetryStats) -> Router {
     let stats = Router::new()
         .route("/stats", get(stats))
-        .with_state(Arc::new(sinks));
+        .with_state(telemetry);
     Router::new()
         .route("/health", get(health))
         .route("/logs", get(logs))
@@ -66,8 +73,9 @@ pub fn router(store: Arc<LogStore>, sinks: Vec<Arc<Mutex<SinkStats>>>) -> Router
         .merge(stats)
 }
 
-async fn stats(State(sinks): State<Arc<Vec<Arc<Mutex<SinkStats>>>>>) -> Json<serde_json::Value> {
-    let sinks = sinks
+async fn stats(State(telemetry): State<TelemetryStats>) -> Json<serde_json::Value> {
+    let sinks = telemetry
+        .sinks
         .iter()
         .map(|sink| {
             sink.lock()
@@ -75,7 +83,12 @@ async fn stats(State(sinks): State<Arc<Vec<Arc<Mutex<SinkStats>>>>>) -> Json<ser
                 .clone()
         })
         .collect::<Vec<_>>();
-    Json(json!({ "sinks": sinks }))
+    let backup = telemetry
+        .backup
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    Json(json!({ "sinks": sinks, "backup": backup }))
 }
 
 async fn health() -> Json<serde_json::Value> {

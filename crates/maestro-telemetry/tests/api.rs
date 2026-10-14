@@ -70,7 +70,7 @@ fn lines(page: &Value) -> Vec<&str> {
 #[tokio::test]
 async fn health_reports_ok() {
     let directory = tempfile::tempdir().unwrap();
-    let app = router(seeded_store(directory.path()), Vec::new());
+    let app = router(seeded_store(directory.path()), Default::default());
     let (status, body) = get(&app, "/health").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
@@ -79,7 +79,7 @@ async fn health_reports_ok() {
 #[tokio::test]
 async fn pages_newest_first_with_a_cursor() {
     let directory = tempfile::tempdir().unwrap();
-    let app = router(seeded_store(directory.path()), Vec::new());
+    let app = router(seeded_store(directory.path()), Default::default());
 
     let (status, first) = get(&app, "/logs?limit=2").await;
     assert_eq!(status, StatusCode::OK);
@@ -107,7 +107,7 @@ async fn pages_newest_first_with_a_cursor() {
 #[tokio::test]
 async fn filters_with_the_query_language() {
     let directory = tempfile::tempdir().unwrap();
-    let app = router(seeded_store(directory.path()), Vec::new());
+    let app = router(seeded_store(directory.path()), Default::default());
 
     let (status, errors) = get(&app, "/logs?query=level%3Aerror%20%40status%3A%3E%3D500").await;
     assert_eq!(status, StatusCode::OK);
@@ -121,7 +121,7 @@ async fn filters_with_the_query_language() {
 #[tokio::test]
 async fn rejects_invalid_queries() {
     let directory = tempfile::tempdir().unwrap();
-    let app = router(seeded_store(directory.path()), Vec::new());
+    let app = router(seeded_store(directory.path()), Default::default());
 
     let (status, body) = get(&app, "/logs?query=unknown%3Avalue").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
+use crate::api::TelemetryStats;
 use crate::api::router;
+use crate::backup::{BackupConfig, new_backup_stats, run_backup};
 use crate::datadog::{self, DatadogConfig, DatadogLogSink};
 use crate::datadog_metrics::DatadogMetrics;
 use crate::disks::disks;
@@ -35,6 +37,7 @@ pub struct TelemetrySettings {
     pub proc_root: PathBuf,
     pub resolver: Arc<dyn ReplicaResolver>,
     pub datadog: Option<DatadogConfig>,
+    pub backup: Option<BackupConfig>,
 }
 
 pub async fn run(settings: TelemetrySettings) -> Result<()> {
@@ -70,6 +73,18 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
         .then(|| sink_stats.clone())
         .into_iter()
         .collect::<Vec<_>>();
+    let backup_stats = new_backup_stats(settings.backup.is_some());
+    let backup = {
+        let config = settings.backup.clone();
+        let store = store.clone();
+        let stats = backup_stats.clone();
+        async move {
+            match config {
+                Some(config) => run_backup(config, store, stats).await,
+                None => std::future::pending().await,
+            }
+        }
+    };
     let mut terminate = signal(SignalKind::terminate())?;
     tracing::info!(
         log_dir = %settings.log_dir.display(),
@@ -99,7 +114,8 @@ pub async fn run(settings: TelemetrySettings) -> Result<()> {
             settings.traffic_interval,
         ) => result,
         result = datadog_logs => result,
-        result = axum::serve(listener, router(store, sinks)) => Ok(result?),
+        result = backup => result,
+        result = axum::serve(listener, router(store, TelemetryStats { sinks, backup: backup_stats })) => Ok(result?),
         _ = tokio::signal::ctrl_c() => Ok(()),
         _ = terminate.recv() => Ok(()),
     }
@@ -121,6 +137,7 @@ impl Default for TelemetrySettings {
             proc_root: PathBuf::from("/proc"),
             resolver: Arc::new(DeploymentFromReplicaId),
             datadog: None,
+            backup: None,
         }
     }
 }
