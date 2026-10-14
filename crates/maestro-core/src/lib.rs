@@ -28,7 +28,7 @@ pub use resources::{
     ByteSize, EffectiveResources, MemoryLimit, Millicores, NodeCapacity, OomPriority,
     ResolvedRequest, ResourceDefaults, ResourceError, ResourceRequest, ResourceSpec,
 };
-pub use routing::{Backend, RouteTable, ServiceRoute, internal_names};
+pub use routing::{Backend, RouteTable, ServiceRoute, affinity_token, internal_names};
 pub use service::{
     BuildSpec, Command, DeploySpec, DepotSpec, EgressRule, EgressSpec, EnvSpec, IngressSpec,
     NodeAffinity, PreviewSpec, SecretsSpec, ServiceSpec, ServicesFile, SessionAffinity, SpecError,

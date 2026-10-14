@@ -356,9 +356,14 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 ### Decisions for features that changed shape
 
 - Session affinity pins a client to a replica, not a node: a Traefik sticky cookie,
-  plus header stickiness where each replica's responses carry an opaque per-replica
-  token in the configured header (default `X-Session-Affinity`) and a higher-priority
-  router sends requests carrying that token to the same replica.
+  plus header stickiness. Each replica gets an opaque token in `MAESTRO_AFFINITY_TOKEN`;
+  the app echoes it in the configured response header (default `X-Session-Affinity`),
+  and a higher-priority router sends requests carrying that token to the same replica.
+  No extra proxy hop. Replicas also get `MAESTRO_NODE_ID`, `MAESTRO_REPLICA_INDEX`, and
+  `MAESTRO_REPLICA_ID` as in v1.
+- The IP blocklist routes matching requests (ClientIP, CF-Connecting-IP, X-Real-IP,
+  X-Forwarded-For) to a loopback 403 responder in the agent instead of v1's probe
+  container.
 - Tailscale runs per node as a host-network system container advertising the node's
   `/24` plus `advertiseRoutes`; the Rust DNS server also answers on the tailnet and
   forwards other clusters' `*.<cluster>.maestro.internal` names to peers discovered via
@@ -404,7 +409,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   Prometheus traffic metrics, access-log analytics (client IP rules, per-minute
   ip/path buckets), log histograms, cluster/system log fan-out, cluster stats with
   warnings, 7-day metric retention, Parquet partitioning by service/deployment/date.
-- [ ] W6 ingress: IP blocklist enforced by Traefik routers (ClientIP and forwarded
+- [x] W6 ingress: IP blocklist enforced by Traefik routers (ClientIP and forwarded
   headers) returning 403, session affinity, ingress routes view.
 - [ ] W7 exec: WebSocket API and CLI (`maestro exec`), framing, resize, 8 sessions per
   node, 30-minute idle timeout, audit log lines, `allowExec` + `deploy.exec`.

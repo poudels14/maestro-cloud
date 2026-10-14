@@ -409,3 +409,22 @@ fn deletes_a_single_deployment_record() {
             .is_empty()
     );
 }
+
+#[test]
+fn blocks_and_unblocks_ips_in_sorted_order() {
+    let (_directory, store) = open_store();
+    let block = |ip: &str, blocked: bool| Mutation::SetBlockedIp {
+        ip: ip.to_string(),
+        blocked,
+    };
+    store
+        .apply(&[
+            block("203.0.113.9", true),
+            block("192.0.2.1", true),
+            block("192.0.2.1", true),
+        ])
+        .unwrap();
+    assert_eq!(store.blocked_ips().unwrap(), ["192.0.2.1", "203.0.113.9"]);
+    store.apply(&[block("192.0.2.1", false)]).unwrap();
+    assert_eq!(store.blocked_ips().unwrap(), ["203.0.113.9"]);
+}

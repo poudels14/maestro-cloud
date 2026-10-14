@@ -39,6 +39,10 @@ pub enum Mutation {
     SetUnschedulable {
         replicas: Vec<UnschedulableReplica>,
     },
+    SetBlockedIp {
+        ip: String,
+        blocked: bool,
+    },
     PruneDeployments {
         service_id: ServiceId,
         keep: usize,
@@ -76,6 +80,7 @@ pub enum ChangeKey {
     },
     ClusterFreeze,
     Unschedulable,
+    Blocklist,
     Everything,
 }
 

@@ -521,3 +521,49 @@ async fn drains_and_restores_nodes_and_reports_unschedulable_replicas() {
         json!([{ "serviceId": "api", "deploymentId": "d1", "replicaIndex": 2, "reason": "no schedulable nodes" }])
     );
 }
+
+#[tokio::test]
+async fn blocks_and_unblocks_ingress_ips() {
+    let (_, app) = app();
+    let path = "/api/ingress/blocked-ips";
+    let (status, body) = call(
+        &app,
+        "PATCH",
+        path,
+        Some(json!({ "ip": "203.0.113.9", "blocked": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "blockedIps": ["203.0.113.9"] }));
+    let (status, body) = call(
+        &app,
+        "PATCH",
+        path,
+        Some(json!({ "ip": "2001:DB8::1", "blocked": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("canonical form `2001:db8::1`")
+    );
+    let (status, _) = call(
+        &app,
+        "PATCH",
+        path,
+        Some(json!({ "ip": "nope", "blocked": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    call(
+        &app,
+        "PATCH",
+        path,
+        Some(json!({ "ip": "203.0.113.9", "blocked": false })),
+    )
+    .await;
+    let (_, body) = call(&app, "GET", path, None).await;
+    assert_eq!(body, json!({ "blockedIps": [] }));
+}

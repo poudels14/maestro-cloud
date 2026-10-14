@@ -29,7 +29,7 @@ pub fn cluster_routes(
         .collect::<Result<Vec<_>, _>>()?
         .concat();
     let assignments = all_assignments(state)?;
-    Ok(build_routes(
+    let routes = build_routes(
         &RoutingInput {
             services: &services,
             deployments: &deployments,
@@ -37,7 +37,11 @@ pub fn cluster_routes(
             observed,
         },
         previous,
-    ))
+    );
+    Ok(RouteTable {
+        blocked_ips: state.blocked_ips()?,
+        ..routes
+    })
 }
 
 pub fn cluster_dns(
@@ -115,11 +119,18 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
                     hosts,
                     backends: held.unwrap_or(backends),
                     health_path: spec.deploy.healthcheck_path.clone(),
+                    affinity_header: ingress
+                        .session_affinity
+                        .as_ref()
+                        .map(|affinity| affinity.header.clone()),
                 },
             ))
         })
         .collect();
-    RouteTable { routes }
+    RouteTable {
+        routes,
+        blocked_ips: Vec::new(),
+    }
 }
 
 fn all_assignments(state: &StateMachine) -> Result<Vec<Assignment>, StoreError> {

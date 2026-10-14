@@ -39,7 +39,8 @@ impl LocalPlanSource {
             | ChangeKey::Node { .. }
             | ChangeKey::ServiceControls { .. }
             | ChangeKey::ClusterFreeze
-            | ChangeKey::Unschedulable => false,
+            | ChangeKey::Unschedulable
+            | ChangeKey::Blocklist => false,
         })
     }
 }

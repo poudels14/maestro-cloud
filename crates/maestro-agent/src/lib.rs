@@ -18,7 +18,7 @@ pub use disks::{Disk, disks};
 pub use dns::{DnsRecords, DnsServer, upstream_resolvers};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};
-pub use ingress::IngressWriter;
+pub use ingress::{IngressWriter, serve_denied};
 pub use node::{apply_workload_slice_limits, detect_capacity, system_reserve};
 pub use reconciler::{Reconciler, ReconcilerSettings};
 pub use source::{LocalPlanSource, PlanSource};

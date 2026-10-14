@@ -1912,9 +1912,11 @@ dependencies = [
 name = "maestro-core"
 version = "3.0.0"
 dependencies = [
+ "hex",
  "json5",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

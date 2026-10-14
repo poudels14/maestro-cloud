@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 use crate::resources::{EffectiveResources, OomPriority};
+use crate::routing::affinity_token;
 use crate::service::{Command, ServiceSpec};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -98,11 +99,28 @@ impl ReplicaPlan {
             resources: assignment.resources,
             oom_priority: deploy.oom_priority,
             command: deploy.command.clone(),
-            env: deploy.env.items.clone(),
+            env: replica_env(assignment, &deploy.env.items),
             healthcheck,
             max_restarts: deploy.max_restarts,
         }
     }
+}
+
+fn replica_env(
+    assignment: &Assignment,
+    items: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::from([
+        ("MAESTRO_NODE_ID".to_string(), assignment.node_id.to_string()),
+        ("MAESTRO_REPLICA_INDEX".to_string(), assignment.index.to_string()),
+        ("MAESTRO_REPLICA_ID".to_string(), assignment.replica_id.to_string()),
+        (
+            "MAESTRO_AFFINITY_TOKEN".to_string(),
+            affinity_token(&assignment.replica_id),
+        ),
+    ]);
+    env.extend(items.clone());
+    env
 }
 
 impl DeploymentStatus {

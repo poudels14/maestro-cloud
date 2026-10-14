@@ -124,6 +124,18 @@ struct ReplicasResponse {
     replicas_override: Option<u32>,
 }
 
+#[derive(Deserialize)]
+struct BlockIpRequest {
+    ip: String,
+    blocked: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockedIps {
+    blocked_ips: Vec<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeDrainState {
@@ -188,6 +200,10 @@ pub fn router<W: StoreWriter, O: ObservedReplicas>(state: Arc<ApiState<W, O>>) -
             patch(set_replicas::<W, O>).delete(clear_replicas::<W, O>),
         )
         .route("/api/cluster/unfreeze", post(unfreeze_cluster::<W, O>))
+        .route(
+            "/api/ingress/blocked-ips",
+            get(list_blocked_ips::<W, O>).patch(set_blocked_ip::<W, O>),
+        )
         .route(
             "/api/cluster/unschedulable",
             get(list_unschedulable::<W, O>),
@@ -667,6 +683,43 @@ async fn clear_replicas<W: StoreWriter, O: ObservedReplicas>(
         replicas: spec.deploy.replicas,
         replicas_override: None,
     }))
+}
+
+async fn list_blocked_ips<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+) -> Result<Json<BlockedIps>, ControlError> {
+    Ok(Json(BlockedIps {
+        blocked_ips: state.writer.state().blocked_ips()?,
+    }))
+}
+
+async fn set_blocked_ip<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Json(request): Json<BlockIpRequest>,
+) -> Result<Json<BlockedIps>, ControlError> {
+    let canonical = request
+        .ip
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| ControlError::Invalid(format!("invalid IP address `{}`", request.ip)))?
+        .to_string();
+    match canonical == request.ip {
+        false => Err(ControlError::Invalid(format!(
+            "IP address `{}` must use canonical form `{canonical}`",
+            request.ip
+        ))),
+        true => {
+            state
+                .writer
+                .write(vec![Mutation::SetBlockedIp {
+                    ip: canonical,
+                    blocked: request.blocked,
+                }])
+                .await?;
+            Ok(Json(BlockedIps {
+                blocked_ips: state.writer.state().blocked_ips()?,
+            }))
+        }
+    }
 }
 
 async fn list_unschedulable<W: StoreWriter, O: ObservedReplicas>(
