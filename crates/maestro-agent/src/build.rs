@@ -408,7 +408,7 @@ async fn copy_timestamped(
             let stamped = format!(
                 "{} {}\n",
                 chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-                String::from_utf8_lossy(&line).trim_end_matches('\r')
+                strip_ansi(String::from_utf8_lossy(&line).trim_end_matches('\r'))
             );
             let _ = log.lock().await.write_all(stamped.as_bytes()).await;
         }
@@ -421,9 +421,52 @@ async fn log_tail(path: &Path) -> String {
     lines[lines.len().saturating_sub(FAILURE_TAIL_LINES)..].join("\n")
 }
 
+fn strip_ansi(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match (character, characters.peek()) {
+            ('\u{1b}', Some('[')) => {
+                characters.next();
+                while characters
+                    .next()
+                    .is_some_and(|code| !('@'..='~').contains(&code))
+                {}
+            }
+            ('\u{1b}', Some(']')) => {
+                while characters
+                    .next()
+                    .is_some_and(|code| code != '\u{7}' && code != '\\')
+                {}
+            }
+            ('\u{1b}', Some(_)) => {
+                characters.next();
+            }
+            ('\u{1b}', None) => {}
+            (other, _) => plain.push(other),
+        }
+    }
+    plain
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_terminal_colors_and_links() {
+        assert_eq!(
+            strip_ansi(
+                "\u{1b}[1;36mBuild Summary\u{1b}[0m: \u{1b}[4;39mhttps://depot.dev/x\u{1b}[0m"
+            ),
+            "Build Summary: https://depot.dev/x"
+        );
+        assert_eq!(
+            strip_ansi("\u{1b}]8;;https://a\u{7}link\u{1b}]8;;\u{7} done\u{1b}"),
+            "link done"
+        );
+        assert_eq!(strip_ansi("plain [33m text"), "plain [33m text");
+    }
 
     #[tokio::test]
     async fn timestamps_every_line_of_stdout_and_stderr() {
