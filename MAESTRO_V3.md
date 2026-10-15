@@ -51,7 +51,7 @@ Both Maestro units are the same binary.
 The admin UI stays a TanStack Start app in its own system container
 (`maestro-admin:<version>`, `maestro-system.slice`) so it is reachable from the tailnet
 while the controller API is not. It talks to the API only through the agent's Unix
-socket (`/run/maestro/api.sock`), which is bind-mounted into the admin container; the
+socket (`/run/maestro/api/api.sock`), whose directory is bind-mounted into the admin container; the
 API's TCP listener stays on `127.0.0.1:3000` for the local CLI. The admin image is built
 on the node with BuildKit only when the tag for the running version is missing, then
 cached. No other image is built at startup.
@@ -480,7 +480,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - [x] Builds via BuildKit (`buildctl`, containerd worker in the `maestro` namespace, `maestro-builds.slice`), bounded build queue, registry push
 - [x] Build sources: GitHub token from config, local context upload (`maestro up`), external secret sources (`aws-secret://`)
 - [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
-- [x] API served on `/run/maestro/api.sock` for the admin container
+- [x] API served on `/run/maestro/api/api.sock` for the admin container
 - [x] Telemetry process tailing driver files into DuckDB, query API
 - [x] Admin UI container (TanStack Start) built once per version, API over mounted Unix socket
 - [x] Port the admin UI from v1 API endpoints to the v3 API

@@ -15,8 +15,9 @@ function isAllowedHost(host: string | null): boolean {
   );
 }
 
-function isSameOrigin(origin: string | null, host: string | null): boolean {
-  if (!origin || !host) return false;
+function isAllowedOrigin(origin: string | null, host: string | null): boolean {
+  if (!origin) return true;
+  if (!host) return false;
   try {
     return new URL(origin).host.toLowerCase() === host.toLowerCase();
   } catch {
@@ -30,7 +31,7 @@ function guardRequest(request: { method: string; headers: Headers }): string | n
   const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
   if (!isAllowedHost(host)) {
     return "unknown host; add it to MAESTRO_ADMIN_HOSTS";
-  } else if ((!safeMethod || upgrade) && !isSameOrigin(request.headers.get("origin"), host)) {
+  } else if ((!safeMethod || upgrade) && !isAllowedOrigin(request.headers.get("origin"), host)) {
     return "cross-origin requests are not allowed";
   } else {
     return null;

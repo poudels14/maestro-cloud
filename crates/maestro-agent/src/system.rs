@@ -22,7 +22,8 @@ const TRAEFIK_CONFIG_MOUNT: &str = "/etc/maestro-traefik";
 const TRAEFIK_METRICS_ADDRESS: &str = "127.0.0.1:9100";
 const LOOPBACK_CIDR: &str = "127.0.0.1/32";
 const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
-const ADMIN_API_SOCKET: &str = "/run/maestro/api.sock";
+const ADMIN_API_DIR: &str = "/run/maestro/api";
+const ADMIN_API_SOCKET: &str = "/run/maestro/api/api.sock";
 pub const ADMIN_CONTAINER_ID: &str = "maestro-admin";
 pub const ADMIN_PORT: u16 = 7490;
 
@@ -164,8 +165,8 @@ pub fn admin_container(image: &str, api_socket: &Path) -> ContainerSpec {
         },
         cgroup_parent: SYSTEM_SLICE.to_string(),
         mounts: vec![BindMount {
-            source: api_socket.to_path_buf(),
-            destination: ADMIN_API_SOCKET.to_string(),
+            source: api_socket.parent().unwrap_or(api_socket).to_path_buf(),
+            destination: ADMIN_API_DIR.to_string(),
             read_only: false,
         }],
         network: NetworkMode::Host,
@@ -189,12 +190,13 @@ mod tests {
     fn admin_only_mounts_the_api_socket() {
         let spec = admin_container(
             "maestro.local/maestro-admin:0.1.0",
-            Path::new("/run/maestro/api.sock"),
+            Path::new("/run/maestro/api/api.sock"),
         );
         assert_eq!(spec.network, NetworkMode::Host);
         assert_eq!(spec.env["HOST"], "127.0.0.1");
         assert_eq!(spec.mounts.len(), 1);
-        assert_eq!(spec.mounts[0].destination, ADMIN_API_SOCKET);
+        assert_eq!(spec.mounts[0].source, Path::new("/run/maestro/api"));
+        assert_eq!(spec.mounts[0].destination, ADMIN_API_DIR);
         assert_eq!(spec.env["MAESTRO_API_SOCKET"], ADMIN_API_SOCKET);
     }
 

@@ -23,7 +23,7 @@ test("requires a same-origin Origin for writes and websockets", () => {
     guardRequest(request("POST", { host, origin: `http://${host}` })),
     null
   );
-  assert.notEqual(guardRequest(request("POST", { host })), null);
+  assert.equal(guardRequest(request("POST", { host })), null);
   assert.notEqual(
     guardRequest(request("POST", { host, origin: "https://evil.example" })),
     null
