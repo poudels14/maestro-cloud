@@ -19,6 +19,8 @@ pub struct EgressPolicy {
     pub allow: Vec<String>,
     pub local_subnet: String,
     pub cluster_cidr: String,
+    pub workload_interfaces: Vec<String>,
+    pub ingress_ports: Vec<u16>,
 }
 
 pub struct EgressFirewall<R: CommandRunner> {
@@ -120,8 +122,52 @@ pub fn render(
         .map(|line| format!("        {line}\n"))
         .collect::<String>();
     format!(
-        "{reset}table inet {TABLE} {{\n    chain forward {{\n        type filter hook forward priority -50; policy accept;\n{body}    }}\n}}\n"
+        "{reset}table inet {TABLE} {{\n    chain forward {{\n        type filter hook forward priority -50; policy accept;\n{body}    }}\n{}}}\n",
+        host_input_chain(policy)
     )
+}
+
+fn host_input_chain(policy: &EgressPolicy) -> String {
+    match policy.workload_interfaces.is_empty() {
+        true => String::new(),
+        false => {
+            let interfaces = format!(
+                "iifname {{ {} }}",
+                policy
+                    .workload_interfaces
+                    .iter()
+                    .map(|interface| format!("\"{interface}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let ingress = match policy.ingress_ports.is_empty() {
+                true => Vec::new(),
+                false => vec![format!(
+                    "{interfaces} tcp dport {{ {} }} accept",
+                    policy
+                        .ingress_ports
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )],
+            };
+            let lines = [
+                format!("{interfaces} ct state established,related accept"),
+                format!("{interfaces} udp dport 53 accept"),
+                format!("{interfaces} tcp dport 53 accept"),
+                format!("{interfaces} icmp type echo-request accept"),
+            ]
+            .into_iter()
+            .chain(ingress)
+            .chain([format!("{interfaces} reject")])
+            .map(|line| format!("        {line}\n"))
+            .collect::<String>();
+            format!(
+                "    chain input {{\n        type filter hook input priority -50; policy accept;\n{lines}    }}\n"
+            )
+        }
+    }
 }
 
 fn allow_lines(ip: &IpAddr, rule: &EgressRule) -> Vec<String> {
@@ -169,7 +215,23 @@ mod tests {
             allow: vec!["10.20.0.5/32".to_string()],
             local_subnet: "10.200.1.0/24".to_string(),
             cluster_cidr: "10.200.0.0/16".to_string(),
+            workload_interfaces: Vec::new(),
+            ingress_ports: Vec::new(),
         }
+    }
+
+    #[test]
+    fn keeps_workloads_off_host_ports_except_dns_and_ingress() {
+        let mut host = policy(&[]);
+        host.workload_interfaces = vec!["maestro0".to_string(), "maestro-wg".to_string()];
+        host.ingress_ports = vec![80, 443];
+        let script = render(&host, &BTreeMap::new(), &BTreeMap::new());
+        let input = &script[script.find("chain input").unwrap()..];
+        assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } udp dport 53 accept"));
+        assert!(input.contains("tcp dport { 80, 443 } accept"));
+        assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } reject"));
+        assert!(input.find("dport { 80, 443 }") < input.find("} reject"));
+        assert!(!render(&policy(&[]), &BTreeMap::new(), &BTreeMap::new()).contains("chain input"));
     }
 
     #[test]

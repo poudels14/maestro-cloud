@@ -264,6 +264,8 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             allow: config.egress.allow.clone(),
             local_subnet: identity.subnet.clone(),
             cluster_cidr: identity.cluster.cidr.clone(),
+            workload_interfaces: vec![BRIDGE_NAME.to_string(), WIREGUARD_INTERFACE.to_string()],
+            ingress_ports: config.ingress.ports.clone(),
         },
         board.clone(),
         reconciler.plans(),
