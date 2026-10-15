@@ -39,6 +39,7 @@ const IMAGE_CHUNK_BUFFER: usize = 16;
 pub const BUILD_LOGS_DIR: &str = "builds/logs";
 const NODE_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_LOG_LIMIT: usize = 100;
 const MAX_LOG_LIMIT: usize = 1_000;
 
@@ -564,16 +565,20 @@ impl StoreWriter for ForwardingWriter {
             Err(ConsensusError::ForwardToLeader {
                 leader_address: Some(address),
                 ..
-            }) => self
-                .clients
-                .call(&address, &NodeRequest::Write { mutations })
-                .await
-                .and_then(|reply| {
-                    reply
-                        .as_u64()
-                        .ok_or_else(|| Status::internal("leader returned no version"))
-                })
-                .map_err(|status| ConsensusError::Rejected(status.message().to_string())),
+            }) => {
+                let version = self
+                    .clients
+                    .call(&address, &NodeRequest::Write { mutations })
+                    .await
+                    .and_then(|reply| {
+                        reply
+                            .as_u64()
+                            .ok_or_else(|| Status::internal("leader returned no version"))
+                    })
+                    .map_err(|status| ConsensusError::Rejected(status.message().to_string()))?;
+                wait_for_version(self.consensus.state(), version).await;
+                Ok(version)
+            }
             other => other,
         }
     }
@@ -924,6 +929,18 @@ fn percent_encode(value: &str) -> String {
             other => format!("%{other:02X}"),
         })
         .collect()
+}
+
+async fn wait_for_version(state: &StateMachine, version: u64) {
+    let mut changes = state.subscribe();
+    let deadline = tokio::time::Instant::now() + CATCH_UP_TIMEOUT;
+    let mut waiting = true;
+    while waiting && state.version().is_ok_and(|current| current < version) {
+        waiting = matches!(
+            tokio::time::timeout_at(deadline, changes.recv()).await,
+            Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_)))
+        );
+    }
 }
 
 #[cfg(test)]
