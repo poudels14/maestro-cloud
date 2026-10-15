@@ -7,6 +7,7 @@ import {
   type ExecProxyContext,
   type ExecUpstreamConstructor
 } from "../../../../lib/execProxy";
+import { guardRequest } from "../../../../lib/requestGuard";
 
 function upstreamUrl(request: Request): string {
   const requestUrl = new URL(request.url);
@@ -24,6 +25,8 @@ function upstreamUrl(request: Request): string {
 
 export default defineWebSocketHandler({
   upgrade(request) {
+    const rejection = guardRequest(request);
+    if (rejection) throw new Response(rejection, { status: 403 });
     return {
       context: {
         url: upstreamUrl(request),

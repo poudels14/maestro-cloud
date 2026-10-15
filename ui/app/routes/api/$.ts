@@ -1,8 +1,13 @@
 import { createFileRoute } from "@tanstack/solid-router";
 import { request as httpRequest } from "node:http";
 import { Readable } from "node:stream";
+import { guardRequest } from "../../../server/lib/requestGuard";
+
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 async function proxy(request: Request): Promise<Response> {
+  const rejection = guardRequest(request);
+  if (rejection) return new Response(rejection, { status: 403 });
   const apiHost = process.env.MAESTRO_API_HOST || "http://127.0.0.1:3000";
   const url = new URL(request.url);
   if (/^\/api\/services\/[^/]+\/exec$/.test(url.pathname)) {
@@ -52,12 +57,12 @@ function socketFetch(
             responseHeaders.set(name, value);
           }
         });
-        resolve(
-          new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, {
-            status: incoming.statusCode ?? 502,
-            headers: responseHeaders
-          })
-        );
+        const status = incoming.statusCode ?? 502;
+        const body = NULL_BODY_STATUSES.has(status)
+          ? null
+          : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>);
+        if (body === null) incoming.resume();
+        resolve(new Response(body, { status, headers: responseHeaders }));
       }
     );
     upstream.on("error", reject);
