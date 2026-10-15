@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use maestro_core::{ByteSize, Millicores};
 use maestro_runtime::{ContainerLimits, ContainerSpec, ContainerState, NetworkMode, Runtime};
@@ -11,6 +11,7 @@ const CONNECTOR_PREFIX: &str = "maestro-cloudflared-";
 const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(10);
 const INGRESS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const DETACHED_GRACE: Duration = Duration::from_secs(60);
 const SYSTEM_SLICE: &str = "maestro-system.slice";
 const SYSTEM_LABEL: &str = "maestro.system";
 const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
@@ -41,9 +42,14 @@ impl<R: Runtime> TunnelConnectors<R> {
     pub async fn run(self) {
         let mut ticker = tokio::time::interval(CHECK_INTERVAL);
         let mut was_ready = None;
+        let mut last_attached = None;
         loop {
             ticker.tick().await;
-            let ready = *self.attached.borrow() && self.ingress_accepts().await;
+            if *self.attached.borrow() {
+                last_attached = Some(Instant::now());
+            }
+            let ready =
+                recently_attached(last_attached, Instant::now()) && self.ingress_accepts().await;
             if was_ready != Some(ready) {
                 tracing::info!(ready, "cloudflare tunnel connectors follow node readiness");
                 was_ready = Some(ready);
@@ -108,6 +114,10 @@ impl<R: Runtime> TunnelConnectors<R> {
     }
 }
 
+fn recently_attached(last_attached: Option<Instant>, now: Instant) -> bool {
+    last_attached.is_some_and(|attached_at| now.duration_since(attached_at) < DETACHED_GRACE)
+}
+
 fn connector(token: &str, index: u32) -> ContainerSpec {
     ContainerSpec {
         id: format!("{CONNECTOR_PREFIX}{index}"),
@@ -138,6 +148,18 @@ mod tests {
     use maestro_runtime::FakeRuntime;
 
     use super::*;
+
+    #[test]
+    fn keeps_connectors_through_a_leader_change_but_not_a_long_detachment() {
+        let now = Instant::now();
+        assert!(!recently_attached(None, now));
+        assert!(recently_attached(Some(now), now));
+        assert!(recently_attached(
+            Some(now),
+            now + DETACHED_GRACE - Duration::from_secs(1)
+        ));
+        assert!(!recently_attached(Some(now), now + DETACHED_GRACE));
+    }
 
     #[tokio::test]
     async fn runs_connectors_only_while_the_node_is_ready() {
