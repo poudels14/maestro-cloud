@@ -248,6 +248,7 @@ pub async fn spawn(
     ));
 
     let clients = NodeClients::new(settings.credentials.clone());
+    let voter_clients = NodeClients::voters(settings.credentials.clone());
     tasks.spawn(mirror_observed(
         observed.as_ref().clone(),
         consensus.clone(),
@@ -314,7 +315,7 @@ pub async fn spawn(
         )
         .with_state(UploadState {
             consensus: consensus.clone(),
-            clients: clients.clone(),
+            clients: voter_clients.clone(),
             key: key.clone(),
             directory: uploads_dir(&settings.data_dir),
             allowed: settings.config.allow_cli_deployment,
@@ -329,7 +330,10 @@ pub async fn spawn(
             clients: clients.clone(),
             allowed: settings.config.allow_exec,
         });
-    let writer = Arc::new(ForwardingWriter::new(consensus.clone(), clients.clone()));
+    let writer = Arc::new(ForwardingWriter::new(
+        consensus.clone(),
+        voter_clients.clone(),
+    ));
     let orchestrator = Arc::new(maintenance::Orchestrator::new(
         writer.clone(),
         maintenance::ClusterNodes {

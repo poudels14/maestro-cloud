@@ -28,7 +28,7 @@ impl ControlLink for GrpcControlLink {
     ) -> Result<(mpsc::Sender<AgentMessage>, mpsc::Receiver<ControlMessage>), String> {
         let channel = Channel::from_shared(format!("https://{target}"))
             .map_err(|error| error.to_string())?
-            .tls_config(self.credentials.client_tls())
+            .tls_config(self.credentials.voter_client_tls())
             .map_err(|error| error.to_string())?
             .connect()
             .await

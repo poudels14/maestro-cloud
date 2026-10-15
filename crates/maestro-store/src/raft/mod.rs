@@ -135,7 +135,7 @@ impl Consensus {
             Arc::new(config),
             GrpcNetwork::new(
                 settings.node_id.0,
-                credentials.map(|credentials| credentials.client_tls()),
+                credentials.map(|credentials| credentials.voter_client_tls()),
             ),
             log_store,
             state_machine,

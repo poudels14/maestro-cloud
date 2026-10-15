@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tonic::transport::{Channel, Endpoint, Uri};
 
-use crate::pki::{NODE_SERVER_NAME, pinned_client_config};
+use crate::pki::{VOTER_SERVER_NAME, pinned_client_config};
 
 pub async fn connect_pinned(
     address: &str,
@@ -20,7 +20,7 @@ pub async fn connect_pinned(
             let target = target.clone();
             async move {
                 let stream = TcpStream::connect(&target).await?;
-                let server_name = ServerName::try_from(NODE_SERVER_NAME)
+                let server_name = ServerName::try_from(VOTER_SERVER_NAME)
                     .map_err(|error| std::io::Error::other(error.to_string()))?;
                 let tls = connector.connect(server_name, stream).await?;
                 Ok::<_, std::io::Error>(TokioIo::new(tls))

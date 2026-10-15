@@ -156,3 +156,24 @@ fn node_certificates_carry_their_identity() {
         Some(Some(CertRole::Worker))
     );
 }
+
+#[tokio::test]
+async fn control_plane_clients_only_accept_voter_servers() {
+    let ca = ClusterCa::generate("test").unwrap();
+    let client = ca.issue_node(2, CertRole::Worker, &[]).unwrap();
+    let voter = serve(&ca.issue_node(1, CertRole::Voter, &[]).unwrap()).await;
+    let impostor = serve(&ca.issue_node(3, CertRole::Worker, &[]).unwrap()).await;
+    let connect = |address: SocketAddr| {
+        let tls = client.voter_client_tls();
+        async move {
+            let channel = Channel::from_shared(format!("https://{address}"))
+                .unwrap()
+                .tls_config(tls)?
+                .connect()
+                .await?;
+            Ok::<_, Box<dyn std::error::Error>>(call(channel).await?)
+        }
+    };
+    assert_eq!(connect(voter).await.unwrap(), "ping+mtls");
+    assert!(connect(impostor).await.is_err());
+}

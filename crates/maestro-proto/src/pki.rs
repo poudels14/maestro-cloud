@@ -184,11 +184,19 @@ impl NodeCredentials {
     }
 
     pub fn client_tls(&self) -> ClientTlsConfig {
+        self.client_tls_for(NODE_SERVER_NAME)
+    }
+
+    pub fn voter_client_tls(&self) -> ClientTlsConfig {
+        self.client_tls_for(VOTER_SERVER_NAME)
+    }
+
+    fn client_tls_for(&self, server_name: &str) -> ClientTlsConfig {
         install_crypto_provider();
         ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(&self.ca_pem))
             .identity(Identity::from_pem(&self.cert_pem, &self.key_pem))
-            .domain_name(NODE_SERVER_NAME)
+            .domain_name(server_name)
     }
 }
 

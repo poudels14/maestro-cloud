@@ -109,6 +109,7 @@ pub struct NodeService {
 #[derive(Clone)]
 pub struct NodeClients {
     credentials: NodeCredentials,
+    voters_only: bool,
     channels: Arc<Mutex<HashMap<String, Channel>>>,
 }
 
@@ -380,6 +381,15 @@ impl NodeClients {
     pub fn new(credentials: NodeCredentials) -> Self {
         Self {
             credentials,
+            voters_only: false,
+            channels: Arc::default(),
+        }
+    }
+
+    pub fn voters(credentials: NodeCredentials) -> Self {
+        Self {
+            credentials,
+            voters_only: true,
             channels: Arc::default(),
         }
     }
@@ -442,7 +452,10 @@ impl NodeClients {
             None => {
                 let channel = Channel::from_shared(format!("https://{address}"))
                     .map_err(|error| Status::invalid_argument(error.to_string()))?
-                    .tls_config(self.credentials.client_tls())
+                    .tls_config(match self.voters_only {
+                        true => self.credentials.voter_client_tls(),
+                        false => self.credentials.client_tls(),
+                    })
                     .map_err(|error| Status::internal(error.to_string()))?
                     .connect_timeout(NODE_CONNECT_TIMEOUT)
                     .connect()
