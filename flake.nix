@@ -86,6 +86,7 @@
     }: let
       cfg = config.services.maestro;
       dataDir = toString cfg.dataDir;
+      depotPackage = import ./nix/depot-package.nix {inherit pkgs;};
       buildkitConfig = pkgs.writeText "buildkitd.toml" ''
         [worker.oci]
           enabled = false
@@ -290,6 +291,7 @@
 
         environment.systemPackages = [
           cfg.package
+          depotPackage
           pkgs.buildkit
           pkgs.nerdctl
           pkgs.wireguard-tools
@@ -351,6 +353,7 @@
           path = [
             pkgs.cni-plugins
             pkgs.iproute2
+            pkgs.iptables
             pkgs.nftables
             pkgs.wireguard-tools
             pkgs.buildkit
@@ -358,6 +361,7 @@
             pkgs.openssh
             pkgs.systemd
             pkgs.coreutils
+            depotPackage
             config.nix.package
             config.system.build.nixos-rebuild
           ] ++ cfg.registry.credentialHelpers;
