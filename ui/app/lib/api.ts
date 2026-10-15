@@ -9,7 +9,6 @@ import type {
   LogEntry,
   MetricPoint,
   ReplicaState,
-  Routes,
   Service,
   ServiceSpec,
   SlackCategory,
@@ -236,10 +235,6 @@ async function getDisks(): Promise<Record<string, DiskInfo[]>> {
   return request("/api/disks/nodes");
 }
 
-async function getRoutes(): Promise<Routes.Table> {
-  return request("/api/routes");
-}
-
 async function getServiceMetrics(
   serviceId: string,
   from?: number,
@@ -410,7 +405,6 @@ export {
   queryLogs,
   getLogHistogram,
   getDisks,
-  getRoutes,
   getServiceMetrics,
   getServiceTraffic,
   getIngressTraffic,

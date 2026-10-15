@@ -7,7 +7,6 @@ import {
   getClusterMetrics,
   getDeployments,
   getDisks,
-  getRoutes,
   getIngressTraffic,
   getBlockedIngressTraffic,
   getNodeMetrics,
@@ -34,7 +33,6 @@ const queryKeys = {
   config: ["config"] as const,
   services: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
-  routes: ["routes"] as const,
   disks: ["disks"] as const,
   nodeMetrics: (range: number, nodeId: number | undefined) =>
     ["metrics", "node", range, nodeId] as const,
@@ -94,12 +92,6 @@ const deploymentsQuery = (serviceId: string) => ({
   refetchInterval: 10_000,
   refetchOnWindowFocus: true,
   staleTime: 5_000
-});
-
-const routesQuery = () => ({
-  queryKey: queryKeys.routes,
-  queryFn: ssrSafe(getRoutes, { routes: {}, blockedIps: [] }),
-  refetchInterval: 15_000
 });
 
 const disksQuery = () => ({
@@ -193,7 +185,6 @@ export {
   unschedulableQuery,
   servicesQuery,
   deploymentsQuery,
-  routesQuery,
   disksQuery,
   nodeMetricsQuery,
   clusterMetricsQuery,
