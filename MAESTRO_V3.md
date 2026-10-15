@@ -391,6 +391,15 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   `master` and `hybrid` both map to a voter.
 - Host volumes must live inside a configured volume root (`volumeRoots`, default
   `/var/lib/maestro-volumes` and `/data`), enforced on each node after resolving symlinks.
+- Security model (review, 2026-10-14):
+  - Node-to-node calls are authorized by the caller's certificate (node id and role);
+    only voters may write, upload, exec, run maintenance, or read logs.
+  - Join tokens are signed grants for one role with an expiry (default 5 minutes).
+  - The admin UI is trusted for anyone on the tailnet; it is bound to loopback so
+    workloads can't reach it, and rejects rebound hosts and cross-site writes.
+  - Containers run under Docker's default seccomp profile and can't reach cloud
+    metadata (169.254.0.0/16) unless the cluster egress allow list opens it.
+  - PR previews intentionally inherit the base service's secrets (as in v1).
 - There is no v1 → v3 migration: v3 clusters start fresh and services are re-applied
   from their services files.
 - Service ids stay lowercase DNS labels (v1 also allowed uppercase and `_`).

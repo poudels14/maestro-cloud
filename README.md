@@ -335,8 +335,11 @@ services.maestro = {
 The module configures containerd, BuildKit (in the builds slice), the three slices,
 the node and telemetry units, WireGuard, IP forwarding, and firewall rules
 (`openFirewall`, `ingressPorts`). The admin UI is built from the source tree once per
-version and runs on voters. Upgrade by updating the flake input and running
-`nixos-rebuild switch`.
+version and runs on voters. It listens on the node's loopback at port 7490, so it is
+reachable over Tailscale (`http://<node>.<tailnet>.ts.net:7490`) or an SSH tunnel, but
+not from workload containers. Anyone who can reach it can operate the cluster; other
+host names must be listed in the admin container's `MAESTRO_ADMIN_HOSTS`. Upgrade by
+updating the flake input and running `nixos-rebuild switch`.
 
 Reach the API through an SSH tunnel or your private network:
 
