@@ -9,7 +9,7 @@ use maestro_core::{
     Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, MAX_REPLICAS_OVERRIDE,
     MaintenanceEvent, MaintenancePhase, Millicores, NodeCapacity, NodeId, NodeRecord, NodeState,
     NodeStepStatus, PreviewSource, ReplicaId, ReplicaStatus, RouteTable, ServiceControls,
-    ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica,
+    ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica, host_conflict,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -271,6 +271,14 @@ async fn put_service<W: StoreWriter, O: ObservedReplicas>(
 ) -> Result<Json<serde_json::Value>, ControlError> {
     let id = ServiceId::new(service_id);
     spec.validate(&id)?;
+    let existing = state.writer.state().services()?;
+    let others = existing
+        .iter()
+        .filter(|(other, _)| *other != id)
+        .map(|(other, spec)| (other, spec));
+    if let Some(conflict) = host_conflict(others.chain([(&id, &spec)])) {
+        Err(conflict)?;
+    }
     reject_cluster_freeze(state.writer.state())?;
     let sealed = state.key.seal_spec(&spec);
     let version = state
@@ -342,6 +350,14 @@ async fn rollout<W: StoreWriter, O: ObservedReplicas>(
     file.services
         .iter()
         .try_for_each(|(id, spec)| spec.validate(id))?;
+    let stored = state.writer.state().services()?;
+    let kept = stored
+        .iter()
+        .filter(|(id, _)| !file.services.contains_key(id))
+        .map(|(id, spec)| (id, spec));
+    if let Some(conflict) = host_conflict(kept.chain(file.services.iter())) {
+        Err(conflict)?;
+    }
     let existing = state
         .writer
         .state()

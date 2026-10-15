@@ -8,6 +8,7 @@ use hickory_proto::rr::rdata::{A, AAAA};
 use hickory_proto::rr::{RData, Record, RecordType};
 use tokio::net::UdpSocket;
 
+const MAX_IN_FLIGHT: usize = 256;
 const INTERNAL_SUFFIX: &str = "maestro.internal";
 const RECORD_TTL: u32 = 5;
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(2);
@@ -100,18 +101,22 @@ impl DnsServer {
 
     pub async fn serve(self, socket: Arc<UdpSocket>) {
         let server = Arc::new(self);
+        let in_flight = Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT));
         let mut buffer = vec![0u8; MAX_PACKET];
         loop {
             match socket.recv_from(&mut buffer).await {
                 Ok((length, client)) => {
-                    let request = buffer[..length].to_vec();
-                    let server = server.clone();
-                    let socket = socket.clone();
-                    tokio::spawn(async move {
-                        if let Some(response) = server.answer(&request).await {
-                            let _ = socket.send_to(&response, client).await;
-                        }
-                    });
+                    if let Ok(permit) = in_flight.clone().try_acquire_owned() {
+                        let request = buffer[..length].to_vec();
+                        let server = server.clone();
+                        let socket = socket.clone();
+                        tokio::spawn(async move {
+                            if let Some(response) = server.answer(&request).await {
+                                let _ = socket.send_to(&response, client).await;
+                            }
+                            drop(permit);
+                        });
+                    }
                 }
                 Err(error) => tracing::warn!(%error, "DNS receive failed"),
             }

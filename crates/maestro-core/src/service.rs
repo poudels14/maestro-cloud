@@ -215,9 +215,35 @@ impl ServicesFile {
         let file: Self = json5::from_str(text)?;
         file.services
             .iter()
-            .try_for_each(|(service_id, spec)| spec.validate(service_id))
-            .map(|_| file)
+            .try_for_each(|(service_id, spec)| spec.validate(service_id))?;
+        match host_conflict(file.services.iter()) {
+            Some(conflict) => Err(conflict),
+            None => Ok(file),
+        }
     }
+}
+
+pub fn host_conflict<'a>(
+    services: impl Iterator<Item = (&'a ServiceId, &'a ServiceSpec)>,
+) -> Option<SpecError> {
+    let mut owners = BTreeMap::<String, &ServiceId>::new();
+    services
+        .flat_map(|(service_id, spec)| {
+            spec.ingress
+                .iter()
+                .flat_map(|ingress| ingress.all_hosts())
+                .map(move |host| (host.to_ascii_lowercase(), service_id))
+                .collect::<Vec<_>>()
+        })
+        .find_map(
+            |(host, service_id)| match owners.insert(host.clone(), service_id) {
+                Some(owner) if owner != service_id => Some(SpecError::Invalid {
+                    service: service_id.clone(),
+                    reason: format!("ingress host {host} is already used by service {owner}"),
+                }),
+                _ => None,
+            },
+        )
 }
 
 impl ServiceSpec {
@@ -421,8 +447,8 @@ fn ingress_problems(ingress: &IngressSpec) -> Vec<String> {
             .then(|| "ingress requires host or hosts".to_string()),
         hosts
             .iter()
-            .any(|host| host.contains('`'))
-            .then(|| "ingress hosts must not contain backticks".to_string()),
+            .find(|host| !valid_hostname(host))
+            .map(|host| format!("ingress host {host} must be a lowercase DNS name")),
         header_problem,
     ]
     .into_iter()
@@ -455,6 +481,19 @@ fn preview_problems(spec: &ServiceSpec, preview: &PreviewSpec) -> Vec<String> {
         .flatten()
         .collect(),
     }
+}
+
+fn valid_hostname(host: &str) -> bool {
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= MAX_LABEL_LENGTH
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+        })
 }
 
 fn sealed_value_problem(spec: &ServiceSpec) -> Option<String> {
@@ -683,6 +722,8 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a`b" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "Dockerfile", "watch": true } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "../Dockerfile" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a.b) || Host(c" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a.b" } }, "web": { "name": "y", "image": "nginx", "ingress": { "hosts": ["a.b"] } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "env": { "items": { "A": "enc:v1:abc" } } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "/etc/passwd" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "repo": "--upload-pack=touch /tmp/x", "dockerfile": "Dockerfile" } } } }"#,
