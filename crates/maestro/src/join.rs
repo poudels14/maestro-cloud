@@ -36,7 +36,7 @@ pub struct JoinArgs {
     #[arg(long)]
     config: String,
     #[arg(long)]
-    advertise: String,
+    advertise: Option<String>,
     #[arg(long, value_parser = parse_role, default_value = "voter")]
     role: NodeRole,
     #[arg(long, default_value = "/var/lib/maestro")]
@@ -180,7 +180,8 @@ pub async fn provision(args: JoinArgs) -> anyhow::Result<()> {
             let config = load_config(&args.config)?;
             let secret = config.join_secret()?.to_string();
             let voters = voter_addresses(&config)?;
-            let own_address = grpc_address(&args.advertise);
+            let advertise = resolve_advertise(args.advertise.as_deref(), &voters)?;
+            let own_address = grpc_address(&advertise);
             let founder = args.role == NodeRole::Voter && voters.first() == Some(&own_address);
             let founded = founder && !cluster_exists(&voters, &own_address, &secret).await;
             match founded {
@@ -188,12 +189,12 @@ pub async fn provision(args: JoinArgs) -> anyhow::Result<()> {
                     tracing::info!("no listed voter has a cluster yet; creating it here");
                     server::init(InitArgs::new(
                         args.data_dir.clone(),
-                        args.advertise.clone(),
+                        advertise,
                         args.config.clone(),
                     ))
                     .await
                 }
-                false => join_until_admitted(&args, &config, &secret, &voters).await,
+                false => join_until_admitted(&args, &advertise, &config, &secret, &voters).await,
             }
         }
     }
@@ -203,11 +204,13 @@ pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
     let config = load_config(&args.config)?;
     let secret = config.join_secret()?.to_string();
     let voters = voter_addresses(&config)?;
-    join_until_admitted(&args, &config, &secret, &voters).await
+    let advertise = resolve_advertise(args.advertise.as_deref(), &voters)?;
+    join_until_admitted(&args, &advertise, &config, &secret, &voters).await
 }
 
 async fn join_until_admitted(
     args: &JoinArgs,
+    advertise: &str,
     config: &ClusterConfig,
     secret: &str,
     voters: &[String],
@@ -216,7 +219,7 @@ async fn join_until_admitted(
         config.encryption_key()?;
         config.jwt_secret_key()?;
     }
-    let own_address = grpc_address(&args.advertise);
+    let own_address = grpc_address(advertise);
     let candidates = voters
         .iter()
         .filter(|voter| **voter != own_address)
@@ -227,14 +230,14 @@ async fn join_until_admitted(
     );
     let capacity = detect_capacity()?;
     let wireguard_key = load_or_generate_key(&args.data_dir.join("keys")).await?;
-    let wireguard_endpoint = advertise_ip(&args.advertise)
+    let wireguard_endpoint = advertise_ip(advertise)
         .map(|ip| SocketAddr::new(ip, WIREGUARD_PORT))
         .context("--advertise must be an IP:port the other nodes can reach")?;
     let mut request = JoinRequest {
         secret: String::new(),
         name: args.name.clone().unwrap_or_else(hostname),
         role: args.role,
-        advertise: args.advertise.clone(),
+        advertise: advertise.to_string(),
         capacity,
         reserved: system_reserve(&capacity, &config.node.reserve),
         labels: config.node.labels.clone(),
@@ -266,7 +269,7 @@ async fn join_until_admitted(
             (None, false) => anyhow::bail!("could not join the cluster: {}", failures.join("; ")),
         }
     };
-    persist(args, response)?;
+    persist(args, advertise, response)?;
     println!("joined the cluster as a {}", role_name(args.role));
     Ok(())
 }
@@ -334,7 +337,7 @@ async fn request_join(
     decode(&reply.into_inner())
 }
 
-fn persist(args: &JoinArgs, response: JoinResponse) -> anyhow::Result<()> {
+fn persist(args: &JoinArgs, advertise: &str, response: JoinResponse) -> anyhow::Result<()> {
     let pki = args.data_dir.join("pki");
     let credentials = NodeCredentials {
         cert_pem: response.cert_pem,
@@ -350,7 +353,7 @@ fn persist(args: &JoinArgs, response: JoinResponse) -> anyhow::Result<()> {
         name: args.name.clone().unwrap_or_else(hostname),
         role: args.role,
         subnet: response.subnet,
-        advertise: args.advertise.clone(),
+        advertise: advertise.to_string(),
         seeds: response.voters,
         cluster: response.cluster,
     }
@@ -376,6 +379,21 @@ fn voter_addresses(config: &ClusterConfig) -> anyhow::Result<Vec<String>> {
         "cluster.voters must list the voter addresses in the cluster config"
     );
     Ok(voters)
+}
+
+fn resolve_advertise(advertise: Option<&str>, voters: &[String]) -> anyhow::Result<String> {
+    match advertise {
+        Some(advertise) => Ok(grpc_address(advertise)),
+        None => {
+            let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
+            probe
+                .connect(voters[0].as_str())
+                .with_context(|| format!("cannot route to {}; pass --advertise", voters[0]))?;
+            let local = probe.local_addr()?.ip();
+            tracing::info!(%local, "advertising the address that routes to the voters");
+            Ok(format!("{local}:{DEFAULT_GRPC_PORT}"))
+        }
+    }
 }
 
 fn grpc_address(endpoint: &str) -> String {
@@ -508,6 +526,16 @@ mod tests {
         assert!(verify_grant("secret", &forged, NodeRole::Voter, 999).is_err());
         let extended = grant.replacen("1000", "9999999999", 1);
         assert!(verify_grant("secret", &extended, NodeRole::Worker, 999).is_err());
+    }
+
+    #[test]
+    fn advertises_the_local_address_that_reaches_the_voters() {
+        let voters = vec!["127.0.0.1:7400".to_string()];
+        assert_eq!(resolve_advertise(None, &voters).unwrap(), "127.0.0.1:7400");
+        assert_eq!(
+            resolve_advertise(Some("10.1.0.11"), &voters).unwrap(),
+            "10.1.0.11:7400"
+        );
     }
 
     #[test]

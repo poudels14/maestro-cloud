@@ -293,8 +293,9 @@ address as `--advertise`, copy the Linux binary to the new VM, and join it.
 
 ## Deploying on NixOS
 
-The flake exports `nixosModules.default`. Every node uses the same module settings
-except `advertise` (and `role` for workers); the cluster forms on its own.
+The flake exports `nixosModules.default`. Every node can use the same module
+settings (plus `role = "worker"` on workers); the cluster forms on its own. `advertise`
+defaults to the node's address on the route to `cluster.voters`.
 
 ```nix
 {
@@ -308,7 +309,6 @@ except `advertise` (and `role` for workers); the cluster forms on its own.
         {
           services.maestro = {
             enable = true;
-            advertise = "10.20.0.11:7400";
             configFile = "aws-secret://maestro/prod/config.json";
             # role = "worker";   # voters are the default
           };

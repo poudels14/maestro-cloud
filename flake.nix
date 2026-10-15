@@ -99,12 +99,21 @@
         if [ -f ${dataDir}/node.json ]; then
           exit 0
         fi
-        ${cfg.package}/bin/maestro server provision \
-          --data-dir ${dataDir} \
-          --role ${cfg.role} \
-          --advertise ${cfg.advertise} \
-          --config ${toString cfg.configFile}
+        exec ${lib.escapeShellArgs provisionArgs}
       '';
+      provisionArgs =
+        [
+          "${cfg.package}/bin/maestro"
+          "server"
+          "provision"
+          "--data-dir"
+          dataDir
+          "--role"
+          cfg.role
+          "--config"
+          (toString cfg.configFile)
+        ]
+        ++ lib.optionals (cfg.advertise != null) ["--advertise" cfg.advertise];
       agentArgs =
         [
           "${cfg.package}/bin/maestro"
@@ -118,6 +127,10 @@
         ++ lib.optionals cfg.adminUi ["--admin-source" "/etc/maestro/source"]
         ++ cfg.extraArgs;
     in {
+      imports = [
+        (lib.mkRenamedOptionModule ["services" "maestro" "config"] ["services" "maestro" "configFile"])
+      ];
+
       options.services.maestro = {
         enable = lib.mkEnableOption "Maestro node";
 
@@ -140,9 +153,10 @@
         };
 
         advertise = lib.mkOption {
-          type = lib.types.str;
+          type = lib.types.nullOr lib.types.str;
+          default = null;
           example = "10.20.0.11:7400";
-          description = "Private IP:port other nodes use to reach this node's gRPC endpoint.";
+          description = "Private IP:port other nodes use to reach this node's gRPC endpoint. When null, the node uses its address on the route to cluster.voters.";
         };
 
         apiListen = lib.mkOption {
