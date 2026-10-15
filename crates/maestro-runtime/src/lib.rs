@@ -6,6 +6,7 @@ mod fake;
 mod oci;
 mod reference;
 mod registry;
+mod seccomp;
 mod spec;
 mod user;
 

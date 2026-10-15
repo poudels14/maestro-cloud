@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use crate::seccomp;
 use crate::spec::{ContainerFiles, ContainerSpec, ImageConfig, NetworkMode};
 use crate::user::ProcessUser;
 
@@ -89,6 +90,7 @@ pub fn build_spec(
             },
             "cgroupsPath": format!("{}:maestro:{}", container.cgroup_parent, container.id),
             "namespaces": namespaces(container.network),
+            "seccomp": seccomp::default_profile(&capabilities),
             "maskedPaths": MASKED_PATHS,
             "readonlyPaths": READONLY_PATHS,
         },
