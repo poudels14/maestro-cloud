@@ -208,7 +208,7 @@ async function queryLogs(params: {
   limit: number;
   beforeTs?: number;
   afterTs?: number;
-  nodeId?: number;
+  nodeIds?: string;
 }): Promise<LogPage> {
   const page = await request<Omit<LogPage, "entries"> & { records: LogRecord[] }>(
     withParams("/api/logs", params)
@@ -227,7 +227,7 @@ async function getLogHistogram(params: {
   to: number;
   bucketMs?: number;
   groupBy?: "level" | "status";
-  nodeId?: number;
+  nodeIds?: string;
 }): Promise<LogHistogram> {
   return request(withParams("/api/logs/histogram", params));
 }

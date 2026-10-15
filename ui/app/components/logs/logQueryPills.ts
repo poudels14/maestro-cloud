@@ -145,6 +145,10 @@ function quoteLogQueryValue(value: string) {
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+function anyOfLogQuery(field: string, values: string[]) {
+  return values.map((value) => `${field}:${quoteLogQueryValue(value)}`).join(" OR ");
+}
+
 function withLogHistogramGroupFilter(
   currentQuery: string,
   groupBy: "level" | "status",
@@ -169,5 +173,11 @@ function withLogHistogramGroupFilter(
   return combineLogQueries(next, filter);
 }
 
-export { combineLogQueries, logQueryPills, removeLogQueryPill, withLogHistogramGroupFilter };
+export {
+  anyOfLogQuery,
+  combineLogQueries,
+  logQueryPills,
+  removeLogQueryPill,
+  withLogHistogramGroupFilter
+};
 export type { LogQueryPill };

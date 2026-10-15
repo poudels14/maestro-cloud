@@ -361,6 +361,7 @@ pub struct HistogramParams {
     bucket_ms: Option<i64>,
     group_by: Option<String>,
     node_id: Option<u64>,
+    node_ids: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -385,9 +386,11 @@ pub async fn log_histogram(
             let selected = nodes
                 .into_iter()
                 .filter(|node| {
-                    params
-                        .node_id
-                        .is_none_or(|node_id| node.id == NodeId(node_id))
+                    crate::node_service::selects_node(
+                        params.node_id,
+                        params.node_ids.as_deref(),
+                        node.id,
+                    )
                 })
                 .collect::<Vec<_>>();
             let mut pairs = vec![

@@ -5,7 +5,9 @@ export const Route = createFileRoute("/cluster_/logs")({
   validateSearch: (
     search: Record<string, unknown>
   ): { node?: string; service?: string; query?: string; range?: string } => ({
-    ...(typeof search.node === "string" && search.node ? { node: search.node } : {}),
+    ...((typeof search.node === "string" && search.node) || typeof search.node === "number"
+      ? { node: String(search.node) }
+      : {}),
     ...(typeof search.service === "string" && search.service ? { service: search.service } : {}),
     ...(typeof search.query === "string" && search.query ? { query: search.query } : {}),
     ...(typeof search.range === "string" && search.range ? { range: search.range } : {})

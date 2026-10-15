@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import { ChevronDown, ChevronUp, Loader2, X } from "lucide-solid";
 import clsx from "clsx";
+import type { JSX } from "solid-js";
 import type { LogEntry } from "../../lib/types";
 import {
   getLogHistogram,
@@ -57,6 +58,10 @@ const minuteFormatter = new Intl.DateTimeFormat(undefined, {
 
 const PAGE_SIZE = 500;
 const POLL_INTERVAL_MS = 5000;
+const POLL_PAGE_SIZE = 1000;
+const MAX_POLL_PAGES = 10;
+const LATE_ARRIVAL_MS = 15_000;
+const MAX_LIVE_ROWS = 3000;
 const HISTOGRAM_POLL_INTERVAL_MS = 30_000;
 const TIME_RANGES = [
   { label: "1h", ms: 3_600_000, bucketMs: 60_000 },
@@ -88,7 +93,7 @@ function logEntryKey(entry: LogEntry) {
 
 function LogViewer(props: {
   scope: string;
-  nodeId?: number;
+  nodeIds?: number[];
   showHost?: boolean;
   embedded?: boolean;
   showHistogram?: boolean;
@@ -99,7 +104,9 @@ function LogViewer(props: {
   onQueryChange?: (query: string) => void;
   range?: string;
   onRangeChange?: (range: string) => void;
+  filters?: JSX.Element;
 }) {
+  const nodeIdsParam = () => (props.nodeIds?.length ? props.nodeIds.join(",") : undefined);
   const [lines, setLines] = createSignal<LogEntry[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
@@ -214,7 +221,7 @@ function LogViewer(props: {
 
   const rowRequestContext = createMemo(
     () =>
-      `${props.scope}\0${props.nodeId ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
+      `${props.scope}\0${nodeIdsParam() ?? ""}\0${requestQuery()}\0${props.showHistogram ? rangeMs() : ""}\0${selectedBucket()?.from ?? ""}\0${selectedBucket()?.to ?? ""}`
   );
 
   const selectRange = (nextRangeMs: number) => {
@@ -301,7 +308,7 @@ function LogViewer(props: {
     queryLogs({
       query: searchQuery,
       limit: PAGE_SIZE,
-      nodeId: props.nodeId,
+      nodeIds: nodeIdsParam(),
       ...bounds
     });
 
@@ -322,7 +329,7 @@ function LogViewer(props: {
         to,
         bucketMs,
         groupBy: props.histogramGroupBy,
-        nodeId: props.nodeId
+        nodeIds: nodeIdsParam()
       });
       if (
         generation !== histogramGeneration ||
@@ -360,26 +367,54 @@ function LogViewer(props: {
     }
   };
 
+  const fetchSince = async (
+    searchQuery: string,
+    bounds: { afterTs?: number; beforeTs?: number },
+    pagesLeft = MAX_POLL_PAGES
+  ): Promise<Awaited<ReturnType<typeof queryLogs>>> => {
+    const page = await queryLogs({
+      query: searchQuery,
+      limit: POLL_PAGE_SIZE,
+      nodeIds: nodeIdsParam(),
+      ...bounds
+    });
+    if (page.nextCursor != null && pagesLeft > 1) {
+      const older = await fetchSince(
+        searchQuery,
+        { afterTs: bounds.afterTs, beforeTs: page.nextCursor },
+        pagesLeft - 1
+      );
+      return { ...page, entries: [...older.entries, ...page.entries] };
+    } else {
+      return page;
+    }
+  };
+
   const pollLogs = async () => {
     if (selectedBucket()) return;
     const searchQuery = requestQuery();
     const requestContext = rowRequestContext();
     const { from, to } = activeTimeRange();
+    const newest = newestTs();
     try {
-      const page = await fetchPage(searchQuery, {
-        afterTs: Math.max(newestTs() ?? from ?? 0, from ?? 0) || undefined,
+      const page = await fetchSince(searchQuery, {
+        afterTs:
+          newest == null ? from : Math.max(newest - LATE_ARRIVAL_MS, from ?? 0) || undefined,
         beforeTs: to
       });
       if (requestContext !== rowRequestContext()) return;
       setNewestTs((current) => Math.max(current ?? 0, page.entries.at(-1)?.ts ?? 0) || null);
       setUnavailableNodes(page.unavailableNodes.map((node) => node.nodeName));
-      keepVisibleRowInPlace(() =>
-        setLines((prev) =>
-          mergeLogEntries(prev, page.entries).filter(
-            (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
-          )
-        )
+      const merged = mergeLogEntries(lines(), page.entries).filter(
+        (entry) => (from == null || entry.ts >= from) && (to == null || entry.ts < to)
       );
+      const kept =
+        wasAtBottom && merged.length > MAX_LIVE_ROWS ? merged.slice(-MAX_LIVE_ROWS) : merged;
+      if (kept.length < merged.length) {
+        setHasMore(true);
+        setOlderCursor(kept[0].ts);
+      }
+      keepVisibleRowInPlace(() => setLines(kept));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");
@@ -430,7 +465,7 @@ function LogViewer(props: {
   createEffect(
     on(
       () =>
-        `${props.scope}\0${props.nodeId ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
+        `${props.scope}\0${nodeIdsParam() ?? ""}\0${requestQuery()}\0${rangeMs()}\0${histogramRefresh()}`,
       () => {
         void fetchHistogram();
       }
@@ -613,7 +648,8 @@ function LogViewer(props: {
           partial.
         </div>
       </Show>
-      <div class="shrink-0 px-3 py-2 border-b border-gray-100 flex items-center gap-3">
+      <div class="shrink-0 px-3 py-2 border-b border-gray-100 flex items-center gap-2">
+        {props.filters}
         <LogQueryInput
           value={queryDraft()}
           appliedQuery={query()}

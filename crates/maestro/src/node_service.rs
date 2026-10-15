@@ -128,6 +128,7 @@ pub struct ClusterLogsParams {
     before_ts: Option<i64>,
     after_ts: Option<i64>,
     node_id: Option<u64>,
+    node_ids: Option<String>,
 }
 
 pub struct MeshImageFetcher {
@@ -591,11 +592,7 @@ pub async fn cluster_logs(
             let active = nodes
                 .into_iter()
                 .filter(|node| node.state != NodeState::Removed)
-                .filter(|node| {
-                    params
-                        .node_id
-                        .is_none_or(|node_id| node.id == NodeId(node_id))
-                })
+                .filter(|node| selects_node(params.node_id, params.node_ids.as_deref(), node.id))
                 .collect();
             query_nodes(&fan_out.clients, active, params).await
         }
@@ -852,6 +849,16 @@ async fn query_nodes(
     }
 }
 
+pub fn selects_node(node_id: Option<u64>, node_ids: Option<&str>, candidate: NodeId) -> bool {
+    let wanted = node_ids
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|id| id.trim().parse::<u64>().ok())
+        .chain(node_id)
+        .collect::<Vec<_>>();
+    wanted.is_empty() || wanted.contains(&candidate.0)
+}
+
 pub async fn read_build_log(directory: &std::path::Path, deployment_id: &str) -> Option<String> {
     let valid = !deployment_id.is_empty()
         && deployment_id
@@ -922,6 +929,16 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selects_nodes_from_a_single_id_or_a_list() {
+        assert!(selects_node(None, None, NodeId(7)));
+        assert!(selects_node(Some(7), None, NodeId(7)));
+        assert!(!selects_node(Some(8), None, NodeId(7)));
+        assert!(selects_node(None, Some("3, 7,9"), NodeId(7)));
+        assert!(!selects_node(None, Some("3,9"), NodeId(7)));
+        assert!(selects_node(None, Some(""), NodeId(7)));
+    }
 
     fn records(timestamps: &[i64]) -> Vec<Value> {
         timestamps.iter().map(|ts| json!({ "ts": ts })).collect()

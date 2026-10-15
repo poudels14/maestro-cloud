@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
+  anyOfLogQuery,
   combineLogQueries,
   logQueryPills,
   removeLogQueryPill,
@@ -93,4 +94,14 @@ test("maps HTTP histogram groups to status-code filters", () => {
     withLogHistogramGroupFilter("service:api AND @http.status_code:[400 TO 499]", "status", "2xx"),
     "service:api AND @http.status_code:[200 TO 299]"
   );
+});
+
+test("matches any of several values and stays grouped when combined", () => {
+  assert.equal(anyOfLogQuery("service", []), "");
+  assert.equal(anyOfLogQuery("service", ["web"]), "service:web");
+  assert.equal(
+    combineLogQueries(anyOfLogQuery("service", ["web", "api"]), "level:error"),
+    "(service:web OR service:api) AND level:error"
+  );
+  assert.equal(anyOfLogQuery("@RouterName", ["svc-web@file"]), "@RouterName:svc-web@file");
 });
