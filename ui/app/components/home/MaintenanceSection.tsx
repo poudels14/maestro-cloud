@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch } from "solid-js";
 import { createStore } from "solid-js/store";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import type { Maintenance } from "../../lib/types";
 import { clusterInfoQuery } from "../../lib/queries";

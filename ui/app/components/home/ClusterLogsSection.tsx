@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { clusterNodesQuery, servicesQuery } from "../../lib/queries";
 import { LogViewer } from "../logs/LogViewer";

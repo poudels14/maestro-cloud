@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
 import type { Stats } from "../../lib/types";

@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/solid-router";
-import { QueryClientProvider, useQuery } from "@tanstack/solid-query";
+import { QueryClientProvider } from "@tanstack/solid-query";
+import { useQuery } from "../lib/useQuery";
 import { createSignal, createEffect, onCleanup, Show, Suspense } from "solid-js";
 import type { JSX } from "solid-js";
 import { HydrationScript } from "solid-js/web";

@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import type { Service } from "../../lib/types";

@@ -1,5 +1,5 @@
 import { createEffect, For, Match, on, Switch } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { getBuildLog } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
 

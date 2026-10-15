@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/solid-router";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../lib/useQuery";
 import { createSignal, Show } from "solid-js";
 import { Menu } from "lucide-solid";
 import clsx from "clsx";

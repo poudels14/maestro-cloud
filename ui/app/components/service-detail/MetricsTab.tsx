@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import type { Service, TrafficPoint } from "../../lib/types";
 import { serviceMetricsQuery, serviceTrafficQuery } from "../../lib/queries";

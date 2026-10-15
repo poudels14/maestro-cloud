@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { useQuery } from "../lib/useQuery";
 import clsx from "clsx";
 import { Plus, Send, Trash2 } from "lucide-solid";
 import type { SlackCategory, SlackWebhook } from "../lib/types";

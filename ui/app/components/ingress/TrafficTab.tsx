@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show, type JSX } from "solid-js";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Ban, Check, ChevronLeft, ChevronRight, Copy, ShieldCheck, Trash2, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";

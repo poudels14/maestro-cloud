@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch } from "solid-js";
 import { createStore } from "solid-js/store";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { EllipsisVertical, RefreshCw, Trash2 } from "lucide-solid";
 import clsx from "clsx";

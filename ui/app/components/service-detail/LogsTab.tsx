@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { useQuery } from "@tanstack/solid-query";
+import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import type { Service } from "../../lib/types";
 import { deploymentsQuery } from "../../lib/queries";
