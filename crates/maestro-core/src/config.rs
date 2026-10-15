@@ -87,6 +87,10 @@ pub struct ClusterConfig {
     pub allow_exec: bool,
     #[serde(default = "default_volume_roots")]
     pub volume_roots: Vec<String>,
+    #[serde(default, alias = "encryption-key", skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<String>,
+    #[serde(default, alias = "jwt-secret-key", skip_serializing_if = "Option::is_none")]
+    pub jwt_secret_key: Option<String>,
 }
 
 fn default_volume_roots() -> Vec<String> {
@@ -256,9 +260,19 @@ pub enum ConfigError {
     UnsupportedSource(String),
     #[error("invalid config: {0}")]
     Invalid(String),
+    #[error("{0} is required in the cluster config on voters")]
+    MissingKey(String),
 }
 
 impl ClusterConfig {
+    pub fn encryption_key(&self) -> Result<&str, ConfigError> {
+        required_key(self.encryption_key.as_deref(), "encryptionKey")
+    }
+
+    pub fn jwt_secret_key(&self) -> Result<&str, ConfigError> {
+        required_key(self.jwt_secret_key.as_deref(), "jwtSecretKey")
+    }
+
     pub fn masked(&self) -> Self {
         let mask = |value: &mut String| {
             if !value.is_empty() {
@@ -266,6 +280,8 @@ impl ClusterConfig {
             }
         };
         let mut masked = self.clone();
+        masked.encryption_key.iter_mut().for_each(mask);
+        masked.jwt_secret_key.iter_mut().for_each(mask);
         if let Some(tailscale) = masked.tailscale.as_mut() {
             mask(&mut tailscale.auth_key);
         }
@@ -520,6 +536,13 @@ fn default_cluster_cidr() -> String {
 
 fn default_ingress_ports() -> Vec<u16> {
     vec![80, 443]
+}
+
+fn required_key<'a>(value: Option<&'a str>, name: &str) -> Result<&'a str, ConfigError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ConfigError::MissingKey(name.to_string()))
 }
 
 #[cfg(test)]

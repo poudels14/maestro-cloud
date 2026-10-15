@@ -10,6 +10,7 @@ const VM_NAME: &str = "maestro-dev";
 const TEMPLATE: &str = include_str!("../../../dev/lima/maestro-dev.yaml");
 const API_URL: &str = "http://127.0.0.1:3000";
 const API_WAIT_ATTEMPTS: u32 = 60;
+const DEV_CONFIG: &str = "/etc/maestro/dev.jsonc";
 const UNIT: &str = r#"[Unit]
 Description=Maestro agent (dev)
 After=containerd.service
@@ -17,7 +18,7 @@ Requires=containerd.service
 
 [Service]
 Slice=maestro-system.slice
-ExecStart=/usr/local/bin/maestro agent --data-dir /var/lib/maestro --listen 127.0.0.1:3000 --admin-source {source}
+ExecStart=/usr/local/bin/maestro agent --data-dir /var/lib/maestro --listen 127.0.0.1:3000 --config /etc/maestro/dev.jsonc --admin-source {source}
 Restart=always
 RestartSec=2
 
@@ -66,8 +67,8 @@ pub async fn run(command: DevCommand) -> anyhow::Result<()> {
                 "/usr/local/bin/maestro",
                 "token",
                 "create",
-                "--data-dir",
-                "/var/lib/maestro",
+                "--config",
+                DEV_CONFIG,
                 "--subject",
                 "dev",
             ])
@@ -129,7 +130,11 @@ cd {source}
 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_TARGET_DIR="$HOME/target" cargo build --locked -p maestro
 sudo install -m 0755 "$HOME/target/debug/maestro" /usr/local/bin/maestro
 sudo systemctl stop maestro.service 2>/dev/null || true
-sudo /usr/local/bin/maestro server init --data-dir /var/lib/maestro --advertise 127.0.0.1:7400
+if ! sudo test -f {config}; then
+  sudo install -d -m 0700 /etc/maestro
+  printf '{{ "encryptionKey": "%s", "jwtSecretKey": "%s" }}\n' "$(head -c 32 /dev/urandom | base64)" "$(head -c 32 /dev/urandom | base64)" | sudo install -m 0600 /dev/stdin {config}
+fi
+sudo /usr/local/bin/maestro server init --data-dir /var/lib/maestro --advertise 127.0.0.1:7400 --config {config}
 sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'
 {unit}UNIT
 sudo tee /etc/systemd/system/maestro-telemetry.service > /dev/null <<'UNIT'
@@ -141,6 +146,7 @@ sudo systemctl restart maestro.service maestro-telemetry.service
         source = shell_quote(&source.to_string_lossy()),
         unit = UNIT.replace("{source}", &source.to_string_lossy()),
         telemetry_unit = TELEMETRY_UNIT,
+        config = DEV_CONFIG,
     );
     limactl(&["shell", VM_NAME, "--", "bash", "-lc", &script])
         .await

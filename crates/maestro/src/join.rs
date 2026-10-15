@@ -44,7 +44,6 @@ pub struct JoinArgs {
 pub struct JoinAuthority {
     ca: ClusterCa,
     secret: String,
-    data_dir: PathBuf,
 }
 
 impl JoinAuthority {
@@ -52,7 +51,6 @@ impl JoinAuthority {
         Ok(Self {
             ca: ClusterCa::load(&data_dir.join("pki"))?,
             secret: join_secret(data_dir)?,
-            data_dir: data_dir.to_path_buf(),
         })
     }
 
@@ -133,11 +131,8 @@ impl JoinAuthority {
     }
 
     fn voter_secrets(&self) -> anyhow::Result<VoterSecrets> {
-        let keys = self.data_dir.join("keys");
         Ok(VoterSecrets {
             ca_key_pem: self.ca.key_pem().to_string(),
-            encryption_key: std::fs::read(keys.join("encryption.key"))?,
-            api_key: std::fs::read(keys.join("api.key"))?,
             join_secret: self.secret.clone(),
         })
     }
@@ -178,6 +173,10 @@ pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
         }
         None => ClusterConfig::default(),
     };
+    if role == NodeRole::Voter {
+        config.encryption_key()?;
+        config.jwt_secret_key()?;
+    }
     let capacity = detect_capacity()?;
     let wireguard_key = load_or_generate_key(&args.data_dir.join("keys")).await?;
     let wireguard_endpoint = advertise_ip(&args.advertise)
@@ -239,10 +238,10 @@ fn persist(args: &JoinArgs, role: NodeRole, response: JoinResponse) -> anyhow::R
     credentials.save(&pki.join("node"))?;
     if let Some(secrets) = response.voter_secrets {
         ClusterCa::from_pem(response.ca_pem, secrets.ca_key_pem).save(&pki)?;
-        let keys = args.data_dir.join("keys");
-        write_private(&keys.join("encryption.key"), &secrets.encryption_key)?;
-        write_private(&keys.join("api.key"), &secrets.api_key)?;
-        write_private(&keys.join(JOIN_SECRET_FILE), secrets.join_secret.as_bytes())?;
+        write_private(
+            &args.data_dir.join("keys").join(JOIN_SECRET_FILE),
+            secrets.join_secret.as_bytes(),
+        )?;
     }
     NodeIdentity {
         id: response.node_id,

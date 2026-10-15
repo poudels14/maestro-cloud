@@ -78,7 +78,5 @@ pub struct JoinResponse {
 #[serde(rename_all = "camelCase")]
 pub struct VoterSecrets {
     pub ca_key_pem: String,
-    pub encryption_key: Vec<u8>,
-    pub api_key: Vec<u8>,
     pub join_secret: String,
 }

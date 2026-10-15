@@ -166,7 +166,7 @@
           type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
           default = null;
           example = "aws-secret://maestro/prod/config.json";
-          description = "Optional cluster config: a maestro.jsonc path or an aws-secret:// source.";
+          description = "Cluster config: a maestro.jsonc path or an aws-secret:// source. Required on voters, which read encryptionKey and jwtSecretKey from it.";
         };
 
         join = {
@@ -259,6 +259,10 @@
           {
             assertion = cfg.join.server == null || cfg.join.tokenFile != null;
             message = "services.maestro.join.tokenFile is required when join.server is set";
+          }
+          {
+            assertion = cfg.configFile != null || (cfg.join.server != null && cfg.join.role == "worker");
+            message = "services.maestro.configFile is required on voters: it holds encryptionKey and jwtSecretKey";
           }
         ];
 

@@ -46,7 +46,7 @@ use crate::node_service::{
 use crate::observability;
 use crate::previews::{PreviewSettings, PreviewWatcher};
 use crate::secret_sources;
-use crate::server::{api_secret, bind_api_socket, encryption_key_path};
+use crate::server::bind_api_socket;
 use crate::slack::{self, SlackState};
 use crate::uploads::{self, UploadState, upload_service};
 
@@ -121,9 +121,7 @@ pub async fn spawn(
     settings: ControlPlaneSettings,
     runtime: Arc<ContainerdRuntime>,
 ) -> anyhow::Result<Arc<Consensus>> {
-    let key = Arc::new(SecretKey::load_or_create(&encryption_key_path(
-        &settings.data_dir,
-    ))?);
+    let key = Arc::new(SecretKey::derive(settings.config.encryption_key()?));
     let consensus = Arc::new(
         open_consensus(
             &settings.data_dir,
@@ -421,7 +419,7 @@ pub async fn spawn(
     .merge(exec)
     .merge(maintenance)
     .merge(info);
-    let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));
+    let auth = Arc::new(ApiAuth::new(settings.config.jwt_secret_key()?.as_bytes()));
     let authenticated_api = api.clone().layer(axum::middleware::from_fn_with_state(
         auth.clone(),
         require_token,

@@ -20,7 +20,8 @@ pub struct ApiAuth {
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
-    iat: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    iat: Option<u64>,
     exp: u64,
 }
 
@@ -33,12 +34,10 @@ impl ApiAuth {
     }
 
     pub fn issue(&self, subject: &str, ttl: Duration) -> String {
-        let issued_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs());
+        let issued_at = unix_now();
         let claims = Claims {
             sub: subject.to_string(),
-            iat: issued_at,
+            iat: Some(issued_at),
             exp: issued_at + ttl.min(MAX_TOKEN_TTL).as_secs(),
         };
         jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &self.encoding)
@@ -48,7 +47,8 @@ impl ApiAuth {
     pub fn verify(&self, token: &str) -> bool {
         jsonwebtoken::decode::<Claims>(token, &self.decoding, &Validation::new(Algorithm::HS256))
             .is_ok_and(|decoded| {
-                decoded.claims.exp.saturating_sub(decoded.claims.iat) <= MAX_TOKEN_TTL.as_secs()
+                let issued_at = decoded.claims.iat.unwrap_or_else(unix_now);
+                decoded.claims.exp.saturating_sub(issued_at) <= MAX_TOKEN_TTL.as_secs()
             })
     }
 }
@@ -97,6 +97,12 @@ fn changes_service_config(method: &Method, path: &str) -> bool {
     }
 }
 
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,13 +135,10 @@ mod tests {
     #[test]
     fn rejects_tokens_issued_for_longer_than_a_day() {
         let auth = ApiAuth::new(b"cluster-secret-for-tests-0000000");
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now();
         let long_lived = Claims {
             sub: "cli".to_string(),
-            iat: now,
+            iat: Some(now),
             exp: now + 30 * 24 * 60 * 60,
         };
         let token =
@@ -151,11 +154,27 @@ mod tests {
         let auth = ApiAuth::new(b"cluster-secret-for-tests-0000000");
         let claims = Claims {
             sub: "cli".to_string(),
-            iat: 1,
+            iat: Some(1),
             exp: 2,
         };
         let token =
             jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &auth.encoding).unwrap();
         assert!(!auth.verify(&token));
+    }
+
+    #[test]
+    fn accepts_external_tokens_without_issued_at() {
+        let secret = "cluster-secret-for-tests-0000000";
+        let auth = ApiAuth::new(secret.as_bytes());
+        let sign = |exp: u64| {
+            jsonwebtoken::encode(
+                &Header::new(Algorithm::HS256),
+                &json!({ "sub": "ci", "exp": exp }),
+                &EncodingKey::from_secret(secret.as_bytes()),
+            )
+            .unwrap()
+        };
+        assert!(auth.verify(&sign(unix_now() + 60 * 60)));
+        assert!(!auth.verify(&sign(unix_now() + 30 * 24 * 60 * 60)));
     }
 }

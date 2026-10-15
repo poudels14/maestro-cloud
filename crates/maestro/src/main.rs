@@ -137,8 +137,8 @@ enum ServerCommand {
 #[derive(Subcommand)]
 enum TokenCommand {
     Create {
-        #[arg(long, default_value = "/var/lib/maestro")]
-        data_dir: PathBuf,
+        #[arg(long)]
+        config: String,
         #[arg(long, default_value = "cli")]
         subject: String,
         #[arg(long, value_parser = parse_ttl, default_value = "1h")]
@@ -172,10 +172,10 @@ async fn run_cli() -> anyhow::Result<()> {
         Command::Dev(command) => dev::run(command).await,
         Command::Context(command) => contexts::run(command),
         Command::Token(TokenCommand::Create {
-            data_dir,
+            config,
             subject,
             ttl,
-        }) => server::create_token(&data_dir, &subject, ttl),
+        }) => server::create_token(&config, &subject, ttl),
         Command::Agent(args) => server::run_agent(args).await,
         Command::Telemetry {
             log_dir,

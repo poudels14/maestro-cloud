@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
+use argon2::Argon2;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use maestro_core::{EnvSpec, ServiceSpec};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const SEALED_PREFIX: &str = "enc:v1:";
 const MASK: &str = "********";
 const KEY_BYTES: usize = 32;
+const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
 const NONCE_BYTES: usize = 12;
 
 pub struct SecretKey {
@@ -19,32 +21,18 @@ pub struct SecretKey {
 
 #[derive(Debug, Error)]
 pub enum SecretError {
-    #[error("failed to access the encryption key: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("the encryption key at {0} must be exactly {KEY_BYTES} bytes")]
-    InvalidKey(String),
     #[error("failed to decrypt a sealed value; was the encryption key changed?")]
     Decrypt,
 }
 
 impl SecretKey {
-    pub fn load_or_create(path: &Path) -> Result<Self, SecretError> {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let generated = rand::random::<[u8; KEY_BYTES]>().to_vec();
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                write_private(path, &generated)?;
-                generated
-            }
-            Err(error) => Err(error)?,
-        };
-        match bytes.len() == KEY_BYTES {
-            true => Ok(Self::from_bytes(&bytes)),
-            false => Err(SecretError::InvalidKey(path.display().to_string())),
-        }
+    pub fn derive(master_secret: &str) -> Self {
+        let salt = Sha256::digest(KDF_SALT);
+        let mut key = [0u8; KEY_BYTES];
+        Argon2::default()
+            .hash_password_into(master_secret.as_bytes(), &salt, &mut key)
+            .unwrap_or_else(|_| unreachable!("a 32-byte output and 32-byte salt are valid"));
+        Self::from_bytes(&key)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
@@ -133,17 +121,6 @@ fn map_env_values<E>(
         build.secrets = map_env(&original.secrets)?;
     }
     Ok(mapped)
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(bytes)
 }
 
 #[cfg(test)]
@@ -241,15 +218,9 @@ mod tests {
     }
 
     #[test]
-    fn creates_a_private_key_file_once() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("keys/encryption.key");
-        let first = SecretKey::load_or_create(&path).unwrap();
-        let sealed = first.seal("value");
-        let second = SecretKey::load_or_create(&path).unwrap();
-        assert_eq!(second.open(&sealed).unwrap(), "value");
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+    fn derives_the_same_key_from_the_same_secret() {
+        let sealed = SecretKey::derive("cluster-secret").seal("value");
+        assert_eq!(SecretKey::derive("cluster-secret").open(&sealed).unwrap(), "value");
+        assert!(SecretKey::derive("other-secret").open(&sealed).is_err());
     }
 }

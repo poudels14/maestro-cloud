@@ -116,11 +116,19 @@ safely. The default system reserve is `max(2 GiB, 10%)` of memory and one CPU.
 
 ## Cluster config
 
-`maestro.jsonc` is optional; every field has a default.
+Voters need a `maestro.jsonc` (a file or an `aws-secret://` source) with
+`encryptionKey` and `jwtSecretKey`; Maestro never generates them, so every voter must
+get the same values. `encryptionKey` encrypts env values and secrets in the cluster
+store (AES-256 with an Argon2-derived key). `jwtSecretKey` signs API tokens (HS256).
+You can mint tokens elsewhere with that secret as long as they carry `sub` and `exp`,
+and `exp` is at most 24 hours after `iat` (or after now when `iat` is absent). Workers
+don't need either key. Every other field has a default.
 
 ```jsonc
 {
   "$extends": "common.jsonc",   // optional base file; objects merge, other values replace
+  "encryptionKey": "…",         // required on voters
+  "jwtSecretKey": "…",          // required on voters
   "cluster": { "name": "prod", "cidr": "10.200.0.0/16" },
   "node": { "labels": { "zone": "us-west-2a" }, "reserve": { "cpu": 1, "memory": "4Gi" } },
   "ingress": { "ports": [80, 443] },
@@ -173,7 +181,7 @@ maestro server join-token --role R       print a join token for a voter or worke
 maestro join --server … --token … --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
-maestro token create [--ttl 1h]          mint an API token on a voter (max 24h)
+maestro token create --config SRC         mint an API token from jwtSecretKey (max 24h)
 maestro context set|use|ls               manage API endpoints and tokens
 maestro rollout [-f file] [--apply]
 maestro services | replicas | nodes
@@ -216,13 +224,13 @@ and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and
    `join.server` is unset):
 
    ```bash
-   sudo maestro server init --advertise 10.20.0.11:7400 [--config maestro.jsonc]
+   sudo maestro server init --advertise 10.20.0.11:7400 --config maestro.jsonc
    sudo systemctl start maestro
    ```
 
-   This creates the cluster CA, the node certificate, the data encryption key, the API
-   signing key, and the join secret in the data dir, then bootstraps a one-voter Raft
-   group.
+   This checks that the config has `encryptionKey` and `jwtSecretKey`, creates the
+   cluster CA, the node certificate and the join secret in the data dir, then
+   bootstraps a one-voter Raft group.
 
 2. Print a join token on any voter. A token admits only the role it was minted for
    and expires after `--ttl` (default 5m):
@@ -243,8 +251,8 @@ and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and
    The joining node pins the CA by the fingerprint in the token, so it never trusts an
    impostor. The leader checks the secret, assigns a node id and the next free `/24`
    from the cluster CIDR, records the node, and returns its certificate. Voters also
-   receive the CA key, the encryption and API keys, and the join secret so they can
-   lead. A follower that receives a join returns the leader's address and the client
+   receive the CA key and the join secret so they can lead; they read the encryption
+   and JWT keys from their own config. A follower that receives a join returns the leader's address and the client
    retries there.
 
 4. The leader adds joining voters as Raft learners, waits for them to catch up, and
@@ -304,7 +312,7 @@ other nodes join with a token.
           services.maestro = {
             enable = true;
             advertise = "10.20.0.11:7400";
-            # configFile = ./maestro.jsonc;
+            configFile = "aws-secret://maestro/prod/config.json";  # required on voters
           };
         }
       ];
@@ -317,7 +325,7 @@ On the first node, mint a join token and an API token:
 
 ```bash
 sudo maestro server join-token --role worker --ttl 30m
-sudo maestro token create --subject laptop
+sudo maestro token create --config aws-secret://maestro/prod/config.json --subject laptop
 ```
 
 Joining nodes set `join.server`, `join.tokenFile` (a token minted for their role; it is
@@ -347,7 +355,7 @@ API tokens last 1 hour by default and at most 24 hours. Use one with the CLI ove
 tailnet, or through an SSH tunnel to the localhost API:
 
 ```bash
-TOKEN=$(ssh node1 sudo maestro token create)
+TOKEN=$(ssh node1 sudo maestro token create --config aws-secret://maestro/prod/config.json)
 maestro context set prod --api http://node1.<tailnet>.ts.net:7490 --token "$TOKEN"
 maestro context use prod
 ```

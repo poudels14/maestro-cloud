@@ -18,7 +18,7 @@ use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_proto::{CertRole, ClusterCa, NodeCredentials};
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
-use maestro_store::{Mutation, SecretKey};
+use maestro_store::Mutation;
 use tokio::task::JoinSet;
 
 use crate::control_link::GrpcControlLink;
@@ -70,10 +70,10 @@ pub struct AgentArgs {
 
 pub async fn init(args: InitArgs) -> anyhow::Result<()> {
     let config = load_config(args.config.as_deref())?;
+    config.encryption_key()?;
+    config.jwt_secret_key()?;
     let identity =
         NodeIdentity::bootstrap(&args.data_dir, &args.advertise, config.cluster.clone())?;
-    SecretKey::load_or_create(&encryption_key_path(&args.data_dir))?;
-    api_secret(&args.data_dir)?;
     join_secret(&args.data_dir)?;
     let pki_dir = args.data_dir.join("pki");
     if !pki_dir.join("node").exists() {
@@ -407,39 +407,15 @@ pub async fn proxy_logs(
     }
 }
 
-pub fn create_token(data_dir: &Path, subject: &str, ttl_secs: u64) -> anyhow::Result<()> {
+pub fn create_token(config: &str, subject: &str, ttl_secs: u64) -> anyhow::Result<()> {
     anyhow::ensure!(
         ttl_secs <= MAX_TOKEN_TTL.as_secs(),
         "API tokens can live at most 24h"
     );
-    let auth = ApiAuth::new(&api_secret(data_dir)?);
+    let config = load_config(Some(config))?;
+    let auth = ApiAuth::new(config.jwt_secret_key()?.as_bytes());
     println!("{}", auth.issue(subject, Duration::from_secs(ttl_secs)));
     Ok(())
-}
-
-pub fn api_secret(data_dir: &Path) -> anyhow::Result<Vec<u8>> {
-    let path = data_dir.join("keys").join("api.key");
-    match std::fs::read(&path) {
-        Ok(secret) => Ok(secret),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let secret = rand::random::<[u8; 32]>().to_vec();
-            std::fs::create_dir_all(data_dir.join("keys"))?;
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)?
-                .write_all(&secret)?;
-            Ok(secret)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-pub fn encryption_key_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("keys").join("encryption.key")
 }
 
 pub fn bind_api_socket(path: &Path) -> anyhow::Result<tokio::net::UnixListener> {

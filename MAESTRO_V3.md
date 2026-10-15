@@ -259,9 +259,11 @@ v3 design (decisions approved):
 
 ## Security
 
-- `maestro server init` creates the cluster CA, the cluster secret, and the data
-  encryption key in the data dir. They can instead be imported from
-  `aws-secret://...`.
+- `maestro server init` creates the cluster CA and the join secret in the data dir.
+  `encryptionKey` and `jwtSecretKey` are required in every voter's config (usually one
+  shared `aws-secret://` source) and are never generated, so API tokens can be minted
+  outside the cluster. The data key is derived with Argon2 as in v1; a voter refuses to
+  start or join without both keys.
 - All internal traffic is mTLS with cluster-issued node certificates.
 - Joining: `maestro server init` prints a join token (cluster id + CA fingerprint +
   HMAC secret). `maestro join <addr> --token <token>` verifies the CA, receives a
