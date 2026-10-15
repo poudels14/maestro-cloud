@@ -417,8 +417,9 @@ fn render(cluster: &str, event: &Event) -> (SlackCategory, String) {
         } => (
             SlackCategory::Error,
             format!(
-                ":x: *Deployment crashed* — `{service}` (`{}`)\n> cluster: `{cluster}`\n> reason: {reason}",
-                short(deployment.as_str())
+                ":x: *Deployment crashed* — `{service}` (`{}`)\n> cluster: `{cluster}`\n> reason: {}",
+                short(deployment.as_str()),
+                escape(reason).replace('\n', "\n> ")
             ),
         ),
         Event::ServiceRemoved { service } => (
@@ -433,7 +434,8 @@ fn render(cluster: &str, event: &Event) -> (SlackCategory, String) {
         } => (
             SlackCategory::Error,
             format!(
-                ":red_circle: *Node down* — `{node}` (`{node_id}`)\n> cluster: `{cluster}` · role: `{role}` · address: `{address}`\n> control-plane heartbeat expired"
+                ":red_circle: *Node down* — `{}` (`{node_id}`)\n> cluster: `{cluster}` · role: `{role}` · address: `{address}`\n> control-plane heartbeat expired",
+                escape(node)
             ),
         ),
         Event::NodeRecovered {
@@ -443,11 +445,18 @@ fn render(cluster: &str, event: &Event) -> (SlackCategory, String) {
         } => (
             SlackCategory::Info,
             format!(
-                ":large_green_circle: *Node recovered* — `{node}` (`{node_id}`)\n> cluster: `{cluster}` · downtime: `{}`",
+                ":large_green_circle: *Node recovered* — `{}` (`{node_id}`)\n> cluster: `{cluster}` · downtime: `{}`",
+                escape(node),
                 format_duration(*downtime)
             ),
         ),
     }
+}
+
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 async fn send(http: &reqwest::Client, url: &str, text: &str) -> Result<(), String> {
@@ -533,6 +542,21 @@ fn error_response(status: StatusCode, message: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crash_reasons_cannot_ping_or_link() {
+        let (_, text) = render(
+            "prod",
+            &Event::Crashed {
+                service: ServiceId::from("api"),
+                deployment: DeploymentId::from("d1"),
+                reason: "boom <!channel> <https://evil.example|click>\nline two".to_string(),
+            },
+        );
+        assert!(!text.contains("<!channel>"));
+        assert!(text.contains("&lt;!channel&gt;"));
+        assert!(text.contains("\n> line two"));
+    }
 
     #[test]
     fn masks_urls_and_formats_events() {
