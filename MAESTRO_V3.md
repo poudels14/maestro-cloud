@@ -399,6 +399,8 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
     workloads can't reach it, and rejects rebound hosts and cross-site writes.
     Creating or updating services still needs an API token, since a service config
     can read any secret the nodes can. API tokens last 1 hour by default, 24 at most.
+    Exec does not need a token: tailnet users may exec into services (when `allowExec`
+    is on) even though that exposes the service's environment.
   - Workloads can only reach their node's DNS and ingress ports, not other host ports.
   - Containers run under Docker's default seccomp profile and can't reach cloud
     metadata (169.254.0.0/16) unless the cluster egress allow list opens it.
