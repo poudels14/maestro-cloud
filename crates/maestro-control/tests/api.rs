@@ -162,6 +162,48 @@ async fn deleting_service_cancels_its_deployments() {
 }
 
 #[tokio::test]
+async fn deleting_a_service_deletes_its_previews() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    let preview = ServiceId::from("api-pr-7");
+    let spec = serde_json::from_value(json!({ "name": "api-pr-7", "image": "api:1" })).unwrap();
+    writer
+        .write(vec![
+            maestro_store::Mutation::PutService {
+                id: preview.clone(),
+                spec,
+            },
+            maestro_store::Mutation::SetPreviewSource {
+                id: preview.clone(),
+                source: serde_json::from_value(json!({
+                    "baseServiceId": "api",
+                    "prNumber": 7,
+                    "headRef": "feature",
+                    "headSha": "abc",
+                    "title": "Feature",
+                    "createdAtMs": 1
+                }))
+                .unwrap(),
+            },
+        ])
+        .await
+        .unwrap();
+
+    let (status, _) = call(&app, "DELETE", "/api/services/api", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let state = writer.state();
+    assert!(state.service(&preview).unwrap().is_none());
+    assert!(state.preview_sources().unwrap().is_empty());
+    assert!(state.service(&ServiceId::from("web")).unwrap().is_some());
+}
+
+#[tokio::test]
 async fn seals_env_values_and_masks_responses() {
     let (writer, app) = app();
     let file = json!({

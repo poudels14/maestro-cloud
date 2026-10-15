@@ -297,7 +297,15 @@ async fn delete_service<W: StoreWriter, O: ObservedReplicas>(
     match store.service(&id)? {
         None => Err(ControlError::NotFound(format!("service {id}"))),
         Some(_) => {
-            let mutations = service_deletion(store, &id)?;
+            let previews = store
+                .preview_sources()?
+                .into_iter()
+                .filter(|(_, source)| source.base_service_id == id)
+                .map(|(preview_id, _)| preview_id);
+            let doomed = std::iter::once(id.clone())
+                .chain(previews)
+                .collect::<Vec<_>>();
+            let mutations = service_deletion(store, &doomed)?;
             state.writer.write(mutations).await?;
             Ok(StatusCode::NO_CONTENT)
         }
@@ -930,21 +938,28 @@ async fn write_replicas_override<W: StoreWriter, O: ObservedReplicas>(
 
 pub fn service_deletion(
     store: &maestro_store::StateMachine,
-    id: &ServiceId,
+    ids: &[ServiceId],
 ) -> Result<Vec<Mutation>, ControlError> {
     let now = unix_millis();
-    let stops = store
-        .deployments(id)?
+    let stops = ids
+        .iter()
+        .map(|id| Ok((id, store.deployments(id)?)))
+        .collect::<Result<Vec<_>, ControlError>>()?
         .into_iter()
-        .filter(|deployment| !deployment.status.is_terminal())
-        .map(|deployment| Mutation::SetDeploymentStatus {
-            service_id: id.clone(),
-            deployment_id: deployment.id,
-            status: DeploymentStatus::Cancelled,
-            image: None,
-            failure: None,
-            at_ms: now,
-        });
+        .flat_map(|(id, deployments)| {
+            deployments
+                .into_iter()
+                .filter(|deployment| !deployment.status.is_terminal())
+                .map(move |deployment| Mutation::SetDeploymentStatus {
+                    service_id: id.clone(),
+                    deployment_id: deployment.id,
+                    status: DeploymentStatus::Cancelled,
+                    image: None,
+                    failure: None,
+                    at_ms: now,
+                })
+        })
+        .collect::<Vec<_>>();
     let releases = store
         .nodes()?
         .iter()
@@ -952,7 +967,7 @@ pub fn service_deletion(
             let kept = store
                 .assignments(node.id)?
                 .into_iter()
-                .filter(|assignment| &assignment.service_id != id)
+                .filter(|assignment| !ids.contains(&assignment.service_id))
                 .collect();
             Ok(Mutation::SetNodeAssignments {
                 node_id: node.id,
@@ -960,10 +975,10 @@ pub fn service_deletion(
             })
         })
         .collect::<Result<Vec<_>, ControlError>>()?;
-    Ok(stops
-        .chain(releases)
-        .chain([Mutation::DeleteService { id: id.clone() }])
-        .collect())
+    let deletions = ids
+        .iter()
+        .map(|id| Mutation::DeleteService { id: id.clone() });
+    Ok(stops.into_iter().chain(releases).chain(deletions).collect())
 }
 
 fn reject_frozen(

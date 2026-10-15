@@ -436,8 +436,8 @@ impl<W: StoreWriter> PreviewWatcher<W> {
                     .await;
             }
         }
-        let mutations =
-            service_deletion(self.writer.state(), id).map_err(|error| error.to_string())?;
+        let mutations = service_deletion(self.writer.state(), std::slice::from_ref(id))
+            .map_err(|error| error.to_string())?;
         self.write(mutations).await
     }
 
