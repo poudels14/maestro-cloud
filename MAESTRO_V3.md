@@ -426,7 +426,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   (owner, denied paths, writable ⇒ single replica + node pin), `nodeAffinity`
   (nodeId, labels), `egress.allow`, `exec` (default true), `flags` (container args),
   `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`,
-  v1 healthcheck semantics (interval default 60 clamped 5–300, 2xx, 10 failures ⇒
+  v1 healthcheck semantics (interval default 30, was 60 in v1, clamped 5–300, 2xx, 10 failures ⇒
   restart), `maxRestarts` default 10.
 - [x] W0b: cluster config parity (schema; `aws-secret://` config sources land with W3) — `tags`, `egress {deny, allow}`, `tailscale`,
   `datadog {apiKey, site, includeIngressLogs, includeTailscaleLogs, logs.includeHealthcheck,

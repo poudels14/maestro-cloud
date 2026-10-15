@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use maestro_core::{Backend, RouteTable, ServiceId, ServiceRoute, affinity_token};
+use maestro_core::{Backend, RouteTable, ServiceId, affinity_token};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -10,8 +10,6 @@ const SERVERS_TRANSPORT: &str = "maestro-transport";
 const RETRY_ATTEMPTS: u32 = 3;
 const RETRY_INTERVAL: &str = "50ms";
 const DIAL_TIMEOUT: &str = "1s";
-const HEALTH_INTERVAL: &str = "2s";
-const HEALTH_TIMEOUT: &str = "1s";
 const AFFINITY_COOKIE: &str = "maestro-affinity";
 const BLOCKED_ROUTER_PREFIX: &str = "maestro-blocked-";
 const BLOCKED_IPS_PER_ROUTER: usize = 256;
@@ -90,7 +88,7 @@ fn render(table: &RouteTable, entry_points: &[String]) -> Value {
             routers.insert(name.clone(), router(&host_rule, &name, entry_points));
             services.insert(
                 name.clone(),
-                load_balancer(route, &route.backends, route.affinity_header.is_some()),
+                load_balancer(&route.backends, route.affinity_header.is_some()),
             );
             if let Some(header) = &route.affinity_header {
                 route.backends.iter().for_each(|backend| {
@@ -103,7 +101,7 @@ fn render(table: &RouteTable, entry_points: &[String]) -> Value {
                     );
                     services.insert(
                         replica_name,
-                        load_balancer(route, std::slice::from_ref(backend), false),
+                        load_balancer(std::slice::from_ref(backend), false),
                     );
                 });
             }
@@ -153,7 +151,7 @@ fn router(rule: &str, service: &str, entry_points: &[String]) -> Value {
     })
 }
 
-fn load_balancer(route: &ServiceRoute, backends: &[Backend], sticky: bool) -> Value {
+fn load_balancer(backends: &[Backend], sticky: bool) -> Value {
     let servers = backends
         .iter()
         .map(|backend| json!({ "url": format!("http://{}", backend.address) }))
@@ -163,13 +161,6 @@ fn load_balancer(route: &ServiceRoute, backends: &[Backend], sticky: bool) -> Va
         "passHostHeader": true,
         "serversTransport": SERVERS_TRANSPORT,
     });
-    if let Some(path) = &route.health_path {
-        load_balancer["healthCheck"] = json!({
-            "path": path,
-            "interval": HEALTH_INTERVAL,
-            "timeout": HEALTH_TIMEOUT,
-        });
-    }
     if sticky {
         load_balancer["sticky"] =
             json!({ "cookie": { "name": AFFINITY_COOKIE, "httpOnly": true } });
@@ -199,6 +190,7 @@ fn service_name(service_id: &ServiceId) -> String {
 
 #[cfg(test)]
 mod tests {
+    use maestro_core::ServiceRoute;
     use std::collections::BTreeMap;
 
     use maestro_core::ReplicaId;
@@ -211,7 +203,6 @@ mod tests {
                 (
                     ServiceId::from("web"),
                     ServiceRoute {
-                        health_path: Some("/health".to_string()),
                         affinity_header: None,
                         hosts: vec!["web.example.com".to_string(), "www.example.com".to_string()],
                         backends: vec![
@@ -229,7 +220,6 @@ mod tests {
                 (
                     ServiceId::from("idle"),
                     ServiceRoute {
-                        health_path: None,
                         affinity_header: None,
                         hosts: vec!["idle.example.com".to_string()],
                         backends: vec![],
@@ -317,7 +307,7 @@ mod tests {
         assert!(config["http"]["routers"].get("svc-idle").is_none());
         assert_eq!(router["middlewares"], json!(["maestro-retry"]));
         let load_balancer = &config["http"]["services"]["svc-web"]["loadBalancer"];
-        assert_eq!(load_balancer["healthCheck"]["path"], "/health");
+        assert!(load_balancer.get("healthCheck").is_none());
         assert_eq!(load_balancer["serversTransport"], "maestro-transport");
         assert_eq!(
             config["http"]["serversTransports"]["maestro-transport"]["forwardingTimeouts"]["dialTimeout"],

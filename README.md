@@ -170,8 +170,9 @@ or the container runtime.
   every node. Traffic to the internet is masqueraded by the node; traffic inside the
   cluster CIDR keeps its source address.
 - Traefik runs on each node, routes `Host()` rules to healthy replicas anywhere in the
-  cluster, retries failed connections on another replica, and actively health-checks
-  backends.
+  cluster, and retries failed connections on another replica. Each replica is
+  health-checked once, by the node it runs on, every `healthcheckInterval` (default
+  30s); three failures in a row take it out of every node's routes.
 - DNS on the bridge gateway answers `<service>.maestro.internal`,
   `<service>.<cluster>.maestro.internal`, and per-replica names; other names are
   forwarded upstream.
@@ -284,8 +285,8 @@ to the leader.
   judging any node, so failovers never trigger rescheduling. Agents reconnect with
   backoff.
 - **Ingress during failures:** Traefik retries failed connections on another replica
-  with a 1-second dial timeout and actively health-checks backends, so a hard node
-  loss costs at most a handful of requests.
+  with a 1-second dial timeout, so a hard node loss costs at most a handful of
+  requests; a replica that hangs leaves the routes after three failed health checks.
 
 ### Builds in multi-node clusters
 

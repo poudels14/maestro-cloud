@@ -395,6 +395,7 @@ async fn run_logged(command: &mut Command, log: &std::fs::File) -> std::io::Resu
         copy_timestamped(child.stdout.take(), log.clone()),
         copy_timestamped(child.stderr.take(), log.clone()),
     );
+    log.lock().await.flush().await?;
     child.wait().await
 }
 

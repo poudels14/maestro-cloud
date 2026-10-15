@@ -24,8 +24,6 @@ pub struct ServiceRoute {
     pub hosts: Vec<String>,
     pub backends: Vec<Backend>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub health_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affinity_header: Option<String>,
 }
 

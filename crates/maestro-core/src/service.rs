@@ -9,7 +9,7 @@ use crate::resources::{OomPriority, ResourceSpec};
 
 const INGRESS_HOST_VARIABLE: &str = "MAESTRO_INGRESS_HOST";
 const INGRESS_PORT_VARIABLE: &str = "MAESTRO_INGRESS_PORT";
-const DEFAULT_HEALTHCHECK_INTERVAL_SECS: u32 = 60;
+const DEFAULT_HEALTHCHECK_INTERVAL_SECS: u32 = 30;
 const MIN_HEALTHCHECK_INTERVAL_SECS: u32 = 5;
 const MAX_HEALTHCHECK_INTERVAL_SECS: u32 = 300;
 const DEFAULT_INGRESS_PORT: u16 = 80;
@@ -738,7 +738,7 @@ mod tests {
         .unwrap();
         let web = &file.services[&ServiceId::from("web")];
         assert_eq!(web.ingress.as_ref().unwrap().port, 80);
-        assert_eq!(web.deploy.healthcheck_interval, 60);
+        assert_eq!(web.deploy.healthcheck_interval, 30);
         let mut quick = web.deploy.clone();
         quick.healthcheck_interval = 1;
         assert_eq!(quick.effective_healthcheck_interval(), 5);
@@ -807,7 +807,7 @@ mod tests {
         let json = serde_json::to_value(&spec).unwrap();
         assert_eq!(
             json["deploy"],
-            serde_json::json!({ "replicas": 1, "healthcheckInterval": 60, "exec": true })
+            serde_json::json!({ "replicas": 1, "healthcheckInterval": 30, "exec": true })
         );
     }
 }
