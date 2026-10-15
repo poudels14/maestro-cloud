@@ -10,8 +10,8 @@ use maestro_agent::{
     HostCommandRunner, IngressWriter, MeshConfig, PeerClusters, Reconciler, ReconcilerSettings,
     StatusBoard, SystemSupervisor, TailscaleNode, TunnelConnectors, WIREGUARD_INTERFACE,
     WIREGUARD_PORT, WireGuardMesh, apply_workload_slice_limits, detect_capacity,
-    discover_peer_clusters, load_or_generate_key, publish_replica_manifest, serve_denied,
-    system_reserve, tailscale_container, traefik_container, upstream_resolvers,
+    discover_peer_clusters, load_or_generate_key, publish_replica_manifest, reset_stale_bridge,
+    serve_denied, system_reserve, tailscale_container, traefik_container, upstream_resolvers,
 };
 use maestro_control::ApiAuth;
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
@@ -138,6 +138,9 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         tracing::warn!(%error, "workload slice limits were not applied");
     }
     let gateway = subnet_gateway(&identity.subnet)?;
+    if let Err(error) = reset_stale_bridge(BRIDGE_NAME, gateway).await {
+        tracing::warn!(%error, "could not check the container bridge address");
+    }
     let host_resolv = std::fs::read_to_string(host_resolv_conf()).unwrap_or_default();
     let container_resolv =
         write_container_resolv_conf(&args.data_dir, gateway, &identity.cluster.name)?;
@@ -188,7 +191,6 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         std::iter::once(traefik_container(
             ingress.directory(),
             &config.ingress.ports,
-            &identity.cluster.cidr,
         ))
         .chain(tailscale.as_ref().map(tailscale_container))
         .collect(),

@@ -9,6 +9,7 @@ use crate::error::AgentError;
 use crate::status::StatusBoard;
 use crate::wireguard::CommandRunner;
 
+const LINK_LOCAL_CIDR: &str = "169.254.0.0/16";
 const TABLE: &str = "maestro_egress";
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -97,32 +98,30 @@ pub fn render(
     replica_ips: &BTreeMap<ReplicaId, IpAddr>,
 ) -> String {
     let reset = format!("table inet {TABLE} {{}}\ndelete table inet {TABLE}\n");
-    match policy.deny.is_empty() {
-        true => reset,
-        false => {
-            let subnet = &policy.local_subnet;
-            let replica_allows = rules.iter().flat_map(|(replica_id, egress)| {
-                replica_ips
-                    .get(replica_id)
-                    .into_iter()
-                    .flat_map(move |ip| egress.iter().flat_map(move |rule| allow_lines(ip, rule)))
-            });
-            let mut lines = vec![
-                "ct state established,related accept".to_string(),
-                format!("ip saddr {subnet} ip daddr {} accept", policy.cluster_cidr),
-            ];
-            lines.extend(replica_allows);
-            lines.extend(family_lines(subnet, &policy.allow, "accept"));
-            lines.extend(family_lines(subnet, &policy.deny, "reject"));
-            let body = lines
-                .iter()
-                .map(|line| format!("        {line}\n"))
-                .collect::<String>();
-            format!(
-                "{reset}table inet {TABLE} {{\n    chain forward {{\n        type filter hook forward priority -50; policy accept;\n{body}    }}\n}}\n"
-            )
-        }
-    }
+    let subnet = &policy.local_subnet;
+    let replica_allows = rules.iter().flat_map(|(replica_id, egress)| {
+        replica_ips
+            .get(replica_id)
+            .into_iter()
+            .flat_map(move |ip| egress.iter().flat_map(move |rule| allow_lines(ip, rule)))
+    });
+    let mut lines = vec![
+        "ct state established,related accept".to_string(),
+        format!("ip saddr {subnet} ip daddr {} accept", policy.cluster_cidr),
+    ];
+    lines.extend(family_lines(subnet, &policy.allow, "accept"));
+    lines.push(format!(
+        "ip saddr {subnet} ip daddr {LINK_LOCAL_CIDR} reject"
+    ));
+    lines.extend(replica_allows);
+    lines.extend(family_lines(subnet, &policy.deny, "reject"));
+    let body = lines
+        .iter()
+        .map(|line| format!("        {line}\n"))
+        .collect::<String>();
+    format!(
+        "{reset}table inet {TABLE} {{\n    chain forward {{\n        type filter hook forward priority -50; policy accept;\n{body}    }}\n}}\n"
+    )
 }
 
 fn allow_lines(ip: &IpAddr, rule: &EgressRule) -> Vec<String> {
@@ -174,16 +173,13 @@ mod tests {
     }
 
     #[test]
-    fn removes_the_table_without_a_deny_list() {
+    fn blocks_cloud_metadata_even_without_a_deny_list() {
         let script = render(&policy(&[]), &BTreeMap::new(), &BTreeMap::new());
-        assert_eq!(
-            script,
-            "table inet maestro_egress {}\ndelete table inet maestro_egress\n"
-        );
+        assert!(script.contains("ip saddr 10.200.1.0/24 ip daddr 169.254.0.0/16 reject"));
     }
 
     #[test]
-    fn renders_replica_allows_before_cluster_allows_and_denies() {
+    fn orders_operator_allows_metadata_block_service_allows_then_denies() {
         let replica = ReplicaId::from("d1-0");
         let rules = BTreeMap::from([(
             replica.clone(),
@@ -207,7 +203,9 @@ mod tests {
         let allow = position("ip saddr 10.200.1.0/24 ip daddr { 10.20.0.5/32 } accept");
         let deny = position("ip saddr 10.200.1.0/24 ip daddr { 10.0.0.0/8 } reject");
         let deny_v6 = position("ip saddr 10.200.1.0/24 ip6 daddr { fd00::/8 } reject");
-        assert!(cluster < replica_tcp && replica_tcp < allow && allow < deny && deny < deny_v6);
+        let metadata = position("ip saddr 10.200.1.0/24 ip daddr 169.254.0.0/16 reject");
+        assert!(cluster < allow && allow < metadata && metadata < replica_tcp);
+        assert!(replica_tcp < deny && deny < deny_v6);
         assert!(script.contains("udp dport { 5432 } accept"));
     }
 }

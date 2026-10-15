@@ -90,8 +90,8 @@ impl<R: Runtime> SystemSupervisor<R> {
     }
 }
 
-pub fn traefik_container(config_dir: &Path, ports: &[u16], cluster_cidr: &str) -> ContainerSpec {
-    let trusted = format!("{cluster_cidr},{LOOPBACK_CIDR}");
+pub fn traefik_container(config_dir: &Path, ports: &[u16]) -> ContainerSpec {
+    let trusted = LOOPBACK_CIDR;
     let entry_points = ports.iter().flat_map(|port| {
         let name = entry_point_name(*port);
         [
@@ -200,18 +200,13 @@ mod tests {
 
     #[test]
     fn traefik_listens_on_configured_ports_in_system_slice() {
-        let spec = traefik_container(
-            Path::new("/var/lib/maestro/traefik"),
-            &[80, 443],
-            "10.200.0.0/16",
-        );
+        let spec = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80, 443]);
         let args = spec.args.unwrap();
         assert!(args.contains(&"--entryPoints.web80.address=:80".to_string()));
         assert!(args.contains(&"--entryPoints.web443.address=:443".to_string()));
         assert!(
             args.contains(
-                &"--entryPoints.web80.forwardedHeaders.trustedIPs=10.200.0.0/16,127.0.0.1/32"
-                    .to_string()
+                &"--entryPoints.web80.forwardedHeaders.trustedIPs=127.0.0.1/32".to_string()
             )
         );
         assert_eq!(spec.cgroup_parent, "maestro-system.slice");
@@ -222,11 +217,7 @@ mod tests {
     #[tokio::test]
     async fn replaces_system_containers_whose_spec_changed() {
         let runtime = Arc::new(maestro_runtime::FakeRuntime::default());
-        let original = traefik_container(
-            Path::new("/var/lib/maestro/traefik"),
-            &[80],
-            "10.200.0.0/16",
-        );
+        let original = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80]);
         SystemSupervisor::new(runtime.clone(), vec![original.clone()])
             .ensure_running()
             .await;
@@ -235,11 +226,7 @@ mod tests {
             .await;
         assert_eq!(runtime.start_count("maestro-traefik"), 1);
 
-        let changed = traefik_container(
-            Path::new("/var/lib/maestro/traefik"),
-            &[80, 443],
-            "10.200.0.0/16",
-        );
+        let changed = traefik_container(Path::new("/var/lib/maestro/traefik"), &[80, 443]);
         SystemSupervisor::new(runtime.clone(), vec![changed])
             .ensure_running()
             .await;

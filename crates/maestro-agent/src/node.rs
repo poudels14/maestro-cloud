@@ -1,4 +1,5 @@
 use maestro_core::{ByteSize, Millicores, NodeCapacity, ReserveSettings};
+use std::net::IpAddr;
 use tokio::process::Command;
 
 use crate::error::AgentError;
@@ -33,6 +34,34 @@ pub fn system_reserve(capacity: &NodeCapacity, settings: &ReserveSettings) -> No
             .memory
             .unwrap_or(ByteSize::new(default_memory))
             .min(capacity.memory),
+    }
+}
+
+pub async fn reset_stale_bridge(bridge: &str, gateway: IpAddr) -> Result<(), AgentError> {
+    let output = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "dev", bridge])
+        .output()
+        .await
+        .map_err(|error| AgentError::Host(format!("failed to run ip: {error}")))?;
+    let addresses = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter_map(|field| {
+            field
+                .split_once('/')
+                .and_then(|(address, _)| address.parse::<IpAddr>().ok())
+        })
+        .collect::<Vec<_>>();
+    match addresses.iter().any(|address| *address != gateway) {
+        true => {
+            tracing::warn!(%bridge, ?addresses, %gateway, "removing a bridge left over from another subnet");
+            Command::new("ip")
+                .args(["link", "delete", bridge])
+                .status()
+                .await
+                .map_err(|error| AgentError::Host(format!("failed to delete {bridge}: {error}")))?;
+            Ok(())
+        }
+        false => Ok(()),
     }
 }
 
