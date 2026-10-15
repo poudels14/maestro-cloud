@@ -163,9 +163,10 @@
         };
 
         configFile = lib.mkOption {
-          type = lib.types.nullOr lib.types.path;
+          type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
           default = null;
-          description = "Optional maestro.jsonc cluster config.";
+          example = "aws-secret://maestro/prod/config.json";
+          description = "Optional cluster config: a maestro.jsonc path or an aws-secret:// source.";
         };
 
         join = {

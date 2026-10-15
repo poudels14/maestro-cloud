@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::resources::{ByteSize, Millicores, ResourceDefaults};
 
 const EXTENDS_KEY: &str = "$extends";
+const SCHEMA_KEY: &str = "$schema";
 const MAX_EXTENDS_DEPTH: usize = 16;
 const FILE_SCHEME: &str = "file://";
 const MAX_TUNNEL_REPLICAS: u32 = 25;
@@ -386,6 +387,7 @@ fn load_layers(
                     error: error.to_string(),
                 }),
             }?;
+            layer.remove(SCHEMA_KEY);
             let base = match layer.remove(EXTENDS_KEY) {
                 Some(Value::String(parent)) => {
                     let parent_source = resolve_relative(source, &parent);
@@ -524,6 +526,18 @@ fn default_ingress_ports() -> Vec<u16> {
 mod tests {
     use super::*;
     use crate::resources::MemoryLimit;
+
+    #[test]
+    fn ignores_the_schema_key() {
+        let config = ClusterConfig::load_with("/c.jsonc", &|_| {
+            Ok(
+                r#"{ "$schema": "./maestro.schema.json", "cluster": { "name": "sandbox" } }"#
+                    .to_string(),
+            )
+        })
+        .unwrap();
+        assert_eq!(config.cluster.name, "sandbox");
+    }
 
     #[test]
     fn empty_config_uses_defaults() {
