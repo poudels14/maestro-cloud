@@ -42,11 +42,19 @@ cf() { curl -fsS -H "Authorization: Bearer $CF_API_TOKEN" "$@"; }
 
 if [ -z "$account" ]; then
   accounts=$(cf "$api/accounts" | jq -r '.result[] | "\(.id)\t\(.name)"')
-  if [ "$(grep -c . <<<"$accounts")" != 1 ]; then
-    echo "the API token can access several accounts (or none); pass --account ID:" >&2
-    printf '%s\n' "$accounts" >&2
-    exit 1
-  fi
+  case "$(grep -c . <<<"$accounts")" in
+    1) ;;
+    0)
+      echo "the API token cannot list accounts; pass --account ID" >&2
+      echo "(the id is in the dashboard URL: https://dash.cloudflare.com/<account-id>/...)" >&2
+      exit 1
+      ;;
+    *)
+      echo "the API token can access several accounts; pass --account ID:" >&2
+      printf '%s\n' "$accounts" | sed 's/^/  /' >&2
+      exit 1
+      ;;
+  esac
   account=$(cut -f1 <<<"$accounts")
 fi
 
