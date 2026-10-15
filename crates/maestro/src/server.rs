@@ -24,6 +24,7 @@ use tokio::task::JoinSet;
 use crate::control_link::GrpcControlLink;
 use crate::control_plane::{self, ControlPlaneSettings};
 use crate::identity::NodeIdentity;
+use crate::join::grpc_address;
 use crate::log_driver;
 use crate::node_service::{MeshImageFetcher, NodeClients, NodeService};
 use crate::unix_http;
@@ -185,7 +186,12 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let tailscale = config.tailscale.as_ref().map(|tailscale| TailscaleNode {
         auth_key: tailscale.auth_key.clone(),
         cluster: identity.cluster.name.clone(),
-        node_id: identity.id.to_string(),
+        name_suffix: config
+            .cluster
+            .voters
+            .iter()
+            .position(|voter| grpc_address(voter) == identity.advertise)
+            .map_or_else(|| identity.id.to_string(), |index| (index + 1).to_string()),
         routes: std::iter::once(identity.subnet.clone())
             .chain(tailscale.advertise_routes.iter().cloned())
             .collect(),

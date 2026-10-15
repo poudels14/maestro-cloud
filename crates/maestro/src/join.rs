@@ -396,7 +396,7 @@ fn resolve_advertise(advertise: Option<&str>, voters: &[String]) -> anyhow::Resu
     }
 }
 
-fn grpc_address(endpoint: &str) -> String {
+pub fn grpc_address(endpoint: &str) -> String {
     let endpoint = endpoint.trim();
     match endpoint.contains(':') {
         true => endpoint.to_string(),

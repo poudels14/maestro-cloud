@@ -12,7 +12,7 @@ use crate::dns::PeerClusters;
 
 const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.3";
 pub const TAILSCALE_CONTAINER_ID: &str = "maestro-tailscale";
-const HOSTNAME_PREFIX: &str = "maestro-tailscale-";
+const HOSTNAME_PREFIX: &str = "maestro-";
 const STATE_MOUNT: &str = "/var/lib/tailscale";
 const SOCKET_MOUNT: &str = "/var/run/tailscale";
 const SOCKET_FILE: &str = "tailscaled.sock";
@@ -27,7 +27,7 @@ const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
 pub struct TailscaleNode {
     pub auth_key: String,
     pub cluster: String,
-    pub node_id: String,
+    pub name_suffix: String,
     pub routes: Vec<String>,
     pub state_dir: PathBuf,
     pub socket_dir: PathBuf,
@@ -62,7 +62,7 @@ pub fn tailscale_container(node: &TailscaleNode) -> ContainerSpec {
                 ("TS_AUTHKEY", node.auth_key.clone()),
                 ("TS_STATE_DIR", STATE_MOUNT.to_string()),
                 ("TS_SOCKET", format!("{SOCKET_MOUNT}/{SOCKET_FILE}")),
-                ("TS_HOSTNAME", hostname(&node.cluster, &node.node_id)),
+                ("TS_HOSTNAME", hostname(&node.cluster, &node.name_suffix)),
                 ("TS_USERSPACE", "true".to_string()),
                 ("TS_ROUTES", node.routes.join(",")),
                 ("TS_EXTRA_ARGS", "--accept-dns=false".to_string()),
@@ -104,8 +104,8 @@ pub async fn discover_peer_clusters(socket_dir: PathBuf, cluster: String, peers:
     }
 }
 
-fn hostname(cluster: &str, node_id: &str) -> String {
-    format!("{HOSTNAME_PREFIX}{cluster}-{node_id}")
+fn hostname(cluster: &str, name_suffix: &str) -> String {
+    format!("{HOSTNAME_PREFIX}{cluster}-{name_suffix}")
 }
 
 fn peer_clusters(status: &Status, own_cluster: &str) -> HashMap<String, Vec<SocketAddr>> {
@@ -171,10 +171,10 @@ mod tests {
     fn finds_other_clusters_among_online_peers() {
         let status: Status = serde_json::from_str(
             r#"{"Peer": {
-                "a": {"HostName": "maestro-tailscale-prod-123", "TailscaleIPs": ["100.64.0.2", "fd7a::2"], "Online": true},
-                "b": {"HostName": "maestro-tailscale-prod-456", "TailscaleIPs": ["100.64.0.3"], "Online": true},
-                "c": {"HostName": "maestro-tailscale-dev-789", "TailscaleIPs": ["100.64.0.4"], "Online": true},
-                "d": {"HostName": "maestro-tailscale-staging-1", "TailscaleIPs": ["100.64.0.5"], "Online": false},
+                "a": {"HostName": "maestro-prod-123", "TailscaleIPs": ["100.64.0.2", "fd7a::2"], "Online": true},
+                "b": {"HostName": "maestro-prod-456", "TailscaleIPs": ["100.64.0.3"], "Online": true},
+                "c": {"HostName": "maestro-dev-789", "TailscaleIPs": ["100.64.0.4"], "Online": true},
+                "d": {"HostName": "maestro-staging-1", "TailscaleIPs": ["100.64.0.5"], "Online": false},
                 "e": {"HostName": "laptop", "TailscaleIPs": ["100.64.0.6"], "Online": true}
             }}"#,
         )
@@ -192,7 +192,7 @@ mod tests {
             )])
         );
         assert_eq!(
-            peer_cluster("maestro-tailscale-my-cluster-42"),
+            peer_cluster("maestro-my-cluster-42"),
             Some("my-cluster")
         );
     }
@@ -202,14 +202,14 @@ mod tests {
         let spec = tailscale_container(&TailscaleNode {
             auth_key: "tskey".to_string(),
             cluster: "prod".to_string(),
-            node_id: "42".to_string(),
+            name_suffix: "42".to_string(),
             routes: vec!["10.200.1.0/24".to_string(), "10.0.0.0/16".to_string()],
             state_dir: PathBuf::from("/var/lib/maestro/tailscale"),
             socket_dir: PathBuf::from("/run/maestro/tailscale"),
         });
         assert_eq!(spec.env["TS_USERSPACE"], "true");
         assert_eq!(spec.env["TS_ROUTES"], "10.200.1.0/24,10.0.0.0/16");
-        assert_eq!(spec.env["TS_HOSTNAME"], "maestro-tailscale-prod-42");
+        assert_eq!(spec.env["TS_HOSTNAME"], "maestro-prod-42");
         assert_eq!(spec.network, NetworkMode::Host);
     }
 }

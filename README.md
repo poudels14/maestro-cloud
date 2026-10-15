@@ -329,7 +329,10 @@ The module configures containerd, BuildKit (in the builds slice), the three slic
 the node and telemetry units, WireGuard, IP forwarding, and firewall rules
 (`openFirewall`, `ingressPorts`). The admin UI is built from the source tree once per
 version and runs on voters. It listens on the node's loopback at port 7490, so it is
-reachable over Tailscale (`http://<node>.<tailnet>.ts.net:7490`) or an SSH tunnel, but
+reachable over Tailscale at a fixed name per voter,
+`http://maestro-<cluster>-<n>.<tailnet>.ts.net:7490` where `<n>` is the voter's position
+in `cluster.voters` (use an ephemeral, reusable auth key so a rebuilt node takes its
+old name back), or through an SSH or SSM tunnel to port 7490, but
 not from workload containers. Anyone who can reach it can operate the cluster, except
 that creating or updating services (`PUT /api/services/…`, rollout, `services up`)
 needs an API token, because a service config can read any secret the nodes can. Other
