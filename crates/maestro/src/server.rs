@@ -13,7 +13,7 @@ use maestro_agent::{
     discover_peer_clusters, load_or_generate_key, publish_replica_manifest, reset_stale_bridge,
     serve_denied, system_reserve, tailscale_container, traefik_container, upstream_resolvers,
 };
-use maestro_control::ApiAuth;
+use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_proto::{CertRole, ClusterCa, NodeCredentials};
@@ -56,7 +56,7 @@ pub struct AgentArgs {
     config: Option<String>,
     #[arg(long, default_value = "127.0.0.1:3000")]
     listen: SocketAddr,
-    #[arg(long, default_value = "/run/maestro/api.sock")]
+    #[arg(long, default_value = "/run/maestro/api/api.sock")]
     api_socket: PathBuf,
     #[arg(long, default_value = "/run/containerd/containerd.sock")]
     containerd_socket: PathBuf,
@@ -407,12 +407,13 @@ pub async fn proxy_logs(
     }
 }
 
-pub fn create_token(data_dir: &Path, subject: &str, ttl_days: u64) -> anyhow::Result<()> {
-    let auth = ApiAuth::new(&api_secret(data_dir)?);
-    println!(
-        "{}",
-        auth.issue(subject, Duration::from_secs(ttl_days * 24 * 60 * 60))
+pub fn create_token(data_dir: &Path, subject: &str, ttl_secs: u64) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        ttl_secs <= MAX_TOKEN_TTL.as_secs(),
+        "API tokens can live at most 24h"
     );
+    let auth = ApiAuth::new(&api_secret(data_dir)?);
+    println!("{}", auth.issue(subject, Duration::from_secs(ttl_secs)));
     Ok(())
 }
 

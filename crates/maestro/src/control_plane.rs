@@ -15,7 +15,8 @@ use maestro_agent::{
 };
 use maestro_control::{
     AgentHub, ApiAuth, ApiState, BuildWatcher, BuiltImage, Deployer, DeployerSettings,
-    ImageBuilder, ObservedNode, RemoteHeads, require_token, router, run_publisher,
+    ImageBuilder, ObservedNode, RemoteHeads, require_token, require_token_for_config, router,
+    run_publisher,
 };
 use maestro_core::{
     ClusterConfig, ClusterSettings, Deployment, DeploymentId, MaintenanceRun, NodeId, NodeRole,
@@ -421,9 +422,14 @@ pub async fn spawn(
     .merge(maintenance)
     .merge(info);
     let auth = Arc::new(ApiAuth::new(&api_secret(&settings.data_dir)?));
-    let authenticated_api = api
-        .clone()
-        .layer(axum::middleware::from_fn_with_state(auth, require_token));
+    let authenticated_api = api.clone().layer(axum::middleware::from_fn_with_state(
+        auth.clone(),
+        require_token,
+    ));
+    let socket_api = api.layer(axum::middleware::from_fn_with_state(
+        auth,
+        require_token_for_config,
+    ));
     let listener = tokio::net::TcpListener::bind(settings.api_listen)
         .await
         .with_context(|| format!("failed to listen on {}", settings.api_listen))?;
@@ -434,7 +440,7 @@ pub async fn spawn(
             .context("API server stopped")
     });
     tasks.spawn(async move {
-        axum::serve(socket_listener, api)
+        axum::serve(socket_listener, socket_api)
             .await
             .context("API socket stopped")
     });

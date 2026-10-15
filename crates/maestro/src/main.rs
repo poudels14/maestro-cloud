@@ -141,8 +141,8 @@ enum TokenCommand {
         data_dir: PathBuf,
         #[arg(long, default_value = "cli")]
         subject: String,
-        #[arg(long, default_value_t = 30)]
-        ttl_days: u64,
+        #[arg(long, value_parser = parse_ttl, default_value = "1h")]
+        ttl: u64,
     },
 }
 
@@ -174,8 +174,8 @@ async fn run_cli() -> anyhow::Result<()> {
         Command::Token(TokenCommand::Create {
             data_dir,
             subject,
-            ttl_days,
-        }) => server::create_token(&data_dir, &subject, ttl_days),
+            ttl,
+        }) => server::create_token(&data_dir, &subject, ttl),
         Command::Agent(args) => server::run_agent(args).await,
         Command::Telemetry {
             log_dir,

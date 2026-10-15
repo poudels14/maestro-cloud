@@ -173,7 +173,7 @@ maestro server join-token --role R       print a join token for a voter or worke
 maestro join --server … --token … --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
-maestro token create                     mint an API token (on a voter)
+maestro token create [--ttl 1h]          mint an API token on a voter (max 24h)
 maestro context set|use|ls               manage API endpoints and tokens
 maestro rollout [-f file] [--apply]
 maestro services | replicas | nodes
@@ -337,15 +337,18 @@ the node and telemetry units, WireGuard, IP forwarding, and firewall rules
 (`openFirewall`, `ingressPorts`). The admin UI is built from the source tree once per
 version and runs on voters. It listens on the node's loopback at port 7490, so it is
 reachable over Tailscale (`http://<node>.<tailnet>.ts.net:7490`) or an SSH tunnel, but
-not from workload containers. Anyone who can reach it can operate the cluster; other
+not from workload containers. Anyone who can reach it can operate the cluster, except
+that creating or updating services (`PUT /api/services/…`, rollout, `services up`)
+needs an API token, because a service config can read any secret the nodes can. Other
 host names must be listed in the admin container's `MAESTRO_ADMIN_HOSTS`. Upgrade by
 updating the flake input and running `nixos-rebuild switch`.
 
-Reach the API through an SSH tunnel or your private network:
+API tokens last 1 hour by default and at most 24 hours. Use one with the CLI over the
+tailnet, or through an SSH tunnel to the localhost API:
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 node1
-maestro context set prod --api http://127.0.0.1:3000 --token <token>
+TOKEN=$(ssh node1 sudo maestro token create)
+maestro context set prod --api http://node1.<tailnet>.ts.net:7490 --token "$TOKEN"
 maestro context use prod
 ```
 

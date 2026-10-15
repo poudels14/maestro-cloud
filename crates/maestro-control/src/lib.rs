@@ -10,7 +10,7 @@ mod watcher;
 mod writer;
 
 pub use api::{ApiState, new_deployment, router, service_deletion};
-pub use auth::{ApiAuth, require_token};
+pub use auth::{ApiAuth, MAX_TOKEN_TTL, require_token, require_token_for_config};
 pub use deployer::{BuiltImage, Deployer, DeployerSettings, ImageBuilder, ObservedReplicas};
 pub use error::ControlError;
 pub use hub::{AgentHub, AgentSession, ObservedNode, run_publisher};

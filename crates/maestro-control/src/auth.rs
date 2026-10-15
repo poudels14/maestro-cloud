@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 const HEALTH_PATH: &str = "/api/health";
+pub const MAX_TOKEN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct ApiAuth {
     encoding: EncodingKey,
@@ -38,7 +39,7 @@ impl ApiAuth {
         let claims = Claims {
             sub: subject.to_string(),
             iat: issued_at,
-            exp: issued_at + ttl.as_secs(),
+            exp: issued_at + ttl.min(MAX_TOKEN_TTL).as_secs(),
         };
         jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &self.encoding)
             .unwrap_or_default()
@@ -46,7 +47,9 @@ impl ApiAuth {
 
     pub fn verify(&self, token: &str) -> bool {
         jsonwebtoken::decode::<Claims>(token, &self.decoding, &Validation::new(Algorithm::HS256))
-            .is_ok()
+            .is_ok_and(|decoded| {
+                decoded.claims.exp.saturating_sub(decoded.claims.iat) <= MAX_TOKEN_TTL.as_secs()
+            })
     }
 }
 
@@ -72,6 +75,28 @@ pub async fn require_token(
     }
 }
 
+pub async fn require_token_for_config(
+    State(auth): State<Arc<ApiAuth>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match changes_service_config(request.method(), request.uri().path()) {
+        true => require_token(State(auth), request, next).await,
+        false => next.run(request).await,
+    }
+}
+
+fn changes_service_config(method: &Method, path: &str) -> bool {
+    let service_path = path
+        .strip_prefix("/api/services/")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
+    match *method {
+        Method::PUT => service_path,
+        Method::POST => path == "/api/rollout" || path == "/api/services/up",
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,6 +108,42 @@ mod tests {
         assert!(auth.verify(&token));
         assert!(!ApiAuth::new(b"another-secret-for-tests-0000000").verify(&token));
         assert!(!auth.verify("not-a-token"));
+    }
+
+    #[test]
+    fn identifies_service_config_changes() {
+        assert!(changes_service_config(&Method::PUT, "/api/services/web"));
+        assert!(changes_service_config(&Method::POST, "/api/rollout"));
+        assert!(changes_service_config(&Method::POST, "/api/services/up"));
+        assert!(!changes_service_config(&Method::GET, "/api/services/web"));
+        assert!(!changes_service_config(
+            &Method::POST,
+            "/api/services/web/redeploy"
+        ));
+        assert!(!changes_service_config(
+            &Method::PATCH,
+            "/api/services/web/replicas"
+        ));
+    }
+
+    #[test]
+    fn rejects_tokens_issued_for_longer_than_a_day() {
+        let auth = ApiAuth::new(b"cluster-secret-for-tests-0000000");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let long_lived = Claims {
+            sub: "cli".to_string(),
+            iat: now,
+            exp: now + 30 * 24 * 60 * 60,
+        };
+        let token =
+            jsonwebtoken::encode(&Header::new(Algorithm::HS256), &long_lived, &auth.encoding)
+                .unwrap();
+        assert!(!auth.verify(&token));
+        let capped = auth.issue("cli", Duration::from_secs(30 * 24 * 60 * 60));
+        assert!(auth.verify(&capped));
     }
 
     #[test]
