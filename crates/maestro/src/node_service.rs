@@ -738,7 +738,14 @@ async fn receive_chunks(
     let mut file = tokio::fs::File::create(destination)
         .await
         .map_err(|error| Status::internal(error.to_string()))?;
+    let mut received = 0usize;
     while let Some(chunk) = chunks.message().await? {
+        received += chunk.data.len();
+        if received > uploads::MAX_UPLOAD_BYTES {
+            return Err(Status::resource_exhausted(
+                "the upload is larger than 1 GiB",
+            ));
+        }
         file.write_all(&chunk.data)
             .await
             .map_err(|error| Status::internal(error.to_string()))?;

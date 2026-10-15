@@ -15,6 +15,7 @@ const DEFAULT_AFFINITY_HEADER: &str = "X-Session-Affinity";
 const DEFAULT_CLOSE_GRACE_PERIOD: &str = "1d";
 const PREVIEW_ID_SUFFIX: &str = "-pr-99999";
 const PREVIEW_ID_MARKER: &str = "-pr-";
+const SEALED_VALUE_PREFIX: &str = "enc:";
 const MAX_LABEL_LENGTH: usize = 63;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicesFile {
@@ -297,8 +298,9 @@ impl ServiceSpec {
             }),
         ];
         let volumes = deploy.volumes.iter().flat_map(volume_problems);
+        let sealed = sealed_value_problem(self);
         let egress = deploy.egress.allow.iter().filter_map(egress_problem);
-        let ingress = self.ingress.iter().flat_map(ingress_problems);
+        let ingress = self.ingress.iter().flat_map(ingress_problems).chain(sealed);
         let preview = self
             .preview
             .iter()
@@ -453,6 +455,31 @@ fn preview_problems(spec: &ServiceSpec, preview: &PreviewSpec) -> Vec<String> {
         .flatten()
         .collect(),
     }
+}
+
+fn sealed_value_problem(spec: &ServiceSpec) -> Option<String> {
+    let deploy_secrets = spec
+        .deploy
+        .secrets
+        .iter()
+        .flat_map(|secrets| secrets.items.values());
+    let build_values = spec
+        .build
+        .iter()
+        .flat_map(|build| build.env.items.values().chain(build.secrets.items.values()));
+    let preview_values = spec
+        .preview
+        .iter()
+        .flat_map(|preview| preview.env.items.values());
+    spec.deploy
+        .env
+        .items
+        .values()
+        .chain(deploy_secrets)
+        .chain(build_values)
+        .chain(preview_values)
+        .any(|value| value.starts_with(SEALED_VALUE_PREFIX))
+        .then(|| "env and secret values must be plaintext, not sealed enc: values".to_string())
 }
 
 fn dockerfile_problem(dockerfile: &str) -> Option<String> {
@@ -656,6 +683,7 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a`b" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "Dockerfile", "watch": true } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "../Dockerfile" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "env": { "items": { "A": "enc:v1:abc" } } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "/etc/passwd" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "repo": "--upload-pack=touch /tmp/x", "dockerfile": "Dockerfile" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "repo": "file:///etc", "dockerfile": "Dockerfile" } } } }"#,

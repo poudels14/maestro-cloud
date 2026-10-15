@@ -54,7 +54,6 @@ const MIRROR_INTERVAL: Duration = Duration::from_secs(2);
 const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_INTERVAL: Duration = Duration::from_secs(30);
 const GITHUB_API: &str = "https://api.github.com";
-const MAX_UPLOAD_BYTES: usize = 1 << 30;
 const ARCHIVE_CHUNK: usize = 1 << 20;
 const MEMBERSHIP_INTERVAL: Duration = Duration::from_secs(5);
 const LEARNER_CATCH_UP: Duration = Duration::from_secs(120);
@@ -309,8 +308,9 @@ pub async fn spawn(
     let uploads = axum::Router::new()
         .route(
             "/api/services/up",
-            axum::routing::post(upload_service)
-                .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+            axum::routing::post(upload_service).layer(axum::extract::DefaultBodyLimit::max(
+                uploads::MAX_UPLOAD_BYTES,
+            )),
         )
         .with_state(UploadState {
             consensus: consensus.clone(),
@@ -365,7 +365,10 @@ pub async fn spawn(
             .as_ref()
             .map(|slack| slack.webhook_url.clone())
             .filter(|url| !url.trim().is_empty()),
-        http: reqwest::Client::new(),
+        http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("failed to build the Slack HTTP client")?,
     };
     tasks.spawn({
         let notifier = slack::run_notifier(slack.clone(), consensus.clone(), observed.clone());

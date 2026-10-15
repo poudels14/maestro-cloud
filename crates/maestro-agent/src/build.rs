@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -98,7 +99,12 @@ impl BuildKitBuilder {
         tokio::fs::create_dir_all(&self.settings.log_dir)
             .await
             .map_err(|error| format!("failed to create build log dir: {error}"))?;
-        let log = std::fs::File::create(log_path)
+        let log = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(log_path)
             .map_err(|error| format!("failed to create build log: {error}"))?;
         let mut commit = None;
         let context = match (&request.repo, &request.context_dir) {

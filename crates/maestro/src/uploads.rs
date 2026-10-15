@@ -20,6 +20,10 @@ const ARCHIVE_EXTENSION: &str = "tar.gz";
 const UPLOAD_CHUNK: usize = 1 << 20;
 const UPLOAD_NAME_PREFIX: &str = "[up] ";
 
+pub const MAX_UPLOAD_BYTES: usize = 1 << 30;
+const MAX_UNPACKED_BYTES: u64 = 4 << 30;
+const MAX_UNPACKED_ENTRIES: usize = 200_000;
+
 #[derive(Clone)]
 pub struct UploadState {
     pub consensus: Arc<Consensus>,
@@ -161,9 +165,18 @@ pub async fn unpack(archive: PathBuf, destination: PathBuf) -> Result<(), String
             format!("uploaded context {} is missing: {error}", archive.display())
         })?;
         std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
-        tar::Archive::new(flate2::read::GzDecoder::new(file))
-            .unpack(&destination)
-            .map_err(|error| format!("failed to unpack uploaded context: {error}"))
+        let failed = |error: std::io::Error| format!("failed to unpack uploaded context: {error}");
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+        let mut unpacked_bytes = 0u64;
+        for (count, entry) in archive.entries().map_err(failed)?.enumerate() {
+            let mut entry = entry.map_err(failed)?;
+            unpacked_bytes += entry.size();
+            if count >= MAX_UNPACKED_ENTRIES || unpacked_bytes > MAX_UNPACKED_BYTES {
+                return Err("uploaded context is too large once unpacked".to_string());
+            }
+            entry.unpack_in(&destination).map_err(failed)?;
+        }
+        Ok(())
     })
     .await
     .map_err(|error| error.to_string())?

@@ -131,6 +131,7 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
 pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let config = load_config(args.config.as_deref())?;
     let identity = NodeIdentity::load(&args.data_dir)?;
+    restrict_data_dir(&args.data_dir)?;
     let credentials = role_certified_credentials(&args.data_dir, &identity)?;
     let capacity = detect_capacity()?;
     let reserved = system_reserve(&capacity, &config.node.reserve);
@@ -478,6 +479,12 @@ pub fn load_config(source: Option<&str>) -> anyhow::Result<ClusterConfig> {
         )?),
         None => Ok(ClusterConfig::default()),
     }
+}
+
+fn restrict_data_dir(data_dir: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(data_dir, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to restrict {}", data_dir.display()))
 }
 
 fn role_certified_credentials(
