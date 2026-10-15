@@ -33,3 +33,20 @@ test("requires a same-origin Origin for writes and websockets", () => {
     null
   );
 });
+
+test("uses the forwarded host when tailscale serve proxies the request", () => {
+  const forwarded = "maestro-prod-1.tail1234.ts.net";
+  const headers = { host: "localhost", "x-forwarded-host": forwarded };
+  assert.equal(
+    guardRequest(request("POST", { ...headers, origin: `https://${forwarded}` })),
+    null
+  );
+  assert.notEqual(
+    guardRequest(request("POST", { ...headers, origin: "https://evil.example" })),
+    null
+  );
+  assert.notEqual(
+    guardRequest(request("GET", { host: "localhost", "x-forwarded-host": "attacker.example" })),
+    null
+  );
+});

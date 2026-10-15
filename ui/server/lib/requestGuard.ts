@@ -26,7 +26,7 @@ function isAllowedOrigin(origin: string | null, host: string | null): boolean {
 }
 
 function guardRequest(request: { method: string; headers: Headers }): string | null {
-  const host = request.headers.get("host");
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   const safeMethod = request.method === "GET" || request.method === "HEAD";
   const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
   if (!isAllowedHost(host)) {
