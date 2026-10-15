@@ -481,6 +481,7 @@ impl ImageBuilder for SealedSpecBuilder {
             .key
             .open_spec(&deployment.spec)
             .map_err(|error| error.to_string())?;
+        let ingress_variables = spec.ingress_variables();
         let build = spec
             .build
             .ok_or_else(|| "deployment has no build configuration".to_string())?;
@@ -510,7 +511,10 @@ impl ImageBuilder for SealedSpecBuilder {
             dockerfile: build.dockerfile,
             registry: build.registry,
             image: None,
-            build_args: build.env.items,
+            build_args: ingress_variables
+                .into_iter()
+                .chain(build.env.items)
+                .collect(),
             secrets: build.secrets.items,
             depot: build
                 .depot

@@ -7,6 +7,9 @@ use crate::resources::{EffectiveResources, OomPriority};
 use crate::routing::affinity_token;
 use crate::service::{Command, EgressRule, SecretsSpec, ServiceSpec, VolumeMount};
 
+const TEMPLATE_OPEN: &str = "${{";
+const TEMPLATE_CLOSE: &str = "}}";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeploymentStatus {
@@ -118,6 +121,7 @@ impl ReplicaPlan {
                 port,
                 interval_secs: deploy.healthcheck_interval,
             });
+        let variables = spec.ingress_variables();
         Self {
             replica_id: assignment.replica_id.clone(),
             service_id: assignment.service_id.clone(),
@@ -126,7 +130,7 @@ impl ReplicaPlan {
             resources: assignment.resources,
             oom_priority: deploy.oom_priority,
             command: deploy.command.clone(),
-            env: replica_env(assignment, &deploy.env.items),
+            env: replica_env(assignment, &variables, &deploy.env.items),
             healthcheck,
             max_restarts: deploy.max_restarts,
             volumes: deploy.volumes.clone(),
@@ -136,6 +140,7 @@ impl ReplicaPlan {
                 .filter(|secrets| !secrets.items.is_empty())
                 .map(|secrets| SecretsSpec {
                     source: None,
+                    items: expand_all(&secrets.items, &variables),
                     ..secrets
                 }),
             image_source: None,
@@ -146,6 +151,7 @@ impl ReplicaPlan {
 
 fn replica_env(
     assignment: &Assignment,
+    variables: &BTreeMap<String, String>,
     items: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::from([
@@ -166,12 +172,80 @@ fn replica_env(
             affinity_token(&assignment.replica_id),
         ),
     ]);
-    env.extend(items.clone());
+    env.extend(variables.clone());
+    env.extend(expand_all(items, variables));
     env
+}
+
+fn expand_all(
+    items: &BTreeMap<String, String>,
+    variables: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    items
+        .iter()
+        .map(|(key, value)| (key.clone(), expand_templates(value, variables)))
+        .collect()
+}
+
+fn expand_templates(value: &str, variables: &BTreeMap<String, String>) -> String {
+    let mut expanded = String::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(open) = remaining.find(TEMPLATE_OPEN) {
+        let after = &remaining[open + TEMPLATE_OPEN.len()..];
+        let replacement = after.find(TEMPLATE_CLOSE).and_then(|close| {
+            variables
+                .get(after[..close].trim())
+                .map(|value| (value, close + TEMPLATE_CLOSE.len()))
+        });
+        match replacement {
+            Some((value, consumed)) => {
+                expanded.push_str(&remaining[..open]);
+                expanded.push_str(value);
+                remaining = &after[consumed..];
+            }
+            None => {
+                expanded.push_str(&remaining[..open + TEMPLATE_OPEN.len()]);
+                remaining = after;
+            }
+        }
+    }
+    expanded.push_str(remaining);
+    expanded
 }
 
 impl DeploymentStatus {
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Stopped | Self::Failed | Self::Cancelled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fills_in_known_placeholders_and_leaves_the_rest() {
+        let variables = BTreeMap::from([
+            (
+                "MAESTRO_INGRESS_HOST".to_string(),
+                "pr-12.preview.example".to_string(),
+            ),
+            ("MAESTRO_INGRESS_PORT".to_string(), "8080".to_string()),
+        ]);
+        assert_eq!(
+            expand_templates(
+                "https://${{ MAESTRO_INGRESS_HOST }}:${{MAESTRO_INGRESS_PORT}}/",
+                &variables
+            ),
+            "https://pr-12.preview.example:8080/"
+        );
+        assert_eq!(
+            expand_templates("${{ UNKNOWN }} and ${{ MAESTRO_INGRESS_HOST", &variables),
+            "${{ UNKNOWN }} and ${{ MAESTRO_INGRESS_HOST"
+        );
+        assert_eq!(
+            expand_templates("plain ${HOME}", &variables),
+            "plain ${HOME}"
+        );
     }
 }

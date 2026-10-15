@@ -93,6 +93,12 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
 
 - Env values and build secrets are encrypted before they reach the cluster store and
   are masked in API responses.
+- Every replica gets `MAESTRO_NODE_ID`, `MAESTRO_REPLICA_ID`, `MAESTRO_REPLICA_INDEX`,
+  `MAESTRO_AFFINITY_TOKEN`, and, when the service has one ingress host,
+  `MAESTRO_INGRESS_HOST` and `MAESTRO_INGRESS_PORT` (a preview gets its preview host).
+  Env and secret values may use `${{ MAESTRO_INGRESS_HOST }}` and
+  `${{ MAESTRO_INGRESS_PORT }}`, including values loaded from `aws-secret://`; builds
+  receive both as build args.
 - `maestro rollout` shows created, updated, and unchanged services; `--apply` stores
   the specs and queues one deployment per changed service. Services missing from the
   file are reported but never deleted implicitly.

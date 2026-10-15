@@ -7,6 +7,8 @@ use thiserror::Error;
 use crate::ids::ServiceId;
 use crate::resources::{OomPriority, ResourceSpec};
 
+const INGRESS_HOST_VARIABLE: &str = "MAESTRO_INGRESS_HOST";
+const INGRESS_PORT_VARIABLE: &str = "MAESTRO_INGRESS_PORT";
 const DEFAULT_HEALTHCHECK_INTERVAL_SECS: u32 = 60;
 const MIN_HEALTHCHECK_INTERVAL_SECS: u32 = 5;
 const MAX_HEALTHCHECK_INTERVAL_SECS: u32 = 300;
@@ -247,6 +249,27 @@ pub fn host_conflict<'a>(
 }
 
 impl ServiceSpec {
+    pub fn ingress_variables(&self) -> BTreeMap<String, String> {
+        let hosts = self
+            .ingress
+            .iter()
+            .flat_map(IngressSpec::all_hosts)
+            .map(|host| host.trim().to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>();
+        let host = match hosts.len() {
+            1 => hosts.into_iter().find(|host| !host.starts_with("*.")),
+            _ => None,
+        };
+        host.map(|host| (INGRESS_HOST_VARIABLE.to_string(), host))
+            .into_iter()
+            .chain(
+                self.ingress
+                    .as_ref()
+                    .map(|ingress| (INGRESS_PORT_VARIABLE.to_string(), ingress.port.to_string())),
+            )
+            .collect()
+    }
+
     pub fn has_secret_sources(&self) -> bool {
         let build_sources = self
             .build
@@ -627,6 +650,24 @@ fn is_dns_label(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exposes_the_single_ingress_host_and_port() {
+        let spec = |ingress: &str| {
+            serde_json::from_str::<ServiceSpec>(&format!(
+                r#"{{ "name": "web", "image": "nginx", "ingress": {ingress} }}"#
+            ))
+            .unwrap()
+            .ingress_variables()
+        };
+        let single = spec(r#"{ "hosts": ["App.Example.com"], "port": 8080 }"#);
+        assert_eq!(single["MAESTRO_INGRESS_HOST"], "app.example.com");
+        assert_eq!(single["MAESTRO_INGRESS_PORT"], "8080");
+        let several = spec(r#"{ "hosts": ["a.example.com", "b.example.com"], "port": 80 }"#);
+        assert!(!several.contains_key("MAESTRO_INGRESS_HOST"));
+        let wildcard = spec(r#"{ "hosts": ["*.example.com"], "port": 80 }"#);
+        assert!(!wildcard.contains_key("MAESTRO_INGRESS_HOST"));
+    }
     use crate::resources::{MemoryLimit, Millicores};
 
     #[test]
