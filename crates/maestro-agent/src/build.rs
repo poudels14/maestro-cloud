@@ -1,12 +1,15 @@
 use std::collections::BTreeMap;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use maestro_core::GitCommit;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 const GITHUB_HOST: &str = "github.com";
 const GIT_SAFETY_ENV: [(&str, &str); 3] = [
@@ -141,16 +144,15 @@ impl BuildKitBuilder {
                 None,
             ),
         };
-        let status = Command::new(&program)
-            .args(&arguments)
-            .envs(&request.secrets)
-            .envs(token.map(|token| (DEPOT_TOKEN_ENV, token)))
-            .stdin(Stdio::null())
-            .stdout(clone_handle(&log)?)
-            .stderr(clone_handle(&log)?)
-            .status()
-            .await
-            .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
+        let status = run_logged(
+            Command::new(&program)
+                .args(&arguments)
+                .envs(&request.secrets)
+                .envs(token.map(|token| (DEPOT_TOKEN_ENV, token))),
+            &log,
+        )
+        .await
+        .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         match status.success() {
             true => Ok(BuildOutput {
                 image,
@@ -281,18 +283,16 @@ async fn clone_repo(
     let branch_args = branch
         .map(|branch| vec!["--branch".to_string(), branch.to_string()])
         .unwrap_or_default();
-    let status = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(["clone", "--depth", "1", "--single-branch"])
         .args(branch_args)
         .arg("--")
         .arg(url)
         .arg(destination)
         .envs(auth_env)
-        .envs(GIT_SAFETY_ENV)
-        .stdin(Stdio::null())
-        .stdout(clone_handle(log)?)
-        .stderr(clone_handle(log)?)
-        .status()
+        .envs(GIT_SAFETY_ENV);
+    let status = run_logged(&mut command, log)
         .await
         .map_err(|error| format!("failed to run git: {error}"))?;
     match status.success() {
@@ -384,9 +384,35 @@ fn git_auth(repo: &str, token: Option<&String>) -> (String, Vec<(String, String)
     }
 }
 
-fn clone_handle(log: &std::fs::File) -> Result<std::fs::File, String> {
-    log.try_clone()
-        .map_err(|error| format!("failed to share build log: {error}"))
+async fn run_logged(command: &mut Command, log: &std::fs::File) -> std::io::Result<ExitStatus> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let log = Arc::new(Mutex::new(tokio::fs::File::from_std(log.try_clone()?)));
+    tokio::join!(
+        copy_timestamped(child.stdout.take(), log.clone()),
+        copy_timestamped(child.stderr.take(), log.clone()),
+    );
+    child.wait().await
+}
+
+async fn copy_timestamped(
+    output: Option<impl AsyncRead + Unpin>,
+    log: Arc<Mutex<tokio::fs::File>>,
+) {
+    if let Some(output) = output {
+        let mut lines = BufReader::new(output).split(b'\n');
+        while let Ok(Some(line)) = lines.next_segment().await {
+            let stamped = format!(
+                "{} {}\n",
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+                String::from_utf8_lossy(&line).trim_end_matches('\r')
+            );
+            let _ = log.lock().await.write_all(stamped.as_bytes()).await;
+        }
+    }
 }
 
 async fn log_tail(path: &Path) -> String {
@@ -398,6 +424,33 @@ async fn log_tail(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn timestamps_every_line_of_stdout_and_stderr() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("build.log");
+        let log = std::fs::File::create(&path).unwrap();
+        let status = run_logged(
+            Command::new("sh").args(["-c", "echo out; echo err >&2; printf 'no newline'"]),
+            &log,
+        )
+        .await
+        .unwrap();
+        assert!(status.success());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let mut lines = contents
+            .lines()
+            .map(|line| line.split_once(' ').unwrap())
+            .collect::<Vec<_>>();
+        lines.sort_by_key(|(_, text)| *text);
+        assert_eq!(
+            lines.iter().map(|(_, text)| *text).collect::<Vec<_>>(),
+            ["err", "no newline", "out"]
+        );
+        assert!(lines.iter().all(|(stamp, _)| {
+            chrono::DateTime::parse_from_rfc3339(stamp).is_ok() && stamp.ends_with('Z')
+        }));
+    }
 
     fn request() -> BuildRequest {
         BuildRequest {

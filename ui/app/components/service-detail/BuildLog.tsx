@@ -1,9 +1,10 @@
-import { createEffect, Match, on, Switch } from "solid-js";
+import { createEffect, For, Match, on, Switch } from "solid-js";
 import { useQuery } from "@tanstack/solid-query";
 import { getBuildLog } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
 
 const BUILD_POLL_INTERVAL_MS = 3_000;
+const TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) (.*)$/;
 
 function BuildLog(props: { serviceId: string; deploymentId: string; building: boolean }) {
   const log = useQuery(() => ({
@@ -47,12 +48,39 @@ function BuildLog(props: { serviceId: string; deploymentId: string; building: bo
             ref={scrollRef}
             class="h-full overflow-auto bg-gray-950 px-4 py-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-gray-200"
           >
-            {text()}
+            <For each={text().split("\n")}>{(line) => <BuildLogLine line={line} />}</For>
           </pre>
         )}
       </Match>
     </Switch>
   );
+}
+
+function BuildLogLine(props: { line: string }) {
+  const match = () => TIMESTAMP_PATTERN.exec(props.line);
+  return (
+    <Switch fallback={<div>{props.line}</div>}>
+      <Match when={match()}>
+        {(parts) => (
+          <div class="flex gap-3">
+            <span class="shrink-0 text-gray-500 select-none" title={parts()[1]}>
+              {formatTime(parts()[1])}
+            </span>
+            <span class="min-w-0">{parts()[2]}</span>
+          </div>
+        )}
+      </Match>
+    </Switch>
+  );
+}
+
+function formatTime(timestamp: string): string {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
 }
 
 export { BuildLog };

@@ -2796,6 +2796,7 @@ name = "maestro-agent"
 version = "3.0.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "hex",
  "hickory-proto",
  "maestro-core",
