@@ -30,6 +30,8 @@ pub enum ControlMessage {
     },
     Mesh {
         peers: Vec<MeshPeer>,
+        #[serde(default)]
+        members: Vec<NodeId>,
     },
     NotLeader {
         leader: Option<String>,

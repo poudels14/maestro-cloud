@@ -104,6 +104,7 @@ pub struct NodeService {
     started: std::time::Instant,
     node_dir: PathBuf,
     hub: Option<AgentHub>,
+    members: Option<tokio::sync::watch::Receiver<Option<Vec<NodeId>>>>,
 }
 
 #[derive(Clone)]
@@ -155,6 +156,14 @@ impl NodeService {
             started: std::time::Instant::now(),
             node_dir,
             hub: None,
+            members: None,
+        }
+    }
+
+    pub fn with_members(self, members: tokio::sync::watch::Receiver<Option<Vec<NodeId>>>) -> Self {
+        Self {
+            members: Some(members),
+            ..self
         }
     }
 
@@ -176,10 +185,22 @@ impl NodeService {
                         identity.node_id
                     ))
                 })?,
-            None => match identity.role {
-                Some(CertRole::Voter) => NodeRole::Voter,
-                _ => NodeRole::Worker,
-            },
+            None => {
+                let current = self
+                    .members
+                    .as_ref()
+                    .and_then(|members| members.borrow().clone());
+                let member =
+                    current.is_none_or(|members| members.contains(&NodeId(identity.node_id)));
+                match (member, identity.role) {
+                    (false, _) => Err(Status::permission_denied(format!(
+                        "node {} is not a member of this cluster",
+                        identity.node_id
+                    )))?,
+                    (true, Some(CertRole::Voter)) => NodeRole::Voter,
+                    (true, _) => NodeRole::Worker,
+                }
+            }
         };
         match (required, role) {
             (CallerRole::Member, _) | (CallerRole::Voter, NodeRole::Voter) => Ok(()),

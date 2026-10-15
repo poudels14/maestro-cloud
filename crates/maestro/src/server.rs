@@ -228,6 +228,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         dns_records,
         Some((WireGuardMesh::host(), mesh)),
     );
+    let members = attachment.members();
     let tunnel = TunnelConnectors::new(
         runtime.clone(),
         config
@@ -342,12 +343,15 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         NodeRole::Worker => {
             let node_grpc = tonic::transport::Server::builder()
                 .tls_config(credentials.server_tls())?
-                .add_service(NodeServer::new(NodeService::new(
-                    args.telemetry_socket.clone(),
-                    None,
-                    runtime.clone(),
-                    args.data_dir.clone(),
-                )))
+                .add_service(NodeServer::new(
+                    NodeService::new(
+                        args.telemetry_socket.clone(),
+                        None,
+                        runtime.clone(),
+                        args.data_dir.clone(),
+                    )
+                    .with_members(members),
+                ))
                 .serve(grpc_listen);
             tasks.spawn(async move { node_grpc.await.context("node gRPC server stopped") });
             let local_api = local_router(board, args.telemetry_socket.clone());

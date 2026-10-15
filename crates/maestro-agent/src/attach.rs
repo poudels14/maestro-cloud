@@ -37,6 +37,7 @@ pub struct Attachment<L: ControlLink> {
     plans: watch::Sender<Vec<ReplicaPlan>>,
     initialized: watch::Sender<bool>,
     attached: watch::Sender<bool>,
+    members: watch::Sender<Option<Vec<NodeId>>>,
     ingress: IngressWriter,
     dns: DnsRecords,
     mesh: Option<(WireGuardMesh, MeshConfig)>,
@@ -67,6 +68,7 @@ impl<L: ControlLink> Attachment<L> {
             plans,
             initialized,
             attached: watch::channel(false).0,
+            members: watch::channel(None).0,
             ingress,
             dns,
             mesh,
@@ -80,6 +82,10 @@ impl<L: ControlLink> Attachment<L> {
 
     pub fn attached(&self) -> watch::Receiver<bool> {
         self.attached.subscribe()
+    }
+
+    pub fn members(&self) -> watch::Receiver<Option<Vec<NodeId>>> {
+        self.members.subscribe()
     }
 
     pub async fn run(mut self) {
@@ -170,7 +176,10 @@ impl<L: ControlLink> Attachment<L> {
                 }
                 self.dns.replace(dns.into_iter().collect());
             }
-            ControlMessage::Mesh { peers } => {
+            ControlMessage::Mesh { peers, members } => {
+                if !members.is_empty() {
+                    self.members.send_replace(Some(members));
+                }
                 if let Some((mesh, template)) = &self.mesh {
                     let config = MeshConfig {
                         peers,

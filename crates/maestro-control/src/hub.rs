@@ -335,7 +335,11 @@ pub async fn run_publisher(
                         hub.publish(node_id, message).await;
                     }
                     match mesh_peers(&state, node_id) {
-                        Ok(peers) => hub.publish(node_id, ControlMessage::Mesh { peers }).await,
+                        Ok(peers) => {
+                            let members = members(&state).unwrap_or_default();
+                            hub.publish(node_id, ControlMessage::Mesh { peers, members })
+                                .await
+                        }
                         Err(error) => {
                             tracing::warn!(%node_id, %error, "failed to build mesh peers")
                         }
@@ -353,6 +357,15 @@ pub async fn run_publisher(
             _ = tokio::time::sleep(PUBLISH_RESYNC) => {}
         }
     }
+}
+
+fn members(state: &StateMachine) -> Result<Vec<NodeId>, StoreError> {
+    Ok(state
+        .nodes()?
+        .into_iter()
+        .filter(|node| node.state != NodeState::Removed)
+        .map(|node| node.id)
+        .collect())
 }
 
 fn assigned_nodes(state: &StateMachine) -> Result<Vec<NodeId>, StoreError> {
