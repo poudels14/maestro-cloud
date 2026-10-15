@@ -194,7 +194,7 @@ maestro join --config SRC --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
 maestro token create [--config SRC]      print an API token signed with jwtSecretKey (max 24h)
-maestro context set|use|ls               manage API endpoints and tokens
+maestro context set|use|ls|remove        manage API endpoints and tokens
 maestro context login [--ttl 24h]        sign a token with $JWT_SECRET_KEY and save it to the active context
 maestro rollout [-f file] [--apply]
 maestro services | replicas | nodes

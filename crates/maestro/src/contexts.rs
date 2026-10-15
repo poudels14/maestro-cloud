@@ -27,6 +27,10 @@ pub enum ContextCommand {
         name: String,
     },
     Ls,
+    #[command(alias = "rm")]
+    Remove {
+        name: String,
+    },
     Login {
         #[arg(long, value_parser = crate::parse_ttl, default_value = "24h")]
         ttl: u64,
@@ -60,6 +64,17 @@ pub fn run(command: ContextCommand) -> anyhow::Result<()> {
             };
             println!("{marker} {name:<20} {api}");
         }),
+        ContextCommand::Remove { name } => {
+            anyhow::ensure!(
+                file.contexts.remove(&name).is_some(),
+                "unknown context {name}"
+            );
+            if file.current.as_deref() == Some(name.as_str()) {
+                file.current = None;
+            }
+            file.save()?;
+            println!("removed context {name}");
+        }
         ContextCommand::Login { ttl } => {
             let name = file
                 .current
