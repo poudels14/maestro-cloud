@@ -7,6 +7,12 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use maestro_core::GitCommit;
 use tokio::process::Command;
 
+const GITHUB_HOST: &str = "github.com";
+const GIT_SAFETY_ENV: [(&str, &str); 3] = [
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GIT_ALLOW_PROTOCOL", "https:ssh"),
+    ("GIT_PROTOCOL_FROM_USER", "0"),
+];
 const LOCAL_REGISTRY: &str = "maestro.local";
 const FAILURE_TAIL_LINES: usize = 20;
 const GIT_TOKEN_SECRET: &str = "GH_TOKEN";
@@ -98,10 +104,12 @@ impl BuildKitBuilder {
         let context = match (&request.repo, &request.context_dir) {
             (Some(repo), _) => {
                 let checkout = workspace.join("src");
-                let token = request
-                    .secrets
-                    .get(GIT_TOKEN_SECRET)
-                    .or(self.settings.git_token.as_ref());
+                let cluster_token = self
+                    .settings
+                    .git_token
+                    .as_ref()
+                    .filter(|_| repo_host(repo).as_deref() == Some(GITHUB_HOST));
+                let token = request.secrets.get(GIT_TOKEN_SECRET).or(cluster_token);
                 clone_repo(repo, request.branch.as_deref(), token, &checkout, &log).await?;
                 commit = head_commit(&checkout).await;
                 checkout
@@ -270,10 +278,11 @@ async fn clone_repo(
     let status = Command::new("git")
         .args(["clone", "--depth", "1", "--single-branch"])
         .args(branch_args)
+        .arg("--")
         .arg(url)
         .arg(destination)
         .envs(auth_env)
-        .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(GIT_SAFETY_ENV)
         .stdin(Stdio::null())
         .stdout(clone_handle(log)?)
         .stderr(clone_handle(log)?)
@@ -293,9 +302,9 @@ pub async fn remote_head(
 ) -> Result<String, String> {
     let (url, auth_env) = git_auth(repo, token);
     let output = Command::new("git")
-        .args(["ls-remote", &url, &format!("refs/heads/{branch}")])
+        .args(["ls-remote", "--", &url, &format!("refs/heads/{branch}")])
         .envs(auth_env)
-        .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(GIT_SAFETY_ENV)
         .stdin(Stdio::null())
         .output()
         .await
@@ -326,6 +335,17 @@ async fn head_commit(checkout: &Path) -> Option<GitCommit> {
         reference: lines.next()?.to_string(),
         message: lines.next().unwrap_or_default().to_string(),
     })
+}
+
+pub fn repo_host(repo: &str) -> Option<String> {
+    repo.strip_prefix("git@")
+        .and_then(|rest| rest.split_once(':'))
+        .map(|(host, _)| host)
+        .or_else(|| {
+            repo.strip_prefix("https://")
+                .and_then(|rest| rest.split('/').next())
+        })
+        .map(str::to_ascii_lowercase)
 }
 
 fn git_auth(repo: &str, token: Option<&String>) -> (String, Vec<(String, String)>) {

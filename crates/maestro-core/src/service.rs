@@ -273,10 +273,17 @@ impl ServiceSpec {
                 (None, None) => Some("one of image or build is required".to_string()),
                 _ => None,
             },
-            self.build.as_ref().and_then(|build| {
-                (build.dockerfile.trim().is_empty())
-                    .then(|| "build.dockerfile is required".to_string())
-            }),
+            self.build
+                .as_ref()
+                .and_then(|build| dockerfile_problem(&build.dockerfile)),
+            self.build
+                .as_ref()
+                .and_then(|build| build.repo.as_deref())
+                .and_then(repo_problem),
+            self.build
+                .as_ref()
+                .and_then(|build| build.branch.as_deref())
+                .and_then(branch_problem),
             self.build.as_ref().and_then(|build| {
                 (build.watch && build.branch.is_none())
                     .then(|| "build.watch requires build.branch".to_string())
@@ -448,6 +455,42 @@ fn preview_problems(spec: &ServiceSpec, preview: &PreviewSpec) -> Vec<String> {
     }
 }
 
+fn dockerfile_problem(dockerfile: &str) -> Option<String> {
+    let escapes =
+        dockerfile.starts_with('/') || dockerfile.split('/').any(|segment| segment == "..");
+    match (dockerfile.trim().is_empty(), escapes) {
+        (true, _) => Some("build.dockerfile is required".to_string()),
+        (false, true) => {
+            Some("build.dockerfile must be a path inside the build context".to_string())
+        }
+        (false, false) => None,
+    }
+}
+
+fn repo_problem(repo: &str) -> Option<String> {
+    let scp_style = repo
+        .strip_prefix("git@")
+        .and_then(|rest| rest.split_once(':'))
+        .is_some_and(|(host, path)| !host.is_empty() && !path.is_empty());
+    let https = repo
+        .strip_prefix("https://")
+        .is_some_and(|rest| rest.split('/').next().is_some_and(|host| !host.is_empty()));
+    let plain = repo
+        .chars()
+        .all(|character| !character.is_whitespace() && !character.is_control());
+    (!(scp_style || https) || !plain)
+        .then(|| "build.repo must be an https:// or git@host:path repository URL".to_string())
+}
+
+fn branch_problem(branch: &str) -> Option<String> {
+    let valid = !branch.is_empty()
+        && !branch.starts_with('-')
+        && branch
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._/-".contains(character));
+    (!valid).then(|| "build.branch must be a plain branch name".to_string())
+}
+
 fn absolute_path_problem(label: &str, path: &str) -> Option<String> {
     let has_dot_segments = path
         .split('/')
@@ -612,6 +655,12 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "egress": { "allow": [{ "cidr": "10.0.10.1/24" }] } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a`b" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "Dockerfile", "watch": true } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "../Dockerfile" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "build": { "dockerfile": "/etc/passwd" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "build": { "repo": "--upload-pack=touch /tmp/x", "dockerfile": "Dockerfile" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "build": { "repo": "file:///etc", "dockerfile": "Dockerfile" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "build": { "repo": "ext::sh -c id", "dockerfile": "Dockerfile" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "build": { "repo": "https://github.com/a/b", "branch": "--orphan", "dockerfile": "Dockerfile" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a.b" }, "preview": { "enabled": true } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "preview": { "closeGracePeriod": "1w" } } } }"#,
         ];

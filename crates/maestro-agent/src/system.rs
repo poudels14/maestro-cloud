@@ -24,6 +24,7 @@ const LOOPBACK_CIDR: &str = "127.0.0.1/32";
 const SYSTEM_OOM_SCORE_ADJ: i32 = -900;
 const ADMIN_API_SOCKET: &str = "/run/maestro/api.sock";
 pub const ADMIN_CONTAINER_ID: &str = "maestro-admin";
+pub const ADMIN_PORT: u16 = 7490;
 
 pub struct SystemSupervisor<R: Runtime> {
     runtime: Arc<R>,
@@ -147,7 +148,8 @@ pub fn admin_container(image: &str, api_socket: &Path) -> ContainerSpec {
         entrypoint: None,
         args: None,
         env: BTreeMap::from([
-            ("PORT".to_string(), "80".to_string()),
+            ("HOST".to_string(), "127.0.0.1".to_string()),
+            ("PORT".to_string(), ADMIN_PORT.to_string()),
             (
                 "MAESTRO_API_SOCKET".to_string(),
                 ADMIN_API_SOCKET.to_string(),
@@ -166,7 +168,7 @@ pub fn admin_container(image: &str, api_socket: &Path) -> ContainerSpec {
             destination: ADMIN_API_SOCKET.to_string(),
             read_only: false,
         }],
-        network: NetworkMode::Bridge,
+        network: NetworkMode::Host,
     }
 }
 
@@ -189,7 +191,8 @@ mod tests {
             "maestro.local/maestro-admin:0.1.0",
             Path::new("/run/maestro/api.sock"),
         );
-        assert_eq!(spec.network, NetworkMode::Bridge);
+        assert_eq!(spec.network, NetworkMode::Host);
+        assert_eq!(spec.env["HOST"], "127.0.0.1");
         assert_eq!(spec.mounts.len(), 1);
         assert_eq!(spec.mounts[0].destination, ADMIN_API_SOCKET);
         assert_eq!(spec.env["MAESTRO_API_SOCKET"], ADMIN_API_SOCKET);
