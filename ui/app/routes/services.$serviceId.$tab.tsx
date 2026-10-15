@@ -12,9 +12,11 @@ import { OverviewTab } from "../components/service-detail/OverviewTab";
 import { DeploymentsTab } from "../components/service-detail/DeploymentsTab";
 import { MetricsTab } from "../components/service-detail/MetricsTab";
 import { LogsTab } from "../components/service-detail/LogsTab";
+import { PreviewsTab } from "../components/service-detail/PreviewsTab";
+import { servicePreviews } from "../lib/previews";
 
-const VALID_TABS = new Set(["overview", "deployments", "metrics", "logs"]);
-type DetailTab = "overview" | "deployments" | "metrics" | "logs";
+const VALID_TABS = new Set(["overview", "deployments", "previews", "metrics", "logs"]);
+type DetailTab = "overview" | "deployments" | "previews" | "metrics" | "logs";
 
 export const Route = createFileRoute("/services/$serviceId/$tab")({
   validateSearch: (
@@ -116,6 +118,10 @@ function ServiceDetailPanel(props: {
   onOpenDrawer: () => void;
 }) {
   const contentMaxWidth = () => (props.tab === "logs" ? "max-w-6xl" : "max-w-4xl");
+  const hasPreviews = () =>
+    !props.service.previewSource &&
+    (!!props.service.preview?.enabled ||
+      servicePreviews(props.services, props.service.id).length > 0);
 
   return (
     <div class="flex-1 flex flex-col min-w-0 h-full">
@@ -153,6 +159,13 @@ function ServiceDetailPanel(props: {
               active={props.tab === "deployments"}
               onClick={() => props.navigateTab("deployments")}
             />
+            <Show when={hasPreviews()}>
+              <TabButton
+                label="Previews"
+                active={props.tab === "previews"}
+                onClick={() => props.navigateTab("previews")}
+              />
+            </Show>
             <TabButton
               label="Logs"
               active={props.tab === "logs"}
@@ -180,6 +193,9 @@ function ServiceDetailPanel(props: {
               serviceId={props.service.id}
               deployFrozen={!!props.service.deployFrozen}
             />
+          </Show>
+          <Show when={props.tab === "previews"}>
+            <PreviewsTab service={props.service} services={props.services} />
           </Show>
           <Show when={props.tab === "metrics"}>
             <MetricsTab service={props.service} />
