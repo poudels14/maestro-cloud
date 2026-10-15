@@ -99,6 +99,7 @@ impl<L: ControlLink> Attachment<L> {
             });
             match self.link.connect(&target).await {
                 Ok((sender, receiver)) => {
+                    tracing::info!(%target, "attached to the control plane");
                     backoff = RECONNECT_MIN;
                     let ended = self.session(sender, receiver).await;
                     self.attached.send_replace(false);

@@ -243,7 +243,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     let (attachment, source) = Attachment::new(
         GrpcControlLink::new(credentials.clone()),
         identity.id,
-        identity.control_seeds(),
+        control_seeds(&identity, &config),
         board.clone(),
         ingress,
         dns_records,
@@ -584,4 +584,22 @@ async fn forward_panel(socket: PathBuf) -> anyhow::Result<()> {
             }
         });
     }
+}
+
+fn control_seeds(identity: &NodeIdentity, config: &ClusterConfig) -> Vec<String> {
+    let listed = config
+        .cluster
+        .voters
+        .iter()
+        .map(|voter| grpc_address(voter));
+    identity
+        .control_seeds()
+        .into_iter()
+        .chain(listed)
+        .fold(Vec::new(), |mut seeds, seed| {
+            if !seeds.contains(&seed) {
+                seeds.push(seed);
+            }
+            seeds
+        })
 }

@@ -6,7 +6,7 @@ use maestro_core::{AgentMessage, ClusterSettings, ControlMessage, JoinRequest, N
 use maestro_proto::pb::Envelope;
 use maestro_proto::pb::cluster_server::Cluster;
 use maestro_proto::peer_identity;
-use maestro_store::{Consensus, StateMachine};
+use maestro_store::Consensus;
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
@@ -15,6 +15,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::join::JoinAuthority;
 
 const OUTBOUND_BUFFER: usize = 64;
+const LEADERSHIP_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
 
 type EnvelopeStream = Pin<Box<dyn Stream<Item = Result<Envelope, Status>> + Send>>;
 
@@ -79,7 +80,7 @@ impl Cluster for ClusterService {
                 let (outbound_sender, outbound_receiver) = mpsc::channel(OUTBOUND_BUFFER);
                 tokio::spawn(serve_agent(
                     self.hub.clone(),
-                    self.consensus.state_handle(),
+                    self.consensus.clone(),
                     caller,
                     inbound,
                     outbound_sender,
@@ -93,11 +94,12 @@ impl Cluster for ClusterService {
 
 async fn serve_agent(
     hub: AgentHub,
-    state: Arc<StateMachine>,
+    consensus: Arc<Consensus>,
     caller: NodeId,
     mut inbound: Streaming<Envelope>,
     outbound: mpsc::Sender<Result<Envelope, Status>>,
 ) {
+    let state = consensus.state_handle();
     let hello = inbound
         .message()
         .await
@@ -129,6 +131,7 @@ async fn serve_agent(
         Some(Ok(AgentMessage::Hello { node_id })) => {
             let mut session = hub.register(node_id);
             let session_id = session.session;
+            let redirect = outbound.clone();
             tokio::spawn(async move {
                 while let Some(message) = session.messages.recv().await {
                     if outbound.send(encode(&message)).await.is_err() {
@@ -136,19 +139,36 @@ async fn serve_agent(
                     }
                 }
             });
-            while let Ok(Some(envelope)) = inbound.message().await {
-                if let Ok(AgentMessage::Replicas { statuses }) = decode(&envelope) {
-                    let assigned = state
-                        .assignments(node_id)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|assignment| assignment.replica_id)
-                        .collect::<Vec<_>>();
-                    let own = statuses
-                        .into_iter()
-                        .filter(|status| assigned.contains(&status.replica_id))
-                        .collect();
-                    hub.record_replicas(node_id, own);
+            let mut leadership = tokio::time::interval(LEADERSHIP_CHECK);
+            loop {
+                tokio::select! {
+                    message = inbound.message() => match message {
+                        Ok(Some(envelope)) => {
+                            if let Ok(AgentMessage::Replicas { statuses }) = decode(&envelope) {
+                                let assigned = state
+                                    .assignments(node_id)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|assignment| assignment.replica_id)
+                                    .collect::<Vec<_>>();
+                                let own = statuses
+                                    .into_iter()
+                                    .filter(|status| assigned.contains(&status.replica_id))
+                                    .collect();
+                                hub.record_replicas(node_id, own);
+                            }
+                        }
+                        _ => break,
+                    },
+                    _ = leadership.tick() => {
+                        if !consensus.is_leader() {
+                            let leader = consensus.current_leader().map(|(_, address)| address);
+                            if let Ok(envelope) = encode(&ControlMessage::NotLeader { leader }) {
+                                let _ = redirect.send(Ok(envelope)).await;
+                            }
+                            break;
+                        }
+                    }
                 }
             }
             hub.unregister(node_id, session_id);

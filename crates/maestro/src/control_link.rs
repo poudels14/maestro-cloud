@@ -2,6 +2,7 @@ use maestro_agent::ControlLink;
 use maestro_core::{AgentMessage, ControlMessage};
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_client::ClusterClient;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -10,6 +11,9 @@ use tonic::transport::Channel;
 use crate::cluster_service::{decode, encode};
 
 const LINK_BUFFER: usize = 64;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct GrpcControlLink {
     credentials: NodeCredentials,
@@ -30,6 +34,10 @@ impl ControlLink for GrpcControlLink {
             .map_err(|error| error.to_string())?
             .tls_config(self.credentials.voter_client_tls())
             .map_err(|error| error.to_string())?
+            .connect_timeout(CONNECT_TIMEOUT)
+            .http2_keep_alive_interval(KEEPALIVE_INTERVAL)
+            .keep_alive_timeout(KEEPALIVE_TIMEOUT)
+            .keep_alive_while_idle(true)
             .connect()
             .await
             .map_err(|error| error.to_string())?;
