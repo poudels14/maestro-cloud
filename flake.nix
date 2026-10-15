@@ -99,22 +99,11 @@
         if [ -f ${dataDir}/node.json ]; then
           exit 0
         fi
-        ${
-          if cfg.join.server != null
-          then ''
-            ${cfg.package}/bin/maestro join \
-              --data-dir ${dataDir} \
-              --server ${cfg.join.server} \
-              --token "$(cat ${toString cfg.join.tokenFile})" \
-              --role ${cfg.join.role} \
-              --advertise ${cfg.advertise}${lib.optionalString (cfg.configFile != null) " --config ${toString cfg.configFile}"}
-          ''
-          else ''
-            ${cfg.package}/bin/maestro server init \
-              --data-dir ${dataDir} \
-              --advertise ${cfg.advertise}${lib.optionalString (cfg.configFile != null) " --config ${toString cfg.configFile}"}
-          ''
-        }
+        ${cfg.package}/bin/maestro server provision \
+          --data-dir ${dataDir} \
+          --role ${cfg.role} \
+          --advertise ${cfg.advertise} \
+          --config ${toString cfg.configFile}
       '';
       agentArgs =
         [
@@ -166,28 +155,13 @@
           type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
           default = null;
           example = "aws-secret://maestro/prod/config.json";
-          description = "Cluster config: a maestro.jsonc path or an aws-secret:// source. Required on voters, which read encryptionKey and jwtSecretKey from it.";
+          description = "Cluster config: a maestro.jsonc path or an aws-secret:// source. It must set cluster.joinSecret and cluster.voters, and on voters encryptionKey and jwtSecretKey.";
         };
 
-        join = {
-          server = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            example = "10.20.0.11:7400";
-            description = "Voter to join through. When null, the first start initializes a new cluster.";
-          };
-
-          tokenFile = lib.mkOption {
-            type = lib.types.nullOr lib.types.path;
-            default = null;
-            description = "File containing the join token from `maestro server join-token`.";
-          };
-
-          role = lib.mkOption {
-            type = lib.types.enum ["voter" "worker"];
-            default = "worker";
-            description = "Role of a joining node.";
-          };
+        role = lib.mkOption {
+          type = lib.types.enum ["voter" "worker"];
+          default = "voter";
+          description = "Voters hold the cluster state and must be listed in cluster.voters; workers only run workloads.";
         };
 
         registry = {
@@ -257,12 +231,8 @@
       config = lib.mkIf cfg.enable {
         assertions = [
           {
-            assertion = cfg.join.server == null || cfg.join.tokenFile != null;
-            message = "services.maestro.join.tokenFile is required when join.server is set";
-          }
-          {
-            assertion = cfg.configFile != null || (cfg.join.server != null && cfg.join.role == "worker");
-            message = "services.maestro.configFile is required on voters: it holds encryptionKey and jwtSecretKey";
+            assertion = cfg.configFile != null;
+            message = "services.maestro.configFile is required: it holds cluster.joinSecret and cluster.voters";
           }
         ];
 
@@ -358,6 +328,7 @@
 
         systemd.services.maestro = {
           description = "Maestro node";
+          startLimitIntervalSec = 0;
           after = ["network-online.target" "containerd.service" "buildkitd.service"];
           wants = ["network-online.target" "buildkitd.service"];
           requires = ["containerd.service"];
@@ -385,6 +356,7 @@
             Slice = "maestro-system.slice";
             LoadCredential = lib.optional (cfg.registry.dockerConfigFile != null) "config.json:${cfg.registry.dockerConfigFile}";
             ExecStartPre = "${provision}";
+            TimeoutStartSec = "5min";
             ExecStart = utils.escapeSystemdExecArgs agentArgs;
             Restart = "always";
             RestartSec = 5;

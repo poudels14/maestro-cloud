@@ -24,7 +24,6 @@ use tokio::task::JoinSet;
 use crate::control_link::GrpcControlLink;
 use crate::control_plane::{self, ControlPlaneSettings};
 use crate::identity::NodeIdentity;
-use crate::join::join_secret;
 use crate::log_driver;
 use crate::node_service::{MeshImageFetcher, NodeClients, NodeService};
 use crate::unix_http;
@@ -46,6 +45,16 @@ pub struct InitArgs {
     advertise: String,
     #[arg(long)]
     config: Option<String>,
+}
+
+impl InitArgs {
+    pub fn new(data_dir: PathBuf, advertise: String, config: String) -> Self {
+        Self {
+            data_dir,
+            advertise,
+            config: Some(config),
+        }
+    }
 }
 
 #[derive(Args)]
@@ -72,9 +81,9 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
     let config = load_config(args.config.as_deref())?;
     config.encryption_key()?;
     config.jwt_secret_key()?;
+    config.join_secret()?;
     let identity =
         NodeIdentity::bootstrap(&args.data_dir, &args.advertise, config.cluster.clone())?;
-    join_secret(&args.data_dir)?;
     let pki_dir = args.data_dir.join("pki");
     if !pki_dir.join("node").exists() {
         let ca = ClusterCa::generate(&identity.cluster.name)?;

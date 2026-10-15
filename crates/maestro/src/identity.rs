@@ -50,6 +50,10 @@ impl NodeIdentity {
         }
     }
 
+    pub fn exists(data_dir: &Path) -> bool {
+        data_dir.join(IDENTITY_FILE).exists()
+    }
+
     pub fn load(data_dir: &Path) -> anyhow::Result<Self> {
         let path = data_dir.join(IDENTITY_FILE);
         let bytes = std::fs::read(&path).with_context(|| {

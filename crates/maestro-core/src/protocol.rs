@@ -78,5 +78,11 @@ pub struct JoinResponse {
 #[serde(rename_all = "camelCase")]
 pub struct VoterSecrets {
     pub ca_key_pem: String,
-    pub join_secret: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterDiscovery {
+    pub ca_pem: String,
+    pub proof: String,
 }

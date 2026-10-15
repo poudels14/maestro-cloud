@@ -61,7 +61,7 @@ pub struct NodeCredentials {
 
 #[derive(Debug)]
 struct PinnedCaVerifier {
-    fingerprint: String,
+    fingerprint: Option<String>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -244,9 +244,17 @@ pub fn fingerprint_of_pem(pem: &str) -> Result<String, PkiError> {
 }
 
 pub fn pinned_client_config(ca_fingerprint: &str) -> rustls::ClientConfig {
+    client_config(Some(ca_fingerprint.to_ascii_lowercase()))
+}
+
+pub fn discovery_client_config() -> rustls::ClientConfig {
+    client_config(None)
+}
+
+fn client_config(fingerprint: Option<String>) -> rustls::ClientConfig {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = PinnedCaVerifier {
-        fingerprint: ca_fingerprint.to_ascii_lowercase(),
+        fingerprint,
         provider: provider.clone(),
     };
     let mut config = rustls::ClientConfig::builder_with_provider(provider)
@@ -268,19 +276,28 @@ impl ServerCertVerifier for PinnedCaVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let pinned = intermediates
-            .iter()
-            .find(|cert| hex::encode(Sha256::digest(cert.as_ref())) == self.fingerprint)
-            .ok_or_else(|| {
-                rustls::Error::General("server did not present the pinned cluster CA".to_string())
-            })?;
-        let mut roots = RootCertStore::empty();
-        roots.add(pinned.clone().into_owned())?;
-        let verifier =
-            WebPkiServerVerifier::builder_with_provider(Arc::new(roots), self.provider.clone())
+        match &self.fingerprint {
+            None => Ok(ServerCertVerified::assertion()),
+            Some(fingerprint) => {
+                let pinned = intermediates
+                    .iter()
+                    .find(|cert| hex::encode(Sha256::digest(cert.as_ref())) == *fingerprint)
+                    .ok_or_else(|| {
+                        rustls::Error::General(
+                            "server did not present the pinned cluster CA".to_string(),
+                        )
+                    })?;
+                let mut roots = RootCertStore::empty();
+                roots.add(pinned.clone().into_owned())?;
+                let verifier = WebPkiServerVerifier::builder_with_provider(
+                    Arc::new(roots),
+                    self.provider.clone(),
+                )
                 .build()
                 .map_err(|error| rustls::Error::General(error.to_string()))?;
-        verifier.verify_server_cert(end_entity, &[], server_name, ocsp_response, now)
+                verifier.verify_server_cert(end_entity, &[], server_name, ocsp_response, now)
+            }
+        }
     }
 
     fn verify_tls12_signature(

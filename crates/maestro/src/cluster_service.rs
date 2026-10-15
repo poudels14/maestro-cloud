@@ -45,6 +45,10 @@ impl ClusterService {
 impl Cluster for ClusterService {
     type AttachStream = EnvelopeStream;
 
+    async fn discover(&self, _request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
+        Ok(Response::new(encode(&self.authority.discovery()?)?))
+    }
+
     async fn join(&self, request: Request<Envelope>) -> Result<Response<Envelope>, Status> {
         let join_request: JoinRequest = decode(request.get_ref())?;
         let response = self

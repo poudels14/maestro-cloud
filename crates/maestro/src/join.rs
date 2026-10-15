@@ -1,5 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
@@ -7,38 +8,41 @@ use hmac::{Hmac, KeyInit, Mac};
 use maestro_agent::{WIREGUARD_PORT, detect_capacity, load_or_generate_key, system_reserve};
 use maestro_control::allocate_subnet;
 use maestro_core::{
-    ClusterConfig, ClusterSettings, JoinRequest, JoinResponse, NodeRecord, NodeRole, NodeState,
-    VoterSecrets, WireGuardInfo,
+    ClusterConfig, ClusterDiscovery, ClusterSettings, JoinRequest, JoinResponse, NodeRecord,
+    NodeRole, NodeState, VoterSecrets, WireGuardInfo,
 };
+use maestro_proto::pb::Envelope;
 use maestro_proto::pb::cluster_client::ClusterClient;
-use maestro_proto::{CertRole, ClusterCa, NodeCredentials, connect_pinned};
+use maestro_proto::{
+    CertRole, ClusterCa, NodeCredentials, connect_pinned, connect_unverified, fingerprint_of_pem,
+};
 use maestro_store::{Consensus, Mutation};
 use sha2::Sha256;
 use tonic::{Code, Status};
 
 use crate::cluster_service::{decode, encode};
 use crate::identity::{NodeIdentity, hostname, random_node_id};
+use crate::server::{self, InitArgs};
 
-const TOKEN_PREFIX: &str = "mj2";
-const JOIN_SECRET_FILE: &str = "join.key";
 const LEADER_MARKER: &str = "leader=";
+const DEFAULT_GRPC_PORT: u16 = 7400;
+const GRANT_TTL_SECS: u64 = 300;
+const RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const JOIN_DEADLINE: Duration = Duration::from_secs(180);
+const CA_PROOF_PREFIX: &str = "ca-";
 
 #[derive(Args)]
 pub struct JoinArgs {
     #[arg(long)]
-    server: String,
-    #[arg(long, env = "MAESTRO_JOIN_TOKEN", hide_env_values = true)]
-    token: String,
+    config: String,
     #[arg(long)]
     advertise: String,
-    #[arg(long, value_parser = parse_role)]
-    role: Option<NodeRole>,
+    #[arg(long, value_parser = parse_role, default_value = "voter")]
+    role: NodeRole,
     #[arg(long, default_value = "/var/lib/maestro")]
     data_dir: PathBuf,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long)]
-    config: Option<String>,
 }
 
 pub struct JoinAuthority {
@@ -47,10 +51,18 @@ pub struct JoinAuthority {
 }
 
 impl JoinAuthority {
-    pub fn load(data_dir: &Path) -> anyhow::Result<Self> {
+    pub fn load(data_dir: &Path, secret: &str) -> anyhow::Result<Self> {
         Ok(Self {
             ca: ClusterCa::load(&data_dir.join("pki"))?,
-            secret: join_secret(data_dir)?,
+            secret: secret.to_string(),
+        })
+    }
+
+    pub fn discovery(&self) -> Result<ClusterDiscovery, Status> {
+        let fingerprint = self.ca.fingerprint().map_err(internal)?;
+        Ok(ClusterDiscovery {
+            ca_pem: self.ca.cert_pem().to_string(),
+            proof: ca_proof(&self.secret, &fingerprint),
         })
     }
 
@@ -86,9 +98,39 @@ impl JoinAuthority {
         let subnet = allocate_subnet(&cluster.cidr, &used).ok_or_else(|| {
             Status::resource_exhausted("no free node subnets in the cluster CIDR")
         })?;
+        let replaced = nodes
+            .iter()
+            .filter(|node| node.endpoint == request.advertise && node.state != NodeState::Removed)
+            .cloned()
+            .collect::<Vec<_>>();
         let node_id = std::iter::repeat_with(random_node_id)
             .find(|candidate| nodes.iter().all(|node| node.id != *candidate))
             .unwrap_or_else(random_node_id);
+        let mut retirements = Vec::new();
+        for previous in replaced {
+            let metrics = consensus.metrics();
+            if metrics.voters.contains_key(&previous.id)
+                || metrics.learners.contains_key(&previous.id)
+            {
+                consensus
+                    .remove_node(previous.id)
+                    .await
+                    .map_err(|error| Status::unavailable(error.to_string()))?;
+            }
+            let has_assignments = !consensus
+                .state()
+                .assignments(previous.id)
+                .map_err(internal)?
+                .is_empty();
+            let state = match has_assignments {
+                true => NodeState::Draining,
+                false => NodeState::Removed,
+            };
+            tracing::info!(node = %previous.name, endpoint = %previous.endpoint, "a new node took over this address; retiring the old one");
+            retirements.push(Mutation::PutNode {
+                node: NodeRecord { state, ..previous },
+            });
+        }
         let record = NodeRecord {
             id: node_id,
             name: request.name.clone(),
@@ -102,10 +144,8 @@ impl JoinAuthority {
             state: NodeState::Active,
             wireguard: request.wireguard.clone(),
         };
-        consensus
-            .write(vec![Mutation::PutNode { node: record }])
-            .await
-            .map_err(internal)?;
+        retirements.push(Mutation::PutNode { node: record });
+        consensus.write(retirements).await.map_err(internal)?;
         let addresses = advertise_ip(&request.advertise)
             .into_iter()
             .collect::<Vec<_>>();
@@ -114,7 +154,9 @@ impl JoinAuthority {
             .issue_node(node_id.0, cert_role(request.role), &addresses)
             .map_err(internal)?;
         let voter_secrets = match request.role {
-            NodeRole::Voter => Some(self.voter_secrets().map_err(internal)?),
+            NodeRole::Voter => Some(VoterSecrets {
+                ca_key_pem: self.ca.key_pem().to_string(),
+            }),
             NodeRole::Worker => None,
         };
         let voters = consensus.metrics().voters.into_values().collect();
@@ -129,63 +171,69 @@ impl JoinAuthority {
             voter_secrets,
         })
     }
-
-    fn voter_secrets(&self) -> anyhow::Result<VoterSecrets> {
-        Ok(VoterSecrets {
-            ca_key_pem: self.ca.key_pem().to_string(),
-            join_secret: self.secret.clone(),
-        })
-    }
 }
 
-pub fn create_token(data_dir: &Path, role: NodeRole, ttl_secs: u64) -> anyhow::Result<()> {
-    let ca = ClusterCa::load(&data_dir.join("pki"))?;
-    let grant = sign_grant(&join_secret(data_dir)?, role, unix_now() + ttl_secs);
-    println!("{TOKEN_PREFIX}.{}.{grant}", ca.fingerprint()?);
-    Ok(())
-}
-
-pub fn join_secret(data_dir: &Path) -> anyhow::Result<String> {
-    let path = data_dir.join("keys").join(JOIN_SECRET_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(secret) => Ok(secret.trim().to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let secret = hex_encode(&rand::random::<[u8; 32]>());
-            write_private(&path, secret.as_bytes())?;
-            Ok(secret)
+pub async fn provision(args: JoinArgs) -> anyhow::Result<()> {
+    match NodeIdentity::exists(&args.data_dir) {
+        true => Ok(()),
+        false => {
+            let config = load_config(&args.config)?;
+            let secret = config.join_secret()?.to_string();
+            let voters = voter_addresses(&config)?;
+            let own_address = grpc_address(&args.advertise);
+            let founder = args.role == NodeRole::Voter && voters.first() == Some(&own_address);
+            let founded = founder && !cluster_exists(&voters, &own_address, &secret).await;
+            match founded {
+                true => {
+                    tracing::info!("no listed voter has a cluster yet; creating it here");
+                    server::init(InitArgs::new(
+                        args.data_dir.clone(),
+                        args.advertise.clone(),
+                        args.config.clone(),
+                    ))
+                    .await
+                }
+                false => join_until_admitted(&args, &config, &secret, &voters).await,
+            }
         }
-        Err(error) => Err(error.into()),
     }
 }
 
 pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
-    let (fingerprint, secret) = parse_token(&args.token)?;
-    let role = grant_role(&secret).context("the join token does not name a role")?;
-    anyhow::ensure!(
-        args.role.is_none_or(|requested| requested == role),
-        "this join token admits a {} node; mint one with --role {}",
-        role_name(role),
-        args.role.map(role_name).unwrap_or_default()
-    );
-    let config = match &args.config {
-        Some(source) => {
-            ClusterConfig::load_with(source, &crate::secret_sources::read_config_source)?
-        }
-        None => ClusterConfig::default(),
-    };
-    if role == NodeRole::Voter {
+    let config = load_config(&args.config)?;
+    let secret = config.join_secret()?.to_string();
+    let voters = voter_addresses(&config)?;
+    join_until_admitted(&args, &config, &secret, &voters).await
+}
+
+async fn join_until_admitted(
+    args: &JoinArgs,
+    config: &ClusterConfig,
+    secret: &str,
+    voters: &[String],
+) -> anyhow::Result<()> {
+    if args.role == NodeRole::Voter {
         config.encryption_key()?;
         config.jwt_secret_key()?;
     }
+    let own_address = grpc_address(&args.advertise);
+    let candidates = voters
+        .iter()
+        .filter(|voter| **voter != own_address)
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        !candidates.is_empty(),
+        "cluster.voters lists no voter other than this node to join through"
+    );
     let capacity = detect_capacity()?;
     let wireguard_key = load_or_generate_key(&args.data_dir.join("keys")).await?;
     let wireguard_endpoint = advertise_ip(&args.advertise)
         .map(|ip| SocketAddr::new(ip, WIREGUARD_PORT))
         .context("--advertise must be an IP:port the other nodes can reach")?;
-    let request = JoinRequest {
-        secret,
+    let mut request = JoinRequest {
+        secret: String::new(),
         name: args.name.clone().unwrap_or_else(hostname),
-        role,
+        role: args.role,
         advertise: args.advertise.clone(),
         capacity,
         reserved: system_reserve(&capacity, &config.node.reserve),
@@ -195,25 +243,83 @@ pub async fn join(args: JoinArgs) -> anyhow::Result<()> {
             endpoint: wireguard_endpoint,
         }),
     };
-    let response = match request_join(&args.server, &fingerprint, &request).await {
+    let started = std::time::Instant::now();
+    let response = loop {
+        request.secret = sign_grant(secret, args.role, unix_now() + GRANT_TTL_SECS);
+        let mut failures = Vec::new();
+        let mut admitted = None;
+        for voter in &candidates {
+            match join_through(voter, secret, &request).await {
+                Ok(response) => {
+                    admitted = Some(response);
+                    break;
+                }
+                Err(error) => failures.push(format!("{voter}: {error:#}")),
+            }
+        }
+        match (admitted, started.elapsed() < JOIN_DEADLINE) {
+            (Some(response), _) => break response,
+            (None, true) => {
+                tracing::warn!(failures = %failures.join("; "), "could not join the cluster yet; retrying");
+                tokio::time::sleep(RETRY_INTERVAL).await;
+            }
+            (None, false) => anyhow::bail!("could not join the cluster: {}", failures.join("; ")),
+        }
+    };
+    persist(args, response)?;
+    println!("joined the cluster as a {}", role_name(args.role));
+    Ok(())
+}
+
+async fn join_through(
+    voter: &str,
+    secret: &str,
+    request: &JoinRequest,
+) -> anyhow::Result<JoinResponse> {
+    let fingerprint = discover(voter, secret).await?;
+    let response = match request_join(voter, &fingerprint, request).await {
         Err(status) if status.code() == Code::FailedPrecondition => {
             let leader = status
                 .message()
                 .split_once(LEADER_MARKER)
                 .map(|(_, leader)| leader.trim().to_string())
                 .filter(|leader| !leader.is_empty())
-                .context("the server is not the leader and did not name one")?;
-            request_join(&leader, &fingerprint, &request).await?
+                .context("the voter is not the leader and did not name one")?;
+            request_join(&leader, &fingerprint, request).await?
         }
         other => other?,
     };
-    persist(&args, role, response)?;
-    println!(
-        "joined the cluster; start the node with `maestro agent --data-dir {} --advertise {}`",
-        args.data_dir.display(),
-        args.advertise
+    Ok(response)
+}
+
+async fn discover(voter: &str, secret: &str) -> anyhow::Result<String> {
+    let channel = connect_unverified(voter).await?;
+    let reply = ClusterClient::new(channel)
+        .discover(Envelope {
+            json: b"{}".to_vec(),
+        })
+        .await?;
+    let discovery: ClusterDiscovery = decode(&reply.into_inner())?;
+    let fingerprint = fingerprint_of_pem(&discovery.ca_pem)?;
+    anyhow::ensure!(
+        constant_time_eq(
+            discovery.proof.as_bytes(),
+            ca_proof(secret, &fingerprint).as_bytes()
+        ),
+        "{voter} does not know this cluster's join secret"
     );
-    Ok(())
+    Ok(fingerprint)
+}
+
+async fn cluster_exists(voters: &[String], own_address: &str, secret: &str) -> bool {
+    let checks = voters
+        .iter()
+        .filter(|voter| *voter != own_address)
+        .map(|voter| discover(voter, secret));
+    futures_util::future::join_all(checks)
+        .await
+        .iter()
+        .any(Result::is_ok)
 }
 
 async fn request_join(
@@ -228,7 +334,7 @@ async fn request_join(
     decode(&reply.into_inner())
 }
 
-fn persist(args: &JoinArgs, role: NodeRole, response: JoinResponse) -> anyhow::Result<()> {
+fn persist(args: &JoinArgs, response: JoinResponse) -> anyhow::Result<()> {
     let pki = args.data_dir.join("pki");
     let credentials = NodeCredentials {
         cert_pem: response.cert_pem,
@@ -238,15 +344,11 @@ fn persist(args: &JoinArgs, role: NodeRole, response: JoinResponse) -> anyhow::R
     credentials.save(&pki.join("node"))?;
     if let Some(secrets) = response.voter_secrets {
         ClusterCa::from_pem(response.ca_pem, secrets.ca_key_pem).save(&pki)?;
-        write_private(
-            &args.data_dir.join("keys").join(JOIN_SECRET_FILE),
-            secrets.join_secret.as_bytes(),
-        )?;
     }
     NodeIdentity {
         id: response.node_id,
         name: args.name.clone().unwrap_or_else(hostname),
-        role,
+        role: args.role,
         subnet: response.subnet,
         advertise: args.advertise.clone(),
         seeds: response.voters,
@@ -255,13 +357,37 @@ fn persist(args: &JoinArgs, role: NodeRole, response: JoinResponse) -> anyhow::R
     .save(&args.data_dir)
 }
 
-fn parse_token(token: &str) -> anyhow::Result<(String, String)> {
-    match token.trim().splitn(3, '.').collect::<Vec<_>>().as_slice() {
-        [TOKEN_PREFIX, fingerprint, secret] => Ok((fingerprint.to_string(), secret.to_string())),
-        _ => anyhow::bail!(
-            "invalid join token; mint a new one with `maestro server join-token --role <voter|worker>`"
-        ),
+fn load_config(source: &str) -> anyhow::Result<ClusterConfig> {
+    Ok(ClusterConfig::load_with(
+        source,
+        &crate::secret_sources::read_config_source,
+    )?)
+}
+
+fn voter_addresses(config: &ClusterConfig) -> anyhow::Result<Vec<String>> {
+    let voters = config
+        .cluster
+        .voters
+        .iter()
+        .map(|voter| grpc_address(voter))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        !voters.is_empty(),
+        "cluster.voters must list the voter addresses in the cluster config"
+    );
+    Ok(voters)
+}
+
+fn grpc_address(endpoint: &str) -> String {
+    let endpoint = endpoint.trim();
+    match endpoint.contains(':') {
+        true => endpoint.to_string(),
+        false => format!("{endpoint}:{DEFAULT_GRPC_PORT}"),
     }
+}
+
+fn ca_proof(secret: &str, ca_fingerprint: &str) -> String {
+    grant_signature(secret, &format!("{CA_PROOF_PREFIX}{ca_fingerprint}"))
 }
 
 fn sign_grant(secret: &str, role: NodeRole, expires_at: u64) -> String {
@@ -363,22 +489,6 @@ fn internal(error: impl std::fmt::Display) -> Status {
     Status::internal(error.to_string())
 }
 
-fn write_private(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(contents)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,13 +511,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_join_tokens() {
-        assert_eq!(
-            parse_token("mj2.abcdef.worker-100-sig").unwrap(),
-            ("abcdef".to_string(), "worker-100-sig".to_string())
-        );
-        assert!(parse_token("mj1.abcdef.s3cret").is_err());
-        assert!(parse_token("mj2.only-two").is_err());
+    fn normalizes_voter_addresses() {
+        assert_eq!(grpc_address("10.1.0.11"), "10.1.0.11:7400");
+        assert_eq!(grpc_address(" 10.1.0.11:7500 "), "10.1.0.11:7500");
+    }
+
+    #[test]
+    fn ca_proofs_need_the_join_secret_and_cannot_pass_as_grants() {
+        let proof = ca_proof("secret", "abc");
+        assert_eq!(proof, ca_proof("secret", "abc"));
+        assert_ne!(proof, ca_proof("other", "abc"));
+        assert_ne!(proof, ca_proof("secret", "abd"));
+        let forged = format!("{CA_PROOF_PREFIX}abc-{proof}");
+        assert!(verify_grant("secret", &forged, NodeRole::Voter, 0).is_err());
     }
 
     #[test]

@@ -132,7 +132,7 @@ sudo install -m 0755 "$HOME/target/debug/maestro" /usr/local/bin/maestro
 sudo systemctl stop maestro.service 2>/dev/null || true
 if ! sudo test -f {config}; then
   sudo install -d -m 0700 /etc/maestro
-  printf '{{ "encryptionKey": "%s", "jwtSecretKey": "%s" }}\n' "$(head -c 32 /dev/urandom | base64)" "$(head -c 32 /dev/urandom | base64)" | sudo install -m 0600 /dev/stdin {config}
+  printf '{{ "encryptionKey": "%s", "jwtSecretKey": "%s", "cluster": {{ "joinSecret": "%s" }} }}\n' "$(head -c 32 /dev/urandom | base64)" "$(head -c 32 /dev/urandom | base64)" "$(head -c 32 /dev/urandom | base64)" | sudo install -m 0600 /dev/stdin {config}
 fi
 sudo /usr/local/bin/maestro server init --data-dir /var/lib/maestro --advertise 127.0.0.1:7400 --config {config}
 sudo tee /etc/systemd/system/maestro.service > /dev/null <<'UNIT'

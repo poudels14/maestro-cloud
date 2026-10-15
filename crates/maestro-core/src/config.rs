@@ -12,7 +12,7 @@ const SCHEMA_KEY: &str = "$schema";
 const MAX_EXTENDS_DEPTH: usize = 16;
 const FILE_SCHEME: &str = "file://";
 const MAX_TUNNEL_REPLICAS: u32 = 25;
-const REPLACED_V1_FIELDS: [(&str, &str); 7] = [
+const REPLACED_V1_FIELDS: [(&str, &str); 6] = [
     (
         "subnet",
         "each node gets a /24 from cluster.cidr when it joins",
@@ -23,8 +23,10 @@ const REPLACED_V1_FIELDS: [(&str, &str); 7] = [
         "disable-etcd-cert",
         "etcd is gone; cluster traffic always uses mTLS",
     ),
-    ("cluster.nodes", "nodes join with `maestro join`"),
-    ("cluster.join-secret", "use `maestro server join-token`"),
+    (
+        "cluster.nodes",
+        "list the voter addresses in cluster.voters; node ids are assigned when nodes join",
+    ),
     (
         "cluster.control-allow-cidrs",
         "restrict port 7400 with your firewall or security group",
@@ -71,9 +73,17 @@ pub struct ClusterConfig {
     pub allow_exec: bool,
     #[serde(default = "default_volume_roots")]
     pub volume_roots: Vec<String>,
-    #[serde(default, alias = "encryption-key", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "encryption-key",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub encryption_key: Option<String>,
-    #[serde(default, alias = "jwt-secret-key", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "jwt-secret-key",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub jwt_secret_key: Option<String>,
 }
 
@@ -185,6 +195,10 @@ pub struct ClusterSettings {
     pub name: String,
     #[serde(default = "default_cluster_cidr")]
     pub cidr: String,
+    #[serde(default, alias = "join-secret", skip_serializing)]
+    pub join_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voters: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,7 +258,7 @@ pub enum ConfigError {
     UnsupportedSource(String),
     #[error("invalid config: {0}")]
     Invalid(String),
-    #[error("{0} is required in the cluster config on voters")]
+    #[error("{0} is required in the cluster config")]
     MissingKey(String),
 }
 
@@ -255,6 +269,10 @@ impl ClusterConfig {
 
     pub fn jwt_secret_key(&self) -> Result<&str, ConfigError> {
         required_key(self.jwt_secret_key.as_deref(), "jwtSecretKey")
+    }
+
+    pub fn join_secret(&self) -> Result<&str, ConfigError> {
+        required_key(self.cluster.join_secret.as_deref(), "cluster.joinSecret")
     }
 
     pub fn masked(&self) -> Self {
@@ -355,6 +373,8 @@ impl Default for ClusterSettings {
         Self {
             name: default_cluster_name(),
             cidr: default_cluster_cidr(),
+            join_secret: None,
+            voters: Vec::new(),
         }
     }
 }
@@ -667,20 +687,35 @@ mod tests {
     #[test]
     fn explains_replaced_v1_fields() {
         let error = ClusterConfig::parse(r#"{ "cluster": { "nodes": {} } }"#).unwrap_err();
-        assert!(error.to_string().contains("maestro join"));
+        assert!(error.to_string().contains("cluster.voters"));
     }
 
     #[test]
     fn requires_both_keys_in_either_spelling() {
-        let kebab =
-            ClusterConfig::parse(r#"{ "encryption-key": "enc", "jwt-secret-key": "jwt" }"#)
-                .unwrap();
+        let kebab = ClusterConfig::parse(r#"{ "encryption-key": "enc", "jwt-secret-key": "jwt" }"#)
+            .unwrap();
         assert_eq!(kebab.encryption_key().unwrap(), "enc");
         assert_eq!(kebab.jwt_secret_key().unwrap(), "jwt");
-        let camel = ClusterConfig::parse(r#"{ "encryptionKey": " ", "jwtSecretKey": "jwt" }"#)
-            .unwrap();
-        assert!(matches!(camel.encryption_key(), Err(ConfigError::MissingKey(_))));
+        let camel =
+            ClusterConfig::parse(r#"{ "encryptionKey": " ", "jwtSecretKey": "jwt" }"#).unwrap();
+        assert!(matches!(
+            camel.encryption_key(),
+            Err(ConfigError::MissingKey(_))
+        ));
         assert!(ClusterConfig::default().jwt_secret_key().is_err());
+    }
+
+    #[test]
+    fn reads_the_join_secret_and_voters_but_never_writes_the_secret() {
+        let config = ClusterConfig::parse(
+            r#"{ "cluster": { "join-secret": "join", "voters": ["10.1.0.11", "10.1.0.12:7400"] } }"#,
+        )
+        .unwrap();
+        assert_eq!(config.join_secret().unwrap(), "join");
+        assert_eq!(config.cluster.voters.len(), 2);
+        let written = serde_json::to_string(&config.cluster).unwrap();
+        assert!(!written.contains("join"));
+        assert!(written.contains("10.1.0.12:7400"));
     }
 
     #[test]

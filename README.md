@@ -116,20 +116,32 @@ safely. The default system reserve is `max(2 GiB, 10%)` of memory and one CPU.
 
 ## Cluster config
 
-Voters need a `maestro.jsonc` (a file or an `aws-secret://` source) with
-`encryptionKey` and `jwtSecretKey`; Maestro never generates them, so every voter must
-get the same values. `encryptionKey` encrypts env values and secrets in the cluster
-store (AES-256 with an Argon2-derived key). `jwtSecretKey` signs API tokens (HS256).
-You can mint tokens elsewhere with that secret as long as they carry `sub` and `exp`,
-and `exp` is at most 24 hours after `iat` (or after now when `iat` is absent). Workers
-don't need either key. Every other field has a default.
+Every node reads the same `maestro.jsonc` (a file or an `aws-secret://` source).
+Maestro never generates secrets, so these come from the config:
+
+- `cluster.joinSecret` (all nodes) lets nodes join and lets a joining node verify it
+  reached the real cluster.
+- `cluster.voters` (all nodes) lists the voter addresses. The first one creates the
+  cluster; everyone else joins through any of them.
+- `encryptionKey` (voters) encrypts env values and secrets in the cluster store
+  (AES-256 with an Argon2-derived key).
+- `jwtSecretKey` (voters) signs API tokens (HS256). You can mint tokens elsewhere with
+  it as long as they carry `sub` and `exp`, and `exp` is at most 24 hours after `iat`
+  (or after now when `iat` is absent).
+
+Every other field has a default.
 
 ```jsonc
 {
   "$extends": "common.jsonc",   // optional base file; objects merge, other values replace
   "encryptionKey": "…",         // required on voters
   "jwtSecretKey": "…",          // required on voters
-  "cluster": { "name": "prod", "cidr": "10.200.0.0/16" },
+  "cluster": {
+    "name": "prod",
+    "cidr": "10.200.0.0/16",
+    "joinSecret": "…",
+    "voters": ["10.20.0.11", "10.20.0.12", "10.20.0.13"]   // port 7400 unless given
+  },
   "node": { "labels": { "zone": "us-west-2a" }, "reserve": { "cpu": 1, "memory": "4Gi" } },
   "ingress": { "ports": [80, 443] },
   "defaults": {
@@ -176,9 +188,9 @@ ranges, `AND`/`OR`/`NOT`/`-`, and `*`/`?` wildcards.
 
 ```text
 maestro dev up|reload|down|status        local cluster in a Lima VM
-maestro server init                      initialize a cluster on this node
-maestro server join-token --role R       print a join token for a voter or worker
-maestro join --server … --token … --advertise IP:7400 [--role voter|worker]
+maestro server provision                 create or join the cluster from the config (NixOS runs this)
+maestro server init                      create a single-node cluster on this node
+maestro join --config SRC --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
 maestro token create --config SRC         mint an API token from jwtSecretKey (max 24h)
@@ -220,43 +232,28 @@ and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and
 
 ### Forming a cluster
 
-1. Initialize the first node (done automatically by the NixOS module when
-   `join.server` is unset):
+Formation needs no manual steps. Start every node with the same config and its own
+`--advertise` address (the NixOS module runs this on first boot):
 
-   ```bash
-   sudo maestro server init --advertise 10.20.0.11:7400 --config maestro.jsonc
-   sudo systemctl start maestro
-   ```
+```bash
+sudo maestro server provision --config aws-secret://maestro/prod/config.json \
+  --advertise 10.20.0.12:7400 --role voter    # or --role worker
+```
 
-   This checks that the config has `encryptionKey` and `jwtSecretKey`, creates the
-   cluster CA, the node certificate and the join secret in the data dir, then
-   bootstraps a one-voter Raft group.
+- The first address in `cluster.voters` creates the cluster (CA, node certificate,
+  one-voter Raft group), unless another listed voter already has one; then it joins.
+- Every other node joins through the listed voters, retrying while they come up. It
+  first asks a voter for the cluster CA along with an HMAC of it under the join
+  secret, so it never trusts a node that doesn't know the secret, then joins over TLS
+  pinned to that CA with a short-lived grant signed with the same secret.
+- The leader assigns a node id and the next free `/24` from the cluster CIDR, records
+  the node, and returns its certificate. Voters also receive the CA key.
+- If a node joins at an address another node used before (an instance replaced with
+  a fresh disk), the old node is dropped from Raft and retired.
+- The leader adds joining voters as Raft learners, waits for them to catch up, and
+  promotes them. Run `maestro nodes` to check the cluster.
 
-2. Print a join token on any voter. A token admits only the role it was minted for
-   and expires after `--ttl` (default 5m):
-
-   ```bash
-   sudo maestro server join-token --role worker   # or --role voter
-   # mj2.<ca-sha256-fingerprint>.<role>-<expiry>-<signature>
-   ```
-
-3. Join other nodes:
-
-   ```bash
-   sudo maestro join --server 10.20.0.11:7400 --token "$TOKEN" \
-     --advertise 10.20.0.12:7400                # the role comes from the token
-   sudo systemctl start maestro
-   ```
-
-   The joining node pins the CA by the fingerprint in the token, so it never trusts an
-   impostor. The leader checks the secret, assigns a node id and the next free `/24`
-   from the cluster CIDR, records the node, and returns its certificate. Voters also
-   receive the CA key and the join secret so they can lead; they read the encryption
-   and JWT keys from their own config. A follower that receives a join returns the leader's address and the client
-   retries there.
-
-4. The leader adds joining voters as Raft learners, waits for them to catch up, and
-   promotes them. Run `maestro nodes` to check the cluster.
+A node with an existing data dir skips all of this and just starts.
 
 ### How the control plane scales
 
@@ -296,8 +293,8 @@ address as `--advertise`, copy the Linux binary to the new VM, and join it.
 
 ## Deploying on NixOS
 
-The flake exports `nixosModules.default`. The first node initializes the cluster;
-other nodes join with a token.
+The flake exports `nixosModules.default`. Every node uses the same module settings
+except `advertise` (and `role` for workers); the cluster forms on its own.
 
 ```nix
 {
@@ -312,7 +309,8 @@ other nodes join with a token.
           services.maestro = {
             enable = true;
             advertise = "10.20.0.11:7400";
-            configFile = "aws-secret://maestro/prod/config.json";  # required on voters
+            configFile = "aws-secret://maestro/prod/config.json";
+            # role = "worker";   # voters are the default
           };
         }
       ];
@@ -321,23 +319,10 @@ other nodes join with a token.
 }
 ```
 
-On the first node, mint a join token and an API token:
+Mint an API token on any voter, or sign one yourself with `jwtSecretKey`:
 
 ```bash
-sudo maestro server join-token --role worker --ttl 30m
 sudo maestro token create --config aws-secret://maestro/prod/config.json --subject laptop
-```
-
-Joining nodes set `join.server`, `join.tokenFile` (a token minted for their role; it is
-only used on first boot, so it just has to be fresh then), and optionally
-`join.role = "voter"`:
-
-```nix
-services.maestro = {
-  enable = true;
-  advertise = "10.20.0.12:7400";
-  join = { server = "10.20.0.11:7400"; tokenFile = "/run/secrets/maestro-join-token"; };
-};
 ```
 
 The module configures containerd, BuildKit (in the builds slice), the three slices,

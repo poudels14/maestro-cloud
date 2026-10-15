@@ -26,7 +26,8 @@ pub use deployment::{
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo};
 pub use protocol::{
-    AgentMessage, ControlMessage, JoinRequest, JoinResponse, MeshPeer, VoterSecrets,
+    AgentMessage, ClusterDiscovery, ControlMessage, JoinRequest, JoinResponse, MeshPeer,
+    VoterSecrets,
 };
 pub use resources::{
     ByteSize, EffectiveResources, MemoryLimit, Millicores, NodeCapacity, OomPriority,

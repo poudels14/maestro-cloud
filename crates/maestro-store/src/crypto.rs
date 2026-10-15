@@ -220,7 +220,10 @@ mod tests {
     #[test]
     fn derives_the_same_key_from_the_same_secret() {
         let sealed = SecretKey::derive("cluster-secret").seal("value");
-        assert_eq!(SecretKey::derive("cluster-secret").open(&sealed).unwrap(), "value");
+        assert_eq!(
+            SecretKey::derive("cluster-secret").open(&sealed).unwrap(),
+            "value"
+        );
         assert!(SecretKey::derive("other-secret").open(&sealed).is_err());
     }
 }

@@ -131,7 +131,10 @@ pub async fn spawn(
         .await?,
     );
     let hub = AgentHub::new(NODE_EXPIRY);
-    let authority = Arc::new(JoinAuthority::load(&settings.data_dir)?);
+    let authority = Arc::new(JoinAuthority::load(
+        &settings.data_dir,
+        settings.config.join_secret()?,
+    )?);
     let grpc = tonic::transport::Server::builder()
         .tls_config(settings.credentials.server_tls())?
         .add_service(consensus.raft_service())

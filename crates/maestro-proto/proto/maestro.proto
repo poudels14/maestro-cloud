@@ -33,6 +33,7 @@ service Raft {
 }
 
 service Cluster {
+  rpc Discover(Envelope) returns (Envelope);
   rpc Join(Envelope) returns (Envelope);
   rpc Attach(stream Envelope) returns (stream Envelope);
 }

@@ -259,16 +259,15 @@ v3 design (decisions approved):
 
 ## Security
 
-- `maestro server init` creates the cluster CA and the join secret in the data dir.
-  `encryptionKey` and `jwtSecretKey` are required in every voter's config (usually one
-  shared `aws-secret://` source) and are never generated, so API tokens can be minted
-  outside the cluster. The data key is derived with Argon2 as in v1; a voter refuses to
-  start or join without both keys.
+- Secrets come from the shared config and are never generated: `cluster.joinSecret`
+  (all nodes), `encryptionKey` and `jwtSecretKey` (voters). The data key is derived
+  with Argon2 as in v1, so API tokens can be minted outside the cluster.
+- Formation is automatic: the first address in `cluster.voters` creates the cluster
+  (unless another listed voter already has one) and every other node joins through
+  the listed voters. A joining node verifies the CA with an HMAC under the join secret
+  before trusting it, then joins with a short-lived grant signed with the same secret.
 - All internal traffic is mTLS with cluster-issued node certificates.
-- Joining: `maestro server init` prints a join token (cluster id + CA fingerprint +
-  HMAC secret). `maestro join <addr> --token <token>` verifies the CA, receives a
-  node certificate, and is admitted as worker or voter.
-- API auth: JWT signed with a key derived from the cluster secret.
+- API auth: HS256 JWTs signed with `jwtSecretKey`.
 - Secrets are encrypted before entering the Raft log.
 
 ## Configuration
@@ -310,8 +309,9 @@ CLI flags on the daemon: `--config`, `--data-dir`, `--role`.
 
 ```
 maestro dev [up|down|status]          local cluster in a Lima VM (macOS) or directly (Linux)
-maestro server init                   create a cluster on this node, print join token
-maestro join <addr> --token <t>       join as worker (default) or --role voter
+maestro server provision              create or join the cluster from the config
+maestro server init                   create a single-node cluster on this node
+maestro join --config <src>           join through cluster.voters as --role voter|worker
 maestro agent | maestro telemetry     long-running units (systemd)
 maestro nodes ls|drain|remove
 maestro services ls|rollout [--apply]|redeploy|cancel
@@ -396,7 +396,10 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - Security model (review, 2026-10-14):
   - Node-to-node calls are authorized by the caller's certificate (node id and role);
     only voters may write, upload, exec, run maintenance, or read logs.
-  - Join tokens are signed grants for one role with an expiry (default 5 minutes).
+  - Join grants are signed with the join secret for one role and expire in 5 minutes;
+    a voter proves it knows the secret (HMAC over the CA fingerprint) before a joining
+    node trusts its CA. Anyone with the shared config can join a node, so it is
+    protected like the encryption key.
   - The admin UI is trusted for anyone on the tailnet; it is bound to loopback so
     workloads can't reach it, and rejects rebound hosts and cross-site writes.
     Creating or updating services still needs an API token, since a service config
@@ -495,7 +498,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 
 ### Phase 3: multi-node
 
-- [x] Raft over gRPC (mTLS), join tokens, voter add (learner then promote), leader redirect
+- [x] Raft over gRPC (mTLS), join grants, voter add (learner then promote), leader redirect
 - [ ] Voter removal and end-to-end 3-voter join test on VMs
 - [x] Agent stream protocol (Attach), hub-aggregated observed state, node expiry and leader startup grace
 - [x] Reschedule replicas from lost nodes; Traefik retries, dial timeouts, and active health checks
