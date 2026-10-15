@@ -89,7 +89,7 @@ pub enum NodeCommand {
 #[derive(Subcommand)]
 pub enum ClusterCommand {
     Upgrade {
-        version: String,
+        version: Option<String>,
     },
     Restart {
         #[arg(long)]

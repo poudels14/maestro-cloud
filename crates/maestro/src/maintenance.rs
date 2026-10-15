@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::node_service::{ForwardingWriter, NodeClients, NodeRequest};
 
+const LATEST: &str = "latest";
 const DRAIN_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 const UPGRADE_TIMEOUT_MS: u64 = 6 * 60 * 60 * 1000;
 const RESTART_TIMEOUT_MS: u64 = 5 * 60 * 1000;
@@ -60,7 +61,8 @@ pub type ClusterOrchestrator = Orchestrator<ForwardingWriter, ClusterNodes>;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeRequest {
-    target_version: String,
+    #[serde(default)]
+    target_version: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -133,7 +135,9 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
             .iter()
             .cloned()
             .filter(|(_, version)| match kind {
-                MaintenanceKind::Upgrade => version.as_deref() != Some(target_version.as_str()),
+                MaintenanceKind::Upgrade => {
+                    target_version == LATEST || version.as_deref() != Some(target_version.as_str())
+                }
                 MaintenanceKind::Restart => true,
             })
             .collect::<Vec<_>>();
@@ -327,11 +331,11 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
                         now.saturating_sub(info["uptimeMs"].as_u64().unwrap_or(u64::MAX));
                     started_at > requested_at
                 });
-                let done = match run.kind {
-                    MaintenanceKind::Upgrade => info.as_ref().is_some_and(|info| {
-                        info["version"].as_str() == Some(run.target_version.as_str())
-                    }),
-                    MaintenanceKind::Restart => restarted,
+                let done = match (run.kind, run.target_version.as_str()) {
+                    (MaintenanceKind::Upgrade, LATEST) | (MaintenanceKind::Restart, _) => restarted,
+                    (MaintenanceKind::Upgrade, target) => info
+                        .as_ref()
+                        .is_some_and(|info| info["version"].as_str() == Some(target)),
                 } && self.nodes.attached(node.id);
                 let timeout = match run.kind {
                     MaintenanceKind::Upgrade => UPGRADE_TIMEOUT_MS,
@@ -489,8 +493,10 @@ pub async fn upgrade(
 ) -> Response {
     let target_version = request
         .target_version
-        .trim()
-        .trim_start_matches('v')
+        .as_deref()
+        .map(|version| version.trim().trim_start_matches('v'))
+        .filter(|version| !version.is_empty())
+        .unwrap_or(LATEST)
         .to_string();
     respond(
         orchestrator
@@ -509,11 +515,7 @@ pub async fn restart(
     };
     respond(
         orchestrator
-            .start(
-                MaintenanceKind::Restart,
-                env!("CARGO_PKG_VERSION").to_string(),
-                target,
-            )
+            .start(MaintenanceKind::Restart, crate::VERSION.to_string(), target)
             .await,
     )
 }
@@ -751,6 +753,23 @@ mod tests {
                 .iter()
                 .all(|node| node.state == NodeState::Active)
         );
+    }
+
+    #[tokio::test]
+    async fn upgrading_to_the_latest_release_reboots_every_node() {
+        let nodes = [
+            node(1, NodeRole::Voter),
+            node(2, NodeRole::Voter),
+            node(3, NodeRole::Voter),
+        ];
+        let (orchestrator, _directory) = orchestrator(&nodes, FakeNodes::default());
+        orchestrator
+            .start(MaintenanceKind::Upgrade, LATEST.to_string(), Target::All)
+            .await
+            .unwrap();
+        let run = finish(&orchestrator).await;
+        assert_eq!(run.phase, MaintenancePhase::Succeeded);
+        assert_eq!(orchestrator.nodes.requested.lock().unwrap().len(), 3);
     }
 
     #[tokio::test]

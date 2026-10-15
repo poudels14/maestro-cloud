@@ -33,6 +33,7 @@
           pname = "maestro";
           version = maestroVersion;
           src = ./.;
+          MAESTRO_BUILD_VERSION = "${maestroVersion}+${self.shortRev or self.dirtyShortRev or "dev"}";
 
           cargoLock = {
             lockFile = ./Cargo.lock;
@@ -357,6 +358,8 @@
             pkgs.openssh
             pkgs.systemd
             pkgs.coreutils
+            config.nix.package
+            config.system.build.nixos-rebuild
           ] ++ cfg.registry.credentialHelpers;
           environment =
             {

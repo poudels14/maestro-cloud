@@ -576,7 +576,7 @@ async fn cluster_info(State(info): State<Arc<InfoState>>) -> Json<ClusterInfo> {
     Json(ClusterInfo {
         name: info.cluster.name.clone(),
         cidr: info.cluster.cidr.clone(),
-        version: env!("CARGO_PKG_VERSION"),
+        version: crate::VERSION,
         node_id: metrics.node_id,
         term: metrics.term,
         leader: info
@@ -795,7 +795,7 @@ async fn run_admin(
             std::future::pending::<anyhow::Result<()>>().await
         }
         Some(source) => {
-            let version = env!("CARGO_PKG_VERSION");
+            let version = crate::VERSION.replace('+', "-");
             let image = format!("maestro.local/maestro-admin:{version}");
             while runtime.pull(&image).await.is_err() {
                 tracing::info!(%image, "building the admin UI image");

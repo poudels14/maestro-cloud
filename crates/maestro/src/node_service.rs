@@ -267,7 +267,7 @@ impl NodeService {
                     .filter(|(status, _)| status.is_success())
                     .and_then(|(_, body)| serde_json::from_slice::<Value>(&body).ok());
                 Ok(json!({
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": crate::VERSION,
                     "uptimeMs": self.started.elapsed().as_millis() as u64,
                     "maintenance": node_maintenance::progress(&self.node_dir),
                     "telemetry": stats.is_some(),

@@ -196,6 +196,7 @@ maestro telemetry                        run the telemetry process (systemd unit
 maestro token create [--config SRC]      print an API token signed with jwtSecretKey (max 24h)
 maestro context set|use|ls|remove        manage API endpoints and tokens
 maestro context login [--ttl 24h]        sign a token with $JWT_SECRET_KEY and save it to the active context
+maestro cluster upgrade [VERSION]        rolling upgrade of every node, without logging in to them
 maestro rollout [-f file] [--apply]
 maestro services | replicas | nodes
 maestro deploy <service>
@@ -343,8 +344,19 @@ in its own network namespace and serves only the panel, so nothing else on the n
 reachable from the tailnet. An SSH or SSM tunnel to port 7490 also works. Anyone who can reach it can operate the cluster, except
 that creating or updating services (`PUT /api/services/…`, rollout, `services up`)
 needs an API token, because a service config can read any secret the nodes can. Other
-host names must be listed in the admin container's `MAESTRO_ADMIN_HOSTS`. Upgrade by
-updating the flake input and running `nixos-rebuild switch`.
+host names must be listed in the admin container's `MAESTRO_ADMIN_HOSTS`.
+
+Upgrade the whole cluster from the CLI; no node access is needed:
+
+```bash
+maestro cluster upgrade            # every node to the latest commit of its flake input
+maestro cluster upgrade 3.1.0+abc1234   # or until every node reports this version
+```
+
+Nodes go one at a time (workers, then follower voters, then the leader). Each is
+drained, runs `nix flake update` and `nixos-rebuild boot` on `/etc/maestro`, reboots,
+and must rejoin before the next one starts; deploys are frozen until the run finishes.
+Node versions read `<version>+<git commit>`.
 
 API tokens last 1 hour by default and at most 24 hours. Use one with the CLI over the
 tailnet, or through an SSH tunnel to the localhost API:

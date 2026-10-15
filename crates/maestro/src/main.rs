@@ -147,6 +147,11 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+const VERSION: &str = match option_env!("MAESTRO_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 async fn run_cli() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
