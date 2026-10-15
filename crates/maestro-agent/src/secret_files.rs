@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use maestro_core::ReplicaId;
 
 const FILE_EXTENSION: &str = "env";
+const DIRECTORY_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o444;
 
 pub fn write(
     directory: &Path,
@@ -14,14 +16,14 @@ pub fn write(
 ) -> std::io::Result<PathBuf> {
     std::fs::DirBuilder::new()
         .recursive(true)
-        .mode(0o700)
+        .mode(DIRECTORY_MODE)
         .create(directory)?;
     let path = file_path(directory, replica_id);
     remove(&path);
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(FILE_MODE)
         .open(&path)?;
     file.write_all(render(items).as_bytes())?;
     Ok(path)
@@ -81,7 +83,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_quoted_lines_with_private_permissions() {
+    fn writes_quoted_lines_readable_by_any_container_user_in_a_private_directory() {
         let directory = tempfile::tempdir().unwrap();
         let secrets = directory.path().join("secrets");
         let items = BTreeMap::from([
@@ -95,7 +97,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
+            0o444
         );
         assert_eq!(
             std::fs::metadata(&secrets).unwrap().permissions().mode() & 0o777,
