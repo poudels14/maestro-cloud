@@ -345,7 +345,7 @@ tailnet, or through an SSH tunnel to the localhost API:
 
 ```bash
 TOKEN=$(ssh node1 sudo maestro token create --config aws-secret://maestro/prod/config.json)
-maestro context set prod --api http://node1.<tailnet>.ts.net:7490 --token "$TOKEN"
+maestro context set prod --api https://maestro-prod-1.<tailnet>.ts.net --token "$TOKEN"
 maestro context use prod
 ```
 
