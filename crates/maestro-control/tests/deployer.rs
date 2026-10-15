@@ -296,22 +296,21 @@ async fn failed_builds_fail_the_deployment() {
 #[tokio::test]
 async fn limits_concurrent_builds() {
     let harness = harness(vec![node(1, 8, 32)]);
-    queue_spec(&harness, "d1", build_service(1)).await;
-    harness.clock.advance(1);
-    queue_spec(&harness, "d2", build_service(1)).await;
-    harness.clock.advance(1);
-    queue_spec(&harness, "d3", build_service(1)).await;
+    for index in 1..=6 {
+        queue_spec(&harness, &format!("d{index}"), build_service(1)).await;
+        harness.clock.advance(1);
+    }
 
     harness.deployer.tick().await.unwrap();
     settle().await;
-    assert_eq!(harness.builder.started(), ["d1", "d2"]);
-    assert_eq!(status(&harness, "d3"), DeploymentStatus::Queued);
+    assert_eq!(harness.builder.started(), ["d1", "d2", "d3", "d4", "d5"]);
+    assert_eq!(status(&harness, "d6"), DeploymentStatus::Queued);
 
     harness.builder.release(1);
     settle().await;
     harness.deployer.tick().await.unwrap();
     settle().await;
-    assert_eq!(harness.builder.started().len(), 3);
+    assert_eq!(harness.builder.started().len(), 6);
 }
 
 #[tokio::test]

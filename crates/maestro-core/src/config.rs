@@ -34,6 +34,7 @@ const REPLACED_V1_FIELDS: [(&str, &str); 6] = [
 ];
 
 const CONFIG_MASK: &str = "********";
+const DEFAULT_MAX_CONCURRENT_BUILDS: u32 = 5;
 const DEFAULT_VOLUME_ROOTS: [&str; 2] = ["/var/lib/maestro-volumes", "/data"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +74,12 @@ pub struct ClusterConfig {
     pub allow_exec: bool,
     #[serde(default = "default_volume_roots")]
     pub volume_roots: Vec<String>,
+    #[serde(
+        default,
+        alias = "max-concurrent-builds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_concurrent_builds: Option<u32>,
     #[serde(
         default,
         alias = "encryption-key",
@@ -267,6 +274,11 @@ impl ClusterConfig {
         required_key(self.encryption_key.as_deref(), "encryptionKey")
     }
 
+    pub fn max_concurrent_builds(&self) -> usize {
+        self.max_concurrent_builds
+            .unwrap_or(DEFAULT_MAX_CONCURRENT_BUILDS) as usize
+    }
+
     pub fn jwt_secret_key(&self) -> Result<&str, ConfigError> {
         required_key(self.jwt_secret_key.as_deref(), "jwtSecretKey")
     }
@@ -341,6 +353,8 @@ impl ClusterConfig {
                 .ports
                 .is_empty()
                 .then(|| "ingress needs at least one port".to_string()),
+            (self.max_concurrent_builds == Some(0))
+                .then(|| "maxConcurrentBuilds must be at least 1".to_string()),
             self.cloudflare.as_ref().and_then(|cloudflare| {
                 (!(1..=MAX_TUNNEL_REPLICAS).contains(&cloudflare.tunnel.replicas))
                     .then(|| format!("cloudflare.tunnel.replicas must be 1..={MAX_TUNNEL_REPLICAS}"))
@@ -716,6 +730,16 @@ mod tests {
         let written = serde_json::to_string(&config.cluster).unwrap();
         assert!(!written.contains("join"));
         assert!(written.contains("10.1.0.12:7400"));
+    }
+
+    #[test]
+    fn configures_concurrent_builds() {
+        assert_eq!(ClusterConfig::default().max_concurrent_builds(), 5);
+        let config = ClusterConfig::parse(r#"{ "maxConcurrentBuilds": 12 }"#).unwrap();
+        assert_eq!(config.max_concurrent_builds(), 12);
+        let kebab = ClusterConfig::parse(r#"{ "max-concurrent-builds": 2 }"#).unwrap();
+        assert_eq!(kebab.max_concurrent_builds(), 2);
+        assert!(ClusterConfig::parse(r#"{ "maxConcurrentBuilds": 0 }"#).is_err());
     }
 
     #[test]

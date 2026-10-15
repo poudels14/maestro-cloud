@@ -160,7 +160,7 @@ maestro-system.slice     CPUWeight=1000, MemoryMin=<reserve>
                          agent, telemetry (own MemoryMax), traefik, containerd
 maestro-workloads.slice  CPUWeight=100, MemoryMax=total − reserve, MemoryHigh≈0.9×MemoryMax
                          every service container (cgroup parent)
-maestro-builds.slice     CPUWeight=50, MemoryMax=<build cap>, 1–2 concurrent builds
+maestro-builds.slice     CPUWeight=50, MemoryMax=<build cap>, up to 5 concurrent builds
 ```
 
 - Per-container defaults (limits, overridable per service):

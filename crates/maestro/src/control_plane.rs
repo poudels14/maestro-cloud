@@ -198,6 +198,7 @@ pub async fn spawn(
         }),
         DeployerSettings {
             defaults: settings.config.defaults.resources.clone(),
+            max_concurrent_builds: settings.config.max_concurrent_builds(),
             ..DeployerSettings::default()
         },
     );

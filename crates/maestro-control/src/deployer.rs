@@ -802,7 +802,7 @@ impl Default for DeployerSettings {
             deploy_timeout: Duration::from_secs(600),
             drain_grace: Duration::from_secs(5),
             history_limit: 20,
-            max_concurrent_builds: 2,
+            max_concurrent_builds: 5,
             clock: Arc::new(unix_millis),
         }
     }
