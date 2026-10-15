@@ -5,6 +5,8 @@ use maestro_core::{ClusterSettings, NodeId, NodeRole};
 use serde::{Deserialize, Serialize};
 
 const IDENTITY_FILE: &str = "node.json";
+const NODE_ID_SHIFT: u32 = 25;
+const NODE_ID_TOP_BIT: u64 = 1 << 39;
 const DEFAULT_SUBNET: &str = "10.200.1.0/24";
 const DEFAULT_ADVERTISE: &str = "127.0.0.1:7400";
 
@@ -35,9 +37,10 @@ impl NodeIdentity {
             true => Self::load(data_dir),
             false => {
                 let subnet = first_node_subnet(&cluster.cidr)?;
+                let id = random_node_id();
                 let identity = Self {
-                    id: random_node_id(),
-                    name: hostname(),
+                    id,
+                    name: id.short(),
                     role: NodeRole::Voter,
                     subnet,
                     advertise: advertise.to_string(),
@@ -83,15 +86,7 @@ impl NodeIdentity {
 }
 
 pub fn random_node_id() -> NodeId {
-    NodeId(rand::random::<u64>() >> 11)
-}
-
-pub fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "node".to_string())
+    NodeId((rand::random::<u64>() >> NODE_ID_SHIFT) | NODE_ID_TOP_BIT)
 }
 
 fn first_node_subnet(cluster_cidr: &str) -> anyhow::Result<String> {

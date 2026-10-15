@@ -19,14 +19,14 @@ use maestro_control::{
     run_publisher,
 };
 use maestro_core::{
-    ClusterConfig, ClusterSettings, Deployment, DeploymentId, MaintenanceRun, NodeId, NodeRole,
-    NodeState, ServiceId, ServiceSpec,
+    ClusterConfig, ClusterSettings, Deployment, DeploymentId, MaintenanceRun, NodeId, NodeRecord,
+    NodeRole, NodeState, ServiceId, ServiceSpec,
 };
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_runtime::{ContainerdRuntime, RegistryClient, Runtime};
-use maestro_store::{Consensus, ConsensusSettings, SecretKey};
+use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
 use maestro_telemetry::{BackupConfig, S3Archive};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
@@ -56,6 +56,7 @@ const DEPLOYER_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_INTERVAL: Duration = Duration::from_secs(30);
 const GITHUB_API: &str = "https://api.github.com";
 const ARCHIVE_CHUNK: usize = 1 << 20;
+const PLACEHOLDER_NODE_NAME: &str = "node";
 const MEMBERSHIP_INTERVAL: Duration = Duration::from_secs(5);
 const LEARNER_CATCH_UP: Duration = Duration::from_secs(120);
 const BUILDKIT_ADDRESS: &str = "unix:///run/buildkit/buildkitd.sock";
@@ -713,6 +714,21 @@ async fn run_membership(consensus: Arc<Consensus>) -> anyhow::Result<()> {
 }
 
 async fn converge_membership(consensus: &Consensus) -> anyhow::Result<()> {
+    let unnamed = consensus
+        .state()
+        .nodes()?
+        .into_iter()
+        .filter(|node| node.name.trim().is_empty() || node.name == PLACEHOLDER_NODE_NAME)
+        .map(|node| Mutation::PutNode {
+            node: NodeRecord {
+                name: node.id.short(),
+                ..node
+            },
+        })
+        .collect::<Vec<_>>();
+    if !unnamed.is_empty() {
+        consensus.write(unnamed).await?;
+    }
     let metrics = consensus.metrics();
     let pending = consensus
         .state()

@@ -21,7 +21,7 @@ use sha2::Sha256;
 use tonic::{Code, Status};
 
 use crate::cluster_service::{decode, encode};
-use crate::identity::{NodeIdentity, hostname, random_node_id};
+use crate::identity::{NodeIdentity, random_node_id};
 use crate::server::{self, InitArgs};
 
 const LEADER_MARKER: &str = "leader=";
@@ -133,7 +133,10 @@ impl JoinAuthority {
         }
         let record = NodeRecord {
             id: node_id,
-            name: request.name.clone(),
+            name: match request.name.trim().is_empty() {
+                true => node_id.short(),
+                false => request.name.clone(),
+            },
             role: request.role,
             endpoint: request.advertise.clone(),
             subnet: Some(subnet.clone()),
@@ -235,7 +238,7 @@ async fn join_until_admitted(
         .context("--advertise must be an IP:port the other nodes can reach")?;
     let mut request = JoinRequest {
         secret: String::new(),
-        name: args.name.clone().unwrap_or_else(hostname),
+        name: args.name.clone().unwrap_or_default(),
         role: args.role,
         advertise: advertise.to_string(),
         capacity,
@@ -350,7 +353,10 @@ fn persist(args: &JoinArgs, advertise: &str, response: JoinResponse) -> anyhow::
     }
     NodeIdentity {
         id: response.node_id,
-        name: args.name.clone().unwrap_or_else(hostname),
+        name: args
+            .name
+            .clone()
+            .unwrap_or_else(|| response.node_id.short()),
         role: args.role,
         subnet: response.subnet,
         advertise: advertise.to_string(),
