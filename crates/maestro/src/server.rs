@@ -290,6 +290,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         },
         board.clone(),
         reconciler.plans(),
+        attachment.node_addresses(),
     );
 
     let mut tasks = JoinSet::new();

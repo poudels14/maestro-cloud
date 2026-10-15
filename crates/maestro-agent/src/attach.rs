@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use maestro_core::{AgentMessage, ControlMessage, NodeId, ReplicaPlan};
@@ -38,6 +39,7 @@ pub struct Attachment<L: ControlLink> {
     initialized: watch::Sender<bool>,
     attached: watch::Sender<bool>,
     members: watch::Sender<Option<Vec<NodeId>>>,
+    node_addresses: watch::Sender<Vec<IpAddr>>,
     ingress: IngressWriter,
     dns: DnsRecords,
     mesh: Option<(WireGuardMesh, MeshConfig)>,
@@ -69,6 +71,7 @@ impl<L: ControlLink> Attachment<L> {
             initialized,
             attached: watch::channel(false).0,
             members: watch::channel(None).0,
+            node_addresses: watch::channel(Vec::new()).0,
             ingress,
             dns,
             mesh,
@@ -82,6 +85,10 @@ impl<L: ControlLink> Attachment<L> {
 
     pub fn attached(&self) -> watch::Receiver<bool> {
         self.attached.subscribe()
+    }
+
+    pub fn node_addresses(&self) -> watch::Receiver<Vec<IpAddr>> {
+        self.node_addresses.subscribe()
     }
 
     pub fn members(&self) -> watch::Receiver<Option<Vec<NodeId>>> {
@@ -181,6 +188,8 @@ impl<L: ControlLink> Attachment<L> {
                 if !members.is_empty() {
                     self.members.send_replace(Some(members));
                 }
+                self.node_addresses
+                    .send_replace(peers.iter().map(|peer| peer.endpoint.ip()).collect());
                 if let Some((mesh, template)) = &self.mesh {
                     let config = MeshConfig {
                         peers,

@@ -28,6 +28,7 @@ pub struct EgressFirewall<R: CommandRunner> {
     policy: EgressPolicy,
     board: StatusBoard,
     plans: watch::Receiver<Vec<ReplicaPlan>>,
+    node_addresses: watch::Receiver<Vec<IpAddr>>,
     applied: Option<String>,
 }
 
@@ -37,12 +38,14 @@ impl<R: CommandRunner> EgressFirewall<R> {
         policy: EgressPolicy,
         board: StatusBoard,
         plans: watch::Receiver<Vec<ReplicaPlan>>,
+        node_addresses: watch::Receiver<Vec<IpAddr>>,
     ) -> Self {
         Self {
             runner,
             policy,
             board,
             plans,
+            node_addresses,
             applied: None,
         }
     }
@@ -53,6 +56,7 @@ impl<R: CommandRunner> EgressFirewall<R> {
             tokio::select! {
                 _ = ticker.tick() => {}
                 _ = self.plans.changed() => {}
+                _ = self.node_addresses.changed() => {}
             }
             if let Err(error) = self.reconcile().await {
                 tracing::warn!(%error, "egress firewall reconcile failed");
@@ -73,7 +77,8 @@ impl<R: CommandRunner> EgressFirewall<R> {
             .into_iter()
             .filter_map(|status| Some((status.replica_id, status.ip?)))
             .collect::<BTreeMap<_, _>>();
-        let script = render(&self.policy, &rules, &replica_ips);
+        let node_addresses = self.node_addresses.borrow().clone();
+        let script = render(&self.policy, &rules, &replica_ips, &node_addresses);
         if self.applied.as_ref() != Some(&script) {
             let output = self
                 .runner
@@ -98,6 +103,7 @@ pub fn render(
     policy: &EgressPolicy,
     rules: &BTreeMap<ReplicaId, Vec<EgressRule>>,
     replica_ips: &BTreeMap<ReplicaId, IpAddr>,
+    node_addresses: &[IpAddr],
 ) -> String {
     let reset = format!("table inet {TABLE} {{}}\ndelete table inet {TABLE}\n");
     let subnet = &policy.local_subnet;
@@ -111,6 +117,14 @@ pub fn render(
         "ct state established,related accept".to_string(),
         format!("ip saddr {subnet} ip daddr {} accept", policy.cluster_cidr),
     ];
+    lines.extend(family_lines(
+        subnet,
+        &node_addresses
+            .iter()
+            .map(IpAddr::to_string)
+            .collect::<Vec<_>>(),
+        "reject",
+    ));
     lines.extend(family_lines(subnet, &policy.allow, "accept"));
     lines.push(format!(
         "ip saddr {subnet} ip daddr {LINK_LOCAL_CIDR} reject"
@@ -225,18 +239,41 @@ mod tests {
         let mut host = policy(&[]);
         host.workload_interfaces = vec!["maestro0".to_string(), "maestro-wg".to_string()];
         host.ingress_ports = vec![80, 443];
-        let script = render(&host, &BTreeMap::new(), &BTreeMap::new());
+        let script = render(&host, &BTreeMap::new(), &BTreeMap::new(), &[]);
         let input = &script[script.find("chain input").unwrap()..];
         assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } udp dport 53 accept"));
         assert!(input.contains("tcp dport { 80, 443 } accept"));
         assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } reject"));
         assert!(input.find("dport { 80, 443 }") < input.find("} reject"));
-        assert!(!render(&policy(&[]), &BTreeMap::new(), &BTreeMap::new()).contains("chain input"));
+        assert!(
+            !render(&policy(&[]), &BTreeMap::new(), &BTreeMap::new(), &[]).contains("chain input")
+        );
+    }
+
+    #[test]
+    fn keeps_workloads_off_other_nodes_even_when_their_range_is_allowed() {
+        let mut open = policy(&[]);
+        open.allow = vec!["10.1.0.0/16".to_string()];
+        let nodes = ["10.1.0.12".parse().unwrap(), "10.1.0.13".parse().unwrap()];
+        let script = render(&open, &BTreeMap::new(), &BTreeMap::new(), &nodes);
+        let lines = script.lines().map(str::trim).collect::<Vec<_>>();
+        let deny = lines
+            .iter()
+            .position(|line| {
+                *line == "ip saddr 10.200.1.0/24 ip daddr { 10.1.0.12, 10.1.0.13 } reject"
+            })
+            .unwrap_or_else(|| panic!("missing node deny:\n{script}"));
+        let allow = lines
+            .iter()
+            .position(|line| *line == "ip saddr 10.200.1.0/24 ip daddr { 10.1.0.0/16 } accept")
+            .unwrap();
+        assert!(deny < allow);
+        assert!(!render(&open, &BTreeMap::new(), &BTreeMap::new(), &[]).contains("10.1.0.12"));
     }
 
     #[test]
     fn blocks_cloud_metadata_even_without_a_deny_list() {
-        let script = render(&policy(&[]), &BTreeMap::new(), &BTreeMap::new());
+        let script = render(&policy(&[]), &BTreeMap::new(), &BTreeMap::new(), &[]);
         assert!(script.contains("ip saddr 10.200.1.0/24 ip daddr 169.254.0.0/16 reject"));
     }
 
@@ -251,7 +288,7 @@ mod tests {
             }],
         )]);
         let ips = BTreeMap::from([(replica, "10.200.1.7".parse().unwrap())]);
-        let script = render(&policy(&["10.0.0.0/8", "fd00::/8"]), &rules, &ips);
+        let script = render(&policy(&["10.0.0.0/8", "fd00::/8"]), &rules, &ips, &[]);
         let lines = script.lines().map(str::trim).collect::<Vec<_>>();
         let position = |needle: &str| {
             lines

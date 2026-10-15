@@ -409,7 +409,9 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
     can read any secret the nodes can. API tokens last 1 hour by default, 24 at most.
     Exec does not need a token: tailnet users may exec into services (when `allowExec`
     is on) even though that exposes the service's environment.
-  - Workloads can only reach their node's DNS and ingress ports, not other host ports.
+  - Workloads can only reach their node's DNS and ingress ports, not other host ports,
+    and cannot reach the other nodes' addresses at all (rejected ahead of any egress
+    allow rule, and kept current as nodes join and leave).
   - Containers run under Docker's default seccomp profile and can't reach cloud
     metadata (169.254.0.0/16) unless the cluster egress allow list opens it.
   - PR previews intentionally inherit the base service's secrets (as in v1).
