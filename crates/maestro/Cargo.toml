@@ -29,6 +29,7 @@ maestro-store = { version = "3.0.0", path = "../maestro-store" }
 maestro-telemetry = { version = "3.0.0", path = "../maestro-telemetry" }
 rand = "0.10.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
+rpassword = "7.5.4"
 serde = "1.0.229"
 serde_json = "1.0.154"
 sha2 = "0.11"

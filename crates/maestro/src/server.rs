@@ -22,6 +22,7 @@ use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
 use maestro_store::Mutation;
 use tokio::task::JoinSet;
 
+use crate::contexts;
 use crate::control_link::GrpcControlLink;
 use crate::control_plane::{self, ControlPlaneSettings};
 use crate::identity::NodeIdentity;
@@ -431,13 +432,16 @@ pub async fn proxy_logs(
     }
 }
 
-pub fn create_token(config: &str, subject: &str, ttl_secs: u64) -> anyhow::Result<()> {
+pub fn create_token(config: Option<&str>, subject: &str, ttl_secs: u64) -> anyhow::Result<()> {
     anyhow::ensure!(
         ttl_secs <= MAX_TOKEN_TTL.as_secs(),
         "API tokens can live at most 24h"
     );
-    let config = load_config(Some(config))?;
-    let auth = ApiAuth::new(config.jwt_secret_key()?.as_bytes());
+    let secret = match config {
+        Some(config) => load_config(Some(config))?.jwt_secret_key()?.to_string(),
+        None => contexts::jwt_secret()?,
+    };
+    let auth = ApiAuth::new(secret.as_bytes());
     println!("{}", auth.issue(subject, Duration::from_secs(ttl_secs)));
     Ok(())
 }

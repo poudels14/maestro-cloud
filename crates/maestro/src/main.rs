@@ -131,7 +131,7 @@ enum ServerCommand {
 enum TokenCommand {
     Create {
         #[arg(long)]
-        config: String,
+        config: Option<String>,
         #[arg(long, default_value = "cli")]
         subject: String,
         #[arg(long, value_parser = parse_ttl, default_value = "1h")]
@@ -164,7 +164,7 @@ async fn run_cli() -> anyhow::Result<()> {
             config,
             subject,
             ttl,
-        }) => server::create_token(&config, &subject, ttl),
+        }) => server::create_token(config.as_deref(), &subject, ttl),
         Command::Agent(args) => server::run_agent(args).await,
         Command::Telemetry {
             log_dir,

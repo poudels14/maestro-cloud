@@ -193,8 +193,9 @@ maestro server init                      create a single-node cluster on this no
 maestro join --config SRC --advertise IP:7400 [--role voter|worker]
 maestro agent                            run a node (systemd unit)
 maestro telemetry                        run the telemetry process (systemd unit)
-maestro token create --config SRC         mint an API token from jwtSecretKey (max 24h)
+maestro token create [--config SRC]      print an API token signed with jwtSecretKey (max 24h)
 maestro context set|use|ls               manage API endpoints and tokens
+maestro context login [--ttl 24h]        sign a token with $JWT_SECRET_KEY and save it to the active context
 maestro rollout [-f file] [--apply]
 maestro services | replicas | nodes
 maestro deploy <service>
@@ -319,11 +320,16 @@ defaults to the node's address on the route to `cluster.voters`.
 }
 ```
 
-Mint an API token on any voter, or sign one yourself with `jwtSecretKey`:
+With `JWT_SECRET_KEY` set to the cluster's `jwtSecretKey` (the CLI prompts for it
+otherwise), save a token to a context:
 
 ```bash
-sudo maestro token create --config aws-secret://maestro/prod/config.json --subject laptop
+maestro context set prod --api https://maestro-prod-1.<tailnet>.ts.net
+maestro context login        # valid for 24h; run it again when it expires
 ```
+
+`maestro token create` prints a token instead, signed with `JWT_SECRET_KEY` or with the
+key from `--config aws-secret://…`.
 
 The module configures containerd, BuildKit (in the builds slice), the three slices,
 the node and telemetry units, WireGuard, IP forwarding, and firewall rules

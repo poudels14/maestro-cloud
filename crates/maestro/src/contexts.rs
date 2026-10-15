@@ -1,14 +1,18 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use std::time::Duration;
+
 use anyhow::Context;
 use clap::Subcommand;
+use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
 use serde_json::{Value, json};
 
 use crate::client::Endpoint;
 
 const DEFAULT_API: &str = "http://127.0.0.1:3000";
 const CONTEXTS_FILE_ENV: &str = "MAESTRO_CONTEXTS_FILE";
+const JWT_SECRET_ENV: &str = "JWT_SECRET_KEY";
 
 #[derive(Subcommand)]
 pub enum ContextCommand {
@@ -23,6 +27,10 @@ pub enum ContextCommand {
         name: String,
     },
     Ls,
+    Login {
+        #[arg(long, value_parser = crate::parse_ttl, default_value = "24h")]
+        ttl: u64,
+    },
 }
 
 struct ContextFile {
@@ -52,8 +60,38 @@ pub fn run(command: ContextCommand) -> anyhow::Result<()> {
             };
             println!("{marker} {name:<20} {api}");
         }),
+        ContextCommand::Login { ttl } => {
+            let name = file
+                .current
+                .clone()
+                .context("no active context; run `maestro context set` first")?;
+            let secret = jwt_secret()?;
+            let lifetime = Duration::from_secs(ttl).min(MAX_TOKEN_TTL);
+            let token =
+                ApiAuth::new(secret.as_bytes()).issue(&format!("maestro-cli/{name}"), lifetime);
+            if let Some((_, saved)) = file.contexts.get_mut(&name) {
+                *saved = Some(token);
+            }
+            file.save()?;
+            println!(
+                "saved a token to context {name} (expires in {}h)",
+                lifetime.as_secs() / 3600
+            );
+        }
     }
     Ok(())
+}
+
+pub fn jwt_secret() -> anyhow::Result<String> {
+    match std::env::var(JWT_SECRET_ENV) {
+        Ok(secret) => Ok(secret),
+        Err(std::env::VarError::NotPresent) => {
+            Ok(rpassword::prompt_password(format!("{JWT_SECRET_ENV}: "))?)
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("{JWT_SECRET_ENV} is not valid UTF-8")
+        }
+    }
 }
 
 pub fn save(name: &str, api: &str, token: Option<String>) -> anyhow::Result<()> {
