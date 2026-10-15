@@ -6,12 +6,13 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Args;
 use maestro_agent::{
-    Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
-    HostCommandRunner, IngressWriter, MeshConfig, PeerClusters, Reconciler, ReconcilerSettings,
-    StatusBoard, SystemSupervisor, TailscaleNode, TunnelConnectors, WIREGUARD_INTERFACE,
-    WIREGUARD_PORT, WireGuardMesh, apply_workload_slice_limits, detect_capacity,
-    discover_peer_clusters, load_or_generate_key, publish_replica_manifest, reset_stale_bridge,
-    serve_denied, system_reserve, tailscale_container, traefik_container, upstream_resolvers,
+    ADMIN_PORT, Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
+    HostCommandRunner, IngressWriter, MeshConfig, PANEL_SOCKET_FILE, PeerClusters, Reconciler,
+    ReconcilerSettings, StatusBoard, SystemSupervisor, TailscaleNode, TunnelConnectors,
+    WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh, apply_workload_slice_limits,
+    detect_capacity, discover_peer_clusters, load_or_generate_key, publish_replica_manifest,
+    reset_stale_bridge, serve_denied, system_reserve, tailscale_container, traefik_container,
+    upstream_resolvers, write_panel_serve_config,
 };
 use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
 use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
@@ -192,6 +193,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             .iter()
             .position(|voter| grpc_address(voter) == identity.advertise)
             .map_or_else(|| identity.id.to_string(), |index| (index + 1).to_string()),
+        serve_panel: identity.role == NodeRole::Voter,
         routes: std::iter::once(identity.subnet.clone())
             .chain(tailscale.advertise_routes.iter().cloned())
             .collect(),
@@ -201,6 +203,9 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     if let Some(node) = &tailscale {
         std::fs::create_dir_all(&node.state_dir)?;
         std::fs::create_dir_all(&node.socket_dir)?;
+        if node.serve_panel {
+            write_panel_serve_config(&node.socket_dir)?;
+        }
     }
     let system = SystemSupervisor::new(
         runtime.clone(),
@@ -317,6 +322,10 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         dns.run(SocketAddr::new(gateway, DNS_PORT)).await;
         Ok(())
     });
+    if let Some(node) = tailscale.as_ref().filter(|node| node.serve_panel) {
+        let socket = node.socket_dir.join(PANEL_SOCKET_FILE);
+        tasks.spawn(async move { forward_panel(socket).await });
+    }
     if let Some(tailnet_dns) = tailnet_dns {
         tasks.spawn(async move {
             tailnet_dns
@@ -551,5 +560,24 @@ fn host_resolv_conf() -> PathBuf {
     match resolved.exists() {
         true => resolved,
         false => PathBuf::from("/etc/resolv.conf"),
+    }
+}
+
+async fn forward_panel(socket: PathBuf) -> anyhow::Result<()> {
+    if socket.exists() {
+        std::fs::remove_file(&socket)?;
+    }
+    let listener = tokio::net::UnixListener::bind(&socket)
+        .with_context(|| format!("failed to bind {}", socket.display()))?;
+    loop {
+        let (mut client, _) = listener.accept().await?;
+        tokio::spawn(async move {
+            match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, ADMIN_PORT)).await {
+                Ok(mut panel) => {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut panel).await;
+                }
+                Err(error) => tracing::debug!(%error, "admin UI is not reachable"),
+            }
+        });
     }
 }

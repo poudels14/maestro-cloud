@@ -328,12 +328,13 @@ sudo maestro token create --config aws-secret://maestro/prod/config.json --subje
 The module configures containerd, BuildKit (in the builds slice), the three slices,
 the node and telemetry units, WireGuard, IP forwarding, and firewall rules
 (`openFirewall`, `ingressPorts`). The admin UI is built from the source tree once per
-version and runs on voters. It listens on the node's loopback at port 7490, so it is
-reachable over Tailscale at a fixed name per voter,
-`http://maestro-<cluster>-<n>.<tailnet>.ts.net:7490` where `<n>` is the voter's position
-in `cluster.voters` (use an ephemeral, reusable auth key so a rebuilt node takes its
-old name back), or through an SSH or SSM tunnel to port 7490, but
-not from workload containers. Anyone who can reach it can operate the cluster, except
+version and runs on voters. It listens on the node's loopback at port 7490, where
+workload containers can't reach it, and is published on the tailnet at a fixed name
+per voter: `https://maestro-<cluster>-<n>.<tailnet>.ts.net`, where `<n>` is the voter's
+position in `cluster.voters`. Enable HTTPS certificates for the tailnet, and use an
+ephemeral, reusable auth key so a rebuilt node takes its old name back. Tailscale runs
+in its own network namespace and serves only the panel, so nothing else on the node is
+reachable from the tailnet. An SSH or SSM tunnel to port 7490 also works. Anyone who can reach it can operate the cluster, except
 that creating or updating services (`PUT /api/services/…`, rollout, `services up`)
 needs an API token, because a service config can read any secret the nodes can. Other
 host names must be listed in the admin container's `MAESTRO_ADMIN_HOSTS`. Upgrade by

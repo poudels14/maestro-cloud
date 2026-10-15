@@ -16,6 +16,8 @@ const HOSTNAME_PREFIX: &str = "maestro-";
 const STATE_MOUNT: &str = "/var/lib/tailscale";
 const SOCKET_MOUNT: &str = "/var/run/tailscale";
 const SOCKET_FILE: &str = "tailscaled.sock";
+const SERVE_CONFIG_FILE: &str = "serve.json";
+pub const PANEL_SOCKET_FILE: &str = "panel.sock";
 const STATUS_PATH: &str = "/localapi/v0/status";
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(15);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,6 +30,7 @@ pub struct TailscaleNode {
     pub auth_key: String,
     pub cluster: String,
     pub name_suffix: String,
+    pub serve_panel: bool,
     pub routes: Vec<String>,
     pub state_dir: PathBuf,
     pub socket_dir: PathBuf,
@@ -57,18 +60,24 @@ pub fn tailscale_container(node: &TailscaleNode) -> ContainerSpec {
         image: TAILSCALE_IMAGE.to_string(),
         entrypoint: None,
         args: None,
-        env: BTreeMap::from(
-            [
-                ("TS_AUTHKEY", node.auth_key.clone()),
-                ("TS_STATE_DIR", STATE_MOUNT.to_string()),
-                ("TS_SOCKET", format!("{SOCKET_MOUNT}/{SOCKET_FILE}")),
-                ("TS_HOSTNAME", hostname(&node.cluster, &node.name_suffix)),
-                ("TS_USERSPACE", "true".to_string()),
-                ("TS_ROUTES", node.routes.join(",")),
-                ("TS_EXTRA_ARGS", "--accept-dns=false".to_string()),
-            ]
-            .map(|(key, value)| (key.to_string(), value)),
-        ),
+        env: [
+            ("TS_AUTHKEY", node.auth_key.clone()),
+            ("TS_STATE_DIR", STATE_MOUNT.to_string()),
+            ("TS_SOCKET", format!("{SOCKET_MOUNT}/{SOCKET_FILE}")),
+            ("TS_HOSTNAME", hostname(&node.cluster, &node.name_suffix)),
+            ("TS_USERSPACE", "true".to_string()),
+            ("TS_ROUTES", node.routes.join(",")),
+            ("TS_EXTRA_ARGS", "--accept-dns=false".to_string()),
+        ]
+        .into_iter()
+        .chain(node.serve_panel.then(|| {
+            (
+                "TS_SERVE_CONFIG",
+                format!("{SOCKET_MOUNT}/{SERVE_CONFIG_FILE}"),
+            )
+        }))
+        .map(|(key, value)| (key.to_string(), value))
+        .collect(),
         labels: BTreeMap::from([(SYSTEM_LABEL.to_string(), "tailscale".to_string())]),
         limits: ContainerLimits {
             cpu: Millicores::new(1000),
@@ -89,8 +98,20 @@ pub fn tailscale_container(node: &TailscaleNode) -> ContainerSpec {
                 read_only: false,
             },
         ],
-        network: NetworkMode::Host,
+        network: NetworkMode::Bridge,
     }
+}
+
+pub fn write_panel_serve_config(socket_dir: &Path) -> std::io::Result<()> {
+    let config = serde_json::json!({
+        "TCP": { "443": { "HTTPS": true } },
+        "Web": {
+            "${TS_CERT_DOMAIN}:443": {
+                "Handlers": { "/": { "Proxy": format!("unix:{SOCKET_MOUNT}/{PANEL_SOCKET_FILE}") } }
+            }
+        }
+    });
+    std::fs::write(socket_dir.join(SERVE_CONFIG_FILE), config.to_string())
 }
 
 pub async fn discover_peer_clusters(socket_dir: PathBuf, cluster: String, peers: PeerClusters) {
@@ -191,25 +212,45 @@ mod tests {
                 ]
             )])
         );
-        assert_eq!(
-            peer_cluster("maestro-my-cluster-42"),
-            Some("my-cluster")
-        );
+        assert_eq!(peer_cluster("maestro-my-cluster-42"), Some("my-cluster"));
     }
 
-    #[test]
-    fn advertises_routes_in_userspace_mode() {
-        let spec = tailscale_container(&TailscaleNode {
+    fn node(serve_panel: bool) -> TailscaleNode {
+        TailscaleNode {
             auth_key: "tskey".to_string(),
             cluster: "prod".to_string(),
             name_suffix: "42".to_string(),
+            serve_panel,
             routes: vec!["10.200.1.0/24".to_string(), "10.0.0.0/16".to_string()],
             state_dir: PathBuf::from("/var/lib/maestro/tailscale"),
             socket_dir: PathBuf::from("/run/maestro/tailscale"),
-        });
+        }
+    }
+
+    #[test]
+    fn runs_in_its_own_network_namespace_in_userspace_mode() {
+        let spec = tailscale_container(&node(false));
         assert_eq!(spec.env["TS_USERSPACE"], "true");
         assert_eq!(spec.env["TS_ROUTES"], "10.200.1.0/24,10.0.0.0/16");
         assert_eq!(spec.env["TS_HOSTNAME"], "maestro-prod-42");
-        assert_eq!(spec.network, NetworkMode::Host);
+        assert_eq!(spec.network, NetworkMode::Bridge);
+        assert!(!spec.env.contains_key("TS_SERVE_CONFIG"));
+    }
+
+    #[test]
+    fn serves_the_panel_over_https_through_a_unix_socket() {
+        let spec = tailscale_container(&node(true));
+        assert_eq!(spec.env["TS_SERVE_CONFIG"], "/var/run/tailscale/serve.json");
+        let directory = tempfile::tempdir().unwrap();
+        write_panel_serve_config(directory.path()).unwrap();
+        let config: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join(SERVE_CONFIG_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(config["TCP"]["443"]["HTTPS"], true);
+        assert_eq!(
+            config["Web"]["${TS_CERT_DOMAIN}:443"]["Handlers"]["/"]["Proxy"],
+            "unix:/var/run/tailscale/panel.sock"
+        );
     }
 }

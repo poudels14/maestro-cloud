@@ -402,6 +402,9 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
     protected like the encryption key.
   - The admin UI is trusted for anyone on the tailnet; it is bound to loopback so
     workloads can't reach it, and rejects rebound hosts and cross-site writes.
+    Tailscale runs in its own network namespace (userspace mode forwards inbound
+    tailnet traffic to localhost, which would otherwise expose every loopback
+    service) and publishes only the panel, over HTTPS via a unix socket on voters.
     Creating or updating services still needs an API token, since a service config
     can read any secret the nodes can. API tokens last 1 hour by default, 24 at most.
     Exec does not need a token: tailnet users may exec into services (when `allowExec`

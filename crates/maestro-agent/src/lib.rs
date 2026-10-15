@@ -32,9 +32,12 @@ pub use reconciler::{ImageFetcher, Reconciler, ReconcilerSettings};
 pub use replica_manifest::{LocalReplica, publish_replica_manifest};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
-pub use system::{ADMIN_CONTAINER_ID, SystemSupervisor, admin_container, traefik_container};
+pub use system::{
+    ADMIN_CONTAINER_ID, ADMIN_PORT, SystemSupervisor, admin_container, traefik_container,
+};
 pub use tailscale::{
-    TAILSCALE_CONTAINER_ID, TailscaleNode, discover_peer_clusters, tailscale_container,
+    PANEL_SOCKET_FILE, TAILSCALE_CONTAINER_ID, TailscaleNode, discover_peer_clusters,
+    tailscale_container, write_panel_serve_config,
 };
 pub use wireguard::{
     CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,
