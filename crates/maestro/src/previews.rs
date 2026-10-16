@@ -249,7 +249,7 @@ impl<W: StoreWriter> PreviewWatcher<W> {
                 Ok(())
             }
             Some(id) => {
-                let spec = self.derive(&candidate.base.spec, &id)?;
+                let spec = self.derive(&candidate.base.spec, &id, &candidate.pull.head.branch)?;
                 let github_deployment_id = self
                     .github
                     .create_deployment(
@@ -306,7 +306,14 @@ impl<W: StoreWriter> PreviewWatcher<W> {
             .service_controls(id)
             .map_err(|error| error.to_string())?;
         let moved = pull.head.sha != source.head_sha;
-        let rebuild = moved && !base.frozen;
+        let wrong_branch = self
+            .writer
+            .state()
+            .service(id)
+            .map_err(|error| error.to_string())?
+            .and_then(|spec| spec.build)
+            .is_some_and(|build| build.branch.as_deref() != Some(pull.head.branch.as_str()));
+        let rebuild = (moved || wrong_branch) && !base.frozen;
         let mut updated = PreviewSource {
             head_ref: pull.head.branch.clone(),
             head_sha: pull.head.sha.clone(),
@@ -325,7 +332,7 @@ impl<W: StoreWriter> PreviewWatcher<W> {
             });
         }
         if rebuild {
-            let spec = self.derive(&base.spec, id)?;
+            let spec = self.derive(&base.spec, id, &pull.head.branch)?;
             updated.github_deployment_id = self
                 .github
                 .create_deployment(&base.repo, &pull.head.sha, &environment(id))
@@ -548,7 +555,12 @@ impl<W: StoreWriter> PreviewWatcher<W> {
         }
     }
 
-    fn derive(&self, base: &ServiceSpec, id: &ServiceId) -> Result<ServiceSpec, String> {
+    fn derive(
+        &self,
+        base: &ServiceSpec,
+        id: &ServiceId,
+        branch: &str,
+    ) -> Result<ServiceSpec, String> {
         let opened = self
             .key
             .open_spec(base)
@@ -562,6 +574,7 @@ impl<W: StoreWriter> PreviewWatcher<W> {
         spec.preview = None;
         if let Some(build) = spec.build.as_mut() {
             build.watch = false;
+            build.branch = Some(branch.to_string());
         }
         spec.deploy.replicas = preview.replicas;
         spec.deploy.volumes.clear();
@@ -889,6 +902,7 @@ mod tests {
             Some("api-pr-7.preview.example.com")
         );
         assert!(spec.preview.is_none());
+        assert_eq!(spec.build.unwrap().branch.as_deref(), Some("feature-7"));
         let deployments = watcher
             .writer
             .state()
@@ -971,6 +985,32 @@ mod tests {
         assert_eq!(
             github.lock().unwrap().statuses.last().unwrap().1,
             "inactive"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebuilds_previews_built_from_the_wrong_branch_once() {
+        let (mut watcher, github, _directory) = harness(None).await;
+        github.lock().unwrap().pulls = vec![pull(2, "hhhhhhhhh1", false, "acme/api")];
+        watcher.poll().await.unwrap();
+        let id = ServiceId::from("api-pr-2");
+        let mut spec = watcher.writer.state().service(&id).unwrap().unwrap();
+        spec.build.as_mut().unwrap().branch = Some("main".to_string());
+        watcher
+            .writer
+            .state()
+            .apply(&[Mutation::PutService {
+                id: id.clone(),
+                spec,
+            }])
+            .unwrap();
+        watcher.poll().await.unwrap();
+        watcher.poll().await.unwrap();
+        let state = watcher.writer.state();
+        assert_eq!(state.deployments(&id).unwrap().len(), 2);
+        assert_eq!(
+            state.service(&id).unwrap().unwrap().build.unwrap().branch.as_deref(),
+            Some("feature-2")
         );
     }
 
