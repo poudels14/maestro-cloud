@@ -187,6 +187,7 @@ async fn exec_in_container() {
                 "echo out; echo err >&2; exit 3".to_string(),
             ],
             tty: false,
+            term: None,
             size: None,
         })
         .await
@@ -211,12 +212,13 @@ async fn exec_in_container() {
             container_id: "exec-1".to_string(),
             argv: vec!["sh".to_string()],
             tty: true,
+            term: Some("xterm-256color".to_string()),
             size: Some((120, 40)),
         })
         .await
         .unwrap();
     let stdin = session.stdin.as_mut().unwrap();
-    tokio::io::AsyncWriteExt::write_all(stdin, b"stty size; exit 5\n")
+    tokio::io::AsyncWriteExt::write_all(stdin, b"stty size; echo term=$TERM; exit 5\n")
         .await
         .unwrap();
     let exit = tokio::time::timeout(EVENT_TIMEOUT, &mut session.exit)
@@ -227,6 +229,7 @@ async fn exec_in_container() {
     let output = drain(&mut session.output).await;
     assert_eq!(exit, 5);
     assert!(output.contains("40 120"), "{output:?}");
+    assert!(output.contains("term=xterm-256color"), "{output:?}");
     runtime
         .remove_exec(&session.container_id, &session.exec_id)
         .await;

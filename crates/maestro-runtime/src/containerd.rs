@@ -780,6 +780,9 @@ impl ContainerdRuntime {
         let mut process = spec["process"].clone();
         process["args"] = serde_json::json!(request.argv);
         process["terminal"] = serde_json::json!(request.tty);
+        if let Some(term) = request.term.as_ref().filter(|_| request.tty) {
+            process["env"] = serde_json::json!(with_term(&process["env"], term));
+        }
         Ok(Any {
             type_url: PROCESS_TYPE_URL.to_string(),
             value: serde_json::to_vec(&process)?,
@@ -1162,6 +1165,17 @@ fn image_error(image: &str, reason: &str) -> RuntimeError {
     }
 }
 
+fn with_term(env: &serde_json::Value, term: &str) -> Vec<String> {
+    env.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.as_str())
+        .filter(|entry| !entry.starts_with("TERM="))
+        .map(str::to_string)
+        .chain([format!("TERM={term}")])
+        .collect()
+}
+
 fn ignore_not_found<T: Default>(result: Result<T, Status>) -> Result<T, RuntimeError> {
     match result {
         Err(status) if status.code() == Code::NotFound => Ok(T::default()),
@@ -1237,5 +1251,15 @@ mod tests {
             "registry.local:5000/team/api"
         );
         assert_eq!(image_repository("localhost:5000/api"), "localhost:5000/api");
+    }
+
+    #[test]
+    fn exec_term_replaces_the_image_term() {
+        let env = serde_json::json!(["PATH=/bin", "TERM=dumb"]);
+        assert_eq!(
+            with_term(&env, "xterm-256color"),
+            ["PATH=/bin", "TERM=xterm-256color"]
+        );
+        assert_eq!(with_term(&serde_json::Value::Null, "xterm"), ["TERM=xterm"]);
     }
 }

@@ -28,6 +28,7 @@ pub struct ExecRequest {
     pub container_id: String,
     pub argv: Vec<String>,
     pub tty: bool,
+    pub term: Option<String>,
     pub size: Option<(u16, u16)>,
 }
 

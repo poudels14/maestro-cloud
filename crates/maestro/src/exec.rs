@@ -30,6 +30,7 @@ const ERROR: u8 = 4;
 const PING: u8 = 5;
 const START: u8 = 6;
 const MAX_SESSIONS: usize = 8;
+const DEFAULT_TERM: &str = "xterm-256color";
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const OUTPUT_DRAIN: Duration = Duration::from_millis(200);
 const MAX_ARGS: usize = 256;
@@ -55,6 +56,7 @@ pub struct ExecQuery {
     replica_index: Option<u32>,
     command: Option<String>,
     tty: Option<bool>,
+    term: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
 }
@@ -65,6 +67,8 @@ struct ExecStart {
     container_id: String,
     argv: Vec<String>,
     tty: bool,
+    #[serde(default)]
+    term: Option<String>,
     size: Option<(u16, u16)>,
     service: String,
     deployment: String,
@@ -123,6 +127,7 @@ pub async fn serve_node_exec(
             container_id: start.container_id.clone(),
             argv: start.argv.clone(),
             tty: start.tty,
+            term: start.term.clone(),
             size: start.size,
         })
         .await
@@ -232,6 +237,10 @@ pub async fn run_cli(
         .transpose()?
         .filter(|(cols, rows)| *cols > 0 && *rows > 0);
     let mut query = vec![("tty".to_string(), tty.to_string())];
+    query.extend(tty.then(|| {
+        let term = std::env::var("TERM").unwrap_or_else(|_| DEFAULT_TERM.to_string());
+        ("term".to_string(), term)
+    }));
     query.extend(replica.map(|index| ("replicaIndex".to_string(), index.to_string())));
     query.extend(deployment.map(|id| ("deploymentId".to_string(), id.to_string())));
     query
@@ -384,6 +393,7 @@ fn prepare(
                     container_id: replica.replica_id.to_string(),
                     argv,
                     tty: query.tty.unwrap_or(true),
+                    term: query.term.clone(),
                     size,
                     service: service_id.to_string(),
                     deployment: deployment.id.to_string(),
