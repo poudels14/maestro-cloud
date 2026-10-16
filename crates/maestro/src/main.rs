@@ -153,6 +153,7 @@ const VERSION: &str = match option_env!("MAESTRO_BUILD_VERSION") {
 };
 
 async fn run_cli() -> anyhow::Result<()> {
+    maestro_proto::install_crypto_provider();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
