@@ -120,14 +120,15 @@ impl GitHub {
         &self,
         repo: &str,
         pr: u64,
-        marker: &str,
+        markers: &[String],
         body: &str,
         known: Option<u64>,
     ) -> Result<u64, GitHubError> {
         let existing = match known {
             Some(id) => Some(id),
-            None => self.find_comment(repo, pr, marker).await?,
+            None => self.find_comment(repo, pr, markers).await?,
         };
+        let marker = &markers[0];
         let payload = json!({ "body": format!("{marker}\n{body}") });
         match existing {
             Some(id) => {
@@ -141,7 +142,7 @@ impl GitHub {
                 .await?;
                 match response.status() {
                     StatusCode::NOT_FOUND => {
-                        Box::pin(self.upsert_comment(repo, pr, marker, body, None)).await
+                        Box::pin(self.upsert_comment(repo, pr, markers, body, None)).await
                     }
                     _ => parse::<Created>(response).await.map(|created| created.id),
                 }
@@ -226,7 +227,7 @@ impl GitHub {
         &self,
         repo: &str,
         pr: u64,
-        marker: &str,
+        markers: &[String],
     ) -> Result<Option<u64>, GitHubError> {
         let mut page = 1;
         loop {
@@ -243,7 +244,7 @@ impl GitHub {
             .await?;
             let found = comments
                 .iter()
-                .find(|comment| comment.body.contains(marker))
+                .find(|comment| markers.iter().any(|marker| comment.body.contains(marker)))
                 .map(|comment| comment.id);
             match (found, comments.len() == PAGE_SIZE) {
                 (Some(id), _) => break Ok(Some(id)),

@@ -463,13 +463,9 @@ impl<W: StoreWriter> PreviewWatcher<W> {
                 .as_ref()
                 .and_then(|deployment| report_for(deployment.status));
             let label = report.map(|report| report_label(report).to_string());
-            if let (Some(base), Some(report), Some(deployment), true, None) = (
-                base,
-                report,
-                latest,
-                label != source.reported,
-                source.closed_at_ms,
-            ) {
+            if let (Some(base), Some(report), Some(deployment), true) =
+                (base, report, latest, label != source.reported)
+            {
                 let host = preview_host(&id, &self.settings.domain);
                 let url = format!("https://{host}");
                 let log_url = self.settings.homepage.as_ref().map(|homepage| {
@@ -478,16 +474,21 @@ impl<W: StoreWriter> PreviewWatcher<W> {
                         deployment.id
                     )
                 });
-                let body = comment_body(report, &source, &deployment, &url, log_url.as_deref());
-                let comment_id = self
-                    .comment(
-                        &base.repo,
-                        source.pr_number,
-                        &base.id,
-                        &body,
-                        source.comment_id,
-                    )
-                    .await;
+                let comment_id = match source.closed_at_ms {
+                    Some(_) => None,
+                    None => {
+                        let body =
+                            comment_body(report, &source, &deployment, &url, log_url.as_deref());
+                        self.comment(
+                            &base.repo,
+                            source.pr_number,
+                            &base.id,
+                            &body,
+                            source.comment_id,
+                        )
+                        .await
+                    }
+                };
                 if let Some(github_deployment) = source.github_deployment_id {
                     let (state, environment_url) = match report {
                         Report::Building | Report::Deploying => ("in_progress", None),
@@ -530,10 +531,13 @@ impl<W: StoreWriter> PreviewWatcher<W> {
         body: &str,
         known: Option<u64>,
     ) -> Option<u64> {
-        let marker = format!("<!-- maestro-preview:{base} -->");
+        let markers = [
+            format!("<!-- maestro-preview:{base} -->"),
+            format!("<!-- maestro-preview:preview-{base} -->"),
+        ];
         match self
             .github
-            .upsert_comment(repo, pr, &marker, body, known)
+            .upsert_comment(repo, pr, &markers, body, known)
             .await
         {
             Ok(id) => Some(id),
@@ -968,6 +972,56 @@ mod tests {
             github.lock().unwrap().statuses.last().unwrap().1,
             "inactive"
         );
+    }
+
+    #[tokio::test]
+    async fn takes_over_the_comment_left_by_maestro_v1() {
+        let (mut watcher, github, _directory) = harness(None).await;
+        github.lock().unwrap().comments = vec![(
+            1,
+            4,
+            "<!-- maestro-preview:preview-api -->\n### Maestro preview: updating".to_string(),
+        )];
+        github.lock().unwrap().pulls = vec![pull(4, "fffffffff1", false, "acme/api")];
+        watcher.poll().await.unwrap();
+        let github = github.lock().unwrap();
+        assert_eq!(github.comments.len(), 1);
+        assert!(
+            github.comments[0]
+                .2
+                .starts_with("<!-- maestro-preview:api -->\n### Maestro preview: building")
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_a_build_that_finishes_after_the_pr_closes() {
+        let (mut watcher, github, _directory) = harness(None).await;
+        github.lock().unwrap().pulls = vec![pull(6, "ggggggggg1", false, "acme/api")];
+        watcher.poll().await.unwrap();
+        github.lock().unwrap().pulls = Vec::new();
+        watcher.poll().await.unwrap();
+        let deployment = watcher
+            .writer
+            .state()
+            .deployments(&ServiceId::from("api-pr-6"))
+            .unwrap()
+            .remove(0);
+        watcher
+            .writer
+            .state()
+            .apply(&[Mutation::SetDeploymentStatus {
+                service_id: deployment.service_id.clone(),
+                deployment_id: deployment.id.clone(),
+                status: DeploymentStatus::Ready,
+                image: None,
+                failure: None,
+                at_ms: 1,
+            }])
+            .unwrap();
+        watcher.poll().await.unwrap();
+        let github = github.lock().unwrap();
+        assert_eq!(github.statuses.last().unwrap().1, "success");
+        assert!(github.comments[0].2.contains("removal scheduled"));
     }
 
     #[tokio::test]
