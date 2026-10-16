@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { test } from "vitest";
 import {
   closeExecProxy,
@@ -9,7 +11,7 @@ import {
   type ExecUpstream
 } from "./execProxy.ts";
 
-type Listener = (event: any) => void;
+type Listener = (event: any, ...rest: any[]) => void;
 
 class FakeUpstream implements ExecUpstream {
   static instance: FakeUpstream;
@@ -36,8 +38,19 @@ class FakeUpstream implements ExecUpstream {
     this.listeners.set(type, listeners);
   }
 
-  emit(type: string, event: any = {}) {
-    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  on(event: string, listener: (...args: any[]) => void) {
+    this.addEventListener(event, listener);
+  }
+
+  reject(statusCode: number, body: string) {
+    const response = Object.assign(new EventEmitter(), { statusCode });
+    this.emit("unexpected-response", {}, response as unknown as IncomingMessage);
+    response.emit("data", Buffer.from(body));
+    response.emit("end");
+  }
+
+  emit(type: string, event: any = {}, ...rest: any[]) {
+    for (const listener of this.listeners.get(type) ?? []) listener(event, ...rest);
   }
 
   send(data: string | ArrayBuffer | ArrayBufferView) {
@@ -106,4 +119,22 @@ test("exec relay turns reserved upstream close codes into a normal close", () =>
     [4001, "exec disabled"]
   ]);
   assert.deepEqual(FakeUpstream.instance.options.headers, {});
+});
+
+test("exec relay passes the control plane's rejection to the client", () => {
+  const context: ExecProxyContext = { url: "ws://controller/exec", pending: [] };
+  const closes: Array<[number | undefined, string | undefined]> = [];
+  const peer: ExecProxyPeer = {
+    context,
+    send: () => {},
+    close: (code, reason) => closes.push([code, reason])
+  };
+
+  openExecProxy(peer, FakeUpstream);
+  const upstream = FakeUpstream.instance;
+  upstream.reject(404, JSON.stringify({ error: "service nosuchservice not found" }));
+  upstream.emit("error");
+  upstream.emit("close", { code: 1006, reason: "" });
+  assert.deepEqual(closes, [[4404, "service nosuchservice not found"]]);
+  assert.equal(upstream.closed, true);
 });

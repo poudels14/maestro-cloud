@@ -514,6 +514,12 @@ async fn session(
                     }
                     _ => {}
                 },
+                Some(Ok(tungstenite::Message::Close(Some(frame))))
+                    if frame.code != tungstenite::protocol::frame::coding::CloseCode::Normal =>
+                {
+                    eprint!("\r\nexec: {}\r\n", frame.reason);
+                    return Ok(1);
+                }
                 Some(Ok(tungstenite::Message::Close(_))) | None => return Ok(0),
                 Some(Ok(_)) => {}
                 Some(Err(error)) => Err(error)?,

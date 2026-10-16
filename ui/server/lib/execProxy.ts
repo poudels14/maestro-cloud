@@ -1,7 +1,15 @@
+import type { ClientRequest, IncomingMessage } from "node:http";
+
+const MAX_CLOSE_REASON_LENGTH = 120;
+
 export type ExecUpstream = {
   binaryType: string;
   readyState: number;
   addEventListener(type: string, listener: (event: any) => void): void;
+  on(
+    event: "unexpected-response",
+    listener: (request: ClientRequest, response: IncomingMessage) => void
+  ): void;
   send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(): void;
 };
@@ -17,6 +25,7 @@ export interface ExecProxyContext {
   authorization?: string;
   upstream?: ExecUpstream;
   pending: Uint8Array[];
+  rejected?: boolean;
 }
 
 export interface ExecProxyPeer {
@@ -52,12 +61,34 @@ export function openExecProxy(peer: ExecProxyPeer, WebSocketClient: ExecUpstream
   upstream.addEventListener("message", (event) => {
     forwardUpstreamMessage(peer, event.data);
   });
+  upstream.on("unexpected-response", (_request, response) => {
+    const chunks: Buffer[] = [];
+    response.on("data", (chunk: Buffer) => chunks.push(chunk));
+    response.on("end", () => {
+      const status = response.statusCode ?? 500;
+      context.rejected = true;
+      peer.close(4000 + status, rejectionReason(status, Buffer.concat(chunks).toString()));
+      upstream.close();
+    });
+  });
   upstream.addEventListener("close", (event) => {
-    peer.close(sendableCloseCode(event.code), event.reason);
+    if (!context.rejected) {
+      peer.close(sendableCloseCode(event.code), event.reason);
+    }
   });
   upstream.addEventListener("error", () => {
-    peer.close(1011, "Maestro exec relay failed");
+    if (!context.rejected) {
+      peer.close(1011, "Maestro exec relay failed");
+    }
   });
+}
+
+function rejectionReason(status: number, body: string) {
+  let reason = `HTTP ${status}`;
+  try {
+    reason = JSON.parse(body).error || reason;
+  } catch {}
+  return reason.slice(0, MAX_CLOSE_REASON_LENGTH);
 }
 
 function sendableCloseCode(code: number | undefined) {
