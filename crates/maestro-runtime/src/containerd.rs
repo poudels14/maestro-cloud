@@ -697,10 +697,6 @@ impl ContainerdRuntime {
                 exec_id: exec_id.clone(),
             }))
             .await?;
-        if let Some((cols, rows)) = request.size {
-            self.resize_exec(&request.container_id, &exec_id, cols, rows)
-                .await?;
-        }
         Ok(ExecSession {
             container_id: request.container_id,
             exec_id,
@@ -780,6 +776,9 @@ impl ContainerdRuntime {
         let mut process = spec["process"].clone();
         process["args"] = serde_json::json!(request.argv);
         process["terminal"] = serde_json::json!(request.tty);
+        if let Some((cols, rows)) = request.size.filter(|_| request.tty) {
+            process["consoleSize"] = serde_json::json!({ "width": cols, "height": rows });
+        }
         if let Some(term) = request.term.as_ref().filter(|_| request.tty) {
             process["env"] = serde_json::json!(with_term(&process["env"], term));
         }
