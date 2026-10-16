@@ -18,15 +18,19 @@ import type {
   UnschedulableReplica
 } from "./types";
 
-type ServiceSummary = Pick<
-  Service,
-  "id" | "latestDeployment" | "deployFrozen" | "replicasOverride" | "previewSource"
-> & { spec: ServiceSpec };
-
-type ServiceDetail = {
-  deployments: Omit<Deployment, "replicas">[];
+type ReplicaPlacement = {
   replicas: Omit<ReplicaState, "index" | "nodeId">[];
   assignments: { replicaId: string; deploymentId: string; nodeId: number; index: number }[];
+};
+
+type ServiceSummary = Pick<Service, "id" | "deployFrozen" | "replicasOverride" | "previewSource"> &
+  ReplicaPlacement & {
+    spec: ServiceSpec;
+    latestDeployment?: Omit<Deployment, "replicas"> | null;
+  };
+
+type ServiceDetail = ReplicaPlacement & {
+  deployments: Omit<Deployment, "replicas">[];
 };
 
 type LogRecord = {
@@ -118,10 +122,14 @@ async function getClusterConfig(): Promise<ClusterConfig> {
 
 async function getServices(): Promise<Service[]> {
   const summaries = await request<ServiceSummary[]>("/api/services");
-  return summaries.map(({ spec, ...summary }) => ({
+  return summaries.map(({ spec, replicas, assignments, latestDeployment, ...summary }) => ({
     ...spec,
     ...summary,
-    status: summary.latestDeployment?.status ?? "idle"
+    latestDeployment: latestDeployment && {
+      ...latestDeployment,
+      replicas: deploymentReplicas({ replicas, assignments }, latestDeployment.id)
+    },
+    status: latestDeployment?.status ?? "idle"
   }));
 }
 
@@ -129,25 +137,7 @@ async function getDeployments(serviceId: string): Promise<Deployment[]> {
   const detail = await request<ServiceDetail>(`/api/services/${encodeURIComponent(serviceId)}`);
   return detail.deployments.map((deployment) => ({
     ...deployment,
-    replicas: detail.assignments
-      .filter((assignment) => assignment.deploymentId === deployment.id)
-      .map((assignment) => {
-        const status = detail.replicas.find(
-          (replica) => replica.replicaId === assignment.replicaId
-        );
-        return {
-          replicaId: assignment.replicaId,
-          deploymentId: assignment.deploymentId,
-          index: assignment.index,
-          nodeId: assignment.nodeId,
-          phase: status?.phase ?? "pending",
-          ip: status?.ip,
-          restarts: status?.restarts ?? 0,
-          consecutiveFailures: status?.consecutiveFailures ?? 0,
-          lastError: status?.lastError
-        };
-      })
-      .sort((left, right) => left.index - right.index)
+    replicas: deploymentReplicas(detail, deployment.id)
   }));
 }
 
@@ -379,6 +369,28 @@ function flattenAttributes(value: Record<string, unknown>, prefix: string): [str
       return [[path, typeof nested === "string" ? nested : JSON.stringify(nested)]];
     }
   });
+}
+
+function deploymentReplicas(placement: ReplicaPlacement, deploymentId: string): ReplicaState[] {
+  return placement.assignments
+    .filter((assignment) => assignment.deploymentId === deploymentId)
+    .map((assignment) => {
+      const status = placement.replicas.find(
+        (replica) => replica.replicaId === assignment.replicaId
+      );
+      return {
+        replicaId: assignment.replicaId,
+        deploymentId: assignment.deploymentId,
+        index: assignment.index,
+        nodeId: assignment.nodeId,
+        phase: status?.phase ?? "pending",
+        ip: status?.ip,
+        restarts: status?.restarts ?? 0,
+        consecutiveFailures: status?.consecutiveFailures ?? 0,
+        lastError: status?.lastError
+      };
+    })
+    .sort((left, right) => left.index - right.index);
 }
 
 export {

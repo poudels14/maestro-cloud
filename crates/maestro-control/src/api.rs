@@ -53,6 +53,8 @@ struct ServiceSummary {
     replicas_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview_source: Option<PreviewSource>,
+    replicas: Vec<ReplicaStatus>,
+    assignments: Vec<Assignment>,
 }
 
 #[derive(Default, Serialize)]
@@ -240,6 +242,8 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
         .preview_sources()?
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
+    let observed = state.observed.replicas();
+    let assignments = all_assignments(store)?;
     store
         .services()?
         .into_iter()
@@ -249,11 +253,22 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
                 .into_iter()
                 .max_by_key(|deployment| deployment.created_at_ms)
                 .map(masked_deployment);
+            let latest_id = latest_deployment.as_ref().map(|deployment| &deployment.id);
             let controls = store.service_controls(&id)?;
             let preview_source = previews.get(&id).cloned();
             Ok(ServiceSummary {
                 preview_source,
                 spec: mask_spec(&spec),
+                replicas: observed
+                    .iter()
+                    .filter(|replica| Some(&replica.deployment_id) == latest_id)
+                    .cloned()
+                    .collect(),
+                assignments: assignments
+                    .iter()
+                    .filter(|assignment| Some(&assignment.deployment_id) == latest_id)
+                    .cloned()
+                    .collect(),
                 latest_deployment,
                 deploy_frozen: controls.frozen,
                 replicas_override: controls.replicas_override,
