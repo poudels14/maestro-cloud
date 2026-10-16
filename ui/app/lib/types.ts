@@ -146,6 +146,7 @@ export type Service = ServiceSpec & {
   deployFrozen: boolean;
   replicasOverride?: number | null;
   previewSource?: Preview.Source | null;
+  pullRequestUrl?: string | null;
 };
 
 export type ReplicaPhase =

@@ -277,28 +277,6 @@ impl GitHub {
     }
 }
 
-pub fn parse_github_repo(url: &str) -> Option<String> {
-    let path = url
-        .strip_prefix("git@github.com:")
-        .or_else(|| {
-            url.split_once("://")
-                .map(|(_, rest)| rest)
-                .and_then(|rest| {
-                    rest.strip_prefix("github.com/")
-                        .or_else(|| rest.strip_prefix("www.github.com/"))
-                })
-        })?
-        .trim_end_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    let mut segments = path.split('/');
-    match (segments.next(), segments.next(), segments.next()) {
-        (Some(owner), Some(repo), None) if !owner.is_empty() && !repo.is_empty() => {
-            Some(format!("{owner}/{repo}"))
-        }
-        _ => None,
-    }
-}
-
 async fn send(request: reqwest::RequestBuilder) -> Result<reqwest::Response, GitHubError> {
     let response = request
         .send()
@@ -340,24 +318,5 @@ async fn parse<T: serde::de::DeserializeOwned>(
             "github returned {status}: {}",
             response.text().await.unwrap_or_default()
         ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_github_repositories() {
-        assert_eq!(
-            parse_github_repo("git@github.com:acme/api.git").as_deref(),
-            Some("acme/api")
-        );
-        assert_eq!(
-            parse_github_repo("https://github.com/acme/api/").as_deref(),
-            Some("acme/api")
-        );
-        assert_eq!(parse_github_repo("https://gitlab.com/acme/api"), None);
-        assert_eq!(parse_github_repo("https://github.com/acme"), None);
     }
 }

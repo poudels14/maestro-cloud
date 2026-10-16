@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { ExternalLink, GitPullRequest } from "lucide-solid";
+import { ExternalLink, GitPullRequest, Github } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { servicePreviews } from "../../lib/previews";
 import { clusterNodesQuery } from "../../lib/queries";
@@ -56,6 +56,20 @@ function PreviewsTab(props: { service: Service; services: Service[] }) {
                     <span class="text-xs font-medium text-amber-600">closing</span>
                   </Show>
                   <StatusBadge status={preview.status} />
+                  <Show when={preview.pullRequestUrl}>
+                    {(url) => (
+                      <a
+                        href={url()}
+                        target="_blank"
+                        rel="noreferrer"
+                        class="rounded p-1 text-gray-400 outline-none hover:bg-gray-50 hover:text-indigo-600"
+                        title={`Open PR #${source().prNumber} on GitHub`}
+                        aria-label={`Open PR #${source().prNumber} on GitHub`}
+                      >
+                        <Github class="size-4" />
+                      </a>
+                    )}
+                  </Show>
                   <Show when={previewUrl()}>
                     {(url) => (
                       <a
@@ -63,6 +77,7 @@ function PreviewsTab(props: { service: Service; services: Service[] }) {
                         target="_blank"
                         rel="noreferrer"
                         class="rounded p-1 text-gray-400 outline-none hover:bg-gray-50 hover:text-indigo-600"
+                        title="Open preview"
                         aria-label={`Open preview for PR ${source().prNumber}`}
                       >
                         <ExternalLink class="size-4" />

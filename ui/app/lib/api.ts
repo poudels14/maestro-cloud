@@ -23,7 +23,10 @@ type ReplicaPlacement = {
   assignments: { replicaId: string; deploymentId: string; nodeId: number; index: number }[];
 };
 
-type ServiceSummary = Pick<Service, "id" | "deployFrozen" | "replicasOverride" | "previewSource"> &
+type ServiceSummary = Pick<
+  Service,
+  "id" | "deployFrozen" | "replicasOverride" | "previewSource" | "pullRequestUrl"
+> &
   ReplicaPlacement & {
     spec: ServiceSpec;
     latestDeployment?: Omit<Deployment, "replicas"> | null;

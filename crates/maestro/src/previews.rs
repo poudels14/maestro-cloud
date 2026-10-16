@@ -9,7 +9,7 @@ use maestro_core::{
 };
 use maestro_store::{Mutation, SecretKey};
 
-use crate::github::{GitHub, GitHubError, PullRequest, parse_github_repo};
+use crate::github::{GitHub, GitHubError, PullRequest};
 
 const PREVIEW_INFIX: &str = "-pr-";
 const MAX_LABEL_LENGTH: usize = 63;
@@ -97,7 +97,7 @@ impl<W: StoreWriter> PreviewWatcher<W> {
                     && spec.preview.as_ref().is_some_and(|preview| preview.enabled)
             })
             .filter_map(|(id, spec)| {
-                let repo = parse_github_repo(spec.build.as_ref()?.repo.as_deref()?)?;
+                let repo = spec.build.as_ref()?.github_repo()?;
                 let frozen = store.service_controls(id).ok()?.frozen;
                 Some(Base {
                     id: id.clone(),

@@ -53,6 +53,8 @@ struct ServiceSummary {
     replicas_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview_source: Option<PreviewSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pull_request_url: Option<String>,
     replicas: Vec<ReplicaStatus>,
     assignments: Vec<Assignment>,
 }
@@ -256,8 +258,13 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
             let latest_id = latest_deployment.as_ref().map(|deployment| &deployment.id);
             let controls = store.service_controls(&id)?;
             let preview_source = previews.get(&id).cloned();
+            let pull_request_url = preview_source.as_ref().and_then(|source| {
+                let repo = spec.build.as_ref()?.github_repo()?;
+                Some(format!("https://github.com/{repo}/pull/{}", source.pr_number))
+            });
             Ok(ServiceSummary {
                 preview_source,
+                pull_request_url,
                 spec: mask_spec(&spec),
                 replicas: observed
                     .iter()
