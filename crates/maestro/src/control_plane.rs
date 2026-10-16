@@ -232,7 +232,7 @@ pub async fn spawn(
             GitHub::new(GITHUB_API.to_string(), github.token.clone()),
             PreviewSettings {
                 domain: github.preview_domain.clone(),
-                max_concurrent: github.max_concurrent_previews as usize,
+                max_concurrent: github.max_concurrent_previews.map(|limit| limit as usize),
                 homepage: settings
                     .config
                     .homepage

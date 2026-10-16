@@ -19,7 +19,7 @@ const SHORT_SHA: usize = 7;
 
 pub struct PreviewSettings {
     pub domain: String,
-    pub max_concurrent: usize,
+    pub max_concurrent: Option<usize>,
     pub homepage: Option<String>,
 }
 
@@ -170,14 +170,17 @@ impl<W: StoreWriter> PreviewWatcher<W> {
             .preview_sources()
             .map_err(|error| error.to_string())?
             .len();
-        let slots = self.settings.max_concurrent.saturating_sub(running);
+        let slots = self
+            .settings
+            .max_concurrent
+            .map_or(usize::MAX, |limit| limit.saturating_sub(running));
         for (index, candidate) in candidates.iter().enumerate() {
             match index < slots {
                 true => self.create(candidate).await?,
                 false => {
                     let body = format!(
                         "### Maestro preview: skipped (quota)\n\nThe cluster is already running its limit of {} concurrent previews. This PR will be reconsidered automatically when a slot becomes available.",
-                        self.settings.max_concurrent
+                        self.settings.max_concurrent.unwrap_or_default()
                     );
                     self.comment(
                         &candidate.base.repo,
@@ -772,7 +775,7 @@ mod tests {
     }
 
     async fn harness(
-        max_concurrent: usize,
+        max_concurrent: Option<usize>,
     ) -> (PreviewWatcher<TestWriter>, Shared, tempfile::TempDir) {
         let github = Shared::default();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -856,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn creates_rebuilds_reports_and_removes_previews() {
-        let (mut watcher, github, _directory) = harness(10).await;
+        let (mut watcher, github, _directory) = harness(None).await;
         github.lock().unwrap().pulls = vec![
             pull(7, "aaaaaaaaa1", false, "acme/api"),
             pull(8, "bbbbbbbbb1", true, "acme/api"),
@@ -969,7 +972,7 @@ mod tests {
 
     #[tokio::test]
     async fn admits_the_oldest_pull_requests_within_the_quota() {
-        let (mut watcher, github, _directory) = harness(1).await;
+        let (mut watcher, github, _directory) = harness(Some(1)).await;
         github.lock().unwrap().pulls = vec![
             pull(5, "eeeeeeeee1", false, "acme/api"),
             pull(3, "ddddddddd1", false, "acme/api"),
@@ -990,8 +993,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn previews_every_pull_request_without_a_limit() {
+        let (mut watcher, github, _directory) = harness(None).await;
+        github.lock().unwrap().pulls = (1..=12)
+            .map(|number| pull(number, &format!("{number:0>9}a"), false, "acme/api"))
+            .collect();
+        watcher.poll().await.unwrap();
+        assert_eq!(previews(&watcher).len(), 12);
+    }
+
+    #[tokio::test]
     async fn frozen_bases_get_no_new_previews() {
-        let (mut watcher, github, _directory) = harness(10).await;
+        let (mut watcher, github, _directory) = harness(None).await;
         watcher
             .writer
             .state()
@@ -1010,7 +1023,7 @@ mod tests {
 
     #[tokio::test]
     async fn pauses_during_a_cluster_freeze() {
-        let (mut watcher, github, _directory) = harness(10).await;
+        let (mut watcher, github, _directory) = harness(None).await;
         watcher
             .writer
             .state()

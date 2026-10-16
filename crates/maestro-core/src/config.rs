@@ -173,8 +173,12 @@ pub struct GithubSettings {
     pub preview_domain: String,
     #[serde(default = "default_poll_interval", alias = "poll-interval-secs")]
     pub poll_interval_secs: u64,
-    #[serde(default = "default_max_previews", alias = "max-concurrent-previews")]
-    pub max_concurrent_previews: u32,
+    #[serde(
+        default,
+        alias = "max-concurrent-previews",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_concurrent_previews: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,8 +366,8 @@ impl ClusterConfig {
             self.github.as_ref().and_then(|github| {
                 (github.token.trim().is_empty()
                     || github.poll_interval_secs == 0
-                    || github.max_concurrent_previews == 0)
-                    .then(|| "github needs a token, pollIntervalSecs >= 1, and maxConcurrentPreviews >= 1".to_string())
+                    || github.max_concurrent_previews == Some(0))
+                    .then(|| "github needs a token, pollIntervalSecs >= 1, and maxConcurrentPreviews >= 1 when set".to_string())
             }),
             self.homepage.as_ref().and_then(|homepage| {
                 (!(homepage.starts_with("https://") || homepage.starts_with("http://"))
@@ -540,10 +544,6 @@ fn default_poll_interval() -> u64 {
     60
 }
 
-fn default_max_previews() -> u32 {
-    10
-}
-
 fn default_cluster_name() -> String {
     "maestro".to_string()
 }
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(config.cloudflare.unwrap().tunnel.replicas, 2);
         let github = config.github.unwrap();
         assert_eq!(github.preview_domain, "preview.getbaton.ai");
-        assert_eq!(github.max_concurrent_previews, 3);
+        assert_eq!(github.max_concurrent_previews, Some(3));
         assert_eq!(config.log_backup.unwrap().retention_days, Some(30));
         assert!(config.allow_exec && config.allow_cli_deployment);
     }

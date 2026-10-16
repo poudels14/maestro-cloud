@@ -255,7 +255,7 @@ v3 design (decisions approved):
 - GitHub reporting: the sticky PR comment plus GitHub Deployment statuses
   (queued, building, ready, failed, inactive), written only on state transitions.
 - Isolation: previews are scheduled like production services;
-  `maxConcurrentPreviews` remains the only preview-specific limit.
+  there is no preview limit unless `github.maxConcurrentPreviews` sets one.
 
 ## Security
 

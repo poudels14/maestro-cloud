@@ -398,7 +398,7 @@ export type ClusterConfig = {
     token: string;
     previewDomain: string;
     pollIntervalSecs: number;
-    maxConcurrentPreviews: number;
+    maxConcurrentPreviews?: number | null;
   } | null;
   homepage?: string | null;
   logBackup?: {
