@@ -4,6 +4,7 @@ import { getBuildLog } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
 
 const BUILD_POLL_INTERVAL_MS = 3_000;
+const FOLLOW_THRESHOLD_PX = 24;
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g;
 const TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) (.*)$/;
 
@@ -14,12 +15,13 @@ function BuildLog(props: { serviceId: string; deploymentId: string; building: bo
     refetchInterval: props.building ? BUILD_POLL_INTERVAL_MS : (false as const)
   }));
   let scrollRef: HTMLPreElement | undefined;
+  let following = true;
 
   createEffect(
     on(
       () => log.data,
       () => {
-        if (scrollRef && props.building) {
+        if (scrollRef && props.building && following) {
           scrollRef.scrollTop = scrollRef.scrollHeight;
         }
       }
@@ -47,6 +49,12 @@ function BuildLog(props: { serviceId: string; deploymentId: string; building: bo
         {(text) => (
           <pre
             ref={scrollRef}
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              following =
+                element.scrollHeight - element.scrollTop - element.clientHeight <
+                FOLLOW_THRESHOLD_PX;
+            }}
             class="h-full overflow-auto bg-gray-950 px-4 py-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-gray-200"
           >
             <For each={text().replace(ANSI_PATTERN, "").split("\n")}>{(line) => <BuildLogLine line={line} />}</For>
