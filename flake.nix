@@ -371,6 +371,7 @@
             }
             // lib.optionalAttrs (cfg.registry.dockerConfigFile != null) {
               DOCKER_CONFIG = "%d";
+              BUILDX_CONFIG = "%h/.docker/buildx";
             };
           serviceConfig = {
             Type = "simple";
