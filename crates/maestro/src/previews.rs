@@ -1009,7 +1009,14 @@ mod tests {
         let state = watcher.writer.state();
         assert_eq!(state.deployments(&id).unwrap().len(), 2);
         assert_eq!(
-            state.service(&id).unwrap().unwrap().build.unwrap().branch.as_deref(),
+            state
+                .service(&id)
+                .unwrap()
+                .unwrap()
+                .build
+                .unwrap()
+                .branch
+                .as_deref(),
             Some("feature-2")
         );
     }

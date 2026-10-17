@@ -260,7 +260,10 @@ async fn list_services<W: StoreWriter, O: ObservedReplicas>(
             let preview_source = previews.get(&id).cloned();
             let pull_request_url = preview_source.as_ref().and_then(|source| {
                 let repo = spec.build.as_ref()?.github_repo()?;
-                Some(format!("https://github.com/{repo}/pull/{}", source.pr_number))
+                Some(format!(
+                    "https://github.com/{repo}/pull/{}",
+                    source.pr_number
+                ))
             });
             Ok(ServiceSummary {
                 preview_source,
