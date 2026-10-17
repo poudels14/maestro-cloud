@@ -192,6 +192,11 @@ function ServiceDetailPanel(props: {
             <DeploymentsTab
               serviceId={props.service.id}
               deployFrozen={!!props.service.deployFrozen}
+              closedPullRequest={
+                props.service.previewSource?.closedAtMs
+                  ? props.service.previewSource.prNumber
+                  : undefined
+              }
             />
           </Show>
           <Show when={props.tab === "previews"}>

@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import { createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
 import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
@@ -13,7 +13,11 @@ import { DeploymentRow } from "./DeploymentRow";
 const INITIAL_VISIBLE = 10;
 const LOAD_MORE_STEP = 10;
 
-function DeploymentsTab(props: { serviceId: string; deployFrozen: boolean }) {
+function DeploymentsTab(props: {
+  serviceId: string;
+  deployFrozen: boolean;
+  closedPullRequest?: number;
+}) {
   const queryClient = useQueryClient();
   const deployments = useQuery(() => deploymentsQuery(props.serviceId));
   const nodes = useQuery(() => clusterNodesQuery());
@@ -101,20 +105,37 @@ function DeploymentsTab(props: { serviceId: string; deployFrozen: boolean }) {
           <ErrorBanner message="Failed to load deployments" onRetry={() => deployments.refetch()} />
         </div>
       </Show>
-      <Show when={props.deployFrozen}>
-        <div class="mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
-          <span class="text-xs text-amber-700 font-medium">
-            Deploy is frozen — auto-deploys from git watch are paused
-          </span>
-        </div>
-      </Show>
+      <Switch>
+        <Match when={props.closedPullRequest}>
+          {(prNumber) => (
+            <div class="mb-3 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg">
+              <span class="text-xs text-gray-600 font-medium">
+                PR #{prNumber()} is closed — this preview no longer picks up new commits and will
+                be removed after the close grace period
+              </span>
+            </div>
+          )}
+        </Match>
+        <Match when={props.deployFrozen}>
+          <div class="mb-3 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+            <span class="text-xs text-amber-700 font-medium">
+              Deploy is frozen — auto-deploys from git watch are paused
+            </span>
+          </div>
+        </Match>
+      </Switch>
 
       <ConfirmDialog
         open={freezeConfirmAction() !== null}
-        title="Deploy is frozen"
+        title={
+          props.closedPullRequest ? `PR #${props.closedPullRequest} is closed` : "Deploy is frozen"
+        }
         description={
           <>
-            Deploys are frozen for this service. Are you sure you want to force a{" "}
+            {props.closedPullRequest
+              ? "This preview no longer picks up new commits."
+              : "Deploys are frozen for this service."}{" "}
+            Are you sure you want to force a{" "}
             {freezeConfirmAction() === "restart" ? "restart" : "redeploy"}?
           </>
         }
