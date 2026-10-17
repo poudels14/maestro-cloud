@@ -49,6 +49,7 @@ pub trait ImageBuilder: Send + Sync + 'static {
     fn build(
         &self,
         deployment: Deployment,
+        repository: ServiceId,
         checked_out: oneshot::Sender<GitCommit>,
     ) -> impl Future<Output = Result<BuiltImage, String>> + Send;
 
@@ -276,8 +277,21 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 ImageStep::Build => {
                     let (checked_out, commit) = oneshot::channel();
                     tokio::spawn(record_commit(writer.clone(), deployment.clone(), commit));
+                    let repository = writer
+                        .state()
+                        .preview_sources()
+                        .ok()
+                        .and_then(|sources| {
+                            sources
+                                .into_iter()
+                                .find(|(id, _)| *id == deployment.service_id)
+                        })
+                        .map(|(_, source)| source.base_service_id)
+                        .unwrap_or_else(|| deployment.service_id.clone());
                     (
-                        builder.build(deployment.clone(), checked_out).await,
+                        builder
+                            .build(deployment.clone(), repository, checked_out)
+                            .await,
                         "build failed",
                     )
                 }

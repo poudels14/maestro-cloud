@@ -482,6 +482,7 @@ impl ImageBuilder for SealedSpecBuilder {
     async fn build(
         &self,
         deployment: Deployment,
+        repository: ServiceId,
         checked_out: oneshot::Sender<GitCommit>,
     ) -> Result<BuiltImage, String> {
         let spec = self
@@ -511,7 +512,7 @@ impl ImageBuilder for SealedSpecBuilder {
         };
         let request = BuildRequest {
             deployment_id: deployment.id.to_string(),
-            service_id: deployment.service_id.to_string(),
+            service_id: repository.to_string(),
             repo: build.repo,
             branch: build.branch,
             context_dir: upload_context.clone(),

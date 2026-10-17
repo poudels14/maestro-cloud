@@ -283,6 +283,42 @@ async fn builds_images_before_deploying() {
 }
 
 #[tokio::test]
+async fn preview_builds_publish_to_the_base_service_repository() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::SetPreviewSource {
+            id: ServiceId::from("api"),
+            source: Some(maestro_core::PreviewSource {
+                base_service_id: ServiceId::from("web"),
+                pr_number: 7,
+                head_ref: "feature".to_string(),
+                head_sha: "abc123".to_string(),
+                title: "Add things".to_string(),
+                created_at_ms: harness.clock.now(),
+                closed_at_ms: None,
+                comment_id: None,
+                github_deployment_id: None,
+                reported: None,
+            }),
+        }])
+        .unwrap();
+    queue_spec(&harness, "d1", build_service(1)).await;
+
+    harness.deployer.tick().await.unwrap();
+    harness.builder.release(1);
+    settle().await;
+    let deployment = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(deployment.image.as_deref(), Some("maestro.local/web:d1"));
+}
+
+#[tokio::test]
 async fn failed_builds_fail_the_deployment() {
     let harness = harness(vec![node(1, 8, 32)]);
     harness.builder.fail("d1");

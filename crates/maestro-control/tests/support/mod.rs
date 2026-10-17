@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use maestro_control::{BuiltImage, ImageBuilder, ObservedReplicas, StoreWriter};
 use maestro_core::{
     BuildSpec, ByteSize, DeploySpec, Deployment, GitCommit, Millicores, NodeCapacity, NodeId,
-    NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, ServiceSpec,
+    NodeRecord, NodeRole, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, ServiceId,
+    ServiceSpec,
 };
 use maestro_store::{ConsensusError, Mutation, StateMachine};
 use tempfile::TempDir;
@@ -182,6 +183,7 @@ impl ImageBuilder for FakeBuilder {
     async fn build(
         &self,
         deployment: Deployment,
+        repository: ServiceId,
         checked_out: tokio::sync::oneshot::Sender<GitCommit>,
     ) -> Result<BuiltImage, String> {
         self.started.lock().unwrap().push(deployment.id.to_string());
@@ -198,7 +200,7 @@ impl ImageBuilder for FakeBuilder {
         {
             true => Err("dockerfile not found".to_string()),
             false => Ok(BuiltImage {
-                image: format!("maestro.local/{}:{}", deployment.service_id, deployment.id),
+                image: format!("maestro.local/{repository}:{}", deployment.id),
                 commit: Some(GitCommit {
                     reference: "abc123".to_string(),
                     message: "Add things".to_string(),
