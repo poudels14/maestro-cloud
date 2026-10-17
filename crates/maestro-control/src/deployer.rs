@@ -9,6 +9,7 @@ use maestro_core::{
     UnschedulableReplica,
 };
 use maestro_store::Mutation;
+use tokio::sync::oneshot;
 
 use crate::error::ControlError;
 use crate::scheduler::{self, PlacementRequest};
@@ -48,6 +49,7 @@ pub trait ImageBuilder: Send + Sync + 'static {
     fn build(
         &self,
         deployment: Deployment,
+        checked_out: oneshot::Sender<GitCommit>,
     ) -> impl Future<Output = Result<BuiltImage, String>> + Send;
 
     fn resolve(&self, image: String) -> impl Future<Output = Result<String, String>> + Send;
@@ -271,7 +273,14 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         let clock = self.settings.clock.clone();
         tokio::spawn(async move {
             let (result, failure_prefix) = match step {
-                ImageStep::Build => (builder.build(deployment.clone()).await, "build failed"),
+                ImageStep::Build => {
+                    let (checked_out, commit) = oneshot::channel();
+                    tokio::spawn(record_commit(writer.clone(), deployment.clone(), commit));
+                    (
+                        builder.build(deployment.clone(), checked_out).await,
+                        "build failed",
+                    )
+                }
                 ImageStep::Resolve(image) => (
                     builder.resolve(image).await.map(|image| BuiltImage {
                         image,
@@ -842,6 +851,24 @@ fn lock_report(
     report
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+async fn record_commit<W: StoreWriter>(
+    writer: Arc<W>,
+    deployment: Deployment,
+    commit: oneshot::Receiver<GitCommit>,
+) {
+    if let Ok(commit) = commit.await {
+        let mutation = Mutation::SetDeploymentBuild {
+            service_id: deployment.service_id,
+            deployment_id: deployment.id.clone(),
+            commit: Some(commit),
+            built_on: None,
+        };
+        if let Err(error) = writer.write(vec![mutation]).await {
+            tracing::warn!(deployment = %deployment.id, %error, "failed to record the build commit");
+        }
+    }
 }
 
 fn lock(set: &Mutex<HashSet<DeploymentId>>) -> std::sync::MutexGuard<'_, HashSet<DeploymentId>> {

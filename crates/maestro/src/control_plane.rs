@@ -19,8 +19,8 @@ use maestro_control::{
     run_publisher,
 };
 use maestro_core::{
-    ClusterConfig, ClusterSettings, Deployment, DeploymentId, MaintenanceRun, NodeId, NodeRecord,
-    NodeRole, NodeState, ServiceId, ServiceSpec,
+    ClusterConfig, ClusterSettings, Deployment, DeploymentId, GitCommit, MaintenanceRun, NodeId,
+    NodeRecord, NodeRole, NodeState, ServiceId, ServiceSpec,
 };
 use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
@@ -30,6 +30,7 @@ use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
 use maestro_telemetry::{BackupConfig, S3Archive};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
 use crate::archive;
@@ -478,7 +479,11 @@ impl RemoteHeads for GitHeads {
 }
 
 impl ImageBuilder for SealedSpecBuilder {
-    async fn build(&self, deployment: Deployment) -> Result<BuiltImage, String> {
+    async fn build(
+        &self,
+        deployment: Deployment,
+        checked_out: oneshot::Sender<GitCommit>,
+    ) -> Result<BuiltImage, String> {
         let spec = self
             .key
             .open_spec(&deployment.spec)
@@ -527,7 +532,12 @@ impl ImageBuilder for SealedSpecBuilder {
                     token,
                 }),
         };
-        let result = self.builder.build(&request).await;
+        let result = self
+            .builder
+            .build(&request, |commit| {
+                let _ = checked_out.send(commit);
+            })
+            .await;
         if let Some(context) = upload_context {
             let _ = tokio::fs::remove_dir_all(context).await;
             let _ = tokio::fs::remove_file(uploads::archive_path(
@@ -833,7 +843,7 @@ async fn run_admin(
                     secrets: Default::default(),
                     depot: None,
                 };
-                if let Err(error) = builder.build(&request).await {
+                if let Err(error) = builder.build(&request, |_| {}).await {
                     tracing::warn!(%error, "admin UI image build failed; retrying");
                     tokio::time::sleep(ADMIN_BUILD_RETRY).await;
                 }

@@ -179,8 +179,16 @@ impl FakeBuilder {
 }
 
 impl ImageBuilder for FakeBuilder {
-    async fn build(&self, deployment: Deployment) -> Result<BuiltImage, String> {
+    async fn build(
+        &self,
+        deployment: Deployment,
+        checked_out: tokio::sync::oneshot::Sender<GitCommit>,
+    ) -> Result<BuiltImage, String> {
         self.started.lock().unwrap().push(deployment.id.to_string());
+        let _ = checked_out.send(GitCommit {
+            reference: "abc123".to_string(),
+            message: "Add things".to_string(),
+        });
         self.gate.acquire().await.unwrap().forget();
         match self
             .failures

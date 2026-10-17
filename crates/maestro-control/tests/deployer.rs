@@ -246,6 +246,16 @@ async fn builds_images_before_deploying() {
     settle().await;
     assert_eq!(status(&harness, "d1"), DeploymentStatus::Building);
     assert_eq!(harness.builder.started(), ["d1"]);
+    let building = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        building.git_commit.map(|commit| commit.message),
+        Some("Add things".to_string())
+    );
 
     harness.deployer.tick().await.unwrap();
     settle().await;
@@ -265,6 +275,7 @@ async fn builds_images_before_deploying() {
         deployment.git_commit.map(|commit| commit.reference),
         Some("abc123".to_string())
     );
+    assert_eq!(deployment.built_on, Some(NodeId(1)));
 
     harness.deployer.tick().await.unwrap();
     let node_assignments = harness.writer.state().assignments(NodeId(1)).unwrap();

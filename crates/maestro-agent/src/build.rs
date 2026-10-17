@@ -69,13 +69,17 @@ impl BuildKitBuilder {
         Self { settings }
     }
 
-    pub async fn build(&self, request: &BuildRequest) -> Result<BuildOutput, String> {
+    pub async fn build(
+        &self,
+        request: &BuildRequest,
+        on_checkout: impl FnOnce(GitCommit) + Send,
+    ) -> Result<BuildOutput, String> {
         let workspace = self.settings.work_dir.join(&request.deployment_id);
         let log_path = self
             .settings
             .log_dir
             .join(format!("{}.log", request.deployment_id));
-        let result = self.run(request, &workspace, &log_path).await;
+        let result = self.run(request, &workspace, &log_path, on_checkout).await;
         let _ = tokio::fs::remove_dir_all(&workspace).await;
         match result {
             Ok(output) => Ok(output),
@@ -94,6 +98,7 @@ impl BuildKitBuilder {
         request: &BuildRequest,
         workspace: &Path,
         log_path: &Path,
+        on_checkout: impl FnOnce(GitCommit) + Send,
     ) -> Result<BuildOutput, String> {
         let _ = tokio::fs::remove_dir_all(workspace).await;
         tokio::fs::create_dir_all(workspace)
@@ -121,6 +126,9 @@ impl BuildKitBuilder {
                 let token = request.secrets.get(GIT_TOKEN_SECRET).or(cluster_token);
                 clone_repo(repo, request.branch.as_deref(), token, &checkout, &log).await?;
                 commit = head_commit(&checkout).await;
+                if let Some(commit) = commit.clone() {
+                    on_checkout(commit);
+                }
                 checkout
             }
             (None, Some(context_dir)) => context_dir.clone(),
