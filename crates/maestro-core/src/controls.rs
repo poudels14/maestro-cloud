@@ -116,6 +116,10 @@ pub struct MaintenanceStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_replicas: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progressed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 

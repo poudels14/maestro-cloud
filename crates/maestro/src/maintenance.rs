@@ -22,7 +22,7 @@ use serde_json::Value;
 use crate::node_service::{ForwardingWriter, NodeClients, NodeRequest};
 
 const LATEST: &str = "latest";
-const DRAIN_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+const DRAIN_STALL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 const UPGRADE_TIMEOUT_MS: u64 = 6 * 60 * 60 * 1000;
 const RESTART_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
@@ -209,6 +209,8 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
                             started_at_ms: None,
                             requested_at_ms: None,
                             completed_at_ms: None,
+                            remaining_replicas: None,
+                            progressed_at_ms: None,
                             error: None,
                         })
                         .collect(),
@@ -276,14 +278,24 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
                     run.nodes[run.current_node_index].status = NodeStepStatus::Draining;
                     run.nodes[run.current_node_index].started_at_ms = Some(now);
                 }
-                let empty = self
+                let remaining = self
                     .writer
                     .state()
                     .assignments(node.id)
                     .map_err(|error| error.to_string())?
-                    .is_empty();
+                    .len() as u32;
+                let step = &mut run.nodes[run.current_node_index];
+                if step
+                    .remaining_replicas
+                    .is_none_or(|previous| remaining < previous)
+                {
+                    step.progressed_at_ms = Some(now);
+                }
+                step.remaining_replicas = Some(remaining);
+                let stalled = now.saturating_sub(step.progressed_at_ms.unwrap_or(now))
+                    > DRAIN_STALL_TIMEOUT_MS;
                 let elsewhere = self.other_schedulable(node.id)?;
-                match (empty || !elsewhere, elapsed > DRAIN_TIMEOUT_MS) {
+                match (remaining == 0 || !elsewhere, stalled) {
                     (true, _) => self.enter(
                         &mut run,
                         MaintenancePhase::Requested,
@@ -292,7 +304,14 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
                     ),
                     (false, true) => {
                         return self
-                            .fail(run, &node, format!("draining {} timed out", node.name))
+                            .fail(
+                                run,
+                                &node,
+                                format!(
+                                    "draining {} stalled: no replica moved off it for 10 minutes and {remaining} remain",
+                                    node.name
+                                ),
+                            )
                             .await;
                     }
                     (false, false) => {}
@@ -575,7 +594,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use maestro_core::{ByteSize, Millicores, NodeCapacity};
+    use maestro_core::{
+        Assignment, ByteSize, DeploymentId, EffectiveResources, Millicores, NodeCapacity,
+        ReplicaId, ResolvedRequest, ServiceId,
+    };
     use maestro_store::{ConsensusError, StateMachine};
 
     use super::*;
@@ -810,6 +832,72 @@ mod tests {
                 .state,
             NodeState::Active
         );
+    }
+
+    #[tokio::test]
+    async fn fails_a_drain_only_after_it_stops_making_progress() {
+        let nodes = [
+            node(1, NodeRole::Voter),
+            node(2, NodeRole::Worker),
+            node(3, NodeRole::Worker),
+        ];
+        let (orchestrator, _directory) = orchestrator(&nodes, FakeNodes::default());
+        let state = orchestrator.writer.state();
+        let assignment = |index: u32| Assignment {
+            replica_id: ReplicaId::new(format!("d1-{index}")),
+            service_id: ServiceId::from("api"),
+            deployment_id: DeploymentId::from("d1"),
+            node_id: NodeId(2),
+            index,
+            image: "nginx".to_string(),
+            resources: EffectiveResources {
+                cpu_limit: Millicores::new(1000),
+                memory_limit: ByteSize::new(1 << 30),
+                request: ResolvedRequest {
+                    cpu: Millicores::new(250),
+                    memory: ByteSize::new(512 << 20),
+                },
+            },
+            retiring_since_ms: None,
+        };
+        let set_assignments = |assignments: Vec<Assignment>| {
+            state
+                .apply(&[Mutation::SetNodeAssignments {
+                    node_id: NodeId(2),
+                    assignments,
+                }])
+                .unwrap();
+        };
+        let backdate_progress = || {
+            let mut run = state.maintenance_run().unwrap().unwrap();
+            let step = run
+                .nodes
+                .iter_mut()
+                .find(|step| step.node_id == NodeId(2))
+                .unwrap();
+            step.progressed_at_ms = Some(now_ms() - DRAIN_STALL_TIMEOUT_MS - 1);
+            state
+                .apply(&[Mutation::SetMaintenanceRun { run: Some(run) }])
+                .unwrap();
+        };
+        set_assignments(vec![assignment(0), assignment(1)]);
+        orchestrator
+            .start(MaintenanceKind::Upgrade, "3.1.0".to_string(), Target::All)
+            .await
+            .unwrap();
+        orchestrator.tick().await.unwrap();
+
+        backdate_progress();
+        set_assignments(vec![assignment(1)]);
+        orchestrator.tick().await.unwrap();
+        let run = state.maintenance_run().unwrap().unwrap();
+        assert_eq!(run.phase, MaintenancePhase::Draining);
+
+        backdate_progress();
+        orchestrator.tick().await.unwrap();
+        let run = state.maintenance_run().unwrap().unwrap();
+        assert_eq!(run.phase, MaintenancePhase::Failed);
+        assert!(run.failure.unwrap().contains("stalled"));
     }
 
     #[tokio::test]
