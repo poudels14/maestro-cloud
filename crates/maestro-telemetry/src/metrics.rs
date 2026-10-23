@@ -79,6 +79,7 @@ impl MetricsCollector {
         containers
             .iter()
             .for_each(|(_, point)| add_into(&mut cluster, point));
+        cluster.memory_limit_bytes = node.memory_limit_bytes;
         [node, cluster]
             .into_iter()
             .chain(services.into_values())
@@ -280,6 +281,10 @@ mod tests {
         let proc_root = root.path().join("proc");
         let scope = cgroups.join("maestro-d1-0.scope");
         std::fs::create_dir_all(&scope).unwrap();
+        let unlimited = cgroups.join("maestro-d2-0.scope");
+        std::fs::create_dir_all(&unlimited).unwrap();
+        std::fs::write(unlimited.join("memory.current"), "1024\n").unwrap();
+        std::fs::write(unlimited.join("memory.max"), "max\n").unwrap();
         std::fs::create_dir_all(proc_root.join("42/net")).unwrap();
         std::fs::write(scope.join("cpu.stat"), "usage_usec 1000\n").unwrap();
         std::fs::write(scope.join("memory.current"), "2048\n").unwrap();
@@ -312,8 +317,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             sources,
-            ["node", "cluster", "service:web", "container:d1-0"]
+            [
+                "node",
+                "cluster",
+                "service:web",
+                "container:d1-0",
+                "container:d2-0"
+            ]
         );
+        assert_eq!(points[1].memory_bytes, 3072);
+        assert_eq!(points[1].memory_limit_bytes, 4096);
         let container = &points[3];
         assert_eq!(container.memory_bytes, 2048);
         assert_eq!(container.memory_limit_bytes, 4096);
