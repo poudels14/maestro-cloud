@@ -835,6 +835,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upgrades_a_single_node_cluster() {
+        let nodes = [node(1, NodeRole::Voter)];
+        let (orchestrator, _directory) = orchestrator(&nodes, FakeNodes::default());
+        orchestrator
+            .start(MaintenanceKind::Upgrade, "3.1.0".to_string(), Target::All)
+            .await
+            .unwrap();
+        let run = finish(&orchestrator).await;
+        assert_eq!(run.phase, MaintenancePhase::Succeeded);
+        assert_eq!(*orchestrator.nodes.requested.lock().unwrap(), [NodeId(1)]);
+    }
+
+    #[tokio::test]
     async fn fails_a_drain_only_after_it_stops_making_progress() {
         let nodes = [
             node(1, NodeRole::Voter),
