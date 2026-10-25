@@ -42,6 +42,13 @@ pub struct StateMachine {
     changes: broadcast::Sender<Change>,
 }
 
+/// Applies several entries in one write transaction. Any error, including a rejection, aborts
+/// the whole batch, so callers that need a rejected entry isolated must retry entries one by one.
+pub(crate) struct BatchWriter {
+    transaction: WriteTransaction,
+    changes: Vec<Change>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct StateExport {
     version: u64,
@@ -80,40 +87,23 @@ impl StateMachine {
     }
 
     pub fn apply(&self, mutations: &[Mutation]) -> Result<u64> {
-        self.apply_recorded(mutations, |_| Ok(()))
+        self.apply_batch(|batch| batch.apply(mutations))
     }
 
-    pub(crate) fn apply_recorded(
+    pub(crate) fn apply_batch<T>(
         &self,
-        mutations: &[Mutation],
-        record: impl FnOnce(&WriteTransaction) -> Result<()>,
-    ) -> Result<u64> {
-        let transaction = self.database.begin_write()?;
-        let keys = mutations
-            .iter()
-            .map(|mutation| apply_mutation(&transaction, mutation))
-            .collect::<Result<Vec<_>>>()?
-            .concat();
-        let version = {
-            let mut meta = transaction.open_table(META)?;
-            let next = meta.get(VERSION_KEY)?.map_or(0, |guard| guard.value()) + 1;
-            meta.insert(VERSION_KEY, next)?;
-            next
+        work: impl FnOnce(&mut BatchWriter) -> Result<T>,
+    ) -> Result<T> {
+        let mut batch = BatchWriter {
+            transaction: self.database.begin_write()?,
+            changes: Vec::new(),
         };
-        record(&transaction)?;
-        transaction.commit()?;
-        let _ = self.changes.send(Change { version, keys });
-        Ok(version)
-    }
-
-    pub(crate) fn record(
-        &self,
-        record: impl FnOnce(&WriteTransaction) -> Result<()>,
-    ) -> Result<()> {
-        let transaction = self.database.begin_write()?;
-        record(&transaction)?;
-        transaction.commit()?;
-        Ok(())
+        let output = work(&mut batch)?;
+        batch.transaction.commit()?;
+        batch.changes.into_iter().for_each(|change| {
+            let _ = self.changes.send(change);
+        });
+        Ok(output)
     }
 
     pub(crate) fn raft_meta<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
@@ -442,6 +432,28 @@ impl StateMachine {
             .range((node_id.0, "")..=(node_id.0, KEY_MAX))?
             .map(|entry| decode(entry?.1.value()))
             .collect()
+    }
+}
+
+impl BatchWriter {
+    pub(crate) fn transaction(&self) -> &WriteTransaction {
+        &self.transaction
+    }
+
+    pub(crate) fn apply(&mut self, mutations: &[Mutation]) -> Result<u64> {
+        let keys = mutations
+            .iter()
+            .map(|mutation| apply_mutation(&self.transaction, mutation))
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        let version = {
+            let mut meta = self.transaction.open_table(META)?;
+            let next = meta.get(VERSION_KEY)?.map_or(0, |guard| guard.value()) + 1;
+            meta.insert(VERSION_KEY, next)?;
+            next
+        };
+        self.changes.push(Change { version, keys });
+        Ok(version)
     }
 }
 

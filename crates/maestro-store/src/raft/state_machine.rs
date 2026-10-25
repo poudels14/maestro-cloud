@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Response, TypeConfig};
 use crate::error::StoreError;
-use crate::state::{StateExport, StateMachine, write_raft_meta};
+use crate::state::{BatchWriter, StateExport, StateMachine, write_raft_meta};
 
 const LAST_APPLIED_KEY: &str = "last_applied";
 const MEMBERSHIP_KEY: &str = "membership";
@@ -40,36 +40,16 @@ impl StateMachineStore {
         }
     }
 
-    fn apply_entry(&self, entry: Entry<TypeConfig>) -> Result<Response, StoreError> {
+    fn apply_alone(&self, entry: Entry<TypeConfig>) -> Result<Response, StoreError> {
         let log_id = entry.log_id;
-        match entry.payload {
-            EntryPayload::Blank => self
-                .state
-                .record(|transaction| record_applied(transaction, log_id, None))
-                .map(|_| Response::Empty),
-            EntryPayload::Membership(membership) => {
-                let stored = StoredMembership::new(Some(log_id), membership);
-                self.state
-                    .record(|transaction| record_applied(transaction, log_id, Some(&stored)))
-                    .map(|_| Response::Empty)
-            }
-            EntryPayload::Normal(request) => {
-                let applied = self
-                    .state
-                    .apply_recorded(&request.mutations, |transaction| {
-                        record_applied(transaction, log_id, None)
-                    });
-                match applied {
-                    Ok(version) => Ok(Response::Applied { version }),
-                    Err(error) if error.is_rejection() => self
-                        .state
-                        .record(|transaction| record_applied(transaction, log_id, None))
-                        .map(|_| Response::Rejected {
-                            reason: error.to_string(),
-                        }),
-                    Err(error) => Err(error),
-                }
-            }
+        match self.state.apply_batch(|batch| apply_entry(batch, entry)) {
+            Err(error) if error.is_rejection() => self.state.apply_batch(|batch| {
+                record_applied(batch.transaction(), log_id, None)?;
+                Ok(Response::Rejected {
+                    reason: error.to_string(),
+                })
+            }),
+            other => other,
         }
     }
 
@@ -148,14 +128,24 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         I: IntoIterator<Item = Entry<TypeConfig>> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
-        entries
-            .into_iter()
-            .map(|entry| {
-                let log_id = entry.log_id;
-                self.apply_entry(entry).map_err(|error| (log_id, error))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|(log_id, error)| StorageIOError::apply(log_id, &error).into())
+        let entries = entries.into_iter().collect::<Vec<_>>();
+        let together = self.state.apply_batch(|batch| {
+            entries
+                .iter()
+                .map(|entry| apply_entry(batch, entry.clone()))
+                .collect::<Result<Vec<_>, _>>()
+        });
+        match together {
+            Err(error) if error.is_rejection() => entries
+                .into_iter()
+                .map(|entry| {
+                    let log_id = entry.log_id;
+                    self.apply_alone(entry).map_err(|error| (log_id, error))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|(log_id, error)| StorageIOError::apply(log_id, &error).into()),
+            other => other.map_err(|error| StorageIOError::write_state_machine(&error).into()),
+        }
     }
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
@@ -179,6 +169,25 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         self.current()
             .map_err(|error| StorageIOError::read_snapshot(None, &error).into())
     }
+}
+
+fn apply_entry(batch: &mut BatchWriter, entry: Entry<TypeConfig>) -> Result<Response, StoreError> {
+    let log_id = entry.log_id;
+    let (response, membership) = match entry.payload {
+        EntryPayload::Blank => (Response::Empty, None),
+        EntryPayload::Membership(membership) => (
+            Response::Empty,
+            Some(StoredMembership::new(Some(log_id), membership)),
+        ),
+        EntryPayload::Normal(request) => (
+            Response::Applied {
+                version: batch.apply(&request.mutations)?,
+            },
+            None,
+        ),
+    };
+    record_applied(batch.transaction(), log_id, membership.as_ref())?;
+    Ok(response)
 }
 
 fn record_applied(
@@ -218,6 +227,64 @@ mod tests {
     fn open_store(directory: &Path) -> StateMachineStore {
         let state = StateMachine::open(directory.join("state.redb")).unwrap();
         StateMachineStore::new(Arc::new(state), directory.join("snapshot.json"))
+    }
+
+    fn service(id: &str) -> Mutation {
+        Mutation::PutService {
+            id: ServiceId::from(id),
+            spec: ServiceSpec {
+                name: id.to_string(),
+                image: Some("nginx".to_string()),
+                build: None,
+                deploy: DeploySpec::default(),
+                ingress: None,
+                preview: None,
+            },
+        }
+    }
+
+    fn entry(index: u64, mutations: Vec<Mutation>) -> Entry<TypeConfig> {
+        Entry {
+            log_id: LogId::new(openraft::CommittedLeaderId::new(1, 1), index),
+            payload: EntryPayload::Normal(super::super::Request { mutations }),
+        }
+    }
+
+    #[tokio::test]
+    async fn applies_a_batch_in_one_transaction_and_isolates_rejected_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = open_store(directory.path());
+        let rejected = Mutation::SetDeploymentStatus {
+            service_id: ServiceId::from("b"),
+            deployment_id: maestro_core::DeploymentId::from("missing"),
+            status: maestro_core::DeploymentStatus::Ready,
+            image: None,
+            failure: None,
+            at_ms: 1,
+        };
+
+        let responses = store
+            .apply(vec![
+                entry(1, vec![service("a")]),
+                entry(2, vec![service("b"), rejected]),
+                entry(3, vec![service("c")]),
+            ])
+            .await
+            .unwrap();
+
+        assert!(matches!(responses[0], Response::Applied { version: 1 }));
+        assert!(matches!(responses[1], Response::Rejected { .. }));
+        assert!(matches!(responses[2], Response::Applied { version: 2 }));
+        let services = store
+            .state
+            .services()
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(services, ["a", "c"]);
+        let (last_applied, _) = store.applied_state().await.unwrap();
+        assert_eq!(last_applied.map(|log_id| log_id.index), Some(3));
     }
 
     #[test]
