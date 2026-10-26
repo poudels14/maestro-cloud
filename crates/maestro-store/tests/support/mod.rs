@@ -48,7 +48,11 @@ pub async fn start_cluster(
     nodes
 }
 
-pub async fn start_node(ca: &ClusterCa, node_id: u64, snapshot_every_logs: Option<u64>) -> TestNode {
+pub async fn start_node(
+    ca: &ClusterCa,
+    node_id: u64,
+    snapshot_every_logs: Option<u64>,
+) -> TestNode {
     let credentials: NodeCredentials = ca
         .issue_node(node_id, CertRole::Voter, &["127.0.0.1".parse().unwrap()])
         .unwrap();

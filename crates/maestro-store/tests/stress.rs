@@ -62,12 +62,9 @@ async fn survives_bursts_of_deploys() {
                     let previous = deploy
                         .checked_sub(1)
                         .map(|previous| DeploymentId::new(format!("d-{index}-{previous}")));
-                    for mutations in deploy_writes(
-                        &service_id,
-                        &deployment_id,
-                        previous,
-                        replicas_per_node,
-                    ) {
+                    for mutations in
+                        deploy_writes(&service_id, &deployment_id, previous, replicas_per_node)
+                    {
                         let latency = write(&nodes, &alive, mutations).await;
                         latencies.lock().await.push(latency);
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -83,7 +80,10 @@ async fn survives_bursts_of_deploys() {
             let leader = leader_index(&nodes, &alive).expect("a leader before the kill");
             alive[leader].store(false, Ordering::SeqCst);
             shutdown(std::slice::from_ref(&nodes[leader])).await;
-            println!("killed the leader (node {}) halfway through", NODE_IDS[leader]);
+            println!(
+                "killed the leader (node {}) halfway through",
+                NODE_IDS[leader]
+            );
             Some(leader)
         }
         false => None,
