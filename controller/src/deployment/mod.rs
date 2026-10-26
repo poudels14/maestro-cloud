@@ -32,7 +32,7 @@ const TAILSCALE_IMAGE_NAME: &str = "maestro-tailscale";
 pub const PROBE_IMAGE_TAG: &str = concat!("maestro-probe:", env!("CARGO_PKG_VERSION"));
 pub const ADMIN_IMAGE_TAG: &str = concat!("maestro-admin:", env!("CARGO_PKG_VERSION"));
 pub const TAILSCALE_IMAGE_TAG: &str = concat!("maestro-tailscale:", env!("CARGO_PKG_VERSION"));
-pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
+pub const CLOUDFLARED_IMAGE_TAG: &str = "cloudflare/cloudflared:1985-dc3b264da64a";
 pub const MAX_CLOUDFLARED_REPLICAS: u32 = 25;
 
 pub(crate) fn container_etcd_endpoints(
