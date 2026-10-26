@@ -368,6 +368,7 @@ export type ClusterInfo = {
   voters: ClusterMember[];
   learners: ClusterMember[];
   maintenance: Maintenance.Run | null;
+  versions: { name: string; version: string }[];
 };
 
 export type ClusterConfig = {

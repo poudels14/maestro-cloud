@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::dns::PeerClusters;
 
-const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.3";
+pub const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.3";
 pub const TAILSCALE_CONTAINER_ID: &str = "maestro-tailscale";
 const HOSTNAME_PREFIX: &str = "maestro-";
 const STATE_MOUNT: &str = "/var/lib/tailscale";

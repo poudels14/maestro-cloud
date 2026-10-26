@@ -15,6 +15,7 @@ import { ServicesGrid } from "./ServicesGrid";
 import { ClusterConfigSection } from "./ClusterConfigSection";
 import { SlackWebhooks } from "../SlackWebhooks";
 import { ClusterStatsSection } from "./ClusterStatsSection";
+import { VersionsSection } from "./VersionsSection";
 import { NodesSection } from "./NodesSection";
 import { HttpLogsSection } from "./HttpLogsSection";
 import { ClusterLogsSection } from "./ClusterLogsSection";
@@ -92,6 +93,7 @@ function HomeShell(props: { tab: HomeTab }) {
                     <ClusterHero />
                     <ClusterStatsSection />
                     <ClusterConfigSection />
+                    <VersionsSection />
                     <SlackWebhooks />
                   </div>
                 </Match>

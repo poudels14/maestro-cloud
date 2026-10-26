@@ -21,7 +21,7 @@ pub use build::{
     BuildKitBuilder, BuildKitSettings, BuildOutput, BuildRequest, DepotBuild, image_name,
     remote_head,
 };
-pub use cloudflare::TunnelConnectors;
+pub use cloudflare::{CLOUDFLARED_IMAGE, TunnelConnectors};
 pub use dns::{DnsRecords, DnsServer, PeerClusters, upstream_resolvers};
 pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;
@@ -33,11 +33,12 @@ pub use replica_manifest::{LocalReplica, publish_replica_manifest};
 pub use source::{LocalPlanSource, PlanSource};
 pub use status::StatusBoard;
 pub use system::{
-    ADMIN_CONTAINER_ID, ADMIN_PORT, SystemSupervisor, admin_container, traefik_container,
+    ADMIN_CONTAINER_ID, ADMIN_PORT, SystemSupervisor, TRAEFIK_IMAGE, admin_container,
+    traefik_container,
 };
 pub use tailscale::{
-    PANEL_SOCKET_FILE, TAILSCALE_CONTAINER_ID, TailscaleNode, discover_peer_clusters,
-    tailscale_container, write_panel_serve_config,
+    PANEL_SOCKET_FILE, TAILSCALE_CONTAINER_ID, TAILSCALE_IMAGE, TailscaleNode,
+    discover_peer_clusters, tailscale_container, write_panel_serve_config,
 };
 pub use wireguard::{
     CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,

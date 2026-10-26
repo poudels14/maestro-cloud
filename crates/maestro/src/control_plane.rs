@@ -96,6 +96,14 @@ struct ClusterInfo {
     voters: Vec<ClusterMember>,
     learners: Vec<ClusterMember>,
     maintenance: Option<MaintenanceRun>,
+    versions: Vec<ComponentVersion>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComponentVersion {
+    name: &'static str,
+    version: String,
 }
 
 #[derive(Serialize)]
@@ -603,6 +611,7 @@ async fn cluster_info(State(info): State<Arc<InfoState>>) -> Json<ClusterInfo> {
         voters: members(metrics.voters),
         learners: members(metrics.learners),
         maintenance: info.consensus.state().maintenance_run().ok().flatten(),
+        versions: component_versions(),
     })
 }
 
@@ -883,4 +892,21 @@ async fn import_archive(
 
 fn uploads_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("uploads")
+}
+
+fn component_versions() -> Vec<ComponentVersion> {
+    let panel_images = include_str!("../../../Dockerfile.admin")
+        .lines()
+        .filter_map(|line| line.strip_prefix("FROM "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<Vec<_>>();
+    [
+        ("Tailscale", maestro_agent::TAILSCALE_IMAGE.to_string()),
+        ("cloudflared", maestro_agent::CLOUDFLARED_IMAGE.to_string()),
+        ("Traefik", maestro_agent::TRAEFIK_IMAGE.to_string()),
+        ("Panel", panel_images.join(", ")),
+    ]
+    .into_iter()
+    .map(|(name, version)| ComponentVersion { name, version })
+    .collect()
 }
