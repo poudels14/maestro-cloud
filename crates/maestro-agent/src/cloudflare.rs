@@ -6,7 +6,7 @@ use maestro_core::{ByteSize, Millicores};
 use maestro_runtime::{ContainerLimits, ContainerSpec, ContainerState, NetworkMode, Runtime};
 use tokio::sync::watch;
 
-pub const CLOUDFLARED_IMAGE: &str = "cloudflare/cloudflared:1852-21ca2e225ea5";
+pub const CLOUDFLARED_IMAGE: &str = "cloudflare/cloudflared:2026.10.4";
 const CONNECTOR_PREFIX: &str = "maestro-cloudflared-";
 const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_secs(10);
