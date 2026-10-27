@@ -35,6 +35,7 @@ use tokio::task::JoinSet;
 
 use crate::archive;
 use crate::cluster_service::ClusterService;
+use crate::disk_alerts;
 use crate::exec::{ExecState, exec_service};
 use crate::github::GitHub;
 use crate::identity::NodeIdentity;
@@ -391,6 +392,14 @@ pub async fn spawn(
         let notifier = slack::run_notifier(slack.clone(), consensus.clone(), observed.clone());
         async move {
             notifier.await;
+            Ok(())
+        }
+    });
+    tasks.spawn({
+        let alerts =
+            disk_alerts::run_disk_alerts(slack.clone(), consensus.clone(), clients.clone());
+        async move {
+            alerts.await;
             Ok(())
         }
     });

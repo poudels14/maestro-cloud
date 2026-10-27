@@ -6,6 +6,7 @@ mod contexts;
 mod control_link;
 mod control_plane;
 mod dev;
+mod disk_alerts;
 mod exec;
 mod github;
 mod identity;

@@ -375,6 +375,10 @@ fn deployment_and_service_events(previous: &Snapshot, current: &Snapshot) -> Vec
 
 async fn dispatch(state: &SlackState, event: &Event) {
     let (category, text) = render(&state.cluster, event);
+    notify(state, category, &text).await;
+}
+
+pub async fn notify(state: &SlackState, category: SlackCategory, text: &str) {
     let configured = state.config_webhook.iter().cloned();
     let subscribed = stored(state)
         .unwrap_or_default()
@@ -382,7 +386,7 @@ async fn dispatch(state: &SlackState, event: &Event) {
         .filter(|webhook| webhook.enabled && webhook.categories.contains(&category))
         .filter_map(|webhook| state.key.open(&webhook.url).ok());
     for url in configured.chain(subscribed) {
-        if let Err(error) = send(&state.http, &url, &text).await {
+        if let Err(error) = send(&state.http, &url, text).await {
             tracing::warn!(%error, "slack notification failed");
         }
     }
@@ -453,7 +457,7 @@ fn render(cluster: &str, event: &Event) -> (SlackCategory, String) {
     }
 }
 
-fn escape(text: &str) -> String {
+pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
