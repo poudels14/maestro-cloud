@@ -74,6 +74,9 @@ pub enum NodeRequest {
         deployment_id: String,
     },
     ObservedReplicas,
+    PruneImages {
+        keep: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -262,6 +265,11 @@ impl NodeService {
                 )),
             },
             NodeRequest::Disks => encode_value(&maestro_telemetry::disks()),
+            NodeRequest::PruneImages { keep } => {
+                crate::image_cleanup::prune_images(&self.runtime, &keep)
+                    .await
+                    .map_err(Status::internal)
+            }
             NodeRequest::Info => {
                 let stats = unix_http::get(&self.telemetry_socket, "/stats")
                     .await

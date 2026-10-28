@@ -39,6 +39,7 @@ use crate::disk_alerts;
 use crate::exec::{ExecState, exec_service};
 use crate::github::GitHub;
 use crate::identity::NodeIdentity;
+use crate::image_cleanup;
 use crate::join::JoinAuthority;
 use crate::maintenance;
 use crate::node_service::{
@@ -392,6 +393,13 @@ pub async fn spawn(
         let notifier = slack::run_notifier(slack.clone(), consensus.clone(), observed.clone());
         async move {
             notifier.await;
+            Ok(())
+        }
+    });
+    tasks.spawn({
+        let cleanup = image_cleanup::run_image_cleanup(consensus.clone(), clients.clone());
+        async move {
+            cleanup.await;
             Ok(())
         }
     });
@@ -833,6 +841,13 @@ async fn run_watcher(
     }
 }
 
+pub fn admin_image() -> String {
+    format!(
+        "maestro.local/maestro-admin:{}",
+        crate::VERSION.replace('+', "-")
+    )
+}
+
 async fn run_admin(
     runtime: Arc<ContainerdRuntime>,
     builder: BuildKitBuilder,
@@ -846,7 +861,7 @@ async fn run_admin(
         }
         Some(source) => {
             let version = crate::VERSION.replace('+', "-");
-            let image = format!("maestro.local/maestro-admin:{version}");
+            let image = admin_image();
             while runtime.pull(&image).await.is_err() {
                 tracing::info!(%image, "building the admin UI image");
                 let request = BuildRequest {

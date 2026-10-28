@@ -11,8 +11,8 @@ use containerd_client::services::v1::{
     CloseIoRequest, Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
     DeleteImageRequest, DeleteProcessRequest, DeleteTaskRequest, ExecProcessRequest,
     GetContainerRequest, GetImageRequest, GetRequest, KillRequest, ListContainersRequest,
-    ReadContentRequest, ResizePtyRequest, StartRequest, SubscribeRequest, TransferRequest,
-    WaitRequest,
+    ListImagesRequest, ReadContentRequest, ResizePtyRequest, StartRequest, SubscribeRequest,
+    TransferRequest, WaitRequest,
 };
 use containerd_client::services::v1::{
     containers_client::ContainersClient, content_client::ContentClient,
@@ -435,6 +435,28 @@ impl ContainerdRuntime {
 impl ContainerdRuntime {
     pub async fn has_image(&self, image: &str) -> Result<bool, RuntimeError> {
         self.image_exists(&reference::normalize(image)).await
+    }
+
+    pub async fn images(&self) -> Result<Vec<(String, Option<i64>)>, RuntimeError> {
+        Ok(ImagesClient::new(self.channel.clone())
+            .list(self.request(ListImagesRequest { filters: vec![] }))
+            .await?
+            .into_inner()
+            .images
+            .into_iter()
+            .map(|image| (image.name, image.created_at.map(|created| created.seconds)))
+            .collect())
+    }
+
+    pub async fn container_images(&self) -> Result<Vec<String>, RuntimeError> {
+        Ok(ContainersClient::new(self.channel.clone())
+            .list(self.request(ListContainersRequest { filters: vec![] }))
+            .await?
+            .into_inner()
+            .containers
+            .into_iter()
+            .map(|container| container.image)
+            .collect())
     }
 
     pub async fn remove_image(&self, image: &str) -> Result<(), RuntimeError> {

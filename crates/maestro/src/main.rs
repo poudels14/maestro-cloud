@@ -10,6 +10,7 @@ mod disk_alerts;
 mod exec;
 mod github;
 mod identity;
+mod image_cleanup;
 mod join;
 mod log_driver;
 mod maintenance;

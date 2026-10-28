@@ -22,6 +22,7 @@ pub use controls::{
 };
 pub use deployment::{
     Assignment, Deployment, DeploymentStatus, GitCommit, HealthcheckPlan, ReplicaPlan,
+    retained_releases,
 };
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo};

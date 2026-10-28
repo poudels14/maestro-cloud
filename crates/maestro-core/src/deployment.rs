@@ -7,6 +7,7 @@ use crate::resources::{EffectiveResources, OomPriority};
 use crate::routing::affinity_token;
 use crate::service::{Command, EgressRule, SecretsSpec, ServiceSpec, VolumeMount};
 
+const RETAINED_RELEASES: usize = 3;
 const TEMPLATE_OPEN: &str = "${{";
 const TEMPLATE_CLOSE: &str = "}}";
 
@@ -219,9 +220,57 @@ impl DeploymentStatus {
     }
 }
 
+/// The newest deployments of one service that went live with an image. Their images are kept so
+/// any of them can be restarted without a rebuild.
+pub fn retained_releases(deployments: &[Deployment]) -> Vec<&Deployment> {
+    let mut released = deployments
+        .iter()
+        .filter(|deployment| deployment.image.is_some())
+        .filter(|deployment| {
+            matches!(
+                deployment.status,
+                DeploymentStatus::Ready | DeploymentStatus::Draining | DeploymentStatus::Stopped
+            )
+        })
+        .collect::<Vec<_>>();
+    released.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at_ms));
+    released.truncate(RETAINED_RELEASES);
+    released
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retains_the_newest_releases_that_went_live_with_an_image() {
+        let deployment = |id: &str, at: u64, status: DeploymentStatus, image: bool| Deployment {
+            id: DeploymentId::from(id),
+            service_id: ServiceId::from("api"),
+            spec: serde_json::from_value(serde_json::json!({ "name": "api", "image": "nginx" }))
+                .unwrap(),
+            status,
+            image: image.then(|| format!("maestro.local/api:{id}")),
+            failure: None,
+            created_at_ms: at,
+            updated_at_ms: at,
+            git_commit: None,
+            built_on: None,
+        };
+        let deployments = vec![
+            deployment("d1", 1, DeploymentStatus::Stopped, true),
+            deployment("d2", 2, DeploymentStatus::Stopped, true),
+            deployment("d3", 3, DeploymentStatus::Failed, true),
+            deployment("d4", 4, DeploymentStatus::Stopped, true),
+            deployment("d5", 5, DeploymentStatus::Ready, true),
+            deployment("d6", 6, DeploymentStatus::Building, false),
+        ];
+        let retained = retained_releases(&deployments)
+            .iter()
+            .map(|deployment| deployment.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(retained, ["d5", "d4", "d2"]);
+    }
 
     #[test]
     fn fills_in_known_placeholders_and_leaves_the_rest() {
