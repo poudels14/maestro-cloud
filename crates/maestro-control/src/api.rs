@@ -10,6 +10,7 @@ use maestro_core::{
     MaintenanceEvent, MaintenancePhase, Millicores, NodeCapacity, NodeId, NodeRecord, NodeState,
     NodeStepStatus, PreviewSource, ReplicaId, ReplicaStatus, RouteTable, ServiceControls,
     ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica, host_conflict,
+    retained_releases,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,7 @@ struct ServiceDetail {
     deployments: Vec<Deployment>,
     replicas: Vec<ReplicaStatus>,
     assignments: Vec<Assignment>,
+    restartable: Vec<DeploymentId>,
 }
 
 #[derive(Serialize)]
@@ -191,6 +193,10 @@ pub fn router<W: StoreWriter, O: ObservedReplicas>(state: Arc<ApiState<W, O>>) -
         .route(
             "/api/services/{service_id}/deployments/{deployment_id}/remove",
             patch(stop_deployment::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/deployments/{deployment_id}/restart",
+            post(restart_deployment::<W, O>),
         )
         .route(
             "/api/services/{service_id}/redeploy",
@@ -472,6 +478,10 @@ async fn get_service<W: StoreWriter, O: ObservedReplicas>(
         .map(masked_deployment)
         .collect::<Vec<_>>();
     deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.created_at_ms));
+    let restartable = retained_releases(&deployments)
+        .into_iter()
+        .map(|deployment| deployment.id.clone())
+        .collect();
     let replicas = state
         .observed
         .replicas()
@@ -491,6 +501,7 @@ async fn get_service<W: StoreWriter, O: ObservedReplicas>(
         deployments,
         replicas,
         assignments,
+        restartable,
     }))
 }
 
@@ -607,31 +618,33 @@ async fn restart_service<W: StoreWriter, O: ObservedReplicas>(
     Query(query): Query<ForceQuery>,
 ) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
     let id = ServiceId::new(service_id);
-    let store = state.writer.state();
-    let spec = store
-        .service(&id)?
-        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
-    reject_frozen(store, &id, query.force)?;
-    let source = restart_source(store.deployments(&id)?).ok_or_else(|| {
+    let source = restart_source(state.writer.state().deployments(&id)?).ok_or_else(|| {
         ControlError::Conflict(format!(
             "service {id} has no deployed image to restart from"
         ))
     })?;
-    let deployment = Deployment {
-        image: source.image,
-        git_commit: source.git_commit,
-        built_on: source.built_on,
-        ..new_deployment(&id, spec)
-    };
-    let deployment_id = deployment.id.clone();
-    state
-        .writer
-        .write(vec![Mutation::CreateDeployment { deployment }])
-        .await?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(QueuedDeployment { deployment_id }),
-    ))
+    queue_restart(&state, &id, source, query.force).await
+}
+
+async fn restart_deployment<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path((service_id, deployment_id)): Path<(String, String)>,
+    Query(query): Query<ForceQuery>,
+) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
+    let id = ServiceId::new(service_id);
+    let deployment_id = DeploymentId::new(deployment_id);
+    let deployments = state.writer.state().deployments(&id)?;
+    let source = retained_releases(&deployments)
+        .into_iter()
+        .find(|deployment| deployment.id == deployment_id)
+        .cloned()
+        .ok_or_else(|| {
+            ControlError::Conflict(format!(
+                "deployment {deployment_id} cannot be restarted: only the last few released \
+                 deployments keep their image; redeploy instead"
+            ))
+        })?;
+    queue_restart(&state, &id, source, query.force).await
 }
 
 async fn freeze_service<W: StoreWriter, O: ObservedReplicas>(
@@ -1028,6 +1041,34 @@ fn reject_cluster_freeze(store: &maestro_store::StateMachine) -> Result<(), Cont
         ))),
         None => Ok(()),
     }
+}
+
+async fn queue_restart<W: StoreWriter, O: ObservedReplicas>(
+    state: &ApiState<W, O>,
+    id: &ServiceId,
+    source: Deployment,
+    force: bool,
+) -> Result<(StatusCode, Json<QueuedDeployment>), ControlError> {
+    let store = state.writer.state();
+    let spec = store
+        .service(id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    reject_frozen(store, id, force)?;
+    let deployment = Deployment {
+        image: source.image,
+        git_commit: source.git_commit,
+        built_on: source.built_on,
+        ..new_deployment(id, spec)
+    };
+    let deployment_id = deployment.id.clone();
+    state
+        .writer
+        .write(vec![Mutation::CreateDeployment { deployment }])
+        .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(QueuedDeployment { deployment_id }),
+    ))
 }
 
 fn restart_source(mut deployments: Vec<Deployment>) -> Option<Deployment> {

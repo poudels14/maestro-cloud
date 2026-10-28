@@ -34,6 +34,7 @@ type ServiceSummary = Pick<
 
 type ServiceDetail = ReplicaPlacement & {
   deployments: Omit<Deployment, "replicas">[];
+  restartable?: string[];
 };
 
 type LogRecord = {
@@ -140,7 +141,8 @@ async function getDeployments(serviceId: string): Promise<Deployment[]> {
   const detail = await request<ServiceDetail>(`/api/services/${encodeURIComponent(serviceId)}`);
   return detail.deployments.map((deployment) => ({
     ...deployment,
-    replicas: deploymentReplicas(detail, deployment.id)
+    replicas: deploymentReplicas(detail, deployment.id),
+    restartable: detail.restartable?.includes(deployment.id) ?? false
   }));
 }
 
@@ -167,6 +169,13 @@ async function redeployService(serviceId: string, force?: boolean) {
 
 async function restartService(serviceId: string, force?: boolean) {
   await request(serviceAction(serviceId, "restart", force), { method: "POST" });
+}
+
+async function restartDeployment(serviceId: string, deploymentId: string, force?: boolean) {
+  await request(
+    `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(deploymentId)}/restart${force ? "?force=true" : ""}`,
+    { method: "POST" }
+  );
 }
 
 async function freezeService(serviceId: string, frozen: boolean) {
@@ -412,6 +421,7 @@ export {
   deleteService,
   redeployService,
   restartService,
+  restartDeployment,
   freezeService,
   setServiceReplicas,
   clearServiceReplicasOverride,

@@ -1,7 +1,15 @@
 import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { EllipsisVertical, Ban, RotateCw, RefreshCw, Square, AlertTriangle } from "lucide-solid";
+import {
+  AlertTriangle,
+  Ban,
+  EllipsisVertical,
+  History,
+  RefreshCw,
+  RotateCw,
+  Square
+} from "lucide-solid";
 import clsx from "clsx";
 
 export function timeAgo(ms: number): string {
@@ -103,6 +111,7 @@ export function DeploymentMenu(props: {
   onStop: () => void;
   onRedeploy: () => void;
   onRestart: () => void;
+  onRestartDeployment?: () => void;
 }) {
   const canCancel = () => CANCELLABLE_STATUSES.has(props.status);
   const canStop = () => STOPPABLE_STATUSES.has(props.status);
@@ -147,6 +156,17 @@ export function DeploymentMenu(props: {
               <RefreshCw class="size-3" />
               Restart
             </DropdownMenu.Item>
+          </Show>
+          <Show when={props.onRestartDeployment}>
+            {(onRestartDeployment) => (
+              <DropdownMenu.Item
+                class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer outline-none"
+                onSelect={() => onRestartDeployment()()}
+              >
+                <History class="size-3" />
+                Restart this deployment
+              </DropdownMenu.Item>
+            )}
           </Show>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

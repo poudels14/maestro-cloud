@@ -3,7 +3,13 @@ import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import { useQuery } from "../../lib/useQuery";
 import { useLocation, useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
-import { cancelDeployment, redeployService, restartService, stopDeployment } from "../../lib/api";
+import {
+  cancelDeployment,
+  redeployService,
+  restartDeployment,
+  restartService,
+  stopDeployment
+} from "../../lib/api";
 import { clusterNodesQuery, deploymentsQuery, queryKeys } from "../../lib/queries";
 import { ErrorBanner } from "../../lib/ui";
 import { ConfirmDialog } from "../home/ConfirmDialog";
@@ -25,9 +31,12 @@ function DeploymentsTab(props: {
   const search = () => location().search as { deployment?: string; tab?: SheetTabId };
   const navigate = useNavigate();
 
-  const [freezeConfirmAction, setFreezeConfirmAction] = createSignal<"redeploy" | "restart" | null>(
-    null
-  );
+  const [freezeConfirmAction, setFreezeConfirmAction] = createSignal<
+    | { kind: "redeploy" }
+    | { kind: "restart" }
+    | { kind: "restart-deployment"; deploymentId: string }
+    | null
+  >(null);
   const [visibleCount, setVisibleCount] = createSignal(INITIAL_VISIBLE);
 
   const setUrlSheetState = (updates: { deployment?: string; tab?: SheetTabId }) =>
@@ -60,6 +69,11 @@ function DeploymentsTab(props: {
     mutationFn: (force?: boolean) => restartService(props.serviceId, force),
     onSuccess: invalidate
   }));
+  const restartDeploymentMutation = useMutation(() => ({
+    mutationFn: (request: { deploymentId: string; force?: boolean }) =>
+      restartDeployment(props.serviceId, request.deploymentId, request.force),
+    onSuccess: invalidate
+  }));
 
   const selectedDeployment = () => deployments.data?.find((d) => d.id === selectedId()) ?? null;
   const visibleDeployments = () => deployments.data?.slice(0, visibleCount()) ?? [];
@@ -85,16 +99,23 @@ function DeploymentsTab(props: {
 
   const handleRedeploy = () => {
     if (props.deployFrozen) {
-      setFreezeConfirmAction("redeploy");
+      setFreezeConfirmAction({ kind: "redeploy" });
     } else {
       redeployMutation.mutate(undefined);
     }
   };
   const handleRestart = () => {
     if (props.deployFrozen) {
-      setFreezeConfirmAction("restart");
+      setFreezeConfirmAction({ kind: "restart" });
     } else {
       restartMutation.mutate(undefined);
+    }
+  };
+  const handleRestartDeployment = (deploymentId: string) => {
+    if (props.deployFrozen) {
+      setFreezeConfirmAction({ kind: "restart-deployment", deploymentId });
+    } else {
+      restartDeploymentMutation.mutate({ deploymentId });
     }
   };
 
@@ -136,17 +157,19 @@ function DeploymentsTab(props: {
               ? "This preview no longer picks up new commits."
               : "Deploys are frozen for this service."}{" "}
             Are you sure you want to force a{" "}
-            {freezeConfirmAction() === "restart" ? "restart" : "redeploy"}?
+            {freezeConfirmAction()?.kind === "redeploy" ? "redeploy" : "restart"}?
           </>
         }
-        confirmLabel={`Force ${freezeConfirmAction() === "restart" ? "restart" : "deploy"}`}
+        confirmLabel={`Force ${freezeConfirmAction()?.kind === "redeploy" ? "deploy" : "restart"}`}
         onConfirm={() => {
           const action = freezeConfirmAction();
           setFreezeConfirmAction(null);
-          if (action === "restart") {
+          if (action?.kind === "restart") {
             restartMutation.mutate(true);
-          } else if (action === "redeploy") {
+          } else if (action?.kind === "redeploy") {
             redeployMutation.mutate(true);
+          } else if (action?.kind === "restart-deployment") {
+            restartDeploymentMutation.mutate({ deploymentId: action.deploymentId, force: true });
           }
         }}
         onCancel={() => setFreezeConfirmAction(null)}
@@ -187,6 +210,11 @@ function DeploymentsTab(props: {
                     onStop={() => stopMutation.mutate(deployment.id)}
                     onRedeploy={handleRedeploy}
                     onRestart={handleRestart}
+                    onRestartDeployment={
+                      deployment.restartable && deployment.status !== "ready"
+                        ? () => handleRestartDeployment(deployment.id)
+                        : undefined
+                    }
                   />
                 )}
               </For>

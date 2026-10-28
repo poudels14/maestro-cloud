@@ -214,6 +214,7 @@ export type Deployment = {
   gitCommit?: GitCommitInfo | null;
   builtOn?: number | null;
   replicas: ReplicaState[];
+  restartable?: boolean;
 };
 
 export type MetricPoint = {

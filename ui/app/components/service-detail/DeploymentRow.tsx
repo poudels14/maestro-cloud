@@ -15,6 +15,7 @@ type Props = {
   onStop: () => void;
   onRedeploy: () => void;
   onRestart: () => void;
+  onRestartDeployment?: () => void;
 };
 
 function DeploymentRow(props: Props) {
@@ -86,6 +87,7 @@ function DeploymentRow(props: Props) {
               onStop={props.onStop}
               onRedeploy={props.onRedeploy}
               onRestart={props.onRestart}
+              onRestartDeployment={props.onRestartDeployment}
             />
           </div>
         </div>

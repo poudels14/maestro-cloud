@@ -397,6 +397,71 @@ async fn cluster_freeze_blocks_even_forced_deploys() {
 }
 
 #[tokio::test]
+async fn restarts_only_deployments_whose_image_is_retained() {
+    let (writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    let template = writer.state().deployments(&ServiceId::from("api")).unwrap()[0].clone();
+    let released = |id: &str, at: u64, status: DeploymentStatus| maestro_core::Deployment {
+        id: maestro_core::DeploymentId::new(id),
+        status,
+        image: Some(format!("maestro.local/api:{id}")),
+        created_at_ms: at,
+        updated_at_ms: at,
+        ..template.clone()
+    };
+    writer
+        .write(
+            [
+                released("d1", 10, DeploymentStatus::Stopped),
+                released("d2", 20, DeploymentStatus::Stopped),
+                released("d3", 30, DeploymentStatus::Stopped),
+                released("d4", 40, DeploymentStatus::Ready),
+            ]
+            .into_iter()
+            .map(|deployment| maestro_store::Mutation::CreateDeployment { deployment })
+            .collect(),
+        )
+        .await
+        .unwrap();
+
+    let (_, detail) = call(&app, "GET", "/api/services/api", None).await;
+    assert_eq!(detail["restartable"], serde_json::json!(["d4", "d3", "d2"]));
+
+    let (status, queued) = call(
+        &app,
+        "POST",
+        "/api/services/api/deployments/d2/restart",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let restarted = writer
+        .state()
+        .deployment(
+            &ServiceId::from("api"),
+            &maestro_core::DeploymentId::new(queued["deploymentId"].as_str().unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(restarted.image.as_deref(), Some("maestro.local/api:d2"));
+
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/services/api/deployments/d1/restart",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn stops_restarts_and_deletes_deployments() {
     let (writer, app) = app();
     call(
