@@ -82,13 +82,9 @@ pub async fn prune_images(runtime: &ContainerdRuntime, keep: &[String]) -> Resul
         .chain(&system)
         .map(|image| normalize_image_reference(image))
         .collect::<BTreeSet<_>>();
-    let system_repositories = system
-        .iter()
-        .map(|image| repository(&normalize_image_reference(image)))
-        .collect::<BTreeSet<_>>();
     let now = chrono::Utc::now().timestamp();
     let mut removed = 0;
-    for image in removable(&images, &kept, &system_repositories, now) {
+    for image in removable(&images, &kept, now) {
         match runtime.remove_image(&image).await {
             Ok(()) => removed += 1,
             Err(error) => tracing::warn!(%image, %error, "could not remove image"),
@@ -134,17 +130,18 @@ fn keep_list(state: &StateMachine) -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn removable(
-    images: &[(String, Option<i64>)],
-    kept: &BTreeSet<String>,
-    system_repositories: &BTreeSet<String>,
-    now: i64,
-) -> Vec<String> {
+/// Images built by Maestro, and older tags of any repository a kept image comes from (registry
+/// builds, system images), are removable once they are past the grace period.
+fn removable(images: &[(String, Option<i64>)], kept: &BTreeSet<String>, now: i64) -> Vec<String> {
+    let repositories = kept
+        .iter()
+        .map(|image| repository(image))
+        .collect::<BTreeSet<_>>();
     images
         .iter()
         .filter(|(name, _)| !kept.contains(name))
         .filter(|(name, _)| {
-            name.starts_with(BUILT_IMAGE_PREFIX) || system_repositories.contains(&repository(name))
+            name.starts_with(BUILT_IMAGE_PREFIX) || repositories.contains(&repository(name))
         })
         .filter(|(_, created)| created.is_some_and(|created| now - created >= GRACE_SECONDS))
         .map(|(name, _)| name.clone())
@@ -165,7 +162,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removes_old_unkept_built_and_outdated_system_images_only() {
+    fn removes_old_unkept_tags_of_managed_repositories_only() {
         let now = 10 * GRACE_SECONDS;
         let old = Some(now - GRACE_SECONDS);
         let fresh = Some(now - 60);
@@ -177,15 +174,27 @@ mod tests {
             ("docker.io/library/traefik:v3.6".to_string(), old),
             ("docker.io/library/nginx:1.27".to_string(), old),
             ("maestro.local/web:d9".to_string(), None),
+            (
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d4".to_string(),
+                old,
+            ),
+            (
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d5".to_string(),
+                old,
+            ),
         ];
         let kept = BTreeSet::from([
             "maestro.local/api:d2".to_string(),
             "docker.io/library/traefik:v3.6".to_string(),
+            "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d5".to_string(),
         ]);
-        let system = BTreeSet::from(["docker.io/library/traefik".to_string()]);
         assert_eq!(
-            removable(&images, &kept, &system, now),
-            ["maestro.local/api:d1", "docker.io/library/traefik:v3.5"]
+            removable(&images, &kept, now),
+            [
+                "maestro.local/api:d1",
+                "docker.io/library/traefik:v3.5",
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d4"
+            ]
         );
     }
 
