@@ -96,6 +96,27 @@
           namespace = "maestro"
           snapshotter = "overlayfs"
       '';
+      migrateData = pkgs.writeShellScript "maestro-migrate-data" ''
+        set -eu
+        old=/var/lib/maestro
+        new=${dataDir}
+        if [ "$old" != "$new" ] && [ -f "$old/node.json" ] && [ ! -f "$new/node.json" ]; then
+          echo "moving maestro data from $old to $new"
+          rm -rf "$new.migrating"
+          mkdir -p "$new.migrating"
+          cp -a "$old/." "$new.migrating/"
+          sync
+          if [ -d "$new" ]; then
+            cp -a "$new.migrating/." "$new/"
+            rm -rf "$new.migrating"
+          else
+            mv "$new.migrating" "$new"
+          fi
+          sync
+          rm -rf "$old"
+          echo "moved maestro data to $new"
+        fi
+      '';
       provision = pkgs.writeShellScript "maestro-provision" ''
         set -eu
         if [ -f ${dataDir}/node.json ]; then
@@ -150,8 +171,8 @@
 
         dataDir = lib.mkOption {
           type = lib.types.path;
-          default = "/var/lib/maestro";
-          description = "Directory for cluster state, keys, logs, and build workspaces.";
+          default = "/data/maestro";
+          description = "Directory for cluster state, keys, logs, and build workspaces. On start, data left in the previous default /var/lib/maestro is moved here.";
         };
 
         advertise = lib.mkOption {
@@ -343,6 +364,17 @@
           };
         };
 
+        systemd.services.maestro-data-migration = {
+          description = "Move Maestro data to ${dataDir}";
+          before = ["maestro.service" "maestro-telemetry.service"];
+          requiredBy = ["maestro.service" "maestro-telemetry.service"];
+          unitConfig.RequiresMountsFor = [dataDir];
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = "${migrateData}";
+          };
+        };
+
         systemd.services.maestro = {
           description = "Maestro node";
           startLimitIntervalSec = 0;
@@ -350,6 +382,7 @@
           wants = ["network-online.target" "buildkitd.service"];
           requires = ["containerd.service"];
           wantedBy = ["multi-user.target"];
+          unitConfig.RequiresMountsFor = [dataDir];
           path = [
             pkgs.cni-plugins
             pkgs.iproute2
@@ -389,6 +422,7 @@
           description = "Maestro telemetry";
           after = ["maestro.service"];
           wantedBy = ["multi-user.target"];
+          unitConfig.RequiresMountsFor = [dataDir];
           serviceConfig = {
             Type = "simple";
             Slice = "maestro-system.slice";

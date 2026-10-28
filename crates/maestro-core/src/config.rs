@@ -35,7 +35,7 @@ const REPLACED_V1_FIELDS: [(&str, &str); 6] = [
 
 const CONFIG_MASK: &str = "********";
 const DEFAULT_MAX_CONCURRENT_BUILDS: u32 = 5;
-const DEFAULT_VOLUME_ROOTS: [&str; 2] = ["/var/lib/maestro-volumes", "/data"];
+const DEFAULT_VOLUME_ROOTS: [&str; 2] = ["/var/lib/maestro-volumes", "/data/volumes"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

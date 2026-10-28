@@ -153,8 +153,8 @@ Every other field has a default.
   "defaults": {
     "resources": { "cpu": 4, "memory": "50%", "request": { "cpu": 0.25, "memory": "512Mi" } }
   },
-  "maxConcurrentBuilds": 5,                              // the default
-  "volumeRoots": ["/var/lib/maestro-volumes", "/data"]   // the default
+  "maxConcurrentBuilds": 5,                                      // the default
+  "volumeRoots": ["/var/lib/maestro-volumes", "/data/volumes"]   // the default
 }
 ```
 
