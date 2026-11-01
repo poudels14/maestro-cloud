@@ -1,10 +1,10 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-solid";
 import type { Stats } from "../../lib/types";
 import { formatBytes, formatUptime } from "../../lib/format";
-import { ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
+import { ErrorBanner, SectionHeader, TabButton, timeAgo } from "../../lib/ui";
 import { clusterConfigQuery, clusterStatsQuery } from "../../lib/queries";
 
 type HealthLevel = "healthy" | "catching-up" | "warning" | "error" | "disabled";
@@ -14,6 +14,9 @@ function ClusterStatsSection() {
   const config = useQuery(() => clusterConfigQuery());
   const healthchecksFiltered = () =>
     config.data?.datadog ? !config.data.datadog.logs?.includeHealthcheck : undefined;
+  const [selectedNodeId, setSelectedNodeId] = createSignal<number | null>(null);
+  const selectedNode = () =>
+    stats.data?.nodes.find((node) => node.nodeId === selectedNodeId()) ?? stats.data?.nodes[0];
 
   return (
     <div>
@@ -28,15 +31,26 @@ function ClusterStatsSection() {
       <Show when={stats.data}>
         {(data) => (
           <div class="space-y-3">
-            <For each={data().nodes}>
+            <div class="flex gap-5 overflow-x-auto border-b border-gray-200">
+              <For each={data().nodes}>
+                {(node) => (
+                  <TabButton
+                    label={node.nodeName}
+                    active={selectedNode()?.nodeId === node.nodeId}
+                    onClick={() => setSelectedNodeId(node.nodeId)}
+                  />
+                )}
+              </For>
+            </div>
+            <Show when={selectedNode()}>
               {(node) => (
                 <NodeStatsCard
-                  node={node}
-                  isLeader={data().leader === node.nodeId}
+                  node={node()}
+                  isLeader={data().leader === node().nodeId}
                   healthchecksFiltered={healthchecksFiltered()}
                 />
               )}
-            </For>
+            </Show>
             <Show when={data().warnings.length > 0}>
               <div class="rounded-lg border border-amber-200 bg-amber-50 divide-y divide-amber-100">
                 <For each={data().warnings}>
@@ -104,7 +118,33 @@ function NodeStatsCard(props: {
         </Show>
         <BackupRow backup={props.node.backup} />
       </Show>
+      <Show when={props.node.host}>{(host) => <HostRows host={host()} />}</Show>
     </div>
+  );
+}
+
+function HostRows(props: { host: Stats.Host }) {
+  const rows = () =>
+    [
+      ["Hostname", props.host.hostname],
+      ["OS", props.host.os],
+      ["Kernel", props.host.kernel],
+      ["Architecture", props.host.arch],
+      ["CPU", props.host.cpuModel],
+      ["Host uptime", props.host.uptimeMs != null ? formatUptime(props.host.uptimeMs) : null]
+    ].filter((row): row is [string, string] => !!row[1]);
+
+  return (
+    <For each={rows()}>
+      {([label, value]) => (
+        <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+          <span class="text-xs font-medium text-gray-700 shrink-0">{label}</span>
+          <span class="text-xs text-gray-600 text-right break-words min-w-0 tabular-nums">
+            {value}
+          </span>
+        </div>
+      )}
+    </For>
   );
 }
 

@@ -1,4 +1,5 @@
 use maestro_core::{ByteSize, Millicores, NodeCapacity, ReserveSettings};
+use serde::Serialize;
 use std::net::IpAddr;
 use tokio::process::Command;
 
@@ -10,6 +11,17 @@ const DEFAULT_CPU_RESERVE: Millicores = Millicores::new(1000);
 const MEMORY_HIGH_PERCENT: u64 = 90;
 const WORKLOADS_SLICE: &str = "maestro-workloads.slice";
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostInfo {
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub kernel: Option<String>,
+    pub arch: &'static str,
+    pub cpu_model: Option<String>,
+    pub uptime_ms: Option<u64>,
+}
+
 pub fn detect_capacity() -> Result<NodeCapacity, AgentError> {
     let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get()) as u32;
     let meminfo = std::fs::read_to_string("/proc/meminfo")
@@ -20,6 +32,23 @@ pub fn detect_capacity() -> Result<NodeCapacity, AgentError> {
         cpu: Millicores::new(cores * 1000),
         memory,
     })
+}
+
+pub fn host_info() -> HostInfo {
+    let read = |path: &str| {
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|contents| contents.trim().to_string())
+            .filter(|contents| !contents.is_empty())
+    };
+    HostInfo {
+        hostname: read("/proc/sys/kernel/hostname"),
+        os: read("/etc/os-release").and_then(|contents| parse_os_name(&contents)),
+        kernel: read("/proc/sys/kernel/osrelease"),
+        arch: std::env::consts::ARCH,
+        cpu_model: read("/proc/cpuinfo").and_then(|contents| parse_cpu_model(&contents)),
+        uptime_ms: read("/proc/uptime").and_then(|contents| parse_uptime_ms(&contents)),
+    }
 }
 
 pub fn system_reserve(capacity: &NodeCapacity, settings: &ReserveSettings) -> NodeCapacity {
@@ -107,6 +136,32 @@ fn parse_mem_total(meminfo: &str) -> Option<ByteSize> {
         .map(|kibibytes| ByteSize::new(kibibytes * 1024))
 }
 
+fn parse_os_name(os_release: &str) -> Option<String> {
+    let field = |key: &str| {
+        os_release
+            .lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+            .map(|value| value.trim().trim_matches('"').to_string())
+    };
+    field("PRETTY_NAME").or_else(|| field("NAME"))
+}
+
+fn parse_cpu_model(cpuinfo: &str) -> Option<String> {
+    cpuinfo
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(key, _)| matches!(key.trim(), "model name" | "Model" | "cpu model"))
+        .map(|(_, value)| value.trim().to_string())
+}
+
+fn parse_uptime_ms(uptime: &str) -> Option<u64> {
+    uptime
+        .split_whitespace()
+        .next()
+        .and_then(|seconds| seconds.parse::<f64>().ok())
+        .map(|seconds| (seconds * 1000.0) as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +176,23 @@ mod tests {
             Some(ByteSize::new(8_131_512 * 1024))
         );
         assert_eq!(parse_mem_total("MemFree: 1 kB"), None);
+    }
+
+    #[test]
+    fn parses_host_details() {
+        let os_release = "NAME=NixOS\nPRETTY_NAME=\"NixOS 25.05 (Warbler)\"\nID=nixos\n";
+        assert_eq!(
+            parse_os_name(os_release).as_deref(),
+            Some("NixOS 25.05 (Warbler)")
+        );
+        assert_eq!(parse_os_name("NAME=\"Ubuntu\"").as_deref(), Some("Ubuntu"));
+        let cpuinfo =
+            "processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7R13 Processor\n";
+        assert_eq!(
+            parse_cpu_model(cpuinfo).as_deref(),
+            Some("AMD EPYC 7R13 Processor")
+        );
+        assert_eq!(parse_uptime_ms("3600.52 7000.10\n"), Some(3_600_520));
     }
 
     #[test]

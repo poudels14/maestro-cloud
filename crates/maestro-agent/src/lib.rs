@@ -27,7 +27,10 @@ pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;
 pub use health::{HealthMonitor, probe};
 pub use ingress::{IngressWriter, serve_denied};
-pub use node::{apply_workload_slice_limits, detect_capacity, reset_stale_bridge, system_reserve};
+pub use node::{
+    HostInfo, apply_workload_slice_limits, detect_capacity, host_info, reset_stale_bridge,
+    system_reserve,
+};
 pub use reconciler::{ImageFetcher, Reconciler, ReconcilerSettings};
 pub use replica_manifest::{LocalReplica, publish_replica_manifest};
 pub use source::{LocalPlanSource, PlanSource};

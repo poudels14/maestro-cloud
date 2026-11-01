@@ -279,6 +279,7 @@ impl NodeService {
                 Ok(json!({
                     "version": crate::VERSION,
                     "uptimeMs": self.started.elapsed().as_millis() as u64,
+                    "host": maestro_agent::host_info(),
                     "maintenance": node_maintenance::progress(&self.node_dir),
                     "telemetry": stats.is_some(),
                     "sinks": stats.as_ref().map(|stats| stats["sinks"].clone()).unwrap_or_else(|| json!([])),

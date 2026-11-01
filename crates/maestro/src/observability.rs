@@ -133,6 +133,7 @@ struct NodeStats {
     node_name: String,
     version: Option<String>,
     uptime_ms: Option<u64>,
+    host: Option<Value>,
     available: bool,
     telemetry: bool,
     sinks: Vec<SinkStats>,
@@ -179,6 +180,10 @@ pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
                             .as_ref()
                             .and_then(|info| info["version"].as_str().map(str::to_string)),
                         uptime_ms: info.as_ref().and_then(|info| info["uptimeMs"].as_u64()),
+                        host: info
+                            .as_ref()
+                            .map(|info| info["host"].clone())
+                            .filter(|host| !host.is_null()),
                         available: info.is_some(),
                         telemetry: info
                             .as_ref()
@@ -766,6 +771,7 @@ mod tests {
             node_name: format!("node{id}"),
             version: version.map(str::to_string),
             uptime_ms: None,
+            host: None,
             available,
             telemetry,
             sinks: Vec::new(),

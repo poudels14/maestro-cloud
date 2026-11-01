@@ -289,11 +289,21 @@ export namespace Stats {
     uploadedBytesLastRun: number;
   };
 
+  export type Host = {
+    hostname: string | null;
+    os: string | null;
+    kernel: string | null;
+    arch: string;
+    cpuModel: string | null;
+    uptimeMs: number | null;
+  };
+
   export type Node = {
     nodeId: number;
     nodeName: string;
     version: string | null;
     uptimeMs: number | null;
+    host: Host | null;
     available: boolean;
     telemetry: boolean;
     sinks: Sink[];
