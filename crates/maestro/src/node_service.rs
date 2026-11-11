@@ -76,6 +76,8 @@ pub enum NodeRequest {
     ObservedReplicas,
     PruneImages {
         keep: Vec<String>,
+        #[serde(default)]
+        managed: Vec<String>,
     },
 }
 
@@ -265,8 +267,8 @@ impl NodeService {
                 )),
             },
             NodeRequest::Disks => encode_value(&maestro_telemetry::disks()),
-            NodeRequest::PruneImages { keep } => {
-                crate::image_cleanup::prune_images(&self.runtime, &keep)
+            NodeRequest::PruneImages { keep, managed } => {
+                crate::image_cleanup::prune_images(&self.runtime, &keep, &managed)
                     .await
                     .map_err(Status::internal)
             }

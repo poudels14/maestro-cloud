@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use maestro_core::{DeploymentStatus, NodeState, retained_releases};
+use maestro_core::{DeploymentStatus, NodeId, NodeState, retained_releases};
 use maestro_runtime::{ContainerdRuntime, normalize_image_reference};
 use maestro_store::{Consensus, StateMachine};
 use serde_json::{Value, json};
@@ -20,6 +20,11 @@ const LIVE: [DeploymentStatus; 5] = [
     DeploymentStatus::Draining,
 ];
 
+struct NeededImages {
+    released: Vec<String>,
+    assigned: BTreeMap<NodeId, Vec<String>>,
+}
+
 pub async fn run_image_cleanup(consensus: Arc<Consensus>, clients: NodeClients) {
     let mut ticker = tokio::time::interval(CLEANUP_INTERVAL);
     ticker.tick().await;
@@ -31,24 +36,43 @@ pub async fn run_image_cleanup(consensus: Arc<Consensus>, clients: NodeClients) 
             .ok()
             .flatten()
             .is_some_and(|run| !run.is_terminal());
-        match (consensus.is_leader() && !maintaining, keep_list(state)) {
+        match (consensus.is_leader() && !maintaining, needed_images(state)) {
             (false, _) => {}
             (true, Err(error)) => {
                 tracing::warn!(%error, "image cleanup could not read cluster state")
             }
-            (true, Ok(keep)) => {
-                let nodes = state
+            (true, Ok(NeededImages { released, assigned })) => {
+                let managed = released
+                    .iter()
+                    .chain(assigned.values().flatten())
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let prunes = state
                     .nodes()
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|node| node.state != NodeState::Removed)
-                    .collect();
-                for (_, node_name, reply) in call_nodes(
-                    &clients,
-                    nodes,
-                    NodeRequest::PruneImages { keep: keep.clone() },
-                )
-                .await
+                    .map(|node| {
+                        let keep = released
+                            .iter()
+                            .filter(|image| image.starts_with(BUILT_IMAGE_PREFIX))
+                            .chain(assigned.get(&node.id).into_iter().flatten())
+                            .cloned()
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect();
+                        let request = NodeRequest::PruneImages {
+                            keep,
+                            managed: managed.clone(),
+                        };
+                        call_nodes(&clients, vec![node], request)
+                    });
+                for (_, node_name, reply) in futures_util::future::join_all(prunes)
+                    .await
+                    .into_iter()
+                    .flatten()
                 {
                     match reply {
                         Ok(pruned) => {
@@ -64,7 +88,13 @@ pub async fn run_image_cleanup(consensus: Arc<Consensus>, clients: NodeClients) 
     }
 }
 
-pub async fn prune_images(runtime: &ContainerdRuntime, keep: &[String]) -> Result<Value, String> {
+/// `keep` is what this node must hold on to. `managed` lists every image the cluster still uses;
+/// older tags of their repositories are Maestro's to remove even when this node runs none of them.
+pub async fn prune_images(
+    runtime: &ContainerdRuntime,
+    keep: &[String],
+    managed: &[String],
+) -> Result<Value, String> {
     let images = runtime.images().await.map_err(|error| error.to_string())?;
     let in_use = runtime
         .container_images()
@@ -82,9 +112,15 @@ pub async fn prune_images(runtime: &ContainerdRuntime, keep: &[String]) -> Resul
         .chain(&system)
         .map(|image| normalize_image_reference(image))
         .collect::<BTreeSet<_>>();
+    let repositories = kept
+        .iter()
+        .cloned()
+        .chain(managed.iter().map(|image| normalize_image_reference(image)))
+        .map(|image| repository(&image))
+        .collect::<BTreeSet<_>>();
     let now = chrono::Utc::now().timestamp();
     let mut removed = 0;
-    for image in removable(&images, &kept, now) {
+    for image in removable(&images, &kept, &repositories, now) {
         match runtime.remove_image(&image).await {
             Ok(()) => removed += 1,
             Err(error) => tracing::warn!(%image, %error, "could not remove image"),
@@ -93,9 +129,11 @@ pub async fn prune_images(runtime: &ContainerdRuntime, keep: &[String]) -> Resul
     Ok(json!({ "removed": removed }))
 }
 
-fn keep_list(state: &StateMachine) -> Result<Vec<String>, String> {
+/// Images of live deployments and retained releases, cluster-wide, and the images assigned to each
+/// node.
+fn needed_images(state: &StateMachine) -> Result<NeededImages, String> {
     let services = state.services().map_err(|error| error.to_string())?;
-    let deployment_images = services
+    let released = services
         .iter()
         .map(|(id, _)| state.deployments(id))
         .collect::<Result<Vec<_>, _>>()
@@ -112,31 +150,38 @@ fn keep_list(state: &StateMachine) -> Result<Vec<String>, String> {
                 .filter_map(|deployment| deployment.image.clone())
                 .chain(live)
                 .collect::<Vec<_>>()
-        });
-    let assigned_images = state
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let assigned = state
         .nodes()
         .map_err(|error| error.to_string())?
         .iter()
-        .map(|node| state.assignments(node.id))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .flatten()
-        .map(|assignment| assignment.image);
-    Ok(deployment_images
-        .chain(assigned_images)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect())
+        .map(|node| {
+            state.assignments(node.id).map(|assignments| {
+                let images = assignments
+                    .into_iter()
+                    .map(|assignment| assignment.image)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                (node.id, images)
+            })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(NeededImages { released, assigned })
 }
 
-/// Images built by Maestro, and older tags of any repository a kept image comes from (registry
-/// builds, system images), are removable once they are past the grace period.
-fn removable(images: &[(String, Option<i64>)], kept: &BTreeSet<String>, now: i64) -> Vec<String> {
-    let repositories = kept
-        .iter()
-        .map(|image| repository(image))
-        .collect::<BTreeSet<_>>();
+/// Images built by Maestro, and tags of any repository Maestro manages (registry builds, system
+/// images) that this node does not keep, are removable once they are past the grace period.
+fn removable(
+    images: &[(String, Option<i64>)],
+    kept: &BTreeSet<String>,
+    repositories: &BTreeSet<String>,
+    now: i64,
+) -> Vec<String> {
     images
         .iter()
         .filter(|(name, _)| !kept.contains(name))
@@ -188,12 +233,42 @@ mod tests {
             "docker.io/library/traefik:v3.6".to_string(),
             "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d5".to_string(),
         ]);
+        let repositories = kept.iter().map(|image| repository(image)).collect();
         assert_eq!(
-            removable(&images, &kept, now),
+            removable(&images, &kept, &repositories, now),
             [
                 "maestro.local/api:d1",
                 "docker.io/library/traefik:v3.5",
                 "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d4"
+            ]
+        );
+    }
+
+    #[test]
+    fn removes_managed_registry_images_this_node_does_not_keep() {
+        let now = 10 * GRACE_SECONDS;
+        let old = Some(now - GRACE_SECONDS);
+        let images = [
+            (
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d4".to_string(),
+                old,
+            ),
+            (
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d5".to_string(),
+                old,
+            ),
+            ("maestro.local/api:d2".to_string(), old),
+        ];
+        let kept = BTreeSet::from(["maestro.local/api:d2".to_string()]);
+        let repositories = BTreeSet::from([
+            "maestro.local/api".to_string(),
+            "123.dkr.ecr.us-west-2.amazonaws.com/team/app".to_string(),
+        ]);
+        assert_eq!(
+            removable(&images, &kept, &repositories, now),
+            [
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d4",
+                "123.dkr.ecr.us-west-2.amazonaws.com/team/app:d5"
             ]
         );
     }
