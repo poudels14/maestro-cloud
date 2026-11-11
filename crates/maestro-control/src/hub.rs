@@ -309,6 +309,7 @@ pub async fn run_publisher(
     let mut hub_changes = hub.subscribe();
     let mut store_changes = state.subscribe();
     let mut previous_routes = RouteTable::default();
+    let mut previous_dns = BTreeMap::new();
     loop {
         let statuses = hub
             .replicas()
@@ -317,7 +318,12 @@ pub async fn run_publisher(
             .collect::<BTreeMap<_, _>>();
         let observed = |replica_id: &ReplicaId| statuses.get(replica_id).cloned();
         let routes = cluster_routes(&state, &observed, &previous_routes)
-            .and_then(|table| Ok((table, cluster_dns(&state, &observed, &cluster)?)))
+            .and_then(|table| {
+                Ok((
+                    table,
+                    cluster_dns(&state, &observed, &cluster, &previous_dns)?,
+                ))
+            })
             .and_then(|(table, dns)| Ok((table, dns, assigned_nodes(&state)?)));
         match routes {
             Ok((table, dns, assigned)) => {
@@ -347,6 +353,7 @@ pub async fn run_publisher(
                 }
                 if routes_ready {
                     previous_routes = table;
+                    previous_dns = dns;
                 }
             }
             Err(error) => tracing::warn!(%error, "failed to compute routes"),

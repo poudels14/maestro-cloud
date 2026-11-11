@@ -48,31 +48,61 @@ pub fn cluster_dns(
     state: &StateMachine,
     observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
     cluster: &str,
+    previous: &BTreeMap<String, Vec<IpAddr>>,
 ) -> Result<BTreeMap<String, Vec<IpAddr>>, StoreError> {
-    let names = all_assignments(state)?
+    Ok(build_dns(
+        &all_assignments(state)?,
+        observed,
+        cluster,
+        previous,
+    ))
+}
+
+pub fn build_dns(
+    assignments: &[Assignment],
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+    cluster: &str,
+    previous: &BTreeMap<String, Vec<IpAddr>>,
+) -> BTreeMap<String, Vec<IpAddr>> {
+    let records = assignments
         .iter()
         .filter(|assignment| !assignment.is_retiring())
         .filter_map(|assignment| {
             let status = observed(&assignment.replica_id)?;
-            let ip = status
-                .ip
-                .filter(|_| status.phase == ReplicaPhase::Healthy)?;
-            Some((assignment.clone(), ip))
+            let ip = status.ip?;
+            Some((assignment.clone(), ip, status.phase))
         })
-        .flat_map(|(assignment, ip)| {
+        .flat_map(|(assignment, ip, phase)| {
             internal_names(cluster, assignment.replica_id.as_str())
                 .into_iter()
                 .chain(internal_names(cluster, assignment.service_id.as_str()))
-                .map(move |name| (name, ip))
+                .map(move |name| (name, ip, phase))
         })
+        .collect::<Vec<_>>();
+    let healthy = records
+        .iter()
+        .filter(|(_, _, phase)| *phase == ReplicaPhase::Healthy)
         .fold(
             BTreeMap::<String, Vec<IpAddr>>::new(),
-            |mut names, (name, ip)| {
-                names.entry(name).or_default().push(ip);
+            |mut names, (name, ip, _)| {
+                names.entry(name.clone()).or_default().push(*ip);
                 names
             },
         );
-    Ok(names)
+    let fallback = records
+        .iter()
+        .filter(|(name, ip, phase)| {
+            *phase == ReplicaPhase::Unhealthy
+                && !healthy.contains_key(name)
+                && previous.get(name).is_some_and(|ips| ips.contains(ip))
+        })
+        .collect::<Vec<_>>();
+    fallback
+        .into_iter()
+        .fold(healthy, |mut names, (name, ip, _)| {
+            names.entry(name.clone()).or_default().push(*ip);
+            names
+        })
 }
 
 pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
@@ -110,11 +140,29 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
                 .collect::<Vec<_>>();
             backends.sort();
             let observation_missing = routed_replicas.iter().any(|(_, status)| status.is_none());
-            let held = previous
+            let previous_backends = previous
                 .routes
                 .get(service_id)
-                .filter(|_| backends.is_empty() && observation_missing)
-                .map(|route| route.backends.clone());
+                .map(|route| route.backends.clone())
+                .unwrap_or_default();
+            let held = match (backends.is_empty(), observation_missing) {
+                (true, true) => Some(previous_backends),
+                (true, false) => Some(
+                    previous_backends
+                        .into_iter()
+                        .filter(|backend| {
+                            routed_replicas.iter().any(|(assignment, status)| {
+                                assignment.replica_id == backend.replica_id
+                                    && status.as_ref().is_some_and(|status| {
+                                        status.phase == ReplicaPhase::Unhealthy
+                                            && status.ip == Some(backend.address.ip())
+                                    })
+                            })
+                        })
+                        .collect(),
+                ),
+                (false, _) => None,
+            };
             Some((
                 service_id.clone(),
                 ServiceRoute {
@@ -308,7 +356,59 @@ mod tests {
     }
 
     #[test]
-    fn drops_backends_when_replicas_are_confirmed_unhealthy() {
+    fn keeps_previously_healthy_replicas_until_a_healthy_one_is_up() {
+        let deployments = [deployment("d1", DeploymentStatus::Ready)];
+        let first = table(
+            &deployments,
+            &[assignment("d1", 0)],
+            &[status("d1-0", ReplicaPhase::Healthy, 2)],
+            &RouteTable::default(),
+        );
+        let unhealthy = table(
+            &deployments,
+            &[assignment("d1", 0), assignment("d1", 1)],
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Running, 3),
+            ],
+            &first,
+        );
+        assert_eq!(addresses(&unhealthy), ["10.200.1.2:8080"]);
+        let still_unhealthy = table(
+            &deployments,
+            &[assignment("d1", 0), assignment("d1", 1)],
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Running, 3),
+            ],
+            &unhealthy,
+        );
+        assert_eq!(addresses(&still_unhealthy), ["10.200.1.2:8080"]);
+        let replaced = table(
+            &deployments,
+            &[assignment("d1", 0), assignment("d1", 1)],
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Healthy, 3),
+            ],
+            &still_unhealthy,
+        );
+        assert_eq!(addresses(&replaced), ["10.200.1.3:8080"]);
+    }
+
+    #[test]
+    fn never_routes_replicas_that_were_never_healthy() {
+        let routes = table(
+            &[deployment("d1", DeploymentStatus::Ready)],
+            &[assignment("d1", 0)],
+            &[status("d1-0", ReplicaPhase::Unhealthy, 2)],
+            &RouteTable::default(),
+        );
+        assert!(addresses(&routes).is_empty());
+    }
+
+    #[test]
+    fn drops_previously_healthy_replicas_once_they_stop_running() {
         let deployments = [deployment("d1", DeploymentStatus::Ready)];
         let assignments = [assignment("d1", 0)];
         let first = table(
@@ -317,12 +417,74 @@ mod tests {
             &[status("d1-0", ReplicaPhase::Healthy, 2)],
             &RouteTable::default(),
         );
-        let unhealthy = table(
+        let restarting = table(
             &deployments,
             &assignments,
-            &[status("d1-0", ReplicaPhase::Unhealthy, 2)],
+            &[ReplicaStatus {
+                ip: None,
+                ..status("d1-0", ReplicaPhase::Restarting, 2)
+            }],
             &first,
         );
-        assert!(addresses(&unhealthy).is_empty());
+        assert!(addresses(&restarting).is_empty());
+    }
+
+    fn dns(
+        assignments: &[Assignment],
+        statuses: &[ReplicaStatus],
+        previous: &BTreeMap<String, Vec<IpAddr>>,
+    ) -> BTreeMap<String, Vec<IpAddr>> {
+        let observed = |replica_id: &ReplicaId| {
+            statuses
+                .iter()
+                .find(|status| &status.replica_id == replica_id)
+                .cloned()
+        };
+        build_dns(assignments, &observed, "prod", previous)
+    }
+
+    fn service_ips(names: &BTreeMap<String, Vec<IpAddr>>) -> Vec<String> {
+        names
+            .get(&internal_names("prod", "web")[0])
+            .map(|ips| ips.iter().map(IpAddr::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn dns_keeps_previously_healthy_replicas_until_a_healthy_one_is_up() {
+        let assignments = [assignment("d1", 0), assignment("d1", 1)];
+        let first = dns(
+            &assignments[..1],
+            &[status("d1-0", ReplicaPhase::Healthy, 2)],
+            &BTreeMap::new(),
+        );
+        let unhealthy = dns(
+            &assignments,
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Unhealthy, 3),
+            ],
+            &first,
+        );
+        assert_eq!(service_ips(&unhealthy), ["10.200.1.2"]);
+        let replaced = dns(
+            &assignments,
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Healthy, 3),
+            ],
+            &unhealthy,
+        );
+        assert_eq!(service_ips(&replaced), ["10.200.1.3"]);
+    }
+
+    #[test]
+    fn dns_never_resolves_replicas_that_were_never_healthy() {
+        let names = dns(
+            &[assignment("d1", 0)],
+            &[status("d1-0", ReplicaPhase::Unhealthy, 2)],
+            &BTreeMap::new(),
+        );
+        assert!(names.is_empty());
     }
 }
