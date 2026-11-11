@@ -6,10 +6,10 @@ use std::time::Duration;
 use hickory_proto::op::{Message, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA};
 use hickory_proto::rr::{RData, Record, RecordType};
+use maestro_core::{DNS_ROOT, cluster_dns_label};
 use tokio::net::UdpSocket;
 
 const MAX_IN_FLIGHT: usize = 256;
-const INTERNAL_SUFFIX: &str = "maestro.internal";
 const RECORD_TTL: u32 = 5;
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(2);
 const BIND_RETRY: Duration = Duration::from_secs(2);
@@ -18,6 +18,7 @@ const MAX_PACKET: usize = 4096;
 #[derive(Clone, Default)]
 pub struct DnsRecords {
     names: Arc<RwLock<HashMap<String, Vec<IpAddr>>>>,
+    tailnet: Arc<RwLock<HashMap<String, Vec<IpAddr>>>>,
 }
 
 #[derive(Clone, Default)]
@@ -51,22 +52,36 @@ impl PeerClusters {
 
 impl DnsRecords {
     pub fn replace(&self, names: HashMap<String, Vec<IpAddr>>) {
-        let normalized = names
-            .into_iter()
-            .map(|(name, addresses)| (normalize(&name), addresses))
-            .collect();
         *self
             .names
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = normalized;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = normalized(names);
+    }
+
+    /// Names learned from the tailnet rather than the control plane, such as the dashboard's;
+    /// control-plane updates leave them alone.
+    pub fn replace_tailnet(&self, names: HashMap<String, Vec<IpAddr>>) {
+        *self
+            .tailnet
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = normalized(names);
     }
 
     pub fn lookup(&self, name: &str) -> Option<Vec<IpAddr>> {
-        self.names
+        let name = normalize(name);
+        let cluster = self
+            .names
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&normalize(name))
-            .cloned()
+            .get(&name)
+            .cloned();
+        cluster.or_else(|| {
+            self.tailnet
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&name)
+                .cloned()
+        })
     }
 }
 
@@ -80,7 +95,7 @@ impl DnsServer {
         Self {
             records,
             upstreams,
-            cluster,
+            cluster: cluster_dns_label(&cluster),
             peers,
         }
     }
@@ -206,15 +221,11 @@ impl DnsServer {
 }
 
 fn cluster_label(name: &str) -> Option<&str> {
-    let labels = name
-        .strip_suffix(INTERNAL_SUFFIX)?
-        .trim_end_matches('.')
+    name.strip_suffix(DNS_ROOT)?
+        .strip_suffix('.')?
         .rsplit('.')
-        .collect::<Vec<_>>();
-    match labels.as_slice() {
-        [cluster, _, ..] => Some(cluster),
-        _ => None,
-    }
+        .next()
+        .filter(|label| !label.is_empty())
 }
 
 pub fn upstream_resolvers(resolv_conf: &str) -> Vec<SocketAddr> {
@@ -228,7 +239,14 @@ pub fn upstream_resolvers(resolv_conf: &str) -> Vec<SocketAddr> {
 }
 
 fn is_internal(name: &str) -> bool {
-    name == INTERNAL_SUFFIX || name.ends_with(&format!(".{INTERNAL_SUFFIX}"))
+    name == DNS_ROOT || name.ends_with(&format!(".{DNS_ROOT}"))
+}
+
+fn normalized(names: HashMap<String, Vec<IpAddr>>) -> HashMap<String, Vec<IpAddr>> {
+    names
+        .into_iter()
+        .map(|(name, addresses)| (normalize(&name), addresses))
+        .collect()
 }
 
 fn normalize(name: &str) -> String {
@@ -253,7 +271,7 @@ mod tests {
     fn records() -> DnsRecords {
         let records = DnsRecords::default();
         records.replace(HashMap::from([(
-            "Web.maestro.internal".to_string(),
+            "Web.dev.maestro".to_string(),
             vec!["10.200.1.2".parse().unwrap(), "10.200.1.3".parse().unwrap()],
         )]));
         records
@@ -268,7 +286,7 @@ mod tests {
             PeerClusters::default(),
         );
         let response = server
-            .answer(&query_bytes("web.maestro.internal.", RecordType::A))
+            .answer(&query_bytes("web.dev.maestro.", RecordType::A))
             .await
             .unwrap();
         let message = Message::from_vec(&response).unwrap();
@@ -291,7 +309,7 @@ mod tests {
             PeerClusters::default(),
         );
         let response = server
-            .answer(&query_bytes("missing.maestro.internal.", RecordType::A))
+            .answer(&query_bytes("missing.dev.maestro.", RecordType::A))
             .await
             .unwrap();
         let message = Message::from_vec(&response).unwrap();
@@ -341,7 +359,7 @@ mod tests {
             let request = Message::from_vec(&buffer[..length]).unwrap();
             let mut reply = Message::response(request.metadata.id, OpCode::Query);
             reply.add_answer(Record::from_rdata(
-                Name::from_str("api.prod.maestro.internal.").unwrap(),
+                Name::from_str("api.prod.maestro.").unwrap(),
                 5,
                 RData::A(A("10.200.9.4".parse().unwrap())),
             ));
@@ -353,13 +371,32 @@ mod tests {
         peers.replace(HashMap::from([("prod".to_string(), vec![peer_address])]));
         let server = DnsServer::new(records(), vec![], "dev".to_string(), peers);
         let response = server
-            .answer(&query_bytes("api.prod.maestro.internal.", RecordType::A))
+            .answer(&query_bytes("api.prod.maestro.", RecordType::A))
             .await
             .unwrap();
         let message = Message::from_vec(&response).unwrap();
         assert_eq!(message.answers[0].data.to_string(), "10.200.9.4");
-        assert_eq!(cluster_label("api.dev.maestro.internal"), Some("dev"));
-        assert_eq!(cluster_label("api.maestro.internal"), None);
+        assert_eq!(cluster_label("api.dev.maestro"), Some("dev"));
+        assert_eq!(cluster_label("dev.maestro"), Some("dev"));
+        assert_eq!(cluster_label("maestro"), None);
+        assert_eq!(cluster_label("api.notmaestro"), None);
+    }
+
+    #[tokio::test]
+    async fn answers_tailnet_names_and_keeps_them_across_route_updates() {
+        let records = records();
+        records.replace_tailnet(HashMap::from([(
+            "dev.maestro".to_string(),
+            vec!["100.64.0.7".parse().unwrap()],
+        )]));
+        records.replace(HashMap::new());
+        let server = DnsServer::new(records, vec![], "Dev".to_string(), PeerClusters::default());
+        let response = server
+            .answer(&query_bytes("dev.maestro.", RecordType::A))
+            .await
+            .unwrap();
+        let message = Message::from_vec(&response).unwrap();
+        assert_eq!(message.answers[0].data.to_string(), "100.64.0.7");
     }
 
     #[test]

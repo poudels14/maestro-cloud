@@ -13,7 +13,7 @@ single laptop or across hundreds of nodes.
   they can never starve Maestro, Traefik, or telemetry.
 - Zero-downtime rollouts, health checks, automatic restarts, and rescheduling off
   failed nodes.
-- Built-in service discovery (`<service>.maestro.internal`), structured log search,
+- Built-in service discovery (`<service>.<cluster>.maestro`), structured log search,
   encrypted secrets, and token-protected API access.
 
 See [MAESTRO_V3.md](MAESTRO_V3.md) for the architecture and roadmap.
@@ -173,10 +173,18 @@ or the container runtime.
 - Traefik runs on each node, routes `Host()` rules to healthy replicas anywhere in the
   cluster, and retries failed connections on another replica. Each replica is
   health-checked once, by the node it runs on, every `healthcheckInterval` (default
-  30s); three failures in a row take it out of every node's routes.
-- DNS on the bridge gateway answers `<service>.maestro.internal`,
-  `<service>.<cluster>.maestro.internal`, and per-replica names; other names are
-  forwarded upstream.
+  30s); three failures in a row take it out of every node's routes, unless no replica
+  of the service is healthy: then the ones that were serving keep their traffic until
+  a healthy one is up.
+- DNS on the bridge gateway answers `<service>.<cluster>.maestro` and per-replica
+  names, where `<cluster>` is the cluster name sanitized into a DNS label (lowercase,
+  other characters become `-`). Containers search `<cluster>.maestro`, so a bare
+  `<service>` resolves too. Other names are forwarded upstream.
+- From a laptop on the tailnet, add a split DNS nameserver in the Tailscale admin
+  console for `<cluster>.maestro` pointing at every node's bridge gateway (the `.1`
+  of each node's `/24`, which the nodes advertise as subnet routes). Then
+  `<service>.<cluster>.maestro` resolves to replica addresses, and
+  `http://<cluster>.maestro` opens the admin UI.
 
 ## Logs
 
@@ -346,7 +354,9 @@ the node and telemetry units, WireGuard, IP forwarding, and firewall rules
 version and runs on voters. It listens on the node's loopback at port 7490, where
 workload containers can't reach it, and is published on the tailnet at a fixed name
 per voter: `https://maestro-<cluster>-<n>.<tailnet>.ts.net`, where `<n>` is the voter's
-position in `cluster.voters`. Enable HTTPS certificates for the tailnet, and use an
+position in `cluster.voters`. Voters also serve it over plain HTTP (inside the tailnet's
+WireGuard tunnel) at `http://<cluster>.maestro`, which the cluster DNS resolves to the
+voters' tailnet addresses. Enable HTTPS certificates for the tailnet, and use an
 ephemeral, reusable auth key so a rebuilt node takes its old name back. Tailscale runs
 in its own network namespace and serves only the panel, so nothing else on the node is
 reachable from the tailnet. An SSH or SSM tunnel to port 7490 also works. Anyone who can reach it can operate the cluster, except

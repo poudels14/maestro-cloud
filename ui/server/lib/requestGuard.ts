@@ -1,4 +1,4 @@
-const ALLOWED_HOST_SUFFIXES = [".ts.net"];
+const ALLOWED_HOST_SUFFIXES = [".ts.net", ".maestro"];
 
 function isAllowedHost(host: string | null): boolean {
   if (!host) return false;

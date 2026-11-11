@@ -3,12 +3,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use maestro_core::{ByteSize, Millicores};
+use maestro_core::{ByteSize, Millicores, cluster_dns_label, cluster_domain};
 use maestro_runtime::{BindMount, ContainerLimits, ContainerSpec, NetworkMode};
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::dns::PeerClusters;
+use crate::dns::{DnsRecords, PeerClusters};
 
 pub const TAILSCALE_IMAGE: &str = "ghcr.io/tailscale/tailscale:v1.98.3";
 pub const TAILSCALE_CONTAINER_ID: &str = "maestro-tailscale";
@@ -36,11 +36,24 @@ pub struct TailscaleNode {
     pub socket_dir: PathBuf,
 }
 
+pub struct TailnetDiscovery {
+    pub socket_dir: PathBuf,
+    pub cluster: String,
+    pub voters: usize,
+    pub serve_panel: bool,
+    pub peers: PeerClusters,
+    pub records: DnsRecords,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Status {
     #[serde(default)]
     peer: HashMap<String, Peer>,
+    #[serde(default, rename = "Self")]
+    self_node: Option<Peer>,
+    #[serde(default, rename = "MagicDNSSuffix")]
+    magic_dns_suffix: String,
 }
 
 #[derive(Deserialize)]
@@ -102,24 +115,55 @@ pub fn tailscale_container(node: &TailscaleNode) -> ContainerSpec {
     }
 }
 
-pub fn write_panel_serve_config(socket_dir: &Path) -> std::io::Result<()> {
-    let config = serde_json::json!({
-        "TCP": { "443": { "HTTPS": true } },
-        "Web": {
-            "${TS_CERT_DOMAIN}:443": {
-                "Handlers": { "/": { "Proxy": format!("unix:{SOCKET_MOUNT}/{PANEL_SOCKET_FILE}") } }
-            }
-        }
+/// Serves the panel over HTTPS on the node's tailnet name and, once the tailnet's MagicDNS suffix
+/// is known, over plain HTTP on `<cluster>.maestro`. Tailscale matches plain HTTP requests by their
+/// Host header with the MagicDNS suffix appended, so `http_host` must carry it.
+pub fn write_panel_serve_config(socket_dir: &Path, http_host: Option<&str>) -> std::io::Result<()> {
+    let handlers = serde_json::json!({
+        "Handlers": { "/": { "Proxy": format!("unix:{SOCKET_MOUNT}/{PANEL_SOCKET_FILE}") } }
     });
-    std::fs::write(socket_dir.join(SERVE_CONFIG_FILE), config.to_string())
+    let ports = std::iter::once(("443".to_string(), serde_json::json!({ "HTTPS": true })))
+        .chain(http_host.map(|_| ("80".to_string(), serde_json::json!({ "HTTP": true }))))
+        .collect::<serde_json::Map<_, _>>();
+    let sites = std::iter::once(("${TS_CERT_DOMAIN}:443".to_string(), handlers.clone()))
+        .chain(http_host.map(|host| (format!("{host}:80"), handlers.clone())))
+        .collect::<serde_json::Map<_, _>>();
+    let config = serde_json::json!({ "TCP": ports, "Web": sites }).to_string();
+    let path = socket_dir.join(SERVE_CONFIG_FILE);
+    match std::fs::read_to_string(&path).ok() == Some(config.clone()) {
+        true => Ok(()),
+        false => std::fs::write(path, config),
+    }
 }
 
-pub async fn discover_peer_clusters(socket_dir: PathBuf, cluster: String, peers: PeerClusters) {
+pub async fn discover_tailnet(discovery: TailnetDiscovery) {
     let mut ticker = tokio::time::interval(DISCOVERY_INTERVAL);
     loop {
         ticker.tick().await;
-        match status(&socket_dir.join(SOCKET_FILE)).await {
-            Ok(status) => peers.replace(peer_clusters(&status, &cluster)),
+        match status(&discovery.socket_dir.join(SOCKET_FILE)).await {
+            Ok(status) => {
+                discovery
+                    .peers
+                    .replace(peer_clusters(&status, &discovery.cluster));
+                discovery.records.replace_tailnet(dashboard_records(
+                    &status,
+                    &discovery.cluster,
+                    discovery.voters,
+                ));
+                let http_host = (discovery.serve_panel && !status.magic_dns_suffix.is_empty())
+                    .then(|| {
+                        format!(
+                            "{}.{}",
+                            cluster_domain(&discovery.cluster),
+                            status.magic_dns_suffix.trim_end_matches('.')
+                        )
+                    });
+                let written = http_host
+                    .map(|host| write_panel_serve_config(&discovery.socket_dir, Some(&host)));
+                if let Some(Err(error)) = written {
+                    tracing::warn!(%error, "failed to update the tailscale serve config");
+                }
+            }
             Err(error) => tracing::debug!(%error, "tailscale status is unavailable"),
         }
     }
@@ -130,15 +174,15 @@ fn hostname(cluster: &str, name_suffix: &str) -> String {
 }
 
 fn peer_clusters(status: &Status, own_cluster: &str) -> HashMap<String, Vec<SocketAddr>> {
+    let own_label = cluster_dns_label(own_cluster);
     status
         .peer
         .values()
         .filter(|peer| peer.online)
         .filter_map(|peer| {
-            let cluster = peer_cluster(&peer.host_name)?;
+            let cluster = cluster_dns_label(peer_cluster(&peer.host_name)?);
             let address = peer.tailscale_ips.iter().find(|ip| ip.is_ipv4())?;
-            (cluster != own_cluster)
-                .then(|| (cluster.to_string(), SocketAddr::new(*address, DNS_PORT)))
+            (cluster != own_label).then(|| (cluster, SocketAddr::new(*address, DNS_PORT)))
         })
         .fold(HashMap::new(), |mut clusters, (cluster, address)| {
             clusters
@@ -147,6 +191,30 @@ fn peer_clusters(status: &Status, own_cluster: &str) -> HashMap<String, Vec<Sock
                 .push(address);
             clusters
         })
+}
+
+/// `<cluster>.maestro` resolves to the tailnet addresses of this cluster's voters, which serve the
+/// panel; voters are named by their position in `cluster.voters`.
+fn dashboard_records(status: &Status, cluster: &str, voters: usize) -> HashMap<String, Vec<IpAddr>> {
+    let voter_names = (1..=voters)
+        .map(|position| hostname(cluster, &position.to_string()))
+        .collect::<Vec<_>>();
+    let mut addresses = status
+        .self_node
+        .iter()
+        .chain(status.peer.values().filter(|peer| peer.online))
+        .filter(|node| {
+            voter_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&node.host_name))
+        })
+        .filter_map(|node| node.tailscale_ips.iter().find(|ip| ip.is_ipv4()).copied())
+        .collect::<Vec<_>>();
+    addresses.sort();
+    match addresses.is_empty() {
+        true => HashMap::new(),
+        false => HashMap::from([(cluster_domain(cluster), addresses)]),
+    }
 }
 
 fn peer_cluster(host_name: &str) -> Option<&str> {
@@ -215,6 +283,32 @@ mod tests {
         assert_eq!(peer_cluster("maestro-my-cluster-42"), Some("my-cluster"));
     }
 
+    #[test]
+    fn points_the_cluster_domain_at_its_online_voters() {
+        let status: Status = serde_json::from_str(
+            r#"{
+                "MagicDNSSuffix": "tail1234.ts.net",
+                "Self": {"HostName": "maestro-Prod-1", "TailscaleIPs": ["100.64.0.1"], "Online": true},
+                "Peer": {
+                    "a": {"HostName": "maestro-Prod-2", "TailscaleIPs": ["fd7a::2", "100.64.0.2"], "Online": true},
+                    "b": {"HostName": "maestro-Prod-3", "TailscaleIPs": ["100.64.0.3"], "Online": false},
+                    "c": {"HostName": "maestro-Prod-691149370204", "TailscaleIPs": ["100.64.0.4"], "Online": true},
+                    "d": {"HostName": "maestro-dev-1", "TailscaleIPs": ["100.64.0.5"], "Online": true}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(status.magic_dns_suffix, "tail1234.ts.net");
+        assert_eq!(
+            dashboard_records(&status, "Prod", 3),
+            HashMap::from([(
+                "prod.maestro".to_string(),
+                vec!["100.64.0.1".parse().unwrap(), "100.64.0.2".parse().unwrap()]
+            )])
+        );
+        assert!(dashboard_records(&status, "staging", 3).is_empty());
+    }
+
     fn node(serve_panel: bool) -> TailscaleNode {
         TailscaleNode {
             auth_key: "tskey".to_string(),
@@ -242,14 +336,23 @@ mod tests {
         let spec = tailscale_container(&node(true));
         assert_eq!(spec.env["TS_SERVE_CONFIG"], "/var/run/tailscale/serve.json");
         let directory = tempfile::tempdir().unwrap();
-        write_panel_serve_config(directory.path()).unwrap();
-        let config: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(directory.path().join(SERVE_CONFIG_FILE)).unwrap(),
-        )
-        .unwrap();
+        let read_config = || -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(directory.path().join(SERVE_CONFIG_FILE)).unwrap())
+                .unwrap()
+        };
+        write_panel_serve_config(directory.path(), None).unwrap();
+        let config = read_config();
         assert_eq!(config["TCP"]["443"]["HTTPS"], true);
+        assert!(config["TCP"].get("80").is_none());
         assert_eq!(
             config["Web"]["${TS_CERT_DOMAIN}:443"]["Handlers"]["/"]["Proxy"],
+            "unix:/var/run/tailscale/panel.sock"
+        );
+        write_panel_serve_config(directory.path(), Some("prod.maestro.tail1234.ts.net")).unwrap();
+        let config = read_config();
+        assert_eq!(config["TCP"]["80"]["HTTP"], true);
+        assert_eq!(
+            config["Web"]["prod.maestro.tail1234.ts.net:80"]["Handlers"]["/"]["Proxy"],
             "unix:/var/run/tailscale/panel.sock"
         );
     }

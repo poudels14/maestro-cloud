@@ -41,7 +41,7 @@ pub use system::{
 };
 pub use tailscale::{
     PANEL_SOCKET_FILE, TAILSCALE_CONTAINER_ID, TAILSCALE_IMAGE, TailscaleNode,
-    discover_peer_clusters, tailscale_container, write_panel_serve_config,
+    TailnetDiscovery, discover_tailnet, tailscale_container, write_panel_serve_config,
 };
 pub use wireguard::{
     CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,

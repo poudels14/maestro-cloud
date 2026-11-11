@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use maestro_core::{
     Assignment, Backend, Deployment, DeploymentStatus, ReplicaId, ReplicaPhase, ReplicaStatus,
-    RouteTable, ServiceId, ServiceRoute, ServiceSpec, internal_names,
+    RouteTable, ServiceId, ServiceRoute, ServiceSpec, internal_name,
 };
 use maestro_store::{StateMachine, StoreError};
 
@@ -73,10 +73,12 @@ pub fn build_dns(
             Some((assignment.clone(), ip, status.phase))
         })
         .flat_map(|(assignment, ip, phase)| {
-            internal_names(cluster, assignment.replica_id.as_str())
-                .into_iter()
-                .chain(internal_names(cluster, assignment.service_id.as_str()))
-                .map(move |name| (name, ip, phase))
+            [
+                internal_name(cluster, assignment.replica_id.as_str()),
+                internal_name(cluster, assignment.service_id.as_str()),
+            ]
+            .into_iter()
+            .map(move |name| (name, ip, phase))
         })
         .collect::<Vec<_>>();
     let healthy = records
@@ -445,7 +447,7 @@ mod tests {
 
     fn service_ips(names: &BTreeMap<String, Vec<IpAddr>>) -> Vec<String> {
         names
-            .get(&internal_names("prod", "web")[0])
+            .get(&internal_name("prod", "web"))
             .map(|ips| ips.iter().map(IpAddr::to_string).collect())
             .unwrap_or_default()
     }

@@ -8,14 +8,17 @@ use clap::Args;
 use maestro_agent::{
     ADMIN_PORT, Attachment, DnsRecords, DnsServer, EgressFirewall, EgressPolicy, HealthMonitor,
     HostCommandRunner, IngressWriter, MeshConfig, PANEL_SOCKET_FILE, PeerClusters, Reconciler,
-    ReconcilerSettings, StatusBoard, SystemSupervisor, TailscaleNode, TunnelConnectors,
-    WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh, apply_workload_slice_limits,
-    detect_capacity, discover_peer_clusters, load_or_generate_key, publish_replica_manifest,
-    reset_stale_bridge, serve_denied, system_reserve, tailscale_container, traefik_container,
-    upstream_resolvers, write_panel_serve_config,
+    ReconcilerSettings, StatusBoard, SystemSupervisor, TailnetDiscovery, TailscaleNode,
+    TunnelConnectors, WIREGUARD_INTERFACE, WIREGUARD_PORT, WireGuardMesh,
+    apply_workload_slice_limits, detect_capacity, discover_tailnet, load_or_generate_key,
+    publish_replica_manifest, reset_stale_bridge, serve_denied, system_reserve,
+    tailscale_container, traefik_container, upstream_resolvers, write_panel_serve_config,
 };
 use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
-use maestro_core::{ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo};
+use maestro_core::{
+    ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo, cluster_dns_label,
+    cluster_domain,
+};
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_proto::{CertRole, ClusterCa, NodeCredentials};
 use maestro_runtime::{CniNetwork, ContainerdRuntime, ContainerdSettings};
@@ -155,6 +158,13 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         tracing::warn!(%error, "could not check the container bridge address");
     }
     let host_resolv = std::fs::read_to_string(host_resolv_conf()).unwrap_or_default();
+    if cluster_dns_label(&identity.cluster.name) != identity.cluster.name {
+        tracing::info!(
+            cluster = %identity.cluster.name,
+            domain = %cluster_domain(&identity.cluster.name),
+            "the cluster name is not a DNS label; DNS names use a sanitized one"
+        );
+    }
     let container_resolv =
         write_container_resolv_conf(&args.data_dir, gateway, &identity.cluster.name)?;
     let log_uri = match log_driver::ensure_binary_link() {
@@ -205,7 +215,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         std::fs::create_dir_all(&node.state_dir)?;
         std::fs::create_dir_all(&node.socket_dir)?;
         if node.serve_panel {
-            write_panel_serve_config(&node.socket_dir)?;
+            write_panel_serve_config(&node.socket_dir, None)?;
         }
     }
     let system = SystemSupervisor::new(
@@ -246,7 +256,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         control_seeds(&identity, &config),
         board.clone(),
         ingress,
-        dns_records,
+        dns_records.clone(),
         Some((WireGuardMesh::host(), mesh)),
     );
     let members = attachment.members();
@@ -335,10 +345,16 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
                 .await;
             Ok(())
         });
-        let cluster = identity.cluster.name.clone();
+        let discovery = TailnetDiscovery {
+            socket_dir: PathBuf::from(TAILSCALE_SOCKET_DIR),
+            cluster: identity.cluster.name.clone(),
+            voters: config.cluster.voters.len(),
+            serve_panel: tailscale.as_ref().is_some_and(|node| node.serve_panel),
+            peers: peer_clusters,
+            records: dns_records,
+        };
         tasks.spawn(async move {
-            discover_peer_clusters(PathBuf::from(TAILSCALE_SOCKET_DIR), cluster, peer_clusters)
-                .await;
+            discover_tailnet(discovery).await;
             Ok(())
         });
     }
@@ -555,7 +571,7 @@ fn write_container_resolv_conf(
     let path = data_dir.join("resolv.conf");
     std::fs::write(
         &path,
-        format!("nameserver {gateway}\nsearch {cluster}.maestro.internal maestro.internal\n"),
+        format!("nameserver {gateway}\nsearch {}\n", cluster_domain(cluster)),
     )?;
     Ok(path)
 }

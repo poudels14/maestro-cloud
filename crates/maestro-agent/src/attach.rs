@@ -340,7 +340,7 @@ mod tests {
             .send(ControlMessage::Routes {
                 table: RouteTable::default(),
                 dns: BTreeMap::from([(
-                    "api.maestro.internal".to_string(),
+                    "api.dev.maestro".to_string(),
                     vec!["10.200.1.2".parse().unwrap()],
                 )]),
             })
@@ -348,7 +348,7 @@ mod tests {
             .unwrap();
         source.changed().await;
         assert_eq!(source.plans().await.unwrap(), vec![plan()]);
-        while dns.lookup("api.maestro.internal").is_none() {
+        while dns.lookup("api.dev.maestro").is_none() {
             tokio::task::yield_now().await;
         }
     }

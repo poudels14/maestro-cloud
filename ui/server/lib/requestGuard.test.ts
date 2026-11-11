@@ -11,6 +11,7 @@ test("allows reads from tailnet, IP, and localhost hosts", () => {
   assert.equal(guardRequest(request("GET", { host: "node-1.tail1234.ts.net:7490" })), null);
   assert.equal(guardRequest(request("GET", { host: "100.64.0.3:7490" })), null);
   assert.equal(guardRequest(request("GET", { host: "localhost:7490" })), null);
+  assert.equal(guardRequest(request("GET", { host: "baton-sandbox.maestro" })), null);
 });
 
 test("rejects rebound hostnames", () => {

@@ -183,7 +183,7 @@ maestro-builds.slice     CPUWeight=50, MemoryMax=<build cap>, up to 5 concurrent
 - Fixed default ports: `7400` (internal gRPC + Raft), `3000` (API/UI), `80/443`
   (ingress), `51820/udp` (WireGuard mesh). No random ports.
 - DNS: in-process `hickory-dns` server on each node answering
-  `*.<cluster>.maestro.internal` from the agent's routing table; everything else is
+  `*.<cluster>.maestro` from the agent's routing table; everything else is
   forwarded to the host resolvers. Replaces CoreDNS and the Python proxy.
 - Ingress: Traefik with the file provider. The agent atomically writes the dynamic
   config from its routing table. Traefik never talks to the store.
@@ -386,8 +386,9 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
   container.
 - Tailscale runs per node as a host-network system container advertising the node's
   `/24` plus `advertiseRoutes`; the Rust DNS server also answers on the tailnet and
-  forwards other clusters' `*.<cluster>.maestro.internal` names to peers discovered via
-  `tailscale status`. No CoreDNS or Python proxy.
+  forwards other clusters' `*.<cluster>.maestro` names to peers discovered via
+  `tailscale status`. `<cluster>.maestro` resolves to the voters' tailnet addresses, which
+  serve the panel over HTTP on that name. No CoreDNS or Python proxy.
 - Node roles are `voter` and `worker` (renamed from `agent`). Voters always run
   workloads; v1's quorum-only `voter` role is intentionally not carried over, and v1's
   `master` and `hybrid` both map to a voter.
@@ -491,7 +492,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 ### Phase 2: single-node parity
 
 - [x] Traefik file-provider ingress (system container, host network) and routing table
-- [x] In-process DNS (`hickory-proto`) on the bridge gateway for `*.maestro.internal`, upstream forwarding
+- [x] In-process DNS (`hickory-proto`) on the bridge gateway for `*.<cluster>.maestro`, upstream forwarding
 - [x] Builds via BuildKit (`buildctl`, containerd worker in the `maestro` namespace, `maestro-builds.slice`), bounded build queue, registry push
 - [x] Build sources: GitHub token from config, local context upload (`maestro up`), external secret sources (`aws-secret://`)
 - [x] `maestro log-driver` (containerd binary log URI, rotated JSON-lines files)
