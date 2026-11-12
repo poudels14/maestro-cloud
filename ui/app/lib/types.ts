@@ -213,6 +213,8 @@ export type Deployment = {
   updatedAtMs: number;
   gitCommit?: GitCommitInfo | null;
   builtOn?: number | null;
+  version?: number | null;
+  restartOf?: string | null;
   replicas: ReplicaState[];
   restartable?: boolean;
 };

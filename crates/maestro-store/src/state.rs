@@ -25,6 +25,7 @@ const SERVICE_CONTROLS: TableDefinition<&str, &[u8]> = TableDefinition::new("ser
 const CLUSTER: TableDefinition<&str, &[u8]> = TableDefinition::new("cluster");
 const PREVIEW_SOURCES: TableDefinition<&str, &[u8]> = TableDefinition::new("preview_sources");
 const ARCHIVED: TableDefinition<(&str, &str), u64> = TableDefinition::new("archived_deployments");
+const DEPLOYMENT_VERSIONS: TableDefinition<&str, u64> = TableDefinition::new("deployment_versions");
 
 const VERSION_KEY: &str = "version";
 const FREEZE_KEY: &str = "freeze";
@@ -70,6 +71,8 @@ pub(crate) struct StateExport {
     archived: Vec<(ServiceId, DeploymentId, u64)>,
     #[serde(default)]
     maintenance_run: Option<MaintenanceRun>,
+    #[serde(default)]
+    deployment_versions: Vec<(ServiceId, u64)>,
 }
 
 impl StateMachine {
@@ -141,6 +144,7 @@ impl StateMachine {
             preview_sources: self.preview_sources()?,
             archived: self.archived()?,
             maintenance_run: self.maintenance_run()?,
+            deployment_versions: self.deployment_versions()?,
         })
     }
 
@@ -226,6 +230,15 @@ impl StateMachine {
                 .insert(id.as_str(), encode(source)?.as_slice())?;
             Ok::<_, StoreError>(())
         })?;
+        export
+            .deployment_versions
+            .iter()
+            .try_for_each(|(service_id, version)| {
+                transaction
+                    .open_table(DEPLOYMENT_VERSIONS)?
+                    .insert(service_id.as_str(), *version)?;
+                Ok::<_, StoreError>(())
+            })?;
         record(&transaction)?;
         transaction.commit()?;
         let _ = self.changes.send(Change {
@@ -360,6 +373,18 @@ impl StateMachine {
             .map(Option::unwrap_or_default)
     }
 
+    fn deployment_versions(&self) -> Result<Vec<(ServiceId, u64)>> {
+        let transaction = self.database.begin_read()?;
+        let table = transaction.open_table(DEPLOYMENT_VERSIONS)?;
+        table
+            .iter()?
+            .map(|entry| {
+                let (service_id, version) = entry?;
+                Ok((ServiceId::new(service_id.value()), version.value()))
+            })
+            .collect()
+    }
+
     fn archived(&self) -> Result<Vec<(ServiceId, DeploymentId, u64)>> {
         let transaction = self.database.begin_read()?;
         let table = transaction.open_table(ARCHIVED)?;
@@ -469,6 +494,7 @@ fn create_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.open_table(CLUSTER)?;
     transaction.open_table(PREVIEW_SOURCES)?;
     transaction.open_table(ARCHIVED)?;
+    transaction.open_table(DEPLOYMENT_VERSIONS)?;
     Ok(())
 }
 
@@ -484,6 +510,7 @@ fn delete_tables(transaction: &WriteTransaction) -> Result<()> {
     transaction.delete_table(CLUSTER)?;
     transaction.delete_table(PREVIEW_SOURCES)?;
     transaction.delete_table(ARCHIVED)?;
+    transaction.delete_table(DEPLOYMENT_VERSIONS)?;
     Ok(())
 }
 
@@ -667,6 +694,9 @@ fn delete_service(transaction: &WriteTransaction, id: &ServiceId) -> Result<Vec<
     transaction
         .open_table(PREVIEW_SOURCES)?
         .remove(id.as_str())?;
+    transaction
+        .open_table(DEPLOYMENT_VERSIONS)?
+        .remove(id.as_str())?;
     let deployment_keys = service_deployments(transaction, id)?
         .iter()
         .map(|deployment| {
@@ -696,10 +726,72 @@ fn create_deployment(
             deployment_id: deployment.id.clone(),
         }),
         (true, false) => {
-            write_deployment(transaction, None, deployment)?;
-            Ok(vec![deployment_key(deployment)])
+            let numbered = Deployment {
+                version: Some(deployment_version(transaction, deployment)?),
+                ..deployment.clone()
+            };
+            write_deployment(transaction, None, &numbered)?;
+            Ok(vec![deployment_key(&numbered)])
         }
     }
+}
+
+fn deployment_version(transaction: &WriteTransaction, deployment: &Deployment) -> Result<u64> {
+    let last = last_deployment_version(transaction, &deployment.service_id)?;
+    let restarted = deployment.restart_of.as_ref().and_then(|source| {
+        read_deployment(transaction, &deployment.service_id, source)
+            .ok()
+            .and_then(|source| source.version)
+    });
+    match restarted {
+        Some(version) => Ok(version),
+        None => {
+            transaction
+                .open_table(DEPLOYMENT_VERSIONS)?
+                .insert(deployment.service_id.as_str(), last + 1)?;
+            Ok(last + 1)
+        }
+    }
+}
+
+fn last_deployment_version(transaction: &WriteTransaction, service_id: &ServiceId) -> Result<u64> {
+    let stored = transaction
+        .open_table(DEPLOYMENT_VERSIONS)?
+        .get(service_id.as_str())?
+        .map(|guard| guard.value());
+    match stored {
+        Some(last) => Ok(last),
+        None => {
+            let numbered = number_existing_deployments(transaction, service_id)?;
+            transaction
+                .open_table(DEPLOYMENT_VERSIONS)?
+                .insert(service_id.as_str(), numbered)?;
+            Ok(numbered)
+        }
+    }
+}
+
+/// Deployments created before versions existed are numbered in creation order the first time
+/// their service deploys again.
+fn number_existing_deployments(
+    transaction: &WriteTransaction,
+    service_id: &ServiceId,
+) -> Result<u64> {
+    let mut deployments = service_deployments(transaction, service_id)?;
+    deployments.sort_by(|left, right| {
+        (left.created_at_ms, &left.id).cmp(&(right.created_at_ms, &right.id))
+    });
+    deployments
+        .iter()
+        .zip(1u64..)
+        .try_for_each(|(deployment, version)| {
+            let numbered = Deployment {
+                version: Some(version),
+                ..deployment.clone()
+            };
+            write_deployment(transaction, Some(deployment), &numbered)
+        })?;
+    Ok(deployments.len() as u64)
 }
 
 fn prune_deployments(
@@ -844,4 +936,83 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     Ok(serde_json::from_slice(bytes)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deployment(id: &str, created_at_ms: u64) -> Deployment {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "serviceId": "api",
+            "spec": { "name": "api", "image": "nginx" },
+            "status": "stopped",
+            "createdAtMs": created_at_ms,
+            "updatedAtMs": created_at_ms
+        }))
+        .unwrap()
+    }
+
+    fn versions(store: &StateMachine) -> Vec<(String, Option<u64>)> {
+        let mut deployments = store.deployments(&ServiceId::from("api")).unwrap();
+        deployments.sort_by_key(|deployment| deployment.created_at_ms);
+        deployments
+            .into_iter()
+            .map(|deployment| (deployment.id.to_string(), deployment.version))
+            .collect()
+    }
+
+    #[test]
+    fn numbers_older_deployments_on_the_next_deploy_and_keeps_counters_in_snapshots() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StateMachine::open(directory.path().join("state.redb")).unwrap();
+        store
+            .apply(&[Mutation::PutService {
+                id: ServiceId::from("api"),
+                spec: deployment("d0", 0).spec,
+            }])
+            .unwrap();
+        let transaction = store.database.begin_write().unwrap();
+        write_deployment(&transaction, None, &deployment("older", 2)).unwrap();
+        write_deployment(&transaction, None, &deployment("oldest", 1)).unwrap();
+        transaction.commit().unwrap();
+
+        store
+            .apply(&[Mutation::CreateDeployment {
+                deployment: Deployment {
+                    restart_of: Some(DeploymentId::from("oldest")),
+                    ..deployment("restart", 3)
+                },
+            }])
+            .unwrap();
+        assert_eq!(
+            versions(&store),
+            [
+                ("oldest".to_string(), Some(1)),
+                ("older".to_string(), Some(2)),
+                ("restart".to_string(), Some(1))
+            ]
+        );
+
+        let restored = StateMachine::open(directory.path().join("restored.redb")).unwrap();
+        restored
+            .import(&store.export().unwrap(), |_| Ok(()))
+            .unwrap();
+        restored
+            .apply(&[
+                Mutation::PruneDeployments {
+                    service_id: ServiceId::from("api"),
+                    keep: 0,
+                },
+                Mutation::CreateDeployment {
+                    deployment: deployment("after-snapshot", 4),
+                },
+            ])
+            .unwrap();
+        assert_eq!(
+            versions(&restored),
+            [("after-snapshot".to_string(), Some(3))]
+        );
+    }
 }

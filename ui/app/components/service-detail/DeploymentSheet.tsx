@@ -4,7 +4,7 @@ import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
 import type { ClusterNode, Deployment } from "../../lib/types";
 import { StatusBadge, timeAgo } from "../../lib/ui";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatVersion } from "../../lib/format";
 import { LogViewer } from "../logs/LogViewer";
 import { ReplicaRow, deploymentTitle } from "./DeploymentRow";
 import { BuildLog } from "./BuildLog";
@@ -161,6 +161,12 @@ function DeploymentDetails(props: { deployment: Deployment; nodes: ClusterNode[]
         <h4 class="text-xs font-medium text-gray-400 mb-2">Deployment</h4>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
           <DetailRow label="ID" value={d.id} />
+          <Show when={d.version}>
+            {(version) => <DetailRow label="Version" value={formatVersion(version())} />}
+          </Show>
+          <Show when={d.restartOf}>
+            {(source) => <DetailRow label="Restart of" value={source()} />}
+          </Show>
           <Show when={d.gitCommit}>
             {(commit) => <DetailRow label="Git commit" value={commit().reference} />}
           </Show>

@@ -205,6 +205,8 @@ fn deploy_writes(
                 updated_at_ms: now_ms(),
                 git_commit: None,
                 built_on: None,
+                version: None,
+                restart_of: None,
             },
         }],
         vec![status(DeploymentStatus::Building, None)],

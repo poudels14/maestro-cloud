@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use clap::Subcommand;
-use maestro_core::{EnvSpec, ServiceSpec, ServicesFile};
+use maestro_core::{EnvSpec, ServiceSpec, ServicesFile, version_label};
 
 use crate::uploads::{self, UploadSpec};
 use serde_json::{Value, json};
@@ -285,8 +285,8 @@ pub async fn services_up(endpoint: &Endpoint, config: &Path, context: &Path) -> 
 pub async fn services(endpoint: &Endpoint) -> anyhow::Result<()> {
     let services = request(endpoint.get("/api/services")).await?;
     println!(
-        "{:<24} {:<20} {:<12} IMAGE",
-        "SERVICE", "DEPLOYMENT", "STATUS"
+        "{:<24} {:<20} {:<10} {:<12} IMAGE",
+        "SERVICE", "DEPLOYMENT", "VERSION", "STATUS"
     );
     services
         .as_array()
@@ -295,9 +295,12 @@ pub async fn services(endpoint: &Endpoint) -> anyhow::Result<()> {
         .for_each(|service| {
             let deployment = &service["latestDeployment"];
             println!(
-                "{:<24} {:<20} {:<12} {}",
+                "{:<24} {:<20} {:<10} {:<12} {}",
                 text(&service["id"]),
                 text(&deployment["id"]),
+                deployment["version"]
+                    .as_u64()
+                    .map_or_else(|| "-".to_string(), version_label),
                 text(&deployment["status"]),
                 text(&deployment["image"]),
             );

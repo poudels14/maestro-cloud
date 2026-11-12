@@ -35,6 +35,8 @@ fn deployment(service: &str, id: &str, created_at_ms: u64, status: DeploymentSta
         updated_at_ms: created_at_ms,
         git_commit: None,
         built_on: None,
+        version: None,
+        restart_of: None,
     }
 }
 
@@ -217,6 +219,72 @@ fn prunes_only_old_terminal_deployments() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn numbers_deployments_per_service_and_restarts_after_the_service_is_deleted() {
+    let (_directory, store) = open_store();
+    let versions = |store: &StateMachine, service: &str| {
+        let mut deployments = store.deployments(&ServiceId::from(service)).unwrap();
+        deployments.sort_by_key(|deployment| deployment.created_at_ms);
+        deployments
+            .into_iter()
+            .map(|deployment| deployment.version)
+            .collect::<Vec<_>>()
+    };
+    store
+        .apply(&[
+            put_service("api"),
+            put_service("web"),
+            Mutation::CreateDeployment {
+                deployment: Deployment {
+                    version: Some(99),
+                    ..deployment("api", "d1", 1, DeploymentStatus::Stopped)
+                },
+            },
+            Mutation::CreateDeployment {
+                deployment: deployment("web", "w1", 2, DeploymentStatus::Ready),
+            },
+            Mutation::CreateDeployment {
+                deployment: deployment("api", "d2", 3, DeploymentStatus::Ready),
+            },
+        ])
+        .unwrap();
+    assert_eq!(versions(&store, "api"), [Some(1), Some(2)]);
+    assert_eq!(versions(&store, "web"), [Some(1)]);
+
+    store
+        .apply(&[
+            Mutation::CreateDeployment {
+                deployment: Deployment {
+                    restart_of: Some(DeploymentId::from("d1")),
+                    ..deployment("api", "r1", 5, DeploymentStatus::Queued)
+                },
+            },
+            Mutation::CreateDeployment {
+                deployment: deployment("api", "d4", 6, DeploymentStatus::Queued),
+            },
+        ])
+        .unwrap();
+    assert_eq!(
+        versions(&store, "api"),
+        [Some(1), Some(2), Some(1), Some(3)]
+    );
+
+    store
+        .apply(&[Mutation::DeleteService {
+            id: ServiceId::from("api"),
+        }])
+        .unwrap();
+    store
+        .apply(&[
+            put_service("api"),
+            Mutation::CreateDeployment {
+                deployment: deployment("api", "d3", 4, DeploymentStatus::Queued),
+            },
+        ])
+        .unwrap();
+    assert_eq!(versions(&store, "api"), [Some(1)]);
 }
 
 #[test]

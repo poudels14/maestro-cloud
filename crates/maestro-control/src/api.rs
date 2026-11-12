@@ -1058,6 +1058,7 @@ async fn queue_restart<W: StoreWriter, O: ObservedReplicas>(
         image: source.image,
         git_commit: source.git_commit,
         built_on: source.built_on,
+        restart_of: Some(source.id),
         ..new_deployment(id, spec)
     };
     let deployment_id = deployment.id.clone();
@@ -1115,6 +1116,8 @@ pub fn new_deployment(service_id: &ServiceId, spec: ServiceSpec) -> Deployment {
         updated_at_ms: now,
         git_commit: None,
         built_on: None,
+        version: None,
+        restart_of: None,
     }
 }
 

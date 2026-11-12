@@ -67,9 +67,14 @@ function formatUptime(ms: number): string {
   }
 }
 
+function formatVersion(version: number): string {
+  return `v${String(version).padStart(8, "0")}`;
+}
+
 export {
   quantityBytes,
   formatUptime,
+  formatVersion,
   formatBytes,
   formatBytesRate,
   formatPercent,

@@ -450,6 +450,11 @@ async fn restarts_only_deployments_whose_image_is_retained() {
         .unwrap()
         .unwrap();
     assert_eq!(restarted.image.as_deref(), Some("maestro.local/api:d2"));
+    assert_eq!(restarted.version, Some(3));
+    assert_eq!(
+        restarted.restart_of,
+        Some(maestro_core::DeploymentId::new("d2"))
+    );
 
     let (status, _) = call(
         &app,

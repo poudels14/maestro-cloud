@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { GitCommitHorizontal } from "lucide-solid";
 import type { ClusterNode, Deployment, ReplicaState } from "../../lib/types";
 import { DeploymentMenu, STATUS_COLORS, StatusBadge, StatusDot } from "../../lib/ui";
-import { formatDateTime } from "../../lib/format";
+import { formatDateTime, formatVersion } from "../../lib/format";
 
 type Props = {
   deployment: Deployment;
@@ -59,7 +59,13 @@ function DeploymentRow(props: Props) {
                 {props.deployment.gitCommit!.reference.slice(0, 7)}
               </span>
             </Show>
+            <Show when={props.deployment.version}>
+              {(version) => <span class="font-mono">{formatVersion(version())}</span>}
+            </Show>
             <span class="font-mono">{shortId()}</span>
+            <Show when={props.deployment.restartOf}>
+              {(source) => <span>restart of {source()}</span>}
+            </Show>
             <Show when={props.deployment.failure}>
               {(failure) => <span class="text-red-600 truncate">{failure()}</span>}
             </Show>

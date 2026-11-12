@@ -232,6 +232,8 @@ mod tests {
             updated_at_ms: 0,
             git_commit: None,
             built_on: None,
+            version: None,
+            restart_of: None,
         }
     }
 

@@ -41,6 +41,13 @@ pub struct Deployment {
     pub git_commit: Option<GitCommit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub built_on: Option<NodeId>,
+    /// Numbered per service in creation order by the state machine; a restart runs the same code
+    /// as the deployment it restarts and keeps its version. Deployments created before versions
+    /// existed get theirs on the service's next deploy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_of: Option<DeploymentId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +227,10 @@ impl DeploymentStatus {
     }
 }
 
+pub fn version_label(version: u64) -> String {
+    format!("{version:08}")
+}
+
 /// The newest deployments of one service that went live with an image. Their images are kept so
 /// any of them can be restarted without a rebuild.
 pub fn retained_releases(deployments: &[Deployment]) -> Vec<&Deployment> {
@@ -256,6 +267,8 @@ mod tests {
             updated_at_ms: at,
             git_commit: None,
             built_on: None,
+            version: None,
+            restart_of: None,
         };
         let deployments = vec![
             deployment("d1", 1, DeploymentStatus::Stopped, true),

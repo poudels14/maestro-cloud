@@ -50,6 +50,8 @@ fn create_deployment(service: &str, id: &str) -> Mutation {
             updated_at_ms: 1,
             git_commit: None,
             built_on: None,
+            version: None,
+            restart_of: None,
         },
     }
 }
