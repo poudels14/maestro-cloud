@@ -6,7 +6,7 @@ import {
   logQueryPills,
   removeLogQueryPill,
   withLogHistogramGroupFilter
-} from "./logQueryPills.ts";
+} from "./logQueryPills";
 
 test("extracts top-level field filters and preserves their values", () => {
   const pills = logQueryPills(

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { Service } from "./types";
-import { servicePreviews, userServices } from "./previews.ts";
+import { servicePreviews, userServices } from "./previews";
 
 const service = (id: string, baseServiceId?: string, prNumber = 0): Service => ({
   id,
