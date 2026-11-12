@@ -36,6 +36,12 @@ pub trait ObservedReplicas: Send + Sync + 'static {
     fn node_available(&self, _node_id: NodeId) -> bool {
         true
     }
+
+    /// The node is connected but has been unable to store telemetry for a while; it is drained
+    /// like `NodeState::Draining` until it recovers.
+    fn node_failing(&self, _node_id: NodeId) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -583,7 +589,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             .state()
             .nodes()?
             .into_iter()
-            .filter(|node| node.state == NodeState::Draining)
+            .filter(|node| node.state == NodeState::Draining || self.observed.node_failing(node.id))
             .map(|node| node.id)
             .collect::<Vec<_>>();
         let active = [DeploymentStatus::Deploying, DeploymentStatus::Ready]
@@ -778,6 +784,15 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             .nodes()?
             .into_iter()
             .filter(|node| self.observed.node_available(node.id))
+            .map(|node| {
+                match node.state == NodeState::Active && self.observed.node_failing(node.id) {
+                    true => NodeRecord {
+                        state: NodeState::Draining,
+                        ..node
+                    },
+                    false => node,
+                }
+            })
             .collect())
     }
 

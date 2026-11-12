@@ -1,5 +1,7 @@
 use std::future::Future;
 use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use maestro_core::{AgentMessage, ControlMessage, NodeId, ReplicaPlan};
@@ -40,6 +42,7 @@ pub struct Attachment<L: ControlLink> {
     attached: watch::Sender<bool>,
     members: watch::Sender<Option<Vec<NodeId>>>,
     node_addresses: watch::Sender<Vec<IpAddr>>,
+    telemetry_failing: Arc<AtomicBool>,
     ingress: IngressWriter,
     dns: DnsRecords,
     mesh: Option<(WireGuardMesh, MeshConfig)>,
@@ -72,6 +75,7 @@ impl<L: ControlLink> Attachment<L> {
             attached: watch::channel(false).0,
             members: watch::channel(None).0,
             node_addresses: watch::channel(Vec::new()).0,
+            telemetry_failing: Arc::default(),
             ingress,
             dns,
             mesh,
@@ -93,6 +97,12 @@ impl<L: ControlLink> Attachment<L> {
 
     pub fn members(&self) -> watch::Receiver<Option<Vec<NodeId>>> {
         self.members.subscribe()
+    }
+
+    /// Set while the node's telemetry cannot store logs; reported to the control plane, which
+    /// drains the node once it stays set.
+    pub fn telemetry_failing(&self) -> Arc<AtomicBool> {
+        self.telemetry_failing.clone()
     }
 
     pub async fn run(mut self) {
@@ -167,6 +177,7 @@ impl<L: ControlLink> Attachment<L> {
         sender
             .send(AgentMessage::Replicas {
                 statuses: self.board.snapshot(),
+                telemetry_failing: self.telemetry_failing.load(Ordering::Relaxed),
             })
             .await
     }

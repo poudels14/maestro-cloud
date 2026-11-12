@@ -600,6 +600,67 @@ async fn draining_a_node_replaces_its_replicas_before_releasing_them() {
 }
 
 #[tokio::test]
+async fn failing_nodes_drain_gracefully_and_take_work_again_once_recovered() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    queue(&harness, "d1", 2).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.observed.set("d1-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    let on_one = harness.writer.state().assignments(NodeId(1)).unwrap()[0]
+        .replica_id
+        .to_string();
+
+    harness.observed.fail_node(NodeId(1));
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1", "d1-2"]);
+    assert_eq!(
+        harness.writer.state().assignments(NodeId(2)).unwrap().len(),
+        2
+    );
+    assert!(retiring_replicas(&harness).is_empty());
+
+    harness.observed.set("d1-2", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(retiring_replicas(&harness), [on_one]);
+    assert_eq!(
+        harness
+            .writer
+            .state()
+            .node(NodeId(1))
+            .unwrap()
+            .unwrap()
+            .state,
+        maestro_core::NodeState::Active
+    );
+
+    harness
+        .clock
+        .advance(Duration::from_secs(6).as_millis() as u64);
+    harness.deployer.tick().await.unwrap();
+    assert!(
+        harness
+            .writer
+            .state()
+            .assignments(NodeId(1))
+            .unwrap()
+            .is_empty()
+    );
+
+    harness.observed.recover_node(NodeId(1));
+    queue(&harness, "d2", 2).await;
+    harness.deployer.tick().await.unwrap();
+    assert!(
+        !harness
+            .writer
+            .state()
+            .assignments(NodeId(1))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn new_deployments_skip_unreachable_nodes() {
     let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
     harness.observed.lose_node(NodeId(2));

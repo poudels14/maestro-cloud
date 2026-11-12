@@ -14,8 +14,15 @@ use crate::status::ReplicaStatus;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentMessage {
-    Hello { node_id: NodeId },
-    Replicas { statuses: Vec<ReplicaStatus> },
+    Hello {
+        node_id: NodeId,
+    },
+    Replicas {
+        statuses: Vec<ReplicaStatus>,
+        /// The node cannot store logs and metrics; older agents never send it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        telemetry_failing: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -199,6 +199,15 @@ impl LogStore {
         Ok(())
     }
 
+    pub async fn check(&self) -> Result<()> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            db.reader()?.execute_batch("SELECT 1")?;
+            Ok(())
+        })
+        .await?
+    }
+
     pub fn checkpoints(&self) -> Result<HashMap<String, TailCheckpoint>> {
         let connection = self.db.reader()?;
         let mut statement =

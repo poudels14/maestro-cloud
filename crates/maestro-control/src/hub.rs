@@ -16,6 +16,7 @@ use crate::routing::{cluster_dns, cluster_routes};
 const AGENT_BUFFER: usize = 64;
 const PUBLISH_RESYNC: Duration = Duration::from_secs(10);
 const UNREACHABLE_ERROR: &str = "node unreachable";
+const TELEMETRY_FAILURE_GRACE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct AgentHub {
@@ -29,6 +30,7 @@ pub struct AgentHub {
 struct HubState {
     links: HashMap<NodeId, AgentLink>,
     replicas: HashMap<NodeId, NodeReplicas>,
+    telemetry_failing_since: HashMap<NodeId, Instant>,
     next_session: u64,
     serving_since: Option<Instant>,
 }
@@ -138,6 +140,24 @@ impl AgentHub {
         };
         if changed {
             self.bump();
+        }
+    }
+
+    pub fn record_telemetry(&self, node_id: NodeId, failing: bool) {
+        let mut state = self.lock();
+        let was_failing = state.telemetry_failing_since.contains_key(&node_id);
+        match (failing, was_failing) {
+            (true, false) => {
+                tracing::warn!(%node_id, "node telemetry is failing; it drains if this persists");
+                state
+                    .telemetry_failing_since
+                    .insert(node_id, Instant::now());
+            }
+            (false, true) => {
+                tracing::info!(%node_id, "node telemetry recovered");
+                state.telemetry_failing_since.remove(&node_id);
+            }
+            _ => {}
         }
     }
 
@@ -287,6 +307,13 @@ impl ObservedReplicas for AgentHub {
         });
         let in_grace = now.duration_since(self.started_at) < self.node_expiry;
         connected || recently_seen || in_grace
+    }
+
+    fn node_failing(&self, node_id: NodeId) -> bool {
+        self.lock()
+            .telemetry_failing_since
+            .get(&node_id)
+            .is_some_and(|since| since.elapsed() >= TELEMETRY_FAILURE_GRACE)
     }
 
     fn replica(&self, replica_id: &ReplicaId) -> Option<ReplicaStatus> {
@@ -452,6 +479,23 @@ mod tests {
             hub.replica(&replica_id).unwrap().phase,
             ReplicaPhase::Healthy
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fails_nodes_whose_telemetry_keeps_failing() {
+        let hub = AgentHub::new(Duration::from_secs(30));
+        hub.record_telemetry(NodeId(1), true);
+        tokio::time::advance(Duration::from_secs(60)).await;
+        hub.record_telemetry(NodeId(1), true);
+        assert!(!hub.node_failing(NodeId(1)));
+        tokio::time::advance(TELEMETRY_FAILURE_GRACE).await;
+        assert!(hub.node_failing(NodeId(1)));
+        assert!(!hub.node_failing(NodeId(2)));
+
+        hub.record_telemetry(NodeId(1), false);
+        assert!(!hub.node_failing(NodeId(1)));
+        hub.record_telemetry(NodeId(1), true);
+        assert!(!hub.node_failing(NodeId(1)));
     }
 
     #[tokio::test(start_paused = true)]

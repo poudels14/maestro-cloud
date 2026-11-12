@@ -290,6 +290,11 @@ to the leader.
 - **Node loss:** a node whose stream has been gone for 30 seconds is marked
   unreachable. Its replicas are removed from routing and rescheduled onto healthy
   nodes. When the node returns, its agent stops the stale copies.
+- **Telemetry failure:** telemetry exits on a fatal log-database error so systemd
+  reopens the database. Each agent checks its telemetry every 15 seconds; a node whose
+  telemetry stays unhealthy for 5 minutes is drained like `maestro node drain`
+  (replacements start elsewhere, its replicas stop once those are healthy) and takes
+  new work again as soon as telemetry recovers.
 - **Leader failover:** a new leader waits the same 30-second grace period before
   judging any node, so failovers never trigger rescheduling. Agents reconnect with
   backoff.

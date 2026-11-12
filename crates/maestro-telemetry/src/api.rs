@@ -91,8 +91,11 @@ async fn stats(State(telemetry): State<TelemetryStats>) -> Json<serde_json::Valu
     Json(json!({ "sinks": sinks, "backup": backup }))
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok" }))
+async fn health(
+    State(store): State<Arc<LogStore>>,
+) -> Result<Json<serde_json::Value>, TelemetryError> {
+    store.check().await?;
+    Ok(Json(json!({ "status": "ok" })))
 }
 
 async fn logs(

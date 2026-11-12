@@ -40,8 +40,8 @@ pub use system::{
     traefik_container,
 };
 pub use tailscale::{
-    PANEL_SOCKET_FILE, TAILSCALE_CONTAINER_ID, TAILSCALE_IMAGE, TailscaleNode,
-    TailnetDiscovery, discover_tailnet, tailscale_container, write_panel_serve_config,
+    PANEL_SOCKET_FILE, TAILSCALE_CONTAINER_ID, TAILSCALE_IMAGE, TailnetDiscovery, TailscaleNode,
+    discover_tailnet, tailscale_container, write_panel_serve_config,
 };
 pub use wireguard::{
     CommandOutput, CommandRunner, DEFAULT_INTERFACE as WIREGUARD_INTERFACE,

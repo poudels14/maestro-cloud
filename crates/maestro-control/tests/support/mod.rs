@@ -22,6 +22,7 @@ pub struct LocalWriter {
 pub struct FakeObserved {
     phases: Mutex<HashMap<ReplicaId, ReplicaPhase>>,
     lost_nodes: Mutex<Vec<NodeId>>,
+    failing_nodes: Mutex<Vec<NodeId>>,
 }
 
 pub struct FakeClock(pub AtomicU64);
@@ -57,6 +58,17 @@ impl FakeObserved {
         self.lost_nodes.lock().unwrap().push(node_id);
     }
 
+    pub fn fail_node(&self, node_id: NodeId) {
+        self.failing_nodes.lock().unwrap().push(node_id);
+    }
+
+    pub fn recover_node(&self, node_id: NodeId) {
+        self.failing_nodes
+            .lock()
+            .unwrap()
+            .retain(|failing| *failing != node_id);
+    }
+
     pub fn set(&self, replica: &str, phase: ReplicaPhase) {
         self.phases
             .lock()
@@ -68,6 +80,10 @@ impl FakeObserved {
 impl ObservedReplicas for FakeObserved {
     fn node_available(&self, node_id: NodeId) -> bool {
         !self.lost_nodes.lock().unwrap().contains(&node_id)
+    }
+
+    fn node_failing(&self, node_id: NodeId) -> bool {
+        self.failing_nodes.lock().unwrap().contains(&node_id)
     }
 
     fn replicas(&self) -> Vec<ReplicaStatus> {

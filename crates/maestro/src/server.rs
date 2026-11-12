@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -41,6 +42,8 @@ const REPLICA_MANIFEST: &str = "/run/maestro/replicas.json";
 const TAILSCALE_SOCKET_DIR: &str = "/run/maestro/tailscale";
 const CONTAINERD_NAMESPACE: &str = "maestro";
 const BRIDGE_NAME: &str = "maestro0";
+const TELEMETRY_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+const TELEMETRY_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_CNI_DIRS: [&str; 3] = ["/usr/local/libexec/cni", "/opt/cni/bin", "/usr/lib/cni"];
 
 #[derive(Args)]
@@ -358,6 +361,12 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             Ok(())
         });
     }
+    let telemetry_failing = attachment.telemetry_failing();
+    let telemetry_socket = args.telemetry_socket.clone();
+    tasks.spawn(async move {
+        watch_telemetry(telemetry_socket, telemetry_failing).await;
+        Ok(())
+    });
     tasks.spawn(async move {
         attachment.run().await;
         Ok(())
@@ -600,6 +609,25 @@ async fn forward_panel(socket: PathBuf) -> anyhow::Result<()> {
                 Err(error) => tracing::debug!(%error, "admin UI is not reachable"),
             }
         });
+    }
+}
+
+async fn watch_telemetry(socket: PathBuf, failing: Arc<AtomicBool>) {
+    let first_check = tokio::time::Instant::now() + TELEMETRY_CHECK_INTERVAL;
+    let mut ticker = tokio::time::interval_at(first_check, TELEMETRY_CHECK_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let healthy =
+            tokio::time::timeout(TELEMETRY_CHECK_TIMEOUT, unix_http::get(&socket, "/health"))
+                .await
+                .is_ok_and(|reply| reply.is_ok_and(|(status, _)| status.is_success()));
+        match (healthy, failing.swap(!healthy, Ordering::Relaxed)) {
+            (false, false) => {
+                tracing::warn!("telemetry cannot store logs; reporting the node as failing")
+            }
+            (true, true) => tracing::info!("telemetry recovered"),
+            _ => {}
+        }
     }
 }
 

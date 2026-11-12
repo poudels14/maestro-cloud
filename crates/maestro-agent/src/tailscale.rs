@@ -195,7 +195,11 @@ fn peer_clusters(status: &Status, own_cluster: &str) -> HashMap<String, Vec<Sock
 
 /// `<cluster>.maestro` resolves to the tailnet addresses of this cluster's voters, which serve the
 /// panel; voters are named by their position in `cluster.voters`.
-fn dashboard_records(status: &Status, cluster: &str, voters: usize) -> HashMap<String, Vec<IpAddr>> {
+fn dashboard_records(
+    status: &Status,
+    cluster: &str,
+    voters: usize,
+) -> HashMap<String, Vec<IpAddr>> {
     let voter_names = (1..=voters)
         .map(|position| hostname(cluster, &position.to_string()))
         .collect::<Vec<_>>();
@@ -337,8 +341,10 @@ mod tests {
         assert_eq!(spec.env["TS_SERVE_CONFIG"], "/var/run/tailscale/serve.json");
         let directory = tempfile::tempdir().unwrap();
         let read_config = || -> serde_json::Value {
-            serde_json::from_slice(&std::fs::read(directory.path().join(SERVE_CONFIG_FILE)).unwrap())
-                .unwrap()
+            serde_json::from_slice(
+                &std::fs::read(directory.path().join(SERVE_CONFIG_FILE)).unwrap(),
+            )
+            .unwrap()
         };
         write_panel_serve_config(directory.path(), None).unwrap();
         let config = read_config();

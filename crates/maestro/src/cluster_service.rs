@@ -144,7 +144,8 @@ async fn serve_agent(
                 tokio::select! {
                     message = inbound.message() => match message {
                         Ok(Some(envelope)) => {
-                            if let Ok(AgentMessage::Replicas { statuses }) = decode(&envelope) {
+                            if let Ok(AgentMessage::Replicas { statuses, telemetry_failing }) = decode(&envelope) {
+                                hub.record_telemetry(node_id, telemetry_failing);
                                 let assigned = state
                                     .assignments(node_id)
                                     .unwrap_or_default()
