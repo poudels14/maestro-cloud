@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use maestro_core::{AgentMessage, ControlMessage, NodeId, ReplicaPlan};
@@ -44,6 +44,7 @@ pub struct Attachment<L: ControlLink> {
     members: watch::Sender<Option<Vec<NodeId>>>,
     node_addresses: watch::Sender<Vec<IpAddr>>,
     telemetry_failing: Arc<AtomicBool>,
+    system_ips: Arc<RwLock<Vec<IpAddr>>>,
     discovery: DiscoveryState,
     ingress: IngressWriter,
     dns: DnsRecords,
@@ -78,6 +79,7 @@ impl<L: ControlLink> Attachment<L> {
             members: watch::channel(None).0,
             node_addresses: watch::channel(Vec::new()).0,
             telemetry_failing: Arc::default(),
+            system_ips: Arc::default(),
             discovery: DiscoveryState::default(),
             ingress,
             dns,
@@ -110,6 +112,10 @@ impl<L: ControlLink> Attachment<L> {
 
     pub fn discovery(&self) -> DiscoveryState {
         self.discovery.clone()
+    }
+
+    pub fn system_ips(&self) -> Arc<RwLock<Vec<IpAddr>>> {
+        self.system_ips.clone()
     }
 
     pub async fn run(mut self) {
@@ -181,10 +187,16 @@ impl<L: ControlLink> Attachment<L> {
         &self,
         sender: &mpsc::Sender<AgentMessage>,
     ) -> Result<(), mpsc::error::SendError<AgentMessage>> {
+        let system_ips = self
+            .system_ips
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         sender
             .send(AgentMessage::Replicas {
                 statuses: self.board.snapshot(),
                 telemetry_failing: self.telemetry_failing.load(Ordering::Relaxed),
+                system_ips,
             })
             .await
     }

@@ -195,6 +195,7 @@ mod tests {
                     items: BTreeMap::from([("PREVIEW_TOKEN".to_string(), "preview".to_string())]),
                 },
             }),
+            network: None,
         }
     }
 

@@ -20,6 +20,7 @@ fn service_spec(name: &str) -> ServiceSpec {
         deploy: DeploySpec::default(),
         ingress: None,
         preview: None,
+        network: None,
     }
 }
 

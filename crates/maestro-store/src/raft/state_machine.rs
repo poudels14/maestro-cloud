@@ -239,6 +239,7 @@ mod tests {
                 deploy: DeploySpec::default(),
                 ingress: None,
                 preview: None,
+                network: None,
             },
         }
     }
@@ -304,6 +305,7 @@ mod tests {
                     deploy: DeploySpec::default(),
                     ingress: None,
                     preview: None,
+                    network: None,
                 },
             }])
             .unwrap();

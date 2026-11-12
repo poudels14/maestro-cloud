@@ -37,7 +37,19 @@ pub struct ServiceSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingress: Option<IngressSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewSpec>,
+}
+
+/// Which services may connect to this one and look it up; everything else in the cluster is
+/// refused. Traefik, the nodes themselves, system containers and the service's own replicas are
+/// always allowed, and previews of a listed service count as listed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSpec {
+    #[serde(default)]
+    pub from: Vec<ServiceId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,6 +368,12 @@ impl ServiceSpec {
         let sealed = sealed_value_problem(self);
         let egress = deploy.egress.allow.iter().filter_map(egress_problem);
         let ingress = self.ingress.iter().flat_map(ingress_problems).chain(sealed);
+        let network = self
+            .network
+            .iter()
+            .flat_map(|network| network.from.iter())
+            .filter(|service| !is_dns_label(service.as_str()))
+            .map(|service| format!("network.from: {service} is not a service id"));
         let preview = self
             .preview
             .iter()
@@ -368,6 +386,7 @@ impl ServiceSpec {
             .chain(volumes)
             .chain(egress)
             .chain(ingress)
+            .chain(network)
             .chain(preview)
             .collect()
     }
@@ -801,6 +820,7 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "build": { "repo": "https://github.com/a/b", "branch": "--orphan", "dockerfile": "Dockerfile" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a.b" }, "preview": { "enabled": true } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "preview": { "closeGracePeriod": "1w" } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "network": { "from": ["Web"] } } } }"#,
         ];
         cases.iter().for_each(|case| {
             assert!(
@@ -831,6 +851,7 @@ mod tests {
             deploy: DeploySpec::default(),
             ingress: None,
             preview: None,
+            network: None,
         };
         let json = serde_json::to_value(&spec).unwrap();
         assert_eq!(

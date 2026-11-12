@@ -42,6 +42,7 @@ fn harness_with(deploy: DeploySpec, settings: ReconcilerSettings) -> Harness {
         deploy,
         ingress: None,
         preview: None,
+        network: None,
     };
     state
         .apply(&[

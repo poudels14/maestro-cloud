@@ -162,6 +162,7 @@ pub fn image_service(replicas: u32) -> ServiceSpec {
         },
         ingress: None,
         preview: None,
+        network: None,
     }
 }
 
@@ -269,5 +270,6 @@ pub fn build_service(replicas: u32) -> ServiceSpec {
         },
         ingress: None,
         preview: None,
+        network: None,
     }
 }

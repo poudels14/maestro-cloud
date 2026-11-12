@@ -185,8 +185,21 @@ or the container runtime.
   of each node's `/24`, which the nodes advertise as subnet routes). Then
   `<service>.<cluster>.maestro` resolves to replica addresses, and
   `http://<cluster>.maestro` opens the admin UI.
+- Service-to-service access is denied by default: a service is reachable from other services
+  only if it lists them in `network.from`, and only those may look it up through discovery:
+
+  ```jsonc
+  "api": { "network": { "from": ["web", "worker"] } }
+  ```
+
+  Previews of a listed service are allowed too, and a preview of `api` inherits `api`'s list.
+  Traefik, the nodes themselves, system containers such as Tailscale's and the service's own
+  replicas are always allowed. Each node enforces this for its own replicas, in nftables, for
+  traffic from other nodes and between containers on the same node. New replicas may wait a few
+  seconds for their address to reach the other nodes, and connections that are already open
+  are not cut when a list changes.
 - Service discovery: every replica gets `MAESTRO_API_HOST` (its node's bridge gateway, port
-  7480) and `MAESTRO_API_KEY`, and can list the replicas of a service:
+  7480) and `MAESTRO_API_KEY`, and can list the replicas of a service that lets it in:
 
   ```bash
   curl -H "Authorization: Bearer $MAESTRO_API_KEY" "$MAESTRO_API_HOST/v1/services/api"
@@ -196,7 +209,8 @@ or the container runtime.
 
   Each node's agent answers from the same data as the cluster DNS. The key is derived per
   service from `jwtSecretKey`, and the caller's container IP must belong to that service, so a
-  key does not work from anywhere else. To see what a service would get, the admin API answers
+  key does not work from anywhere else; services that do not list the caller in `network.from`
+  answer `403`. To see what a service would get, the admin API answers
   `GET /api/services/<service>/discovery` with the same response, without a key.
 - **Voters** run the control plane (Raft over mTLS gRPC with redb storage, the API,
   the scheduler, the deployer, and the build queue) and also run workloads.

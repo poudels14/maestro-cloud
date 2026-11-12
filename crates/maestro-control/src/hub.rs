@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,6 +32,7 @@ struct HubState {
     links: HashMap<NodeId, AgentLink>,
     replicas: HashMap<NodeId, NodeReplicas>,
     telemetry_failing_since: HashMap<NodeId, Instant>,
+    system_ips: HashMap<NodeId, Vec<IpAddr>>,
     next_session: u64,
     serving_since: Option<Instant>,
 }
@@ -141,6 +143,17 @@ impl AgentHub {
         if changed {
             self.bump();
         }
+    }
+
+    pub fn record_system_ips(&self, node_id: NodeId, ips: Vec<IpAddr>) {
+        let changed = self.lock().system_ips.insert(node_id, ips.clone()) != Some(ips);
+        if changed {
+            self.bump();
+        }
+    }
+
+    pub fn system_ips(&self) -> Vec<IpAddr> {
+        self.lock().system_ips.values().flatten().copied().collect()
     }
 
     pub fn record_telemetry(&self, node_id: NodeId, failing: bool) {
@@ -353,7 +366,13 @@ pub async fn run_publisher(
                 ))
             })
             .and_then(|(table, dns)| {
-                let discovery = cluster_discovery(&state, &observed, &cluster, &discovery_keys)?;
+                let discovery = cluster_discovery(
+                    &state,
+                    &observed,
+                    &cluster,
+                    &discovery_keys,
+                    &hub.system_ips(),
+                )?;
                 Ok((table, dns, discovery, assigned_nodes(&state)?))
             });
         match routes {

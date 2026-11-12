@@ -18,6 +18,36 @@ pub struct DiscoveryTable {
     /// The hash of every service's API key; a caller is the service owning its container IP and
     /// must present that service's key.
     pub key_hashes: BTreeMap<ServiceId, String>,
+    /// The services allowed to reach each service (its `network.from`, previews included).
+    pub access: BTreeMap<ServiceId, Vec<ServiceId>>,
+    /// The addresses of every running replica, retiring ones included, by service.
+    pub members: BTreeMap<ServiceId, Vec<IpAddr>>,
+    /// Node gateways and system containers, which may reach every service.
+    pub always_allowed: Vec<IpAddr>,
+}
+
+impl DiscoveryTable {
+    pub fn may_reach(&self, caller: &ServiceId, target: &ServiceId) -> bool {
+        caller == target
+            || self
+                .access
+                .get(target)
+                .is_some_and(|callers| callers.contains(caller))
+    }
+
+    /// The source addresses allowed to connect to `target`'s replicas.
+    pub fn allowed_sources(&self, target: &ServiceId) -> Vec<IpAddr> {
+        let mut sources = self
+            .members
+            .iter()
+            .filter(|(service_id, _)| self.may_reach(service_id, target))
+            .flat_map(|(_, addresses)| addresses.iter().copied())
+            .chain(self.always_allowed.iter().copied())
+            .collect::<Vec<_>>();
+        sources.sort();
+        sources.dedup();
+        sources
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,4 +65,34 @@ pub struct DiscoveredReplica {
 
 pub fn discovery_key_hash(key: &str) -> String {
     hex::encode(Sha256::digest(key.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_listed_callers_the_service_itself_and_system_addresses() {
+        let table = DiscoveryTable {
+            access: BTreeMap::from([(ServiceId::from("api"), vec![ServiceId::from("web")])]),
+            members: BTreeMap::from([
+                (ServiceId::from("api"), vec!["10.50.1.5".parse().unwrap()]),
+                (ServiceId::from("web"), vec!["10.50.2.7".parse().unwrap()]),
+                (ServiceId::from("db"), vec!["10.50.3.9".parse().unwrap()]),
+            ]),
+            always_allowed: vec!["10.50.1.1".parse().unwrap()],
+            ..DiscoveryTable::default()
+        };
+        assert!(table.may_reach(&ServiceId::from("web"), &ServiceId::from("api")));
+        assert!(!table.may_reach(&ServiceId::from("db"), &ServiceId::from("api")));
+        assert!(!table.may_reach(&ServiceId::from("api"), &ServiceId::from("web")));
+        assert_eq!(
+            table.allowed_sources(&ServiceId::from("api")),
+            [
+                "10.50.1.1".parse::<IpAddr>().unwrap(),
+                "10.50.1.5".parse().unwrap(),
+                "10.50.2.7".parse().unwrap()
+            ]
+        );
+    }
 }

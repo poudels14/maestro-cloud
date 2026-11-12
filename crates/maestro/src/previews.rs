@@ -843,6 +843,7 @@ mod tests {
                 replicas: 1,
                 env: Default::default(),
             }),
+            network: None,
         };
         state
             .apply(&[Mutation::PutService {

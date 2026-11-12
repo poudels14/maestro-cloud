@@ -292,6 +292,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     )));
     let health = HealthMonitor::new(board.clone(), reconciler.plans());
     let reconciler_plans = reconciler.plans();
+    let system_ips = attachment.system_ips();
     let egress = EgressFirewall::new(
         HostCommandRunner,
         EgressPolicy {
@@ -306,6 +307,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         board.clone(),
         reconciler.plans(),
         attachment.node_addresses(),
+        attachment.discovery().subscribe(),
     );
 
     let mut tasks = JoinSet::new();
@@ -332,7 +334,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
         Ok(())
     });
     tasks.spawn(async move {
-        system.run().await;
+        system.publishing_addresses(system_ips).run().await;
         Ok(())
     });
     tasks.spawn(async move {

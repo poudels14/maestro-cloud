@@ -75,5 +75,10 @@ async fn service_replicas(
             Json(json!({ "error": "unknown caller or invalid MAESTRO_API_KEY" })),
         )
             .into_response(),
+        Err(DiscoveryDenied::Forbidden) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": format!("{service_id} does not list this service in network.from") })),
+        )
+            .into_response(),
     }
 }

@@ -141,6 +141,7 @@ pub fn put_service(id: &str) -> Mutation {
             deploy: DeploySpec::default(),
             ingress: None,
             preview: None,
+            network: None,
         },
     }
 }

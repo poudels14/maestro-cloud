@@ -3,8 +3,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use maestro_core::{
     Assignment, Backend, Deployment, DeploymentStatus, DiscoveredReplica, DiscoveryTable,
-    ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable, ServiceId, ServiceRoute, ServiceSpec,
-    discovery_key_hash, internal_name, version_label,
+    PreviewSource, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable, ServiceId, ServiceRoute,
+    ServiceSpec, discovery_key_hash, internal_name, subnet_gateway, version_label,
 };
 use maestro_store::{DiscoveryKeys, StateMachine, StoreError};
 
@@ -69,6 +69,7 @@ pub fn cluster_discovery(
     observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
     cluster: &str,
     discovery_keys: &DiscoveryKeys,
+    system_ips: &[IpAddr],
 ) -> Result<DiscoveryTable, StoreError> {
     let services = state.services()?;
     let deployments = services
@@ -76,8 +77,16 @@ pub fn cluster_discovery(
         .map(|(service_id, _)| state.deployments(service_id))
         .collect::<Result<Vec<_>, _>>()?
         .concat();
+    let assignments = all_assignments(state)?;
+    let gateways = state
+        .nodes()?
+        .into_iter()
+        .filter_map(|node| subnet_gateway(node.subnet.as_deref()?));
     Ok(DiscoveryTable {
-        services: discovered_replicas(&deployments, &all_assignments(state)?, observed, cluster),
+        services: discovered_replicas(&deployments, &assignments, observed, cluster),
+        access: network_access(&services, &state.preview_sources()?),
+        members: running_members(&assignments, observed),
+        always_allowed: gateways.chain(system_ips.iter().copied()).collect(),
         key_hashes: services
             .iter()
             .map(|(service_id, _)| {
@@ -282,6 +291,51 @@ fn discovered_replicas(
     replicas
 }
 
+/// Who may reach each service: its `network.from`, plus the previews of every listed service.
+fn network_access(
+    services: &[(ServiceId, ServiceSpec)],
+    previews: &[(ServiceId, PreviewSource)],
+) -> BTreeMap<ServiceId, Vec<ServiceId>> {
+    services
+        .iter()
+        .map(|(service_id, spec)| {
+            let listed = spec
+                .network
+                .as_ref()
+                .map(|network| network.from.clone())
+                .unwrap_or_default();
+            let listed_previews = previews
+                .iter()
+                .filter(|(_, source)| listed.contains(&source.base_service_id))
+                .map(|(preview_id, _)| preview_id.clone())
+                .collect::<Vec<_>>();
+            (
+                service_id.clone(),
+                listed.into_iter().chain(listed_previews).collect(),
+            )
+        })
+        .collect()
+}
+
+fn running_members(
+    assignments: &[Assignment],
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+) -> BTreeMap<ServiceId, Vec<IpAddr>> {
+    assignments
+        .iter()
+        .filter_map(|assignment| {
+            let ip = observed(&assignment.replica_id)?.ip?;
+            Some((assignment.service_id.clone(), ip))
+        })
+        .fold(
+            BTreeMap::<ServiceId, Vec<IpAddr>>::new(),
+            |mut members, (service_id, ip)| {
+                members.entry(service_id).or_default().push(ip);
+                members
+            },
+        )
+}
+
 fn all_assignments(state: &StateMachine) -> Result<Vec<Assignment>, StoreError> {
     Ok(state
         .nodes()?
@@ -315,6 +369,7 @@ mod tests {
                 session_affinity: None,
             }),
             preview: None,
+            network: None,
         }
     }
 
@@ -529,6 +584,63 @@ mod tests {
             &first,
         );
         assert!(addresses(&restarting).is_empty());
+    }
+
+    #[test]
+    fn lets_listed_services_and_their_previews_reach_a_service() {
+        let services = [
+            (
+                ServiceId::from("api"),
+                ServiceSpec {
+                    network: Some(maestro_core::NetworkSpec {
+                        from: vec![ServiceId::from("web")],
+                    }),
+                    ..spec()
+                },
+            ),
+            (ServiceId::from("web"), spec()),
+        ];
+        let previews = [(
+            ServiceId::from("web-pr-12"),
+            serde_json::from_value::<PreviewSource>(serde_json::json!({
+                "baseServiceId": "web",
+                "prNumber": 12,
+                "headRef": "feature",
+                "headSha": "abc",
+                "title": "Feature",
+                "createdAtMs": 1
+            }))
+            .unwrap(),
+        )];
+        let access = network_access(&services, &previews);
+        assert_eq!(
+            access[&ServiceId::from("api")],
+            [ServiceId::from("web"), ServiceId::from("web-pr-12")]
+        );
+        assert!(access[&ServiceId::from("web")].is_empty());
+
+        let retiring = Assignment {
+            retiring_since_ms: Some(1),
+            ..assignment("d1", 1)
+        };
+        let statuses = [
+            status("d1-0", ReplicaPhase::Starting, 2),
+            status("d1-1", ReplicaPhase::Healthy, 3),
+        ];
+        let observed = |replica_id: &ReplicaId| {
+            statuses
+                .iter()
+                .find(|status| &status.replica_id == replica_id)
+                .cloned()
+        };
+        let members = running_members(&[assignment("d1", 0), retiring], &observed);
+        assert_eq!(
+            members[&ServiceId::from("web")],
+            [
+                "10.200.1.2".parse::<IpAddr>().unwrap(),
+                "10.200.1.3".parse().unwrap()
+            ]
+        );
     }
 
     #[test]

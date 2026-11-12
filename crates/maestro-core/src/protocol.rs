@@ -23,6 +23,9 @@ pub enum AgentMessage {
         /// The node cannot store logs and metrics; older agents never send it.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         telemetry_failing: bool,
+        /// Addresses of the node's system containers on the bridge, such as Tailscale's.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        system_ips: Vec<IpAddr>,
     },
 }
 

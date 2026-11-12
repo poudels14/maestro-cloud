@@ -139,6 +139,7 @@ export type SlackWebhook = {
 };
 
 export type ServiceSpec = {
+  network?: { from: string[] } | null;
   name: string;
   image?: string | null;
   build?: Build | null;

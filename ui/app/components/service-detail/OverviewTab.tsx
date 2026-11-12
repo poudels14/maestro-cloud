@@ -5,6 +5,7 @@ import { ConfigSection } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { IngressInfo } from "./overview/IngressInfo";
 import { VolumesList } from "./overview/VolumesList";
+import { DiscoveryList } from "./overview/DiscoveryList";
 import { FreezeToggle } from "./overview/FreezeToggle";
 
 function OverviewTab(props: { service: Service; services: Service[] }) {
@@ -95,6 +96,12 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
           .join(", ")
       });
     }
+    items.push({
+      label: "Reachable from",
+      value: props.service.network?.from.length
+        ? props.service.network.from.join(", ")
+        : "no other services"
+    });
     if (props.service.deploy.maxRestarts != null) {
       items.push({ label: "Max restarts", value: String(props.service.deploy.maxRestarts) });
     }
@@ -158,6 +165,8 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
       </Show>
 
       <IngressInfo service={props.service} />
+
+      <DiscoveryList service={props.service} services={props.services} />
 
       <Show when={!props.service.previewSource}>
         <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">

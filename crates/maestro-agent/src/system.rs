@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use maestro_core::{ByteSize, Millicores};
@@ -30,6 +31,7 @@ pub const ADMIN_PORT: u16 = 7490;
 pub struct SystemSupervisor<R: Runtime> {
     runtime: Arc<R>,
     containers: Vec<ContainerSpec>,
+    addresses: Arc<RwLock<Vec<IpAddr>>>,
 }
 
 impl<R: Runtime> SystemSupervisor<R> {
@@ -37,7 +39,14 @@ impl<R: Runtime> SystemSupervisor<R> {
         Self {
             runtime,
             containers: containers.into_iter().map(with_spec_hash).collect(),
+            addresses: Arc::default(),
         }
+    }
+
+    /// Publishes the addresses of its running containers that are on the bridge (host-network
+    /// ones have none) into `addresses`.
+    pub fn publishing_addresses(self, addresses: Arc<RwLock<Vec<IpAddr>>>) -> Self {
+        Self { addresses, ..self }
     }
 
     pub async fn run(self) {
@@ -50,11 +59,24 @@ impl<R: Runtime> SystemSupervisor<R> {
 
     pub async fn ensure_running(&self) {
         let running = match self.runtime.list().await {
-            Ok(containers) => containers
-                .into_iter()
-                .filter(|container| container.state == ContainerState::Running)
-                .map(|container| (container.id, container.labels.get(SPEC_HASH_LABEL).cloned()))
-                .collect::<Vec<_>>(),
+            Ok(containers) => {
+                let running = containers
+                    .into_iter()
+                    .filter(|container| container.state == ContainerState::Running)
+                    .collect::<Vec<_>>();
+                *self
+                    .addresses
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = running
+                    .iter()
+                    .filter(|container| self.containers.iter().any(|spec| spec.id == container.id))
+                    .filter_map(|container| container.ip)
+                    .collect();
+                running
+                    .into_iter()
+                    .map(|container| (container.id, container.labels.get(SPEC_HASH_LABEL).cloned()))
+                    .collect::<Vec<_>>()
+            }
             Err(error) => {
                 tracing::warn!(%error, "failed to list system containers");
                 Vec::new()
