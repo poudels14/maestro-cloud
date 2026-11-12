@@ -9,6 +9,8 @@ use crate::error::{Result, TelemetryError};
 
 const READER_CONNECTIONS: usize = 4;
 const LOCK_WAIT_LOG_THRESHOLD: Duration = Duration::from_millis(100);
+const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+const DUCKDB_MEMORY_SHARE_PERCENT: u64 = 60;
 
 pub(super) struct Db {
     writer: Mutex<Connection>,
@@ -24,6 +26,10 @@ impl Db {
             std::fs::create_dir_all(parent)?;
         }
         let connection = Connection::open(path)?;
+        if let Some(limit) = duckdb_memory_limit() {
+            tracing::info!(limit_mib = limit >> 20, "limiting DuckDB memory");
+            connection.execute_batch(&format!("SET memory_limit = '{}MiB'", limit >> 20))?;
+        }
         connection.execute_batch(schema)?;
         let maintenance = connection.try_clone()?;
         let readers = (0..READER_CONNECTIONS)
@@ -90,4 +96,47 @@ fn lock_with_wait_log<'a>(
 
 fn poisoned(role: &str) -> TelemetryError {
     TelemetryError::Storage(format!("DuckDB {role} lock poisoned"))
+}
+
+/// DuckDB defaults to 80% of the memory it can see, which leaves too little for the rest of
+/// telemetry under the service's cgroup cap; a lower limit makes it spill to disk instead of
+/// getting the whole process OOM-killed.
+fn duckdb_memory_limit() -> Option<u64> {
+    let membership = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let cgroup = unified_cgroup(&membership)?;
+    let memory_max = std::fs::read_to_string(
+        Path::new(CGROUP_ROOT)
+            .join(cgroup.trim_start_matches('/'))
+            .join("memory.max"),
+    )
+    .ok()?;
+    memory_cap(&memory_max).map(|cap| cap / 100 * DUCKDB_MEMORY_SHARE_PERCENT)
+}
+
+fn unified_cgroup(membership: &str) -> Option<&str> {
+    membership.lines().find_map(|line| line.strip_prefix("0::"))
+}
+
+fn memory_cap(memory_max: &str) -> Option<u64> {
+    memory_max.trim().parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_service_memory_cap_from_its_cgroup() {
+        assert_eq!(
+            unified_cgroup("0::/maestro.slice/maestro-system.slice/maestro-telemetry.service\n"),
+            Some("/maestro.slice/maestro-system.slice/maestro-telemetry.service")
+        );
+        assert_eq!(unified_cgroup("1:name=systemd:/init.scope\n"), None);
+        assert_eq!(memory_cap("1073741824\n"), Some(1 << 30));
+        assert_eq!(memory_cap("max\n"), None);
+        assert_eq!(
+            memory_cap("1073741824").map(|cap| (cap / 100 * DUCKDB_MEMORY_SHARE_PERCENT) >> 20),
+            Some(614)
+        );
+    }
 }
