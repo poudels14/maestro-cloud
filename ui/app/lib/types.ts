@@ -301,6 +301,7 @@ export namespace Stats {
   export type Node = {
     nodeId: number;
     nodeName: string;
+    dnsServer: string | null;
     version: string | null;
     uptimeMs: number | null;
     host: Host | null;
@@ -320,6 +321,7 @@ export namespace Stats {
     generatedAtMs: number;
     term: number;
     leader: number | null;
+    dnsDomain: string;
     nodes: Node[];
     warnings: Warning[];
   };

@@ -320,6 +320,7 @@ pub async fn spawn(
         .with_state(ClusterAccess {
             consensus: consensus.clone(),
             clients: clients.clone(),
+            cluster: settings.identity.cluster.name.clone(),
         });
     let uploads = axum::Router::new()
         .route(

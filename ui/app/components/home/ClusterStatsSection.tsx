@@ -31,6 +31,14 @@ function ClusterStatsSection() {
       <Show when={stats.data}>
         {(data) => (
           <div class="space-y-3">
+            <Show when={config.data?.tailscale}>
+              <TailnetAccessCard
+                domain={data().dnsDomain}
+                nameservers={data()
+                  .nodes.map((node) => node.dnsServer)
+                  .filter((server): server is string => !!server)}
+              />
+            </Show>
             <div class="flex gap-5 overflow-x-auto border-b border-gray-200">
               <For each={data().nodes}>
                 {(node) => (
@@ -118,7 +126,39 @@ function NodeStatsCard(props: {
         </Show>
         <BackupRow backup={props.node.backup} />
       </Show>
+      <Show when={props.node.dnsServer}>
+        {(server) => <InfoRow label="DNS nameserver" value={server()} />}
+      </Show>
       <Show when={props.node.host}>{(host) => <HostRows host={host()} />}</Show>
+    </div>
+  );
+}
+
+function TailnetAccessCard(props: { domain: string; nameservers: string[] }) {
+  const dashboardUrl = () => `http://${props.domain}`;
+
+  return (
+    <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+      <div class="px-4 py-3">
+        <div class="text-xs font-medium text-gray-700">Tailscale access</div>
+        <div class="mt-0.5 text-[11px] text-gray-400">
+          Add a split DNS nameserver in the Tailscale admin console for the domain below, pointing
+          at every nameserver, to reach the dashboard and services by name.
+        </div>
+      </div>
+      <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+        <span class="text-xs font-medium text-gray-700 shrink-0">Dashboard</span>
+        <a
+          href={dashboardUrl()}
+          target="_blank"
+          rel="noreferrer"
+          class="text-xs text-blue-600 hover:underline text-right break-words min-w-0"
+        >
+          {dashboardUrl()}
+        </a>
+      </div>
+      <InfoRow label="Split DNS domain" value={props.domain} />
+      <InfoRow label="Nameservers" value={props.nameservers.join(", ")} />
     </div>
   );
 }
@@ -134,17 +174,17 @@ function HostRows(props: { host: Stats.Host }) {
       ["Host uptime", props.host.uptimeMs != null ? formatUptime(props.host.uptimeMs) : null]
     ].filter((row): row is [string, string] => !!row[1]);
 
+  return <For each={rows()}>{([label, value]) => <InfoRow label={label} value={value} />}</For>;
+}
+
+function InfoRow(props: { label: string; value: string }) {
   return (
-    <For each={rows()}>
-      {([label, value]) => (
-        <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-          <span class="text-xs font-medium text-gray-700 shrink-0">{label}</span>
-          <span class="text-xs text-gray-600 text-right break-words min-w-0 tabular-nums">
-            {value}
-          </span>
-        </div>
-      )}
-    </For>
+    <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
+      <span class="text-xs font-medium text-gray-700 shrink-0">{props.label}</span>
+      <span class="text-xs text-gray-600 text-right break-words min-w-0 tabular-nums select-all">
+        {props.value}
+      </span>
+    </div>
   );
 }
 

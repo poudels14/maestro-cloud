@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,14 @@ impl NodeRecord {
     }
 }
 
+/// The first address of a node's container subnet: its bridge gateway, where the node's DNS
+/// server listens.
+pub fn subnet_gateway(subnet: &str) -> Option<IpAddr> {
+    let (network, _) = subnet.split_once('/')?;
+    let [first, second, third, _] = network.parse::<Ipv4Addr>().ok()?.octets();
+    Some(IpAddr::from([first, second, third, 1]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +83,15 @@ mod tests {
             serde_json::to_string(&NodeRole::Worker).unwrap(),
             "\"worker\""
         );
+    }
+
+    #[test]
+    fn finds_the_gateway_of_a_node_subnet() {
+        assert_eq!(
+            subnet_gateway("10.50.3.0/24"),
+            Some("10.50.3.1".parse().unwrap())
+        );
+        assert_eq!(subnet_gateway("10.50.3.0"), None);
+        assert_eq!(subnet_gateway("fd00::/64"), None);
     }
 }

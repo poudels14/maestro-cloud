@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId};
+use maestro_core::{NodeId, NodeRecord, NodeState, ServiceId, cluster_domain, subnet_gateway};
 use maestro_telemetry::{
     BackupStats, HistogramBucket, IngressTrafficBreakdown, LogHistogram, MetricPoint, SinkStats,
     TrafficBreakdownEntry, TrafficPoint, histogram_bucket,
@@ -131,6 +132,7 @@ pub async fn container_metrics(
 struct NodeStats {
     node_id: NodeId,
     node_name: String,
+    dns_server: Option<IpAddr>,
     version: Option<String>,
     uptime_ms: Option<u64>,
     host: Option<Value>,
@@ -154,6 +156,7 @@ struct ClusterStats {
     generated_at_ms: i64,
     term: u64,
     leader: Option<NodeId>,
+    dns_domain: String,
     nodes: Vec<NodeStats>,
     warnings: Vec<StatsWarning>,
 }
@@ -168,6 +171,10 @@ pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
                 .iter()
                 .map(|node| (node.id, node.state))
                 .collect::<BTreeMap<_, _>>();
+            let dns_servers = nodes
+                .iter()
+                .filter_map(|node| Some((node.id, subnet_gateway(node.subnet.as_deref()?)?)))
+                .collect::<BTreeMap<_, _>>();
             let mut stats = call_nodes(&access.clients, nodes, NodeRequest::Info)
                 .await
                 .into_iter()
@@ -176,6 +183,7 @@ pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
                     NodeStats {
                         node_id,
                         node_name,
+                        dns_server: dns_servers.get(&node_id).copied(),
                         version: info
                             .as_ref()
                             .and_then(|info| info["version"].as_str().map(str::to_string)),
@@ -204,6 +212,7 @@ pub async fn cluster_stats(State(access): State<ClusterAccess>) -> Response {
                 generated_at_ms: now_ms(),
                 term: metrics.term,
                 leader,
+                dns_domain: cluster_domain(&access.cluster),
                 nodes: stats,
                 warnings,
             })
@@ -769,6 +778,7 @@ mod tests {
         let node = |id: u64, version: Option<&str>, available: bool, telemetry: bool| NodeStats {
             node_id: NodeId(id),
             node_name: format!("node{id}"),
+            dns_server: None,
             version: version.map(str::to_string),
             uptime_ms: None,
             host: None,

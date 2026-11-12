@@ -124,6 +124,7 @@ pub struct NodeClients {
 pub struct ClusterAccess {
     pub consensus: Arc<Consensus>,
     pub clients: NodeClients,
+    pub cluster: String,
 }
 
 #[derive(Deserialize)]

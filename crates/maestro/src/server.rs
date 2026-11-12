@@ -18,7 +18,7 @@ use maestro_agent::{
 use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
 use maestro_core::{
     ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo, cluster_dns_label,
-    cluster_domain,
+    cluster_domain, subnet_gateway,
 };
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_proto::{CertRole, ClusterCa, NodeCredentials};
@@ -156,7 +156,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
     if let Err(error) = apply_workload_slice_limits(&capacity, &reserved).await {
         tracing::warn!(%error, "workload slice limits were not applied");
     }
-    let gateway = subnet_gateway(&identity.subnet)?;
+    let gateway = subnet_gateway(&identity.subnet).context("node subnet must be an IPv4 CIDR")?;
     if let Err(error) = reset_stale_bridge(BRIDGE_NAME, gateway).await {
         tracing::warn!(%error, "could not check the container bridge address");
     }
@@ -560,16 +560,6 @@ fn cni_dirs() -> Vec<PathBuf> {
         Some(paths) => std::env::split_paths(&paths).collect(),
         None => DEFAULT_CNI_DIRS.iter().map(PathBuf::from).collect(),
     }
-}
-
-fn subnet_gateway(subnet: &str) -> anyhow::Result<IpAddr> {
-    let network = subnet
-        .split_once('/')
-        .map(|(network, _)| network)
-        .context("node subnet must be a CIDR")?
-        .parse::<std::net::Ipv4Addr>()?;
-    let [first, second, third, _] = network.octets();
-    Ok(IpAddr::from([first, second, third, 1]))
 }
 
 fn write_container_resolv_conf(

@@ -25,7 +25,7 @@ pub use deployment::{
     retained_releases,
 };
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
-pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo};
+pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo, subnet_gateway};
 pub use protocol::{
     AgentMessage, ClusterDiscovery, ControlMessage, JoinRequest, JoinResponse, MeshPeer,
     VoterSecrets,
