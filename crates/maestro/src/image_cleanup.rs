@@ -7,9 +7,10 @@ use maestro_runtime::{ContainerdRuntime, normalize_image_reference};
 use maestro_store::{Consensus, StateMachine};
 use serde_json::{Value, json};
 
-use crate::node_service::{NodeClients, NodeRequest, call_nodes};
+use crate::node_service::{NodeClients, NodeRequest};
 
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const PRUNE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const GRACE_SECONDS: i64 = 60 * 60;
 const BUILT_IMAGE_PREFIX: &str = "maestro.local/";
 const LIVE: [DeploymentStatus; 5] = [
@@ -67,13 +68,20 @@ pub async fn run_image_cleanup(consensus: Arc<Consensus>, clients: NodeClients) 
                             keep,
                             managed: managed.clone(),
                         };
-                        call_nodes(&clients, vec![node], request)
+                        let clients = &clients;
+                        async move {
+                            let reply = tokio::time::timeout(
+                                PRUNE_TIMEOUT,
+                                clients.call(&node.endpoint, &request),
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(tonic::Status::deadline_exceeded("image cleanup timed out"))
+                            });
+                            (node.name, reply)
+                        }
                     });
-                for (_, node_name, reply) in futures_util::future::join_all(prunes)
-                    .await
-                    .into_iter()
-                    .flatten()
-                {
+                for (node_name, reply) in futures_util::future::join_all(prunes).await {
                     match reply {
                         Ok(pruned) => {
                             tracing::info!(node = %node_name, removed = %pruned["removed"], "pruned container images")
