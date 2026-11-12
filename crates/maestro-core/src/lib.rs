@@ -1,6 +1,7 @@
 mod config;
 mod controls;
 mod deployment;
+mod discovery;
 mod ids;
 mod node;
 mod protocol;
@@ -23,6 +24,10 @@ pub use controls::{
 pub use deployment::{
     Assignment, Deployment, DeploymentStatus, GitCommit, HealthcheckPlan, ReplicaPlan,
     retained_releases, version_label,
+};
+pub use discovery::{
+    DISCOVERY_HOST_ENV, DISCOVERY_KEY_ENV, DISCOVERY_PORT, DiscoveredReplica, DiscoveryTable,
+    discovery_key_hash,
 };
 pub use ids::{DeploymentId, NodeId, ReplicaId, ServiceId};
 pub use node::{NodeRecord, NodeRole, NodeState, WireGuardInfo, subnet_gateway};

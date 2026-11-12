@@ -17,8 +17,8 @@ use maestro_agent::{
 };
 use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
 use maestro_core::{
-    ClusterConfig, NodeRecord, NodeRole, NodeState, WireGuardInfo, cluster_dns_label,
-    cluster_domain, subnet_gateway,
+    ClusterConfig, DISCOVERY_PORT, NodeRecord, NodeRole, NodeState, WireGuardInfo,
+    cluster_dns_label, cluster_domain, subnet_gateway,
 };
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_proto::{CertRole, ClusterCa, NodeCredentials};
@@ -29,6 +29,7 @@ use tokio::task::JoinSet;
 use crate::contexts;
 use crate::control_link::GrpcControlLink;
 use crate::control_plane::{self, ControlPlaneSettings};
+use crate::discovery::serve_discovery;
 use crate::identity::NodeIdentity;
 use crate::join::grpc_address;
 use crate::log_driver;
@@ -300,6 +301,7 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             cluster_cidr: identity.cluster.cidr.clone(),
             workload_interfaces: vec![BRIDGE_NAME.to_string(), WIREGUARD_INTERFACE.to_string()],
             ingress_ports: config.ingress.ports.clone(),
+            discovery_port: DISCOVERY_PORT,
         },
         board.clone(),
         reconciler.plans(),
@@ -361,6 +363,9 @@ pub async fn run_agent(args: AgentArgs) -> anyhow::Result<()> {
             Ok(())
         });
     }
+    let discovery = attachment.discovery();
+    let discovery_board = board.clone();
+    tasks.spawn(async move { serve_discovery(gateway, discovery, discovery_board).await });
     let telemetry_failing = attachment.telemetry_failing();
     let telemetry_socket = args.telemetry_socket.clone();
     tasks.spawn(async move {

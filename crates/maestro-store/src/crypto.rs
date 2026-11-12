@@ -4,8 +4,9 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::Argon2;
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
-use maestro_core::{EnvSpec, ServiceSpec};
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use hmac::{Hmac, KeyInit as _, Mac};
+use maestro_core::{EnvSpec, ServiceId, ServiceSpec};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -14,9 +15,15 @@ const MASK: &str = "********";
 const KEY_BYTES: usize = 32;
 const KDF_SALT: &[u8] = b"maestro-v1-key-derivation";
 const NONCE_BYTES: usize = 12;
+const DISCOVERY_KEY_CONTEXT: &[u8] = b"maestro-discovery-key\0";
 
 pub struct SecretKey {
     cipher: Aes256Gcm,
+}
+
+/// Derives each service's service-discovery API key from the cluster's JWT secret.
+pub struct DiscoveryKeys {
+    secret: Vec<u8>,
 }
 
 #[derive(Debug, Error)]
@@ -80,6 +87,22 @@ impl SecretKey {
 
     pub fn open_spec(&self, spec: &ServiceSpec) -> Result<ServiceSpec, SecretError> {
         map_env_values(spec, |value| self.open(value))
+    }
+}
+
+impl DiscoveryKeys {
+    pub fn new(jwt_secret: &str) -> Self {
+        Self {
+            secret: jwt_secret.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn key(&self, service_id: &ServiceId) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)
+            .unwrap_or_else(|_| unreachable!("HMAC accepts keys of any length"));
+        mac.update(DISCOVERY_KEY_CONTEXT);
+        mac.update(service_id.as_str().as_bytes());
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
     }
 }
 
@@ -215,6 +238,22 @@ mod tests {
         assert_eq!(masked.deploy.env.items["DB_PASSWORD"], MASK);
         assert_eq!(masked.deploy.secrets.unwrap().items["tls.key"], MASK);
         assert_eq!(masked.preview.unwrap().env.items["PREVIEW_TOKEN"], MASK);
+    }
+
+    #[test]
+    fn derives_a_stable_discovery_key_per_service() {
+        let keys = DiscoveryKeys::new("jwt-secret");
+        let api = keys.key(&ServiceId::from("api"));
+        assert_eq!(
+            api,
+            DiscoveryKeys::new("jwt-secret").key(&ServiceId::from("api"))
+        );
+        assert_ne!(api, keys.key(&ServiceId::from("web")));
+        assert_ne!(
+            api,
+            DiscoveryKeys::new("other-secret").key(&ServiceId::from("api"))
+        );
+        assert_eq!(api.len(), 43);
     }
 
     #[test]

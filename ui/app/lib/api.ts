@@ -2,6 +2,7 @@ import type {
   ClusterConfig,
   ClusterInfo,
   ClusterNode,
+  Discovery,
   Deployment,
   DiskInfo,
   IngressBlocklist,
@@ -135,6 +136,10 @@ async function getServices(): Promise<Service[]> {
     },
     status: latestDeployment?.status ?? "idle"
   }));
+}
+
+async function getServiceDiscovery(serviceId: string): Promise<Discovery.Service> {
+  return request<Discovery.Service>(`/api/services/${encodeURIComponent(serviceId)}/discovery`);
 }
 
 async function getDeployments(serviceId: string): Promise<Deployment[]> {
@@ -406,6 +411,7 @@ function deploymentReplicas(placement: ReplicaPlacement, deploymentId: string): 
 }
 
 export {
+  getServiceDiscovery,
   getClusterInfo,
   getClusterNodes,
   getUnschedulableReplicas,

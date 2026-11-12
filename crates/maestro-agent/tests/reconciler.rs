@@ -8,7 +8,7 @@ use maestro_core::{
     ServiceId, ServiceSpec, VolumeMount,
 };
 use maestro_runtime::FakeRuntime;
-use maestro_store::{Mutation, StateMachine};
+use maestro_store::{DiscoveryKeys, Mutation, StateMachine};
 use tempfile::TempDir;
 
 const NODE: NodeId = NodeId(1);
@@ -71,7 +71,12 @@ fn harness_with(deploy: DeploySpec, settings: ReconcilerSettings) -> Harness {
     let board = StatusBoard::new();
     let reconciler = Reconciler::new(
         runtime.clone(),
-        Arc::new(LocalPlanSource::new(state.clone(), test_key(), NODE)),
+        Arc::new(LocalPlanSource::new(
+            state.clone(),
+            test_key(),
+            Arc::new(DiscoveryKeys::new("jwt-secret")),
+            NODE,
+        )),
         board.clone(),
         settings,
     );
@@ -265,6 +270,7 @@ async fn adopts_running_replicas_after_agent_restart() {
         Arc::new(LocalPlanSource::new(
             harness.state.clone(),
             test_key(),
+            Arc::new(DiscoveryKeys::new("jwt-secret")),
             NODE,
         )),
         restarted_board.clone(),

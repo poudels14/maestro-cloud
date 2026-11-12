@@ -2896,6 +2896,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "base64 0.22.1",
+ "hmac 0.13.0",
  "maestro-core",
  "maestro-proto",
  "openraft",

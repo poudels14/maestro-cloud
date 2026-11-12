@@ -1,6 +1,8 @@
-use maestro_core::{NodeId, ReplicaPlan};
+use maestro_core::{
+    DISCOVERY_HOST_ENV, DISCOVERY_KEY_ENV, DISCOVERY_PORT, NodeId, ReplicaPlan, subnet_gateway,
+};
 
-use crate::crypto::{SecretError, SecretKey};
+use crate::crypto::{DiscoveryKeys, SecretError, SecretKey};
 use crate::error::StoreError;
 use crate::state::StateMachine;
 
@@ -15,8 +17,13 @@ pub enum PlanError {
 pub fn replica_plans(
     state: &StateMachine,
     key: &SecretKey,
+    discovery_keys: &DiscoveryKeys,
     node_id: NodeId,
 ) -> Result<Vec<ReplicaPlan>, PlanError> {
+    let gateway = state
+        .node(node_id)?
+        .and_then(|node| node.subnet)
+        .and_then(|subnet| subnet_gateway(&subnet));
     state
         .assignments(node_id)?
         .iter()
@@ -34,9 +41,26 @@ pub fn replica_plans(
                     .transpose()?
                     .flatten()
                     .map(|node| node.endpoint);
+                let plan = ReplicaPlan::new(assignment, &spec);
+                let discovery_env = gateway
+                    .map(|gateway| {
+                        [
+                            (
+                                DISCOVERY_HOST_ENV.to_string(),
+                                format!("http://{gateway}:{DISCOVERY_PORT}"),
+                            ),
+                            (
+                                DISCOVERY_KEY_ENV.to_string(),
+                                discovery_keys.key(&assignment.service_id),
+                            ),
+                        ]
+                    })
+                    .into_iter()
+                    .flatten();
                 Ok(ReplicaPlan {
                     image_source,
-                    ..ReplicaPlan::new(assignment, &spec)
+                    env: plan.env.into_iter().chain(discovery_env).collect(),
+                    ..plan
                 })
             }))
         })

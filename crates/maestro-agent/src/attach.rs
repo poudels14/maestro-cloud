@@ -7,6 +7,7 @@ use std::time::Duration;
 use maestro_core::{AgentMessage, ControlMessage, NodeId, ReplicaPlan};
 use tokio::sync::{mpsc, watch};
 
+use crate::discovery::DiscoveryState;
 use crate::dns::DnsRecords;
 use crate::error::AgentError;
 use crate::ingress::IngressWriter;
@@ -43,6 +44,7 @@ pub struct Attachment<L: ControlLink> {
     members: watch::Sender<Option<Vec<NodeId>>>,
     node_addresses: watch::Sender<Vec<IpAddr>>,
     telemetry_failing: Arc<AtomicBool>,
+    discovery: DiscoveryState,
     ingress: IngressWriter,
     dns: DnsRecords,
     mesh: Option<(WireGuardMesh, MeshConfig)>,
@@ -76,6 +78,7 @@ impl<L: ControlLink> Attachment<L> {
             members: watch::channel(None).0,
             node_addresses: watch::channel(Vec::new()).0,
             telemetry_failing: Arc::default(),
+            discovery: DiscoveryState::default(),
             ingress,
             dns,
             mesh,
@@ -103,6 +106,10 @@ impl<L: ControlLink> Attachment<L> {
     /// drains the node once it stays set.
     pub fn telemetry_failing(&self) -> Arc<AtomicBool> {
         self.telemetry_failing.clone()
+    }
+
+    pub fn discovery(&self) -> DiscoveryState {
+        self.discovery.clone()
     }
 
     pub async fn run(mut self) {
@@ -189,11 +196,16 @@ impl<L: ControlLink> Attachment<L> {
                 self.initialized.send_replace(true);
                 self.attached.send_replace(true);
             }
-            ControlMessage::Routes { table, dns } => {
+            ControlMessage::Routes {
+                table,
+                dns,
+                discovery,
+            } => {
                 if let Err(error) = self.ingress.write(&table).await {
                     tracing::warn!(%error, "failed to write ingress config");
                 }
                 self.dns.replace(dns.into_iter().collect());
+                self.discovery.replace(discovery);
             }
             ControlMessage::Mesh { peers, members } => {
                 if !members.is_empty() {
@@ -354,6 +366,7 @@ mod tests {
                     "api.dev.maestro".to_string(),
                     vec!["10.200.1.2".parse().unwrap()],
                 )]),
+                discovery: Default::default(),
             })
             .await
             .unwrap();

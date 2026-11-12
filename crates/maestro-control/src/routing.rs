@@ -2,13 +2,19 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use maestro_core::{
-    Assignment, Backend, Deployment, DeploymentStatus, ReplicaId, ReplicaPhase, ReplicaStatus,
-    RouteTable, ServiceId, ServiceRoute, ServiceSpec, internal_name,
+    Assignment, Backend, Deployment, DeploymentStatus, DiscoveredReplica, DiscoveryTable,
+    ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable, ServiceId, ServiceRoute, ServiceSpec,
+    discovery_key_hash, internal_name, version_label,
 };
-use maestro_store::{StateMachine, StoreError};
+use maestro_store::{DiscoveryKeys, StateMachine, StoreError};
 
 const ROUTED_STATUSES: [DeploymentStatus; 2] =
     [DeploymentStatus::Deploying, DeploymentStatus::Ready];
+const DISCOVERABLE_STATUSES: [DeploymentStatus; 3] = [
+    DeploymentStatus::Deploying,
+    DeploymentStatus::Ready,
+    DeploymentStatus::Draining,
+];
 
 pub struct RoutingInput<'a> {
     pub services: &'a [(ServiceId, ServiceSpec)],
@@ -56,6 +62,53 @@ pub fn cluster_dns(
         cluster,
         previous,
     ))
+}
+
+pub fn cluster_discovery(
+    state: &StateMachine,
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+    cluster: &str,
+    discovery_keys: &DiscoveryKeys,
+) -> Result<DiscoveryTable, StoreError> {
+    let services = state.services()?;
+    let deployments = services
+        .iter()
+        .map(|(service_id, _)| state.deployments(service_id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
+    Ok(DiscoveryTable {
+        services: discovered_replicas(&deployments, &all_assignments(state)?, observed, cluster),
+        key_hashes: services
+            .iter()
+            .map(|(service_id, _)| {
+                (
+                    service_id.clone(),
+                    discovery_key_hash(&discovery_keys.key(service_id)),
+                )
+            })
+            .collect(),
+    })
+}
+
+/// What the discovery API returns for one service, for the admin API to show the same answer.
+pub fn service_discovery(
+    state: &StateMachine,
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+    cluster: &str,
+    service_id: &ServiceId,
+) -> Result<Vec<DiscoveredReplica>, StoreError> {
+    let assignments = all_assignments(state)?
+        .into_iter()
+        .filter(|assignment| &assignment.service_id == service_id)
+        .collect::<Vec<_>>();
+    Ok(discovered_replicas(
+        &state.deployments(service_id)?,
+        &assignments,
+        observed,
+        cluster,
+    )
+    .remove(service_id)
+    .unwrap_or_default())
 }
 
 pub fn build_dns(
@@ -182,6 +235,51 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
         routes,
         blocked_ips: Vec::new(),
     }
+}
+
+fn discovered_replicas(
+    deployments: &[Deployment],
+    assignments: &[Assignment],
+    observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
+    cluster: &str,
+) -> BTreeMap<ServiceId, Vec<DiscoveredReplica>> {
+    let mut replicas = assignments
+        .iter()
+        .filter(|assignment| !assignment.is_retiring())
+        .filter_map(|assignment| {
+            let deployment = deployments.iter().find(|deployment| {
+                deployment.id == assignment.deployment_id
+                    && DISCOVERABLE_STATUSES.contains(&deployment.status)
+            })?;
+            let status = observed(&assignment.replica_id)?;
+            let replica = DiscoveredReplica {
+                replica_id: assignment.replica_id.clone(),
+                deployment_id: assignment.deployment_id.clone(),
+                version: deployment.version.map(version_label),
+                host: internal_name(cluster, assignment.replica_id.as_str()),
+                ip: status.ip?,
+                port: deployment
+                    .spec
+                    .ingress
+                    .as_ref()
+                    .map(|ingress| ingress.port)
+                    .or_else(|| deployment.spec.deploy.expose_ports.first().copied()),
+                healthy: status.phase == ReplicaPhase::Healthy,
+                node_id: assignment.node_id,
+            };
+            Some((assignment.service_id.clone(), replica))
+        })
+        .fold(
+            BTreeMap::<ServiceId, Vec<DiscoveredReplica>>::new(),
+            |mut services, (service_id, replica)| {
+                services.entry(service_id).or_default().push(replica);
+                services
+            },
+        );
+    replicas
+        .values_mut()
+        .for_each(|service| service.sort_by(|left, right| left.replica_id.cmp(&right.replica_id)));
+    replicas
 }
 
 fn all_assignments(state: &StateMachine) -> Result<Vec<Assignment>, StoreError> {
@@ -431,6 +529,42 @@ mod tests {
             &first,
         );
         assert!(addresses(&restarting).is_empty());
+    }
+
+    #[test]
+    fn discovers_the_live_replicas_of_each_service() {
+        let deployments = [
+            Deployment {
+                version: Some(3),
+                ..deployment("d1", DeploymentStatus::Ready)
+            },
+            deployment("d0", DeploymentStatus::Stopped),
+        ];
+        let retiring = Assignment {
+            retiring_since_ms: Some(1),
+            ..assignment("d1", 1)
+        };
+        let assignments = [assignment("d1", 0), retiring, assignment("d0", 0)];
+        let statuses = [
+            status("d1-0", ReplicaPhase::Running, 2),
+            status("d1-1", ReplicaPhase::Healthy, 3),
+            status("d0-0", ReplicaPhase::Healthy, 4),
+        ];
+        let observed = |replica_id: &ReplicaId| {
+            statuses
+                .iter()
+                .find(|status| &status.replica_id == replica_id)
+                .cloned()
+        };
+        let replicas = discovered_replicas(&deployments, &assignments, &observed, "Prod");
+        let web = &replicas[&ServiceId::from("web")];
+        assert_eq!(web.len(), 1);
+        assert_eq!(web[0].replica_id, ReplicaId::from("d1-0"));
+        assert_eq!(web[0].version.as_deref(), Some("00000003"));
+        assert_eq!(web[0].host, "d1-0.prod.maestro");
+        assert_eq!(web[0].ip.to_string(), "10.200.1.2");
+        assert_eq!(web[0].port, Some(8080));
+        assert!(!web[0].healthy);
     }
 
     fn dns(

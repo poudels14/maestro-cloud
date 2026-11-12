@@ -26,7 +26,7 @@ use maestro_proto::NodeCredentials;
 use maestro_proto::pb::cluster_server::ClusterServer;
 use maestro_proto::pb::node_server::NodeServer;
 use maestro_runtime::{ContainerdRuntime, RegistryClient, Runtime};
-use maestro_store::{Consensus, ConsensusSettings, Mutation, SecretKey};
+use maestro_store::{Consensus, ConsensusSettings, DiscoveryKeys, Mutation, SecretKey};
 use maestro_telemetry::{BackupConfig, S3Archive};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
@@ -172,6 +172,7 @@ pub async fn spawn(
         hub.clone(),
         consensus.clone(),
         key.clone(),
+        Arc::new(DiscoveryKeys::new(settings.config.jwt_secret_key()?)),
         settings.identity.cluster.name.clone(),
     ));
     tasks.spawn(run_membership(consensus.clone()));
@@ -444,6 +445,7 @@ pub async fn spawn(
         writer: writer.clone(),
         observed,
         key,
+        cluster: settings.identity.cluster.name.clone(),
     }))
     .merge(logs)
     .merge(uploads)
@@ -704,9 +706,10 @@ async fn publish(
     hub: AgentHub,
     consensus: Arc<Consensus>,
     key: Arc<SecretKey>,
+    discovery_keys: Arc<DiscoveryKeys>,
     cluster: String,
 ) -> anyhow::Result<()> {
-    run_publisher(hub, consensus.state_handle(), key, cluster).await;
+    run_publisher(hub, consensus.state_handle(), key, discovery_keys, cluster).await;
     Ok(())
 }
 

@@ -7,6 +7,7 @@ edition = "2024"
 aes-gcm = "0.10.3"
 argon2 = "0.5"
 base64 = "0.22"
+hmac = "0.13.0"
 maestro-core = { version = "3.0.0", path = "../maestro-core" }
 maestro-proto = { version = "3.0.0", path = "../maestro-proto" }
 openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }

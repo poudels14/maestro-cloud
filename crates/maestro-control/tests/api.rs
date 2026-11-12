@@ -17,6 +17,7 @@ fn app() -> (Arc<LocalWriter>, axum::Router) {
         writer: writer.clone(),
         observed: Arc::new(FakeObserved::default()),
         key: Arc::new(maestro_store::SecretKey::from_bytes(&[3u8; 32])),
+        cluster: "test".to_string(),
     });
     (writer, router(state))
 }
@@ -464,6 +465,26 @@ async fn restarts_only_deployments_whose_image_is_retained() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn shows_what_the_discovery_api_returns_for_a_service() {
+    let (_writer, app) = app();
+    call(
+        &app,
+        "POST",
+        "/api/rollout?apply=true",
+        Some(services_file("api:1")),
+    )
+    .await;
+    let (status, body) = call(&app, "GET", "/api/services/api/discovery", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        serde_json::json!({ "service": "api", "replicas": [] })
+    );
+    let (status, _) = call(&app, "GET", "/api/services/missing/discovery", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

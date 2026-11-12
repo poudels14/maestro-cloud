@@ -5,13 +5,13 @@ use std::time::Duration;
 use maestro_core::{
     ControlMessage, MeshPeer, NodeId, NodeState, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable,
 };
-use maestro_store::{SecretKey, StateMachine, StoreError, replica_plans};
+use maestro_store::{DiscoveryKeys, SecretKey, StateMachine, StoreError, replica_plans};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 use crate::deployer::ObservedReplicas;
-use crate::routing::{cluster_dns, cluster_routes};
+use crate::routing::{cluster_discovery, cluster_dns, cluster_routes};
 
 const AGENT_BUFFER: usize = 64;
 const PUBLISH_RESYNC: Duration = Duration::from_secs(10);
@@ -331,6 +331,7 @@ pub async fn run_publisher(
     hub: AgentHub,
     state: Arc<StateMachine>,
     key: Arc<SecretKey>,
+    discovery_keys: Arc<DiscoveryKeys>,
     cluster: String,
 ) {
     let mut hub_changes = hub.subscribe();
@@ -351,12 +352,15 @@ pub async fn run_publisher(
                     cluster_dns(&state, &observed, &cluster, &previous_dns)?,
                 ))
             })
-            .and_then(|(table, dns)| Ok((table, dns, assigned_nodes(&state)?)));
+            .and_then(|(table, dns)| {
+                let discovery = cluster_discovery(&state, &observed, &cluster, &discovery_keys)?;
+                Ok((table, dns, discovery, assigned_nodes(&state)?))
+            });
         match routes {
-            Ok((table, dns, assigned)) => {
+            Ok((table, dns, discovery, assigned)) => {
                 let routes_ready = !hub.awaiting_reports(&assigned);
                 for node_id in hub.connected_nodes() {
-                    match replica_plans(&state, &key, node_id) {
+                    match replica_plans(&state, &key, &discovery_keys, node_id) {
                         Ok(plans) => hub.publish(node_id, ControlMessage::Plans { plans }).await,
                         Err(error) => tracing::warn!(%node_id, %error, "failed to build plans"),
                     }
@@ -364,6 +368,7 @@ pub async fn run_publisher(
                         let message = ControlMessage::Routes {
                             table: table.clone(),
                             dns: dns.clone(),
+                            discovery: discovery.clone(),
                         };
                         hub.publish(node_id, message).await;
                     }

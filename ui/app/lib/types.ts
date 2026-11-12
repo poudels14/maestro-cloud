@@ -112,6 +112,24 @@ export namespace Preview {
 
 export type SlackCategory = "info" | "error";
 
+export namespace Discovery {
+  export type Replica = {
+    replicaId: string;
+    deploymentId: string;
+    version: string | null;
+    host: string;
+    ip: string;
+    port: number | null;
+    healthy: boolean;
+    nodeId: number;
+  };
+
+  export type Service = {
+    service: string;
+    replicas: Replica[];
+  };
+}
+
 export type SlackWebhook = {
   id: string;
   name: string;

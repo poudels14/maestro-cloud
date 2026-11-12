@@ -185,48 +185,19 @@ or the container runtime.
   of each node's `/24`, which the nodes advertise as subnet routes). Then
   `<service>.<cluster>.maestro` resolves to replica addresses, and
   `http://<cluster>.maestro` opens the admin UI.
+- Service discovery: every replica gets `MAESTRO_API_HOST` (its node's bridge gateway, port
+  7480) and `MAESTRO_API_KEY`, and can list the replicas of a service:
 
-## Logs
+  ```bash
+  curl -H "Authorization: Bearer $MAESTRO_API_KEY" "$MAESTRO_API_HOST/v1/services/api"
+  # {"service":"api","replicas":[{"replicaId":"dmw…-0","deploymentId":"dmw…","version":"00000042",
+  #   "host":"dmw…-0.<cluster>.maestro","ip":"10.50.2.12","port":8080,"healthy":true,"nodeId":…}]}
+  ```
 
-Container output goes through `maestro-log-driver` into rotated files and is indexed
-by the telemetry process (DuckDB with daily Parquet rollover).
-
-```bash
-maestro logs --service api -q 'level:error "upstream timeout"'
-maestro logs -q '@http.status_code:[500 TO 599] AND -message:*health*' -n 200
-```
-
-Queries support free text, quoted phrases, `service:`, `deployment:`, `replica:`,
-`stream:`, `level:`, `@attribute` filters for JSON lines, numeric comparisons and
-ranges, `AND`/`OR`/`NOT`/`-`, and `*`/`?` wildcards.
-
-## CLI
-
-```text
-maestro dev up|reload|down|status        local cluster in a Lima VM
-maestro server provision                 create or join the cluster from the config (NixOS runs this)
-maestro server init                      create a single-node cluster on this node
-maestro join --config SRC --advertise IP:7400 [--role voter|worker]
-maestro agent                            run a node (systemd unit)
-maestro telemetry                        run the telemetry process (systemd unit)
-maestro token create [--config SRC]      print an API token signed with jwtSecretKey (max 24h)
-maestro context set|use|ls|remove        manage API endpoints and tokens
-maestro context login [--ttl 24h]        sign a token with $JWT_SECRET_KEY and save it to the active context
-maestro cluster upgrade [VERSION]        rolling upgrade of every node, without logging in to them
-maestro rollout [-f file] [--apply]
-maestro services | replicas | nodes
-maestro deploy <service>
-maestro logs [--service S] [-q QUERY] [-n N]
-```
-
-The CLI reads `~/.config/maestro/contexts.json` (override with
-`MAESTRO_CONTEXTS_FILE`); `--api` and `--token` (or `MAESTRO_API`, `MAESTRO_TOKEN`)
-override the active context.
-
-## Multi-node clusters
-
-A Maestro cluster has 1, 3, or 5 **voters** and any number of **workers**.
-
+  Each node's agent answers from the same data as the cluster DNS. The key is derived per
+  service from `jwtSecretKey`, and the caller's container IP must belong to that service, so a
+  key does not work from anywhere else. To see what a service would get, the admin API answers
+  `GET /api/services/<service>/discovery` with the same response, without a key.
 - **Voters** run the control plane (Raft over mTLS gRPC with redb storage, the API,
   the scheduler, the deployer, and the build queue) and also run workloads.
 - **Workers** run workloads only. They hold no cluster state and receive exactly the

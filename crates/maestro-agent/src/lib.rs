@@ -1,6 +1,7 @@
 mod attach;
 mod build;
 mod cloudflare;
+mod discovery;
 mod dns;
 mod egress;
 mod error;
@@ -22,6 +23,7 @@ pub use build::{
     remote_head,
 };
 pub use cloudflare::{CLOUDFLARED_IMAGE, TunnelConnectors};
+pub use discovery::{DiscoveryDenied, DiscoveryState};
 pub use dns::{DnsRecords, DnsServer, PeerClusters, upstream_resolvers};
 pub use egress::{EgressFirewall, EgressPolicy};
 pub use error::AgentError;

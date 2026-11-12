@@ -21,6 +21,7 @@ pub struct EgressPolicy {
     pub cluster_cidr: String,
     pub workload_interfaces: Vec<String>,
     pub ingress_ports: Vec<u16>,
+    pub discovery_port: u16,
 }
 
 pub struct EgressFirewall<R: CommandRunner> {
@@ -170,6 +171,7 @@ fn host_input_chain(policy: &EgressPolicy) -> String {
                 format!("{interfaces} ct state established,related accept"),
                 format!("{interfaces} udp dport 53 accept"),
                 format!("{interfaces} tcp dport 53 accept"),
+                format!("{interfaces} tcp dport {} accept", policy.discovery_port),
                 format!("{interfaces} icmp type echo-request accept"),
             ]
             .into_iter()
@@ -231,6 +233,7 @@ mod tests {
             cluster_cidr: "10.200.0.0/16".to_string(),
             workload_interfaces: Vec::new(),
             ingress_ports: Vec::new(),
+            discovery_port: 7480,
         }
     }
 
@@ -243,6 +246,7 @@ mod tests {
         let input = &script[script.find("chain input").unwrap()..];
         assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } udp dport 53 accept"));
         assert!(input.contains("tcp dport { 80, 443 } accept"));
+        assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } tcp dport 7480 accept"));
         assert!(input.contains("iifname { \"maestro0\", \"maestro-wg\" } reject"));
         assert!(input.find("dport { 80, 443 }") < input.find("} reject"));
         assert!(

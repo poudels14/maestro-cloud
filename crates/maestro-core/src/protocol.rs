@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ClusterSettings;
 use crate::deployment::ReplicaPlan;
+use crate::discovery::DiscoveryTable;
 use crate::ids::NodeId;
 use crate::node::{NodeRole, WireGuardInfo};
 use crate::resources::NodeCapacity;
@@ -34,6 +35,8 @@ pub enum ControlMessage {
     Routes {
         table: RouteTable,
         dns: BTreeMap<String, Vec<IpAddr>>,
+        #[serde(default)]
+        discovery: DiscoveryTable,
     },
     Mesh {
         peers: Vec<MeshPeer>,

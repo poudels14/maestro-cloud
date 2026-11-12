@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use maestro_core::{NodeId, ReplicaPlan};
-use maestro_store::{Change, ChangeKey, SecretKey, StateMachine, replica_plans};
+use maestro_store::{Change, ChangeKey, DiscoveryKeys, SecretKey, StateMachine, replica_plans};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::error::AgentError;
@@ -16,16 +16,23 @@ pub trait PlanSource: Send + Sync + 'static {
 pub struct LocalPlanSource {
     state: Arc<StateMachine>,
     key: Arc<SecretKey>,
+    discovery_keys: Arc<DiscoveryKeys>,
     node_id: NodeId,
     changes: Mutex<broadcast::Receiver<Change>>,
 }
 
 impl LocalPlanSource {
-    pub fn new(state: Arc<StateMachine>, key: Arc<SecretKey>, node_id: NodeId) -> Self {
+    pub fn new(
+        state: Arc<StateMachine>,
+        key: Arc<SecretKey>,
+        discovery_keys: Arc<DiscoveryKeys>,
+        node_id: NodeId,
+    ) -> Self {
         let changes = Mutex::new(state.subscribe());
         Self {
             state,
             key,
+            discovery_keys,
             node_id,
             changes,
         }
@@ -50,7 +57,12 @@ impl LocalPlanSource {
 
 impl PlanSource for LocalPlanSource {
     async fn plans(&self) -> Result<Vec<ReplicaPlan>, AgentError> {
-        Ok(replica_plans(&self.state, &self.key, self.node_id)?)
+        Ok(replica_plans(
+            &self.state,
+            &self.key,
+            &self.discovery_keys,
+            self.node_id,
+        )?)
     }
 
     async fn changed(&self) {

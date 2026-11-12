@@ -14,6 +14,7 @@ import {
   getIngressBlocklist,
   getServiceMetrics,
   getServiceTraffic,
+  getServiceDiscovery,
   getServices,
   getUnschedulableReplicas,
   listSlackWebhooks
@@ -33,6 +34,7 @@ const queryKeys = {
   config: ["config"] as const,
   services: ["services"] as const,
   deployments: (serviceId: string) => ["deployments", serviceId] as const,
+  discovery: (serviceId: string) => ["discovery", serviceId] as const,
   disks: ["disks"] as const,
   nodeMetrics: (range: number, nodeId: number | undefined) =>
     ["metrics", "node", range, nodeId] as const,
@@ -89,6 +91,14 @@ const servicesQuery = () => ({
 const deploymentsQuery = (serviceId: string) => ({
   queryKey: queryKeys.deployments(serviceId),
   queryFn: ssrSafe(() => getDeployments(serviceId), []),
+  refetchInterval: 10_000,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000
+});
+
+const serviceDiscoveryQuery = (serviceId: string) => ({
+  queryKey: queryKeys.discovery(serviceId),
+  queryFn: ssrSafe(() => getServiceDiscovery(serviceId), { service: serviceId, replicas: [] }),
   refetchInterval: 10_000,
   refetchOnWindowFocus: true,
   staleTime: 5_000
@@ -185,6 +195,7 @@ export {
   unschedulableQuery,
   servicesQuery,
   deploymentsQuery,
+  serviceDiscoveryQuery,
   disksQuery,
   nodeMetricsQuery,
   clusterMetricsQuery,

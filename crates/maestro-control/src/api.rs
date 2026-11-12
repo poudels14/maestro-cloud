@@ -6,11 +6,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use maestro_core::{
-    Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, MAX_REPLICAS_OVERRIDE,
-    MaintenanceEvent, MaintenancePhase, Millicores, NodeCapacity, NodeId, NodeRecord, NodeState,
-    NodeStepStatus, PreviewSource, ReplicaId, ReplicaStatus, RouteTable, ServiceControls,
-    ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica, host_conflict,
-    retained_releases,
+    Assignment, ByteSize, Deployment, DeploymentId, DeploymentStatus, DiscoveredReplica,
+    MAX_REPLICAS_OVERRIDE, MaintenanceEvent, MaintenancePhase, Millicores, NodeCapacity, NodeId,
+    NodeRecord, NodeState, NodeStepStatus, PreviewSource, ReplicaId, ReplicaStatus, RouteTable,
+    ServiceControls, ServiceId, ServiceSpec, ServicesFile, SpecError, UnschedulableReplica,
+    host_conflict, retained_releases,
 };
 use maestro_store::{ConsensusError, Mutation, SecretKey, mask_spec};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::deployer::{ObservedReplicas, unix_millis};
 use crate::error::ControlError;
-use crate::routing::cluster_routes;
+use crate::routing::{cluster_routes, service_discovery};
 use crate::writer::StoreWriter;
 
 const CANCELLABLE_STATUSES: [DeploymentStatus; 3] = [
@@ -41,6 +41,14 @@ pub struct ApiState<W: StoreWriter, O: ObservedReplicas> {
     pub writer: Arc<W>,
     pub observed: Arc<O>,
     pub key: Arc<SecretKey>,
+    pub cluster: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceDiscovery {
+    service: ServiceId,
+    replicas: Vec<DiscoveredReplica>,
 }
 
 #[derive(Serialize)]
@@ -205,6 +213,10 @@ pub fn router<W: StoreWriter, O: ObservedReplicas>(state: Arc<ApiState<W, O>>) -
         .route(
             "/api/services/{service_id}/restart",
             post(restart_service::<W, O>),
+        )
+        .route(
+            "/api/services/{service_id}/discovery",
+            get(discover_service::<W, O>),
         )
         .route(
             "/api/services/{service_id}/freeze",
@@ -887,6 +899,24 @@ async fn list_nodes<W: StoreWriter, O: ObservedReplicas>(
         })
         .collect();
     Ok(Json(nodes))
+}
+
+/// The answer the in-cluster discovery API gives for one service, for testing from the dashboard.
+async fn discover_service<W: StoreWriter, O: ObservedReplicas>(
+    State(state): State<Arc<ApiState<W, O>>>,
+    Path(service_id): Path<String>,
+) -> Result<Json<ServiceDiscovery>, ControlError> {
+    let id = ServiceId::new(service_id);
+    let store = state.writer.state();
+    store
+        .service(&id)?
+        .ok_or_else(|| ControlError::NotFound(format!("service {id}")))?;
+    let observed = |replica_id: &ReplicaId| state.observed.replica(replica_id);
+    let replicas = service_discovery(store, &observed, &state.cluster, &id)?;
+    Ok(Json(ServiceDiscovery {
+        service: id,
+        replicas,
+    }))
 }
 
 async fn list_routes<W: StoreWriter, O: ObservedReplicas>(
