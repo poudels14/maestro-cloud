@@ -1,9 +1,10 @@
 # Instructions
 
-- When the user shares coding preferences, patterns, or review feedback that should apply going forward, automatically add them as guidelines to the relevant section of this CLAUDE.md file.
+- When the user shares coding preferences, patterns, or review feedback that should apply going forward, automatically add them as guidelines to the relevant section of this AGENTS.md file.
 - Don't uncomment any code unless I explicitly ask you to. Most of the time, the code is commented to get rid of it soon after testing.
 - Do not change bahvior of the code unless you are explicitly asked to do so, even if you think there's a but or whatever.
 - Never add `Co-Authored-By` or any other AI attribution to commit messages or PR descriptions.
+- Include `cargo fmt` changes in the commit they belong to instead of a separate formatting commit.
 
 # Architecture
 
