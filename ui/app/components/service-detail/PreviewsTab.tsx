@@ -1,15 +1,28 @@
-import { For, Show } from "solid-js";
-import { ExternalLink, GitPullRequest, Github } from "lucide-solid";
+import { createSignal, For, Show } from "solid-js";
+import { useMutation, useQueryClient } from "@tanstack/solid-query";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { EllipsisVertical, ExternalLink, GitPullRequest, Github, Trash2 } from "lucide-solid";
 import type { Service } from "../../lib/types";
+import { deleteService } from "../../lib/api";
 import { servicePreviews } from "../../lib/previews";
-import { clusterNodesQuery } from "../../lib/queries";
+import { clusterNodesQuery, queryKeys } from "../../lib/queries";
 import { useQuery } from "../../lib/useQuery";
 import { StatusBadge, timeAgo } from "../../lib/ui";
+import { ConfirmDialog } from "../home/ConfirmDialog";
 import { ReplicaRow } from "./DeploymentRow";
 
 function PreviewsTab(props: { service: Service; services: Service[] }) {
   const previews = () => servicePreviews(props.services, props.service.id);
   const nodes = useQuery(() => clusterNodesQuery());
+  const queryClient = useQueryClient();
+  const [deleteTarget, setDeleteTarget] = createSignal<Service | null>(null);
+  const deleteMutation = useMutation(() => ({
+    mutationFn: (serviceId: string) => deleteService(serviceId),
+    onSuccess: () => {
+      setDeleteTarget(null);
+      queryClient.invalidateQueries({ queryKey: queryKeys.services });
+    }
+  }));
 
   return (
     <Show
@@ -84,12 +97,58 @@ function PreviewsTab(props: { service: Service; services: Service[] }) {
                       </a>
                     )}
                   </Show>
+                  <DropdownMenu>
+                    <DropdownMenu.Trigger
+                      class="rounded p-1 text-gray-400 outline-none hover:bg-gray-100 hover:text-gray-600"
+                      aria-label={`More actions for PR ${source().prNumber}`}
+                    >
+                      <EllipsisVertical class="size-4" />
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content class="bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-[160px]">
+                        <DropdownMenu.Item
+                          class="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+                          onSelect={() => setDeleteTarget(preview)}
+                        >
+                          <Trash2 class="size-3.5" />
+                          Delete preview
+                        </DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu>
                 </div>
               </div>
             );
           }}
         </For>
       </div>
+      <ConfirmDialog
+        open={deleteTarget() !== null}
+        title="Delete preview"
+        description={
+          <>
+            Delete the preview for{" "}
+            <span class="font-medium text-gray-700">
+              PR #{deleteTarget()?.previewSource?.prNumber}
+            </span>
+            ? Its replicas and deployments are removed.
+            <Show when={!deleteTarget()?.previewSource?.closedAtMs}>
+              {" "}
+              The pull request is still open, so Maestro creates the preview again on its next
+              check.
+            </Show>
+          </>
+        }
+        confirmLabel="Delete"
+        confirmBusyLabel="Deleting…"
+        destructive
+        busy={deleteMutation.isPending}
+        onConfirm={() => {
+          const target = deleteTarget();
+          if (target) deleteMutation.mutate(target.id);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </Show>
   );
 }
