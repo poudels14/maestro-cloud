@@ -113,6 +113,8 @@ pub struct DeploySpec {
     pub node_affinity: Option<NodeAffinity>,
     #[serde(default, skip_serializing_if = "EgressSpec::is_empty")]
     pub egress: EgressSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain: Option<DrainSpec>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub resources: ResourceSpec,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -172,6 +174,23 @@ pub struct NodeAffinity {
     pub node: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+}
+
+/// When the replicas of a superseded deployment stop: as soon as `checkPath` answers 200, and at
+/// the latest after `timeout` (such as "30s", "15m" or "2h").
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DrainSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+}
+
+impl DrainSpec {
+    pub fn timeout_secs(&self) -> Option<u64> {
+        self.timeout.as_deref().and_then(parse_duration_secs)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +386,23 @@ impl ServiceSpec {
         let volumes = deploy.volumes.iter().flat_map(volume_problems);
         let sealed = sealed_value_problem(self);
         let egress = deploy.egress.allow.iter().filter_map(egress_problem);
+        let drain = deploy.drain.iter().flat_map(|drain| {
+            [
+                drain
+                    .check_path
+                    .as_ref()
+                    .filter(|path| !path.starts_with('/'))
+                    .map(|_| "deploy.drain.checkPath must start with /".to_string()),
+                (drain.timeout.is_some() && drain.timeout_secs().is_none()).then(|| {
+                    "deploy.drain.timeout must be a duration like 30s, 15m or 2h".to_string()
+                }),
+                (drain.check_path.is_some() && drain.timeout.is_none()).then(|| {
+                    "deploy.drain.timeout is required with deploy.drain.checkPath".to_string()
+                }),
+            ]
+            .into_iter()
+            .flatten()
+        });
         let ingress = self.ingress.iter().flat_map(ingress_problems).chain(sealed);
         let network = self
             .network
@@ -385,6 +421,7 @@ impl ServiceSpec {
             .flatten()
             .chain(volumes)
             .chain(egress)
+            .chain(drain)
             .chain(ingress)
             .chain(network)
             .chain(preview)
@@ -415,6 +452,7 @@ impl Default for DeploySpec {
             volumes: Vec::new(),
             node_affinity: None,
             egress: EgressSpec::default(),
+            drain: None,
             resources: ResourceSpec::default(),
             oom_priority: OomPriority::default(),
         }
@@ -821,6 +859,9 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "ingress": { "host": "a.b" }, "preview": { "enabled": true } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "preview": { "closeGracePeriod": "1w" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "network": { "from": ["Web"] } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "timeout": "forever" } } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "checkPath": "ready", "timeout": "5m" } } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "checkPath": "/ready" } } } } }"#,
         ];
         cases.iter().for_each(|case| {
             assert!(

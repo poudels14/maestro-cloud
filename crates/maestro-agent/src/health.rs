@@ -20,11 +20,18 @@ const UNHEALTHY_AFTER_FAILURES: u32 = 3;
 pub struct HealthMonitor {
     board: StatusBoard,
     plans: watch::Receiver<Vec<ReplicaPlan>>,
-    next_due: HashMap<ReplicaId, Instant>,
+    next_due: HashMap<(ReplicaId, ProbeKind), Instant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ProbeKind {
+    Health,
+    Drain,
 }
 
 struct ProbeResult {
     replica_id: ReplicaId,
+    kind: ProbeKind,
     outcome: Result<u16, String>,
 }
 
@@ -52,46 +59,56 @@ impl HealthMonitor {
         let now = Instant::now();
         let plans = self.plans.borrow().clone();
         self.next_due
-            .retain(|replica_id, _| plans.iter().any(|plan| &plan.replica_id == replica_id));
+            .retain(|(replica_id, _), _| plans.iter().any(|plan| &plan.replica_id == replica_id));
         plans.iter().for_each(|plan| {
             let status = self.board.get(&plan.replica_id);
-            let target = plan.healthcheck.as_ref().zip(
-                status
-                    .filter(|status| status.phase.is_live())
-                    .and_then(|status| status.ip),
-            );
-            let due = self
-                .next_due
-                .get(&plan.replica_id)
-                .is_none_or(|due| *due <= now);
-            if let (Some((healthcheck, ip)), true) = (target, due) {
-                let interval = Duration::from_secs(u64::from(healthcheck.interval_secs.max(1)));
-                self.next_due
-                    .insert(plan.replica_id.clone(), now + interval);
-                let replica_id = plan.replica_id.clone();
-                let path = healthcheck.path.clone();
-                let port = healthcheck.port;
-                probes.spawn(async move {
-                    ProbeResult {
-                        replica_id,
-                        outcome: probe(ip, port, &path, PROBE_TIMEOUT).await,
-                    }
-                });
-            }
+            let address = status
+                .as_ref()
+                .filter(|status| status.phase.is_live())
+                .and_then(|status| status.ip);
+            let drain_check = plan
+                .drain_check
+                .as_ref()
+                .filter(|_| status.as_ref().is_some_and(|status| !status.drained));
+            [
+                (ProbeKind::Health, plan.healthcheck.as_ref()),
+                (ProbeKind::Drain, drain_check),
+            ]
+            .into_iter()
+            .filter_map(|(kind, check)| Some((kind, check?, address?)))
+            .for_each(|(kind, check, ip)| {
+                let key = (plan.replica_id.clone(), kind);
+                let due = self.next_due.get(&key).is_none_or(|due| *due <= now);
+                if due {
+                    let interval = Duration::from_secs(u64::from(check.interval_secs.max(1)));
+                    self.next_due.insert(key, now + interval);
+                    let replica_id = plan.replica_id.clone();
+                    let path = check.path.clone();
+                    let port = check.port;
+                    probes.spawn(async move {
+                        ProbeResult {
+                            replica_id,
+                            kind,
+                            outcome: probe(ip, port, &path, PROBE_TIMEOUT).await,
+                        }
+                    });
+                }
+            });
         });
     }
 
     fn record(&self, result: ProbeResult) {
         self.board.update(&result.replica_id, |status| {
             let still_live = status.phase.is_live();
-            match (still_live, result.outcome) {
-                (false, _) => {}
-                (true, Ok(_)) => {
+            match (result.kind, still_live, result.outcome) {
+                (ProbeKind::Drain, _, Ok(_)) => status.drained = true,
+                (ProbeKind::Drain, _, Err(_)) | (ProbeKind::Health, false, _) => {}
+                (ProbeKind::Health, true, Ok(_)) => {
                     status.phase = ReplicaPhase::Healthy;
                     status.consecutive_failures = 0;
                     status.last_error = None;
                 }
-                (true, Err(error)) => {
+                (ProbeKind::Health, true, Err(error)) => {
                     status.consecutive_failures += 1;
                     status.last_error = Some(error);
                     if status.consecutive_failures >= UNHEALTHY_AFTER_FAILURES {

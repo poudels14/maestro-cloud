@@ -102,6 +102,10 @@ pub struct ReplicaPlan {
     pub image_source: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress: Vec<EgressRule>,
+    /// Set while the replica's deployment drains and the service has `deploy.drain.checkPath`:
+    /// the agent polls it and reports the replica drained once it answers 200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_check: Option<HealthcheckPlan>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +157,7 @@ impl ReplicaPlan {
                 }),
             image_source: None,
             egress: deploy.egress.allow.clone(),
+            drain_check: None,
         }
     }
 }

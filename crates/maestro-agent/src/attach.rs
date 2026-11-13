@@ -328,6 +328,7 @@ mod tests {
             secrets: None,
             image_source: None,
             egress: Vec::new(),
+            drain_check: None,
         }
     }
 

@@ -1,6 +1,9 @@
 use maestro_core::{
-    DISCOVERY_HOST_ENV, DISCOVERY_KEY_ENV, DISCOVERY_PORT, NodeId, ReplicaPlan, subnet_gateway,
+    DISCOVERY_HOST_ENV, DISCOVERY_KEY_ENV, DISCOVERY_PORT, DeploymentStatus, HealthcheckPlan,
+    NodeId, ReplicaPlan, subnet_gateway,
 };
+
+const DRAIN_CHECK_INTERVAL_SECS: u32 = 5;
 
 use crate::crypto::{DiscoveryKeys, SecretError, SecretKey};
 use crate::error::StoreError;
@@ -57,9 +60,27 @@ pub fn replica_plans(
                     })
                     .into_iter()
                     .flatten();
+                let drain_check = spec
+                    .deploy
+                    .drain
+                    .as_ref()
+                    .and_then(|drain| drain.check_path.clone())
+                    .filter(|_| deployment.status == DeploymentStatus::Draining)
+                    .zip(
+                        spec.ingress
+                            .as_ref()
+                            .map(|ingress| ingress.port)
+                            .or_else(|| spec.deploy.expose_ports.first().copied()),
+                    )
+                    .map(|(path, port)| HealthcheckPlan {
+                        path,
+                        port,
+                        interval_secs: DRAIN_CHECK_INTERVAL_SECS,
+                    });
                 Ok(ReplicaPlan {
                     image_source,
                     env: plan.env.into_iter().chain(discovery_env).collect(),
+                    drain_check,
                     ..plan
                 })
             }))

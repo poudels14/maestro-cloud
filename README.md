@@ -99,6 +99,18 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   Env and secret values may use `${{ MAESTRO_INGRESS_HOST }}` and
   `${{ MAESTRO_INGRESS_PORT }}`, including values loaded from `aws-secret://`; builds
   receive both as build args.
+- A new deployment starts all its replicas next to the current one but gets no traffic until
+  every replica is healthy; then Traefik, the service's DNS name and discovery switch to it at
+  once, so requests never mix versions. If it does not get healthy within the deploy timeout,
+  it fails and the current deployment keeps serving. The old deployment's replicas then drain:
+  they get no new traffic but keep running, keep their own DNS names and stay in discovery with
+  `"draining": true`, so clients can finish work they own. Each one stops as soon as its
+  `deploy.drain.checkPath` answers 200, and all stop after `deploy.drain.timeout` at the
+  latest (required with `checkPath`; a few seconds without `drain`):
+
+  ```jsonc
+  "deploy": { "drain": { "checkPath": "/internal/can-stop", "timeout": "30m" } }
+  ```
 - `maestro rollout` shows created, updated, and unchanged services; `--apply` stores
   the specs and queues one deployment per changed service. Services missing from the
   file are reported but never deleted implicitly.

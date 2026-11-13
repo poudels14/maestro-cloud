@@ -175,6 +175,78 @@ async fn new_deployment_replaces_old_after_drain_grace() {
     assert_eq!(assigned_replicas(&harness), ["d2-0"]);
 }
 
+fn draining_service(drain: serde_json::Value) -> maestro_core::ServiceSpec {
+    maestro_core::ServiceSpec {
+        deploy: maestro_core::DeploySpec {
+            drain: Some(serde_json::from_value(drain).unwrap()),
+            ..image_service(2).deploy
+        },
+        ..image_service(2)
+    }
+}
+
+async fn superseded(harness: &Harness, drain: serde_json::Value) {
+    queue_spec(harness, "d1", draining_service(drain.clone())).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.observed.set("d1-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    harness.clock.advance(1_000);
+    queue_spec(harness, "d2", draining_service(drain)).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d2-0", ReplicaPhase::Healthy);
+    harness.observed.set("d2-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(harness, "d1"), DeploymentStatus::Draining);
+}
+
+#[tokio::test]
+async fn stops_each_old_replica_once_its_drain_check_passes() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    superseded(
+        &harness,
+        serde_json::json!({ "checkPath": "/drained", "timeout": "30m" }),
+    )
+    .await;
+    harness
+        .clock
+        .advance(Duration::from_secs(60).as_millis() as u64);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Draining);
+    assert_eq!(
+        assigned_replicas(&harness),
+        ["d1-0", "d1-1", "d2-0", "d2-1"]
+    );
+
+    harness.observed.drain("d1-0");
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-1", "d2-0", "d2-1"]);
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Draining);
+
+    harness.observed.drain("d1-1");
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Stopped);
+    assert_eq!(assigned_replicas(&harness), ["d2-0", "d2-1"]);
+}
+
+#[tokio::test]
+async fn stops_old_replicas_after_the_drain_timeout() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    superseded(&harness, serde_json::json!({ "timeout": "2m" })).await;
+    harness
+        .clock
+        .advance(Duration::from_secs(60).as_millis() as u64);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Draining);
+
+    harness
+        .clock
+        .advance(Duration::from_secs(61).as_millis() as u64);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Stopped);
+    assert_eq!(assigned_replicas(&harness), ["d2-0", "d2-1"]);
+}
+
 #[tokio::test]
 async fn failed_replica_fails_deployment_and_keeps_old_one() {
     let harness = harness(vec![node(1, 8, 32)]);

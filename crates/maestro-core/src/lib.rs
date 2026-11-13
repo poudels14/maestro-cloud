@@ -44,8 +44,8 @@ pub use routing::{
     internal_name,
 };
 pub use service::{
-    BuildSpec, Command, DeploySpec, DepotSpec, EgressRule, EgressSpec, EnvSpec, IngressSpec,
-    NetworkSpec, NodeAffinity, PreviewSpec, SecretsSpec, ServiceSpec, ServicesFile,
+    BuildSpec, Command, DeploySpec, DepotSpec, DrainSpec, EgressRule, EgressSpec, EnvSpec,
+    IngressSpec, NetworkSpec, NodeAffinity, PreviewSpec, SecretsSpec, ServiceSpec, ServicesFile,
     SessionAffinity, SpecError, VolumeMount, VolumeOwner, host_conflict, parse_duration_secs,
 };
 pub use status::{ReplicaPhase, ReplicaStatus};

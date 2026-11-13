@@ -352,6 +352,7 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             restarts: previous.as_ref().map_or(0, |status| status.restarts),
             consecutive_failures: 0,
             last_error: previous.and_then(|status| status.last_error),
+            drained: false,
         }
     }
 
@@ -495,14 +496,45 @@ fn contained_volume(roots: &[PathBuf], host_path: &str) -> Result<PathBuf, Strin
     }
 }
 
+/// The drain check is only added once the deployment drains, which must not restart the replica.
 fn plan_hash(plan: &ReplicaPlan) -> String {
-    let encoded = serde_json::to_vec(plan).unwrap_or_default();
+    let container = ReplicaPlan {
+        drain_check: None,
+        ..plan.clone()
+    };
+    let encoded = serde_json::to_vec(&container).unwrap_or_default();
     hex::encode(Sha256::digest(encoded))[..16].to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn starting_to_drain_does_not_change_the_container() {
+        let plan: ReplicaPlan = serde_json::from_value(serde_json::json!({
+            "replicaId": "d1-0",
+            "serviceId": "api",
+            "deploymentId": "d1",
+            "image": "nginx",
+            "resources": {
+                "cpuLimit": 1.0,
+                "memoryLimit": "1Gi",
+                "request": { "cpu": 0.25, "memory": "512Mi" }
+            },
+            "oomPriority": "normal"
+        }))
+        .unwrap();
+        let draining = ReplicaPlan {
+            drain_check: Some(maestro_core::HealthcheckPlan {
+                path: "/drained".to_string(),
+                port: 8080,
+                interval_secs: 5,
+            }),
+            ..plan.clone()
+        };
+        assert_eq!(plan_hash(&plan), plan_hash(&draining));
+    }
 
     #[test]
     fn volumes_stay_inside_their_root_even_through_symlinks() {

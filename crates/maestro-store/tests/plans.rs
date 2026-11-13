@@ -36,25 +36,7 @@ fn gives_every_replica_its_node_discovery_endpoint_and_key() {
     let state = StateMachine::open(directory.path().join("state.redb")).unwrap();
     let key = SecretKey::derive("cluster-secret");
     let discovery_keys = DiscoveryKeys::new("jwt-secret");
-    let node = NodeRecord {
-        id: NodeId(1),
-        name: "node1".to_string(),
-        role: NodeRole::Voter,
-        endpoint: "10.0.0.1:7400".to_string(),
-        subnet: Some("10.50.3.0/24".to_string()),
-        runs_workloads: true,
-        capacity: NodeCapacity {
-            cpu: Millicores::new(4000),
-            memory: ByteSize::new(8 << 30),
-        },
-        reserved: NodeCapacity {
-            cpu: Millicores::new(500),
-            memory: ByteSize::new(512 << 20),
-        },
-        labels: Default::default(),
-        state: NodeState::Active,
-        wireguard: None,
-    };
+    let node = node();
     let mutations = ["web", "api"]
         .into_iter()
         .flat_map(|service| {
@@ -110,4 +92,82 @@ fn gives_every_replica_its_node_discovery_endpoint_and_key() {
         env("api")["MAESTRO_API_KEY"],
         discovery_keys.key(&ServiceId::from("api"))
     );
+}
+
+#[test]
+fn checks_drains_only_while_the_deployment_drains() {
+    let plan_for = |status: DeploymentStatus| {
+        let directory = tempfile::tempdir().unwrap();
+        let state = StateMachine::open(directory.path().join("state.redb")).unwrap();
+        let spec: ServiceSpec = serde_json::from_value(serde_json::json!({
+            "name": "web",
+            "image": "nginx",
+            "ingress": { "host": "web.example.com", "port": 8080 },
+            "deploy": { "drain": { "checkPath": "/drained", "timeout": "30m" } }
+        }))
+        .unwrap();
+        let assignment = assignment("web");
+        state
+            .apply(&[
+                Mutation::PutService {
+                    id: ServiceId::from("web"),
+                    spec: spec.clone(),
+                },
+                Mutation::CreateDeployment {
+                    deployment: Deployment {
+                        id: assignment.deployment_id.clone(),
+                        service_id: ServiceId::from("web"),
+                        spec,
+                        status,
+                        image: Some("nginx".to_string()),
+                        failure: None,
+                        created_at_ms: 1,
+                        updated_at_ms: 1,
+                        git_commit: None,
+                        built_on: None,
+                        version: None,
+                        restart_of: None,
+                    },
+                },
+                Mutation::PutNode { node: node() },
+                Mutation::SetNodeAssignments {
+                    node_id: NodeId(1),
+                    assignments: vec![assignment],
+                },
+            ])
+            .unwrap();
+        replica_plans(
+            &state,
+            &SecretKey::derive("cluster-secret"),
+            &DiscoveryKeys::new("jwt-secret"),
+            NodeId(1),
+        )
+        .unwrap()
+        .remove(0)
+    };
+    assert!(plan_for(DeploymentStatus::Ready).drain_check.is_none());
+    let check = plan_for(DeploymentStatus::Draining).drain_check.unwrap();
+    assert_eq!((check.path.as_str(), check.port), ("/drained", 8080));
+}
+
+fn node() -> NodeRecord {
+    NodeRecord {
+        id: NodeId(1),
+        name: "node1".to_string(),
+        role: NodeRole::Voter,
+        endpoint: "10.0.0.1:7400".to_string(),
+        subnet: Some("10.50.3.0/24".to_string()),
+        runs_workloads: true,
+        capacity: NodeCapacity {
+            cpu: Millicores::new(4000),
+            memory: ByteSize::new(8 << 30),
+        },
+        reserved: NodeCapacity {
+            cpu: Millicores::new(500),
+            memory: ByteSize::new(512 << 20),
+        },
+        labels: Default::default(),
+        state: NodeState::Active,
+        wireguard: None,
+    }
 }

@@ -23,6 +23,7 @@ pub struct FakeObserved {
     phases: Mutex<HashMap<ReplicaId, ReplicaPhase>>,
     lost_nodes: Mutex<Vec<NodeId>>,
     failing_nodes: Mutex<Vec<NodeId>>,
+    drained: Mutex<Vec<ReplicaId>>,
 }
 
 pub struct FakeClock(pub AtomicU64);
@@ -69,6 +70,10 @@ impl FakeObserved {
             .retain(|failing| *failing != node_id);
     }
 
+    pub fn drain(&self, replica: &str) {
+        self.drained.lock().unwrap().push(ReplicaId::from(replica));
+    }
+
     pub fn set(&self, replica: &str, phase: ReplicaPhase) {
         self.phases
             .lock()
@@ -111,6 +116,7 @@ impl ObservedReplicas for FakeObserved {
                 restarts: 0,
                 consecutive_failures: 0,
                 last_error: None,
+                drained: self.drained.lock().unwrap().contains(replica_id),
             })
     }
 }

@@ -443,6 +443,7 @@ mod tests {
             restarts: 0,
             consecutive_failures: 0,
             last_error: None,
+            drained: false,
         }
     }
 

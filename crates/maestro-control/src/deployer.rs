@@ -737,18 +737,64 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.write(mutations).await
     }
 
+    /// Drained replicas of superseded deployments stop one by one, as soon as their
+    /// `deploy.drain.checkPath` answers 200; the deployment stops once none are left, or after its
+    /// drain timeout (the default grace without one).
     async fn stop_drained(&self) -> Result<(), ControlError> {
         let now = self.now();
-        let grace_ms = self.settings.drain_grace.as_millis() as u64;
-        let drained = self
+        let draining = self
             .state()
-            .deployments_with_status(DeploymentStatus::Draining)?
-            .into_iter()
-            .filter(|deployment| now.saturating_sub(deployment.updated_at_ms) >= grace_ms)
+            .deployments_with_status(DeploymentStatus::Draining)?;
+        let existing = self.all_assignments()?;
+        let drained_replicas = existing
+            .values()
+            .flatten()
+            .filter(|assignment| {
+                draining
+                    .iter()
+                    .any(|deployment| deployment.id == assignment.deployment_id)
+            })
+            .filter(|assignment| {
+                self.observed
+                    .replica(&assignment.replica_id)
+                    .is_some_and(|status| status.drained)
+            })
+            .map(|assignment| assignment.replica_id.clone())
             .collect::<Vec<_>>();
-        let history_limit = self.settings.history_limit;
-        let mutations = drained
+        let released = existing
             .iter()
+            .filter(|(_, assignments)| {
+                assignments
+                    .iter()
+                    .any(|assignment| drained_replicas.contains(&assignment.replica_id))
+            })
+            .map(|(node_id, assignments)| Mutation::SetNodeAssignments {
+                node_id: *node_id,
+                assignments: assignments
+                    .iter()
+                    .filter(|assignment| !drained_replicas.contains(&assignment.replica_id))
+                    .cloned()
+                    .collect(),
+            });
+        let history_limit = self.settings.history_limit;
+        let stopped = draining
+            .iter()
+            .filter(|deployment| {
+                let timeout_ms = deployment
+                    .spec
+                    .deploy
+                    .drain
+                    .as_ref()
+                    .and_then(|drain| drain.timeout_secs())
+                    .map_or(self.settings.drain_grace.as_millis() as u64, |secs| {
+                        secs * 1000
+                    });
+                let remaining = existing.values().flatten().any(|assignment| {
+                    assignment.deployment_id == deployment.id
+                        && !drained_replicas.contains(&assignment.replica_id)
+                });
+                !remaining || now.saturating_sub(deployment.updated_at_ms) >= timeout_ms
+            })
             .flat_map(|deployment| {
                 [
                     status_change(deployment, DeploymentStatus::Stopped, None, None, now),
@@ -757,9 +803,8 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                         keep: history_limit,
                     },
                 ]
-            })
-            .collect::<Vec<_>>();
-        self.write(mutations).await
+            });
+        self.write(released.chain(stopped).collect()).await
     }
 
     async fn release_inactive(&self) -> Result<(), ControlError> {
