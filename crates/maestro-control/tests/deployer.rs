@@ -552,6 +552,70 @@ fn set_override(harness: &Harness, replicas: Option<u32>) {
         .unwrap();
 }
 
+async fn ready_with_two_healthy_replicas() -> Harness {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    queue(&harness, "d1", 2).await;
+    harness.deployer.tick().await.unwrap();
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.observed.set("d1-1", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Ready);
+    harness
+}
+
+#[tokio::test]
+async fn starts_a_replacement_before_retiring_an_unhealthy_replica() {
+    let harness = ready_with_two_healthy_replicas().await;
+    harness.observed.set("d1-0", ReplicaPhase::Unhealthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1", "d1-2"]);
+    assert!(retiring_replicas(&harness).is_empty());
+
+    harness.deployer.tick().await.unwrap();
+    assert!(retiring_replicas(&harness).is_empty());
+
+    harness.observed.set("d1-2", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(retiring_replicas(&harness), ["d1-0"]);
+
+    harness
+        .clock
+        .advance(Duration::from_secs(6).as_millis() as u64);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-1", "d1-2"]);
+}
+
+#[tokio::test]
+async fn never_more_than_doubles_a_deployment_whose_replacements_fail_too() {
+    let harness = ready_with_two_healthy_replicas().await;
+    harness.observed.set("d1-0", ReplicaPhase::Unhealthy);
+    harness.observed.set("d1-1", ReplicaPhase::Unhealthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(
+        assigned_replicas(&harness),
+        ["d1-0", "d1-1", "d1-2", "d1-3"]
+    );
+
+    harness.observed.set("d1-2", ReplicaPhase::Unhealthy);
+    harness.observed.set("d1-3", ReplicaPhase::Unhealthy);
+    harness.deployer.tick().await.unwrap();
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness).len(), 4);
+    assert!(retiring_replicas(&harness).is_empty());
+}
+
+#[tokio::test]
+async fn releases_the_replacement_when_the_unhealthy_replica_recovers_first() {
+    let harness = ready_with_two_healthy_replicas().await;
+    harness.observed.set("d1-0", ReplicaPhase::Unhealthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(assigned_replicas(&harness), ["d1-0", "d1-1", "d1-2"]);
+
+    harness.observed.set("d1-0", ReplicaPhase::Healthy);
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(retiring_replicas(&harness), ["d1-2"]);
+}
+
 #[tokio::test]
 async fn draining_a_node_replaces_its_replicas_before_releasing_them() {
     let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);

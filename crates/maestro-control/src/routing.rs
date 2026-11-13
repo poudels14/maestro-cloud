@@ -153,15 +153,14 @@ pub fn build_dns(
                 names
             },
         );
-    let fallback = records
+    let still_serving = records
         .iter()
         .filter(|(name, ip, phase)| {
             *phase == ReplicaPhase::Unhealthy
-                && !healthy.contains_key(name)
                 && previous.get(name).is_some_and(|ips| ips.contains(ip))
         })
         .collect::<Vec<_>>();
-    fallback
+    still_serving
         .into_iter()
         .fold(healthy, |mut names, (name, ip, _)| {
             names.entry(name.clone()).or_default().push(*ip);
@@ -189,44 +188,35 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
                 })
                 .map(|assignment| (assignment, (input.observed)(&assignment.replica_id)))
                 .collect::<Vec<_>>();
-            let mut backends = routed_replicas
-                .iter()
-                .filter_map(|(assignment, status)| {
-                    let status = status.as_ref()?;
-                    let ip = status
-                        .ip
-                        .filter(|_| status.phase == ReplicaPhase::Healthy)?;
-                    Some(Backend {
-                        replica_id: assignment.replica_id.clone(),
-                        address: SocketAddr::new(ip, ingress.port),
-                    })
-                })
-                .collect::<Vec<_>>();
-            backends.sort();
-            let observation_missing = routed_replicas.iter().any(|(_, status)| status.is_none());
             let previous_backends = previous
                 .routes
                 .get(service_id)
                 .map(|route| route.backends.clone())
                 .unwrap_or_default();
-            let held = match (backends.is_empty(), observation_missing) {
-                (true, true) => Some(previous_backends),
-                (true, false) => Some(
-                    previous_backends
-                        .into_iter()
-                        .filter(|backend| {
-                            routed_replicas.iter().any(|(assignment, status)| {
-                                assignment.replica_id == backend.replica_id
-                                    && status.as_ref().is_some_and(|status| {
-                                        status.phase == ReplicaPhase::Unhealthy
-                                            && status.ip == Some(backend.address.ip())
-                                    })
-                            })
+            let healthy = routed_replicas.iter().filter_map(|(assignment, status)| {
+                let status = status.as_ref()?;
+                let ip = status
+                    .ip
+                    .filter(|_| status.phase == ReplicaPhase::Healthy)?;
+                Some(Backend {
+                    replica_id: assignment.replica_id.clone(),
+                    address: SocketAddr::new(ip, ingress.port),
+                })
+            });
+            let still_serving = previous_backends.iter().filter(|backend| {
+                routed_replicas.iter().any(|(assignment, status)| {
+                    assignment.replica_id == backend.replica_id
+                        && status.as_ref().is_some_and(|status| {
+                            status.phase == ReplicaPhase::Unhealthy
+                                && status.ip == Some(backend.address.ip())
                         })
-                        .collect(),
-                ),
-                (false, _) => None,
-            };
+                })
+            });
+            let mut backends = healthy.chain(still_serving.cloned()).collect::<Vec<_>>();
+            backends.sort();
+            backends.dedup();
+            let observation_missing = routed_replicas.iter().any(|(_, status)| status.is_none());
+            let held = (backends.is_empty() && observation_missing).then_some(previous_backends);
             Some((
                 service_id.clone(),
                 ServiceRoute {
@@ -513,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_previously_healthy_replicas_until_a_healthy_one_is_up() {
+    fn keeps_serving_unhealthy_replicas_until_they_are_retired() {
         let deployments = [deployment("d1", DeploymentStatus::Ready)];
         let first = table(
             &deployments,
@@ -550,7 +540,23 @@ mod tests {
             ],
             &still_unhealthy,
         );
-        assert_eq!(addresses(&replaced), ["10.200.1.3:8080"]);
+        assert_eq!(addresses(&replaced), ["10.200.1.2:8080", "10.200.1.3:8080"]);
+        let retired = table(
+            &deployments,
+            &[
+                Assignment {
+                    retiring_since_ms: Some(1),
+                    ..assignment("d1", 0)
+                },
+                assignment("d1", 1),
+            ],
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Healthy, 3),
+            ],
+            &replaced,
+        );
+        assert_eq!(addresses(&retired), ["10.200.1.3:8080"]);
     }
 
     #[test]
@@ -701,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn dns_keeps_previously_healthy_replicas_until_a_healthy_one_is_up() {
+    fn dns_keeps_unhealthy_replicas_until_they_are_retired() {
         let assignments = [assignment("d1", 0), assignment("d1", 1)];
         let first = dns(
             &assignments[..1],
@@ -725,7 +731,22 @@ mod tests {
             ],
             &unhealthy,
         );
-        assert_eq!(service_ips(&replaced), ["10.200.1.3"]);
+        assert_eq!(service_ips(&replaced), ["10.200.1.3", "10.200.1.2"]);
+        let retired = dns(
+            &[
+                Assignment {
+                    retiring_since_ms: Some(1),
+                    ..assignment("d1", 0)
+                },
+                assignment("d1", 1),
+            ],
+            &[
+                status("d1-0", ReplicaPhase::Unhealthy, 2),
+                status("d1-1", ReplicaPhase::Healthy, 3),
+            ],
+            &replaced,
+        );
+        assert_eq!(service_ips(&retired), ["10.200.1.3"]);
     }
 
     #[test]

@@ -173,9 +173,12 @@ or the container runtime.
 - Traefik runs on each node, routes `Host()` rules to healthy replicas anywhere in the
   cluster, and retries failed connections on another replica. Each replica is
   health-checked once, by the node it runs on, every `healthcheckInterval` (default
-  30s); three failures in a row take it out of every node's routes, unless no replica
-  of the service is healthy: then the ones that were serving keep their traffic until
-  a healthy one is up.
+  30s). Three failures in a row mark it unhealthy: Maestro starts a replacement, keeps the
+  unhealthy replica in routes and DNS while the replacement comes up, and retires it once the
+  replacement is healthy. If the unhealthy replica recovers first, the extra one is released.
+  Replacements never take a deployment past twice its replica count, so an app that fails
+  everywhere keeps its replicas instead of piling up new ones. Replicas that never passed a
+  health check get no traffic.
 - DNS on the bridge gateway answers `<service>.<cluster>.maestro` and per-replica
   names, where `<cluster>` is the cluster name sanitized into a DNS label (lowercase,
   other characters become `-`). Containers search `<cluster>.maestro`, so a bare

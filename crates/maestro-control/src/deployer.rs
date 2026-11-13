@@ -28,6 +28,10 @@ const ACTIVE_STATUSES: [DeploymentStatus; 3] = [
     DeploymentStatus::Draining,
 ];
 
+/// Replacements for unhealthy replicas never take a deployment past this multiple of its replica
+/// count, so a deployment whose new replicas fail too does not keep growing.
+const MAX_REPLICA_SURGE: usize = 2;
+
 pub trait ObservedReplicas: Send + Sync + 'static {
     fn replica(&self, replica_id: &ReplicaId) -> Option<ReplicaStatus>;
 
@@ -606,10 +610,15 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                 .filter(|assignment| !assignment.is_retiring())
                 .collect::<Vec<_>>();
             if let Some(first) = assigned.first() {
-                let (mut serving, draining): (Vec<&Assignment>, Vec<&Assignment>) = assigned
+                let (serving, draining): (Vec<&Assignment>, Vec<&Assignment>) = assigned
                     .iter()
                     .copied()
                     .partition(|assignment| !draining_nodes.contains(&assignment.node_id));
+                let (mut serving, failing): (Vec<&Assignment>, Vec<&Assignment>) =
+                    serving.into_iter().partition(|assignment| {
+                        deployment.status != DeploymentStatus::Ready
+                            || !self.is_unhealthy(&assignment.replica_id)
+                    });
                 serving.sort_by_key(|assignment| assignment.index);
                 let target = self.target_replicas(deployment)? as usize;
                 let next_index = current
@@ -633,18 +642,20 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
                     released.extend(
                         draining
                             .iter()
+                            .chain(&failing)
                             .map(|assignment| assignment.replica_id.clone()),
                     );
                 }
-                requests.extend(
-                    (0..target.saturating_sub(serving.len()) as u32).map(|offset| {
-                        PlacementRequest::for_replica(
-                            deployment,
-                            next_index + offset,
-                            first.image.clone(),
-                        )
-                    }),
-                );
+                let missing = target
+                    .saturating_sub(serving.len())
+                    .min((target * MAX_REPLICA_SURGE).saturating_sub(assigned.len()));
+                requests.extend((0..missing as u32).map(|offset| {
+                    PlacementRequest::for_replica(
+                        deployment,
+                        next_index + offset,
+                        first.image.clone(),
+                    )
+                }));
             }
         }
         let retired = current
@@ -800,6 +811,13 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.observed
             .replica(replica_id)
             .is_some_and(|status| status.phase == ReplicaPhase::Healthy)
+    }
+
+    /// Failed its health check three times in a row; a replacement starts before it is retired.
+    fn is_unhealthy(&self, replica_id: &ReplicaId) -> bool {
+        self.observed
+            .replica(replica_id)
+            .is_some_and(|status| status.phase == ReplicaPhase::Unhealthy)
     }
 
     fn target_replicas(&self, deployment: &Deployment) -> Result<u32, ControlError> {
