@@ -75,6 +75,7 @@ mod tests {
                     ip: "10.50.1.2".parse().unwrap(),
                     port: Some(8080),
                     healthy: true,
+                    draining: false,
                     node_id: NodeId(1),
                 }],
             )]),

@@ -60,6 +60,9 @@ pub struct DiscoveredReplica {
     pub ip: IpAddr,
     pub port: Option<u16>,
     pub healthy: bool,
+    /// A replica of a superseded deployment: it gets no new traffic and is terminated once it
+    /// drains, but clients may still route work it owns to it.
+    pub draining: bool,
     pub node_id: NodeId,
 }
 

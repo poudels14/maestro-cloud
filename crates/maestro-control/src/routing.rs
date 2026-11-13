@@ -2,19 +2,14 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use maestro_core::{
-    Assignment, Backend, Deployment, DeploymentStatus, DiscoveredReplica, DiscoveryTable,
-    PreviewSource, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable, ServiceId, ServiceRoute,
-    ServiceSpec, discovery_key_hash, internal_name, subnet_gateway, version_label,
+    Assignment, Backend, Deployment, DeploymentId, DeploymentStatus, DiscoveredReplica,
+    DiscoveryTable, PreviewSource, ReplicaId, ReplicaPhase, ReplicaStatus, RouteTable, ServiceId,
+    ServiceRoute, ServiceSpec, discovery_key_hash, internal_name, subnet_gateway, version_label,
 };
 use maestro_store::{DiscoveryKeys, StateMachine, StoreError};
 
 const ROUTED_STATUSES: [DeploymentStatus; 2] =
     [DeploymentStatus::Deploying, DeploymentStatus::Ready];
-const DISCOVERABLE_STATUSES: [DeploymentStatus; 3] = [
-    DeploymentStatus::Deploying,
-    DeploymentStatus::Ready,
-    DeploymentStatus::Draining,
-];
 
 pub struct RoutingInput<'a> {
     pub services: &'a [(ServiceId, ServiceSpec)],
@@ -56,7 +51,14 @@ pub fn cluster_dns(
     cluster: &str,
     previous: &BTreeMap<String, Vec<IpAddr>>,
 ) -> Result<BTreeMap<String, Vec<IpAddr>>, StoreError> {
+    let deployments = state
+        .services()?
+        .iter()
+        .map(|(service_id, _)| state.deployments(service_id))
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
     Ok(build_dns(
+        &deployments,
         &all_assignments(state)?,
         observed,
         cluster,
@@ -121,11 +123,13 @@ pub fn service_discovery(
 }
 
 pub fn build_dns(
+    deployments: &[Deployment],
     assignments: &[Assignment],
     observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
     cluster: &str,
     previous: &BTreeMap<String, Vec<IpAddr>>,
 ) -> BTreeMap<String, Vec<IpAddr>> {
+    let serving = serving_deployments(deployments);
     let records = assignments
         .iter()
         .filter(|assignment| !assignment.is_retiring())
@@ -135,12 +139,10 @@ pub fn build_dns(
             Some((assignment.clone(), ip, status.phase))
         })
         .flat_map(|(assignment, ip, phase)| {
-            [
-                internal_name(cluster, assignment.replica_id.as_str()),
-                internal_name(cluster, assignment.service_id.as_str()),
-            ]
-            .into_iter()
-            .map(move |name| (name, ip, phase))
+            let serves = serving.get(&assignment.service_id) == Some(&assignment.deployment_id);
+            std::iter::once(internal_name(cluster, assignment.replica_id.as_str()))
+                .chain(serves.then(|| internal_name(cluster, assignment.service_id.as_str())))
+                .map(move |name| (name, ip, phase))
         })
         .collect::<Vec<_>>();
     let healthy = records
@@ -169,6 +171,7 @@ pub fn build_dns(
 }
 
 pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
+    let serving = serving_deployments(input.deployments);
     let routes = input
         .services
         .iter()
@@ -180,12 +183,7 @@ pub fn build_routes(input: &RoutingInput, previous: &RouteTable) -> RouteTable {
                 .iter()
                 .filter(|assignment| &assignment.service_id == service_id)
                 .filter(|assignment| !assignment.is_retiring())
-                .filter(|assignment| {
-                    input.deployments.iter().any(|deployment| {
-                        deployment.id == assignment.deployment_id
-                            && ROUTED_STATUSES.contains(&deployment.status)
-                    })
-                })
+                .filter(|assignment| serving.get(service_id) == Some(&assignment.deployment_id))
                 .map(|assignment| (assignment, (input.observed)(&assignment.replica_id)))
                 .collect::<Vec<_>>();
             let previous_backends = previous
@@ -242,13 +240,15 @@ fn discovered_replicas(
     observed: &dyn Fn(&ReplicaId) -> Option<ReplicaStatus>,
     cluster: &str,
 ) -> BTreeMap<ServiceId, Vec<DiscoveredReplica>> {
+    let serving = serving_deployments(deployments);
     let mut replicas = assignments
         .iter()
         .filter(|assignment| !assignment.is_retiring())
         .filter_map(|assignment| {
             let deployment = deployments.iter().find(|deployment| {
                 deployment.id == assignment.deployment_id
-                    && DISCOVERABLE_STATUSES.contains(&deployment.status)
+                    && (serving.get(&deployment.service_id) == Some(&deployment.id)
+                        || deployment.status == DeploymentStatus::Draining)
             })?;
             let status = observed(&assignment.replica_id)?;
             let replica = DiscoveredReplica {
@@ -264,6 +264,7 @@ fn discovered_replicas(
                     .map(|ingress| ingress.port)
                     .or_else(|| deployment.spec.deploy.expose_ports.first().copied()),
                 healthy: status.phase == ReplicaPhase::Healthy,
+                draining: deployment.status == DeploymentStatus::Draining,
                 node_id: assignment.node_id,
             };
             Some((assignment.service_id.clone(), replica))
@@ -279,6 +280,37 @@ fn discovered_replicas(
         .values_mut()
         .for_each(|service| service.sort_by(|left, right| left.replica_id.cmp(&right.replica_id)));
     replicas
+}
+
+/// The deployment each service's traffic goes to: its newest ready one, or, while it has none
+/// (its first deploy), its newest one still rolling out. Traffic only moves to a new deployment
+/// once all of its replicas are healthy, so requests never mix versions.
+fn serving_deployments(deployments: &[Deployment]) -> BTreeMap<ServiceId, DeploymentId> {
+    let rank = |deployment: &Deployment| {
+        (
+            deployment.status == DeploymentStatus::Ready,
+            deployment.created_at_ms,
+            deployment.id.clone(),
+        )
+    };
+    deployments
+        .iter()
+        .filter(|deployment| ROUTED_STATUSES.contains(&deployment.status))
+        .fold(
+            BTreeMap::<ServiceId, &Deployment>::new(),
+            |mut serving, deployment| {
+                let newer = serving
+                    .get(&deployment.service_id)
+                    .is_none_or(|current| rank(deployment) > rank(current));
+                if newer {
+                    serving.insert(deployment.service_id.clone(), deployment);
+                }
+                serving
+            },
+        )
+        .into_iter()
+        .map(|(service_id, deployment)| (service_id, deployment.id.clone()))
+        .collect()
 }
 
 /// Who may reach each service: its `network.from`, plus the previews of every listed service.
@@ -468,6 +500,71 @@ mod tests {
         let route = &routes.routes[&ServiceId::from("web")];
         assert_eq!(route.hosts, ["web.example.com", "www.example.com"]);
         assert_eq!(addresses(&routes), ["10.200.1.3:8080"]);
+    }
+
+    #[test]
+    fn switches_traffic_to_a_new_deployment_only_once_it_is_ready() {
+        let old = Deployment {
+            created_at_ms: 1,
+            ..deployment("d1", DeploymentStatus::Ready)
+        };
+        let rolling_out = Deployment {
+            created_at_ms: 2,
+            ..deployment("d2", DeploymentStatus::Deploying)
+        };
+        let assignments = [assignment("d1", 0), assignment("d2", 0)];
+        let statuses = [
+            status("d1-0", ReplicaPhase::Healthy, 2),
+            status("d2-0", ReplicaPhase::Healthy, 3),
+        ];
+        let during = table(
+            &[old.clone(), rolling_out.clone()],
+            &assignments,
+            &statuses,
+            &RouteTable::default(),
+        );
+        assert_eq!(addresses(&during), ["10.200.1.2:8080"]);
+
+        let ready = Deployment {
+            status: DeploymentStatus::Ready,
+            ..rolling_out.clone()
+        };
+        let switched = table(
+            &[old.clone(), ready.clone()],
+            &assignments,
+            &statuses,
+            &during,
+        );
+        assert_eq!(addresses(&switched), ["10.200.1.3:8080"]);
+
+        let observed = |replica_id: &ReplicaId| {
+            statuses
+                .iter()
+                .find(|status| &status.replica_id == replica_id)
+                .cloned()
+        };
+        let names = build_dns(
+            &[old.clone(), rolling_out],
+            &assignments,
+            &observed,
+            "prod",
+            &BTreeMap::new(),
+        );
+        assert_eq!(service_ips(&names), ["10.200.1.2"]);
+        assert!(names.contains_key("d2-0.prod.maestro"));
+
+        let draining = Deployment {
+            status: DeploymentStatus::Draining,
+            ..old
+        };
+        let replicas = discovered_replicas(&[draining, ready], &assignments, &observed, "prod");
+        let web = &replicas[&ServiceId::from("web")];
+        assert_eq!(
+            web.iter()
+                .map(|replica| (replica.replica_id.to_string(), replica.draining))
+                .collect::<Vec<_>>(),
+            [("d1-0".to_string(), true), ("d2-0".to_string(), false)]
+        );
     }
 
     #[test]
@@ -696,7 +793,13 @@ mod tests {
                 .find(|status| &status.replica_id == replica_id)
                 .cloned()
         };
-        build_dns(assignments, &observed, "prod", previous)
+        build_dns(
+            &[deployment("d1", DeploymentStatus::Ready)],
+            assignments,
+            &observed,
+            "prod",
+            previous,
+        )
     }
 
     fn service_ips(names: &BTreeMap<String, Vec<IpAddr>>) -> Vec<String> {
