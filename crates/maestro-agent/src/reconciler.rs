@@ -146,10 +146,13 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             self.board.remove(replica_id);
             self.restarts.remove(replica_id);
         });
+        // Published before launching: a pass that starts many replicas (each fetching its image
+        // first) takes minutes, and health checks and firewall rules must cover every replica as
+        // soon as it runs, not when the whole pass ends.
+        self.plans.send_replace(desired.values().cloned().collect());
         for plan in desired.values() {
             self.converge(plan, actual.get(&plan.replica_id)).await;
         }
-        self.plans.send_replace(desired.into_values().collect());
         Ok(())
     }
 

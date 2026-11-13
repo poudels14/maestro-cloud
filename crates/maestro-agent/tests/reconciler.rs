@@ -132,6 +132,43 @@ fn phase(harness: &Harness, replica: &str) -> Option<ReplicaPhase> {
 }
 
 #[tokio::test(start_paused = true)]
+async fn publishes_every_plan_before_slow_launches_finish() {
+    let Harness {
+        _directory: _kept,
+        runtime,
+        board,
+        mut reconciler,
+        state,
+    } = harness(None);
+    runtime.delay_pull("registry.example/slow:1", Duration::from_secs(60));
+    let slow = Assignment {
+        image: "registry.example/slow:1".to_string(),
+        ..assignment("d1-0", 1000)
+    };
+    state
+        .apply(&[Mutation::SetNodeAssignments {
+            node_id: NODE,
+            assignments: vec![slow, assignment("d1-1", 1000)],
+        }])
+        .unwrap();
+    let plans = reconciler.plans();
+    let pass = tokio::spawn(async move { reconciler.reconcile().await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(!pass.is_finished());
+    assert_eq!(
+        plans
+            .borrow()
+            .iter()
+            .map(|plan| plan.replica_id.to_string())
+            .collect::<Vec<_>>(),
+        ["d1-0", "d1-1"]
+    );
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    pass.await.unwrap().unwrap();
+    assert!(board.get(&ReplicaId::from("d1-1")).is_some());
+}
+
+#[tokio::test(start_paused = true)]
 async fn starts_assigned_replicas_with_limits() {
     let mut harness = harness(None);
     assign(

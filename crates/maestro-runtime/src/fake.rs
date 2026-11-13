@@ -20,6 +20,7 @@ struct FakeState {
     containers: BTreeMap<String, FakeContainer>,
     pulled: HashSet<String>,
     failing_images: HashSet<String>,
+    pull_delays: BTreeMap<String, std::time::Duration>,
     subscribers: Vec<mpsc::Sender<RuntimeEvent>>,
     next_ip: u8,
     started: Vec<String>,
@@ -32,6 +33,10 @@ struct FakeContainer {
 }
 
 impl FakeRuntime {
+    pub fn delay_pull(&self, image: &str, delay: std::time::Duration) {
+        self.lock().pull_delays.insert(image.to_string(), delay);
+    }
+
     pub fn fail_image(&self, image: &str) {
         self.lock().failing_images.insert(image.to_string());
     }
@@ -74,6 +79,10 @@ impl FakeRuntime {
 
 impl Runtime for FakeRuntime {
     async fn pull(&self, image: &str) -> Result<(), RuntimeError> {
+        let delay = self.lock().pull_delays.get(image).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         let mut state = self.lock();
         match state.failing_images.contains(image) {
             true => Err(RuntimeError::Image {
