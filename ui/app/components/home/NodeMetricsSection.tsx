@@ -4,7 +4,7 @@ import { useQuery } from "../../lib/useQuery";
 import clsx from "clsx";
 import { clusterMetricsQuery, clusterNodesQuery, nodeMetricsQuery } from "../../lib/queries";
 import { formatBytes, formatPercent } from "../../lib/format";
-import { Card, ErrorBanner, SectionHeader } from "../../lib/ui";
+import { Card, ErrorBanner, SectionHeader, TabButton } from "../../lib/ui";
 import { TimelineChart } from "../TimelineChart";
 
 const TIME_RANGES = [
@@ -18,7 +18,8 @@ function NodeMetricsSection() {
   const [rangeMs, setRangeMs] = createSignal(3_600_000);
   const nodes = useQuery(() => clusterNodesQuery());
   const [selectedNodeId, setSelectedNodeId] = createSignal<number | undefined>(undefined);
-  const nodeMetrics = useQuery(() => nodeMetricsQuery(rangeMs(), selectedNodeId()));
+  const activeNodeId = () => selectedNodeId() ?? nodes.data?.[0]?.id;
+  const nodeMetrics = useQuery(() => nodeMetricsQuery(rangeMs(), activeNodeId()));
   const clusterMetrics = useQuery(() => clusterMetricsQuery(rangeMs()));
 
   const latestNode = () => {
@@ -66,25 +67,17 @@ function NodeMetricsSection() {
         </div>
       </div>
       <div>
-        <div class="mb-4 flex items-center justify-between gap-3">
-          <SectionHeader>Node</SectionHeader>
-          <Show when={(nodes.data?.length ?? 0) > 1}>
-            <select
-              aria-label="Node"
-              value={selectedNodeId() ?? ""}
-              onChange={(event) =>
-                setSelectedNodeId(
-                  event.currentTarget.value ? Number(event.currentTarget.value) : undefined
-                )
-              }
-              class="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-700 outline-none focus:border-indigo-300"
-            >
-              <option value="">This node</option>
-              <For each={nodes.data ?? []}>
-                {(node) => <option value={node.id}>{node.name}</option>}
-              </For>
-            </select>
-          </Show>
+        <SectionHeader class="mb-4">Node</SectionHeader>
+        <div class="mb-4 flex gap-5 overflow-x-auto border-b border-gray-200">
+          <For each={nodes.data ?? []}>
+            {(node) => (
+              <TabButton
+                label={node.name}
+                active={activeNodeId() === node.id}
+                onClick={() => setSelectedNodeId(node.id)}
+              />
+            )}
+          </For>
         </div>
         <div class="grid grid-cols-1 gap-4">
           <MetricCard
