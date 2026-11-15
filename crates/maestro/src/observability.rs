@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use axum::Json;
@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use crate::node_service::{ClusterAccess, NodeRequest, call_nodes, url_query};
 
 const METRICS_BUCKET_MS: i64 = 15_000;
+const STALE_SAMPLE_MS: i64 = 2 * METRICS_BUCKET_MS;
 const DEFAULT_RANGE_MS: i64 = 60 * 60 * 1000;
 const CONTAINER_SOURCE_PREFIX: &str = "container:";
 const DEFAULT_BREAKDOWN_LIMIT: usize = 100;
@@ -54,8 +55,13 @@ pub async fn node_metrics(
             .filter(|node| node.id == node_id)
             .collect::<Vec<_>>()
     });
+    let (from, to) = bounds(&range);
     respond(match selected {
-        Ok(selected) => Ok(gather_metrics(&access, selected, &range, "source", "node").await),
+        Ok(selected) => Ok(
+            gather_metrics(&access, selected, from, to, "source", "node")
+                .await
+                .concat(),
+        ),
         Err(error) => Err(error),
     })
 }
@@ -64,10 +70,20 @@ pub async fn cluster_metrics(
     State(access): State<ClusterAccess>,
     Query(range): Query<RangeQuery>,
 ) -> Response {
+    let (from, to) = bounds(&range);
     respond(match nodes(&access) {
-        Ok(nodes) => Ok(sum_buckets(
-            gather_metrics(&access, nodes, &range, "source", "cluster").await,
+        Ok(nodes) => Ok(sum_latest(
+            gather_metrics(
+                &access,
+                nodes,
+                from - STALE_SAMPLE_MS,
+                to,
+                "source",
+                "cluster",
+            )
+            .await,
             "cluster",
+            from,
         )),
         Err(error) => Err(error),
     })
@@ -79,10 +95,20 @@ pub async fn service_metrics(
     Query(range): Query<RangeQuery>,
 ) -> Response {
     let source = format!("service:{service_id}");
+    let (from, to) = bounds(&range);
     respond(match nodes(&access) {
-        Ok(nodes) => Ok(sum_buckets(
-            gather_metrics(&access, nodes, &range, "source", &source).await,
+        Ok(nodes) => Ok(sum_latest(
+            gather_metrics(
+                &access,
+                nodes,
+                from - STALE_SAMPLE_MS,
+                to,
+                "source",
+                &source,
+            )
+            .await,
             &source,
+            from,
         )),
         Err(error) => Err(error),
     })
@@ -106,15 +132,18 @@ pub async fn container_metrics(
         .map_err(|error| error.to_string());
     respond(match (nodes(&access), deployments) {
         (Ok(nodes), Ok(deployments)) => {
+            let (from, to) = bounds(&range);
             let points = gather_metrics(
                 &access,
                 nodes,
-                &range,
+                from,
+                to,
                 "sourcePrefix",
                 CONTAINER_SOURCE_PREFIX,
             )
             .await
             .into_iter()
+            .flatten()
             .filter(|point| {
                 deployments
                     .iter()
@@ -631,12 +660,11 @@ async fn gather(access: &ClusterAccess, nodes: Vec<NodeRecord>, path: String) ->
 async fn gather_metrics(
     access: &ClusterAccess,
     nodes: Vec<NodeRecord>,
-    range: &RangeQuery,
+    from: i64,
+    to: i64,
     filter: &str,
     value: &str,
-) -> Vec<MetricPoint> {
-    let to = range.to.unwrap_or_else(now_ms);
-    let from = range.from.unwrap_or(to - DEFAULT_RANGE_MS);
+) -> Vec<Vec<MetricPoint>> {
     let path = format!(
         "/metrics?{}",
         url_query(&[
@@ -649,28 +677,51 @@ async fn gather_metrics(
         .await
         .into_iter()
         .filter_map(|points| serde_json::from_value::<Vec<MetricPoint>>(points).ok())
-        .flatten()
         .collect()
 }
 
-fn sum_buckets(points: Vec<MetricPoint>, source: &str) -> Vec<MetricPoint> {
-    points
+fn bounds(range: &RangeQuery) -> (i64, i64) {
+    let to = range.to.unwrap_or_else(now_ms);
+    (range.from.unwrap_or(to - DEFAULT_RANGE_MS), to)
+}
+
+/// Nodes sample on their own clocks, so a bucket sums each node's latest non-stale sample by its end.
+fn sum_latest(node_series: Vec<Vec<MetricPoint>>, source: &str, from: i64) -> Vec<MetricPoint> {
+    let buckets = node_series
+        .iter()
+        .flatten()
+        .filter(|point| point.ts >= from)
+        .map(|point| point.ts - point.ts.rem_euclid(METRICS_BUCKET_MS))
+        .collect::<BTreeSet<_>>();
+    buckets
         .into_iter()
-        .fold(BTreeMap::<i64, MetricPoint>::new(), |mut buckets, point| {
-            let bucket = point.ts - point.ts.rem_euclid(METRICS_BUCKET_MS);
-            let total = buckets.entry(bucket).or_insert_with(|| MetricPoint {
-                ts: bucket,
-                source: source.to_string(),
-                ..MetricPoint::default()
-            });
-            total.cpu_percent += point.cpu_percent;
-            total.memory_bytes += point.memory_bytes;
-            total.memory_limit_bytes += point.memory_limit_bytes;
-            total.net_rx_bytes += point.net_rx_bytes;
-            total.net_tx_bytes += point.net_tx_bytes;
-            buckets
+        .map(|bucket| {
+            let bucket_end = bucket + METRICS_BUCKET_MS;
+            node_series
+                .iter()
+                .filter_map(|points| {
+                    let latest_index = points.partition_point(|point| point.ts < bucket_end);
+                    latest_index
+                        .checked_sub(1)
+                        .map(|index| &points[index])
+                        .filter(|point| point.ts >= bucket_end - STALE_SAMPLE_MS)
+                })
+                .fold(
+                    MetricPoint {
+                        ts: bucket,
+                        source: source.to_string(),
+                        ..MetricPoint::default()
+                    },
+                    |mut total, point| {
+                        total.cpu_percent += point.cpu_percent;
+                        total.memory_bytes += point.memory_bytes;
+                        total.memory_limit_bytes += point.memory_limit_bytes;
+                        total.net_rx_bytes += point.net_rx_bytes;
+                        total.net_tx_bytes += point.net_tx_bytes;
+                        total
+                    },
+                )
         })
-        .into_values()
         .collect()
 }
 
@@ -720,21 +771,80 @@ mod tests {
     }
 
     #[test]
-    fn sums_node_samples_into_shared_buckets() {
-        let summed = sum_buckets(
+    fn sums_each_nodes_latest_sample_per_bucket() {
+        let summed = sum_latest(
             vec![
-                point(15_100, 10.0, 1),
-                point(29_900, 5.0, 2),
-                point(30_050, 1.0, 4),
+                vec![point(15_100, 10.0, 1), point(30_050, 1.0, 4)],
+                vec![point(29_900, 5.0, 2)],
             ],
             "cluster",
+            0,
         );
-        assert_eq!(summed.len(), 2);
-        assert_eq!(
-            (summed[0].ts, summed[0].cpu_percent, summed[0].memory_bytes),
-            (15_000, 15.0, 3)
+        let totals = summed
+            .iter()
+            .map(|point| (point.ts, point.cpu_percent, point.memory_bytes))
+            .collect::<Vec<_>>();
+        assert_eq!(totals, vec![(15_000, 15.0, 3), (30_000, 6.0, 6)]);
+    }
+
+    #[test]
+    fn counts_a_node_once_when_two_of_its_samples_share_a_bucket() {
+        let summed = sum_latest(
+            vec![
+                vec![point(15_001, 10.0, 100), point(29_999, 12.0, 120)],
+                vec![point(20_000, 5.0, 50)],
+            ],
+            "cluster",
+            0,
         );
-        assert_eq!((summed[1].ts, summed[1].memory_bytes), (30_000, 4));
+        assert_eq!((summed[0].cpu_percent, summed[0].memory_bytes), (17.0, 170));
+    }
+
+    #[test]
+    fn keeps_nodes_that_have_not_reported_in_the_newest_bucket() {
+        let summed = sum_latest(
+            vec![
+                vec![point(14_000, 10.0, 100), point(29_000, 10.0, 100)],
+                vec![point(2_000, 5.0, 50), point(17_000, 5.0, 50)],
+                vec![
+                    point(10_000, 1.0, 10),
+                    point(25_000, 1.0, 10),
+                    point(40_000, 1.0, 10),
+                ],
+            ],
+            "cluster",
+            0,
+        );
+        let newest = summed.last().unwrap();
+        assert_eq!((newest.ts, newest.memory_bytes), (30_000, 160));
+    }
+
+    #[test]
+    fn drops_nodes_whose_latest_sample_is_stale() {
+        let summed = sum_latest(
+            vec![
+                vec![point(1_000, 10.0, 100)],
+                vec![point(1_000, 5.0, 50), point(61_000, 5.0, 50)],
+            ],
+            "cluster",
+            0,
+        );
+        let newest = summed.last().unwrap();
+        assert_eq!((newest.ts, newest.memory_bytes), (60_000, 50));
+    }
+
+    #[test]
+    fn leaves_out_lookback_samples_before_the_range() {
+        let summed = sum_latest(
+            vec![vec![point(5_000, 10.0, 100)], vec![point(20_000, 5.0, 50)]],
+            "cluster",
+            15_000,
+        );
+        let totals = summed
+            .iter()
+            .map(|point| (point.ts, point.memory_bytes))
+            .collect::<Vec<_>>();
+        assert_eq!(totals, vec![(15_000, 150)]);
     }
 
     #[test]
