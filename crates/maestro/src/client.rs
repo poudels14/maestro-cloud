@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 use std::path::Path;
 
 use anyhow::Context;
 use clap::Subcommand;
 use maestro_core::{EnvSpec, ServiceId, ServiceSpec, ServicesFile, cluster_domain, version_label};
 
+use crate::prompt::{self, Choice};
 use crate::uploads::{self, UploadSpec};
 use serde_json::{Value, json};
 
@@ -42,50 +42,49 @@ impl Endpoint {
 #[derive(Subcommand)]
 pub enum ServiceCommand {
     Freeze {
-        service: String,
+        service: Option<String>,
     },
     Unfreeze {
-        service: String,
+        service: Option<String>,
     },
     Redeploy {
-        service: String,
+        service: Option<String>,
         #[arg(long)]
         force: bool,
     },
     Restart {
-        service: String,
+        service: Option<String>,
         #[arg(long)]
         force: bool,
     },
     Scale {
-        service: String,
-        #[arg(required_unless_present = "reset")]
+        service: Option<String>,
         replicas: Option<u32>,
         #[arg(long, conflicts_with = "replicas")]
         reset: bool,
     },
     Stop {
-        service: String,
-        deployment: String,
+        service: Option<String>,
+        deployment: Option<String>,
     },
     Cancel {
-        service: String,
-        deployment: String,
+        service: Option<String>,
+        deployment: Option<String>,
     },
     Forget {
-        service: String,
-        deployment: String,
+        service: Option<String>,
+        deployment: Option<String>,
     },
     Delete {
-        service: String,
+        service: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 pub enum NodeCommand {
-    Drain { node: String },
-    Restore { node: String },
-    Remove { node: String },
+    Drain { node: Option<String> },
+    Restore { node: Option<String> },
+    Remove { node: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -186,14 +185,17 @@ pub async fn cluster(endpoint: &Endpoint, command: ClusterCommand) -> anyhow::Re
 pub async fn node(endpoint: &Endpoint, command: NodeCommand) -> anyhow::Result<()> {
     match command {
         NodeCommand::Drain { node } => {
+            let node = pick_node(endpoint, node).await?;
             request(endpoint.post(&format!("/api/cluster/nodes/{node}/drain"))).await?;
             println!("draining node {node}; its replicas move once replacements are healthy");
         }
         NodeCommand::Restore { node } => {
+            let node = pick_node(endpoint, node).await?;
             request(endpoint.post(&format!("/api/cluster/nodes/{node}/restore"))).await?;
             println!("node {node} accepts new replicas again");
         }
         NodeCommand::Remove { node } => {
+            let node = pick_node(endpoint, node).await?;
             let removal = request(endpoint.delete(&format!("/api/cluster/nodes/{node}"))).await?;
             match removal["state"].as_str() {
                 Some("removed") => println!("removed node {node}"),
@@ -208,9 +210,14 @@ pub async fn node(endpoint: &Endpoint, command: NodeCommand) -> anyhow::Result<(
 
 pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Result<()> {
     match command {
-        ServiceCommand::Freeze { service } => set_frozen(endpoint, &service, true).await,
-        ServiceCommand::Unfreeze { service } => set_frozen(endpoint, &service, false).await,
+        ServiceCommand::Freeze { service } => {
+            set_frozen(endpoint, &pick_service(endpoint, service).await?, true).await
+        }
+        ServiceCommand::Unfreeze { service } => {
+            set_frozen(endpoint, &pick_service(endpoint, service).await?, false).await
+        }
         ServiceCommand::Redeploy { service, force } => {
+            let service = pick_service(endpoint, service).await?;
             queue(
                 endpoint,
                 &format!("/api/services/{service}/redeploy?force={force}"),
@@ -218,6 +225,7 @@ pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Re
             .await
         }
         ServiceCommand::Restart { service, force } => {
+            let service = pick_service(endpoint, service).await?;
             queue(
                 endpoint,
                 &format!("/api/services/{service}/restart?force={force}"),
@@ -229,12 +237,14 @@ pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Re
             replicas,
             reset,
         } => {
+            let service = pick_service(endpoint, service).await?;
             let path = format!("/api/services/{service}/replicas");
-            let response = match (reset, replicas) {
-                (false, Some(replicas)) => {
+            let response = match reset {
+                true => request(endpoint.delete(&path)).await?,
+                false => {
+                    let replicas = prompt::count("Replicas", replicas)?;
                     request(endpoint.patch(&path).json(&json!({ "replicas": replicas }))).await?
                 }
-                _ => request(endpoint.delete(&path)).await?,
             };
             println!("{service} runs {} replicas", text(&response["replicas"]));
             Ok(())
@@ -243,6 +253,8 @@ pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Re
             service,
             deployment,
         } => {
+            let service = pick_service(endpoint, service).await?;
+            let deployment = pick_deployment(endpoint, &service, deployment).await?;
             request(endpoint.patch(&format!(
                 "/api/services/{service}/deployments/{deployment}/remove"
             )))
@@ -254,6 +266,8 @@ pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Re
             service,
             deployment,
         } => {
+            let service = pick_service(endpoint, service).await?;
+            let deployment = pick_deployment(endpoint, &service, deployment).await?;
             request(endpoint.patch(&format!(
                 "/api/services/{service}/deployments/{deployment}/cancel"
             )))
@@ -265,12 +279,15 @@ pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Re
             service,
             deployment,
         } => {
+            let service = pick_service(endpoint, service).await?;
+            let deployment = pick_deployment(endpoint, &service, deployment).await?;
             request(endpoint.delete(&format!("/api/services/{service}/deployments/{deployment}")))
                 .await?;
             println!("deleted deployment record {deployment}");
             Ok(())
         }
         ServiceCommand::Delete { service } => {
+            let service = pick_service(endpoint, service).await?;
             request(endpoint.delete(&format!("/api/services/{service}"))).await?;
             println!("deleted service {service}");
             Ok(())
@@ -295,7 +312,7 @@ pub async fn rollout(
             (service_id, expansion.map(|_| spec))
         })
         .collect::<BTreeMap<_, _>>();
-    let picked = match std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+    let picked = match prompt::interactive() {
         true => pick_services(endpoint, expanded, force).await?,
         false => expanded,
     };
@@ -647,6 +664,75 @@ async fn pick_services(
         .into_iter()
         .filter(|(service_id, _)| picked.contains(service_id))
         .collect())
+}
+
+pub async fn pick_service(endpoint: &Endpoint, service: Option<String>) -> anyhow::Result<String> {
+    prompt::choose("Service", service, async {
+        let services = request(endpoint.get("/api/services")).await?;
+        Ok(services
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|service| Choice {
+                value: text(&service["id"]),
+                label: format!(
+                    "{} ({})",
+                    text(&service["id"]),
+                    text(&service["latestDeployment"]["status"])
+                ),
+            })
+            .collect())
+    })
+    .await
+}
+
+async fn pick_deployment(
+    endpoint: &Endpoint,
+    service: &str,
+    deployment: Option<String>,
+) -> anyhow::Result<String> {
+    prompt::choose("Deployment", deployment, async {
+        let deployments =
+            request(endpoint.get(&format!("/api/services/{service}/deployments"))).await?;
+        Ok(deployments
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|deployment| Choice {
+                value: text(&deployment["id"]),
+                label: format!(
+                    "{} {} ({})",
+                    text(&deployment["id"]),
+                    deployment["version"]
+                        .as_u64()
+                        .map_or_else(|| "-".to_string(), version_label),
+                    text(&deployment["status"])
+                ),
+            })
+            .collect())
+    })
+    .await
+}
+
+async fn pick_node(endpoint: &Endpoint, node: Option<String>) -> anyhow::Result<String> {
+    prompt::choose("Node", node, async {
+        let nodes = request(endpoint.get("/api/nodes")).await?;
+        Ok(nodes
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|node| Choice {
+                value: text(&node["id"]),
+                label: format!(
+                    "{} ({}, {})",
+                    text(&node["name"]),
+                    text(&node["endpoint"]),
+                    text(&node["state"])
+                ),
+            })
+            .collect())
+    })
+    .await
 }
 
 fn print_list(label: &str, values: &Value) {

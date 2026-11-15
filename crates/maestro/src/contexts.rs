@@ -9,6 +9,7 @@ use maestro_control::{ApiAuth, MAX_TOKEN_TTL};
 use serde_json::{Value, json};
 
 use crate::client::Endpoint;
+use crate::prompt::{self, Choice};
 
 const DEFAULT_API: &str = "http://127.0.0.1:3000";
 const CONTEXTS_FILE_ENV: &str = "MAESTRO_CONTEXTS_FILE";
@@ -17,19 +18,19 @@ const JWT_SECRET_ENV: &str = "JWT_SECRET_KEY";
 #[derive(Subcommand)]
 pub enum ContextCommand {
     Set {
-        name: String,
+        name: Option<String>,
         #[arg(long)]
-        api: String,
+        api: Option<String>,
         #[arg(long)]
         token: Option<String>,
     },
     Use {
-        name: String,
+        name: Option<String>,
     },
     Ls,
     #[command(alias = "rm")]
     Remove {
-        name: String,
+        name: Option<String>,
     },
     Login {
         #[arg(long, value_parser = crate::parse_ttl, default_value = "24h")]
@@ -42,16 +43,19 @@ struct ContextFile {
     contexts: BTreeMap<String, (String, Option<String>)>,
 }
 
-pub fn run(command: ContextCommand) -> anyhow::Result<()> {
+pub async fn run(command: ContextCommand) -> anyhow::Result<()> {
     let mut file = ContextFile::load()?;
     match command {
         ContextCommand::Set { name, api, token } => {
+            let name = prompt::text("Context name", name)?;
+            let api = prompt::text("API URL", api)?;
             file.contexts.insert(name.clone(), (api, token));
             file.current.get_or_insert(name.clone());
             file.save()?;
             println!("saved context {name}");
         }
         ContextCommand::Use { name } => {
+            let name = pick_context(&file, name).await?;
             anyhow::ensure!(file.contexts.contains_key(&name), "unknown context {name}");
             file.current = Some(name.clone());
             file.save()?;
@@ -65,6 +69,7 @@ pub fn run(command: ContextCommand) -> anyhow::Result<()> {
             println!("{marker} {name:<20} {api}");
         }),
         ContextCommand::Remove { name } => {
+            let name = pick_context(&file, name).await?;
             anyhow::ensure!(
                 file.contexts.remove(&name).is_some(),
                 "unknown context {name}"
@@ -201,4 +206,18 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
         .open(path)?;
     file.write_all(bytes)?;
     Ok(())
+}
+
+async fn pick_context(file: &ContextFile, name: Option<String>) -> anyhow::Result<String> {
+    prompt::choose("Context", name, async {
+        Ok(file
+            .contexts
+            .iter()
+            .map(|(name, (api, _))| Choice {
+                value: name.clone(),
+                label: format!("{name} ({api})"),
+            })
+            .collect())
+    })
+    .await
 }

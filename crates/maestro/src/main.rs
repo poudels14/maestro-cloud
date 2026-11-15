@@ -19,6 +19,7 @@ mod node_maintenance;
 mod node_service;
 mod observability;
 mod previews;
+mod prompt;
 mod secret_sources;
 mod server;
 mod slack;
@@ -83,14 +84,14 @@ enum Command {
     #[command(subcommand)]
     Service(client::ServiceCommand),
     Deploy {
-        service: String,
+        service: Option<String>,
         #[arg(long)]
         force: bool,
     },
     Replicas,
     Nodes,
     Exec {
-        service: String,
+        service: Option<String>,
         #[arg(short, long)]
         replica: Option<u32>,
         #[arg(long)]
@@ -168,7 +169,7 @@ async fn run_cli() -> anyhow::Result<()> {
         Command::Server(ServerCommand::Provision(args)) => join::provision(args).await,
         Command::Join(args) => join::join(args).await,
         Command::Dev(command) => dev::run(command).await,
-        Command::Context(command) => contexts::run(command),
+        Command::Context(command) => contexts::run(command).await,
         Command::Token(TokenCommand::Create {
             config,
             subject,
@@ -222,7 +223,9 @@ async fn run_cli() -> anyhow::Result<()> {
             client::service(&contexts::resolve(cli.api, cli.token)?, command).await
         }
         Command::Deploy { service, force } => {
-            client::deploy(&contexts::resolve(cli.api, cli.token)?, &service, force).await
+            let endpoint = contexts::resolve(cli.api, cli.token)?;
+            let service = client::pick_service(&endpoint, service).await?;
+            client::deploy(&endpoint, &service, force).await
         }
         Command::Replicas => client::replicas(&contexts::resolve(cli.api, cli.token)?).await,
         Command::Nodes => client::nodes(&contexts::resolve(cli.api, cli.token)?).await,
@@ -234,6 +237,7 @@ async fn run_cli() -> anyhow::Result<()> {
             command,
         } => {
             let endpoint = contexts::resolve(cli.api, cli.token)?;
+            let service = client::pick_service(&endpoint, service).await?;
             let code = exec::run_cli(
                 &endpoint,
                 &service,
