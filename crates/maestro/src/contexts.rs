@@ -89,6 +89,32 @@ pub async fn run(command: ContextCommand) -> anyhow::Result<()> {
             let lifetime = Duration::from_secs(ttl).min(MAX_TOKEN_TTL);
             let token =
                 ApiAuth::new(secret.as_bytes()).issue(&format!("maestro-cli/{name}"), lifetime);
+            let api = file
+                .contexts
+                .get(&name)
+                .map(|(api, _)| api.trim_end_matches('/').to_string())
+                .unwrap_or_default();
+            let check = reqwest::Client::new()
+                .post(format!("{api}/api/rollout?apply=false"))
+                .bearer_auth(&token)
+                .json(&json!({ "services": {} }))
+                .send()
+                .await
+                .map(|response| response.status());
+            match check {
+                Ok(reqwest::StatusCode::UNAUTHORIZED) => anyhow::bail!(
+                    "{api} rejected the token: {JWT_SECRET_ENV} doesn't match the cluster's jwtSecretKey"
+                ),
+                Ok(status) if status.is_success() => {}
+                Ok(status) => {
+                    eprintln!("could not verify the token with {api} ({status}); saving it anyway")
+                }
+                Err(error) => {
+                    eprintln!(
+                        "could not reach {api} to verify the token ({error}); saving it anyway"
+                    )
+                }
+            }
             if let Some((_, saved)) = file.contexts.get_mut(&name) {
                 *saved = Some(token);
             }
