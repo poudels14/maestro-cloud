@@ -114,6 +114,13 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   ```jsonc
   "deploy": { "drain": { "checkPath": "/internal/can-stop", "timeout": "30m" } }
   ```
+- A replica is stopped with SIGTERM and killed if it hasn't exited after
+  `deploy.stopGracePeriod` (10s by default). A replica that accepts a termination request
+  while draining gets the rest of `deploy.drain.timeout` instead when that is longer:
+
+  ```jsonc
+  "deploy": { "stopGracePeriod": "2m" }
+  ```
 - `maestro rollout` shows created, updated, and unchanged services; `--apply` stores
   the specs and queues one deployment per changed service. Services missing from the
   file are reported but never deleted implicitly.

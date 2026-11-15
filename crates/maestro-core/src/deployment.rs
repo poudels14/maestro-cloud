@@ -103,9 +103,16 @@ pub struct ReplicaPlan {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress: Vec<EgressRule>,
     /// Set while the replica's deployment drains and the service has `deploy.drain.checkPath`:
-    /// the agent polls it and reports the replica drained once it answers 200.
+    /// the agent POSTs to it and reports the replica drained once it answers 202.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_check: Option<HealthcheckPlan>,
+    /// Set while the replica's deployment drains with `deploy.drain.timeout`: when the drain ends.
+    /// A replica stopped before then gets until then to exit after SIGTERM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_deadline_ms: Option<u64>,
+    /// `deploy.stopGracePeriod`: how long the replica gets to exit after SIGTERM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_grace_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +152,7 @@ impl ReplicaPlan {
             env: replica_env(assignment, &variables, &deploy.env.items),
             healthcheck,
             max_restarts: deploy.max_restarts,
+            stop_grace_secs: deploy.stop_grace_secs(),
             volumes: deploy.volumes.clone(),
             secrets: deploy
                 .secrets
@@ -158,6 +166,7 @@ impl ReplicaPlan {
             image_source: None,
             egress: deploy.egress.allow.clone(),
             drain_check: None,
+            drain_deadline_ms: None,
         }
     }
 }

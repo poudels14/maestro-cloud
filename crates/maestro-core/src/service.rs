@@ -131,6 +131,9 @@ pub struct DeploySpec {
     pub egress: EgressSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain: Option<DrainSpec>,
+    /// How long a replica gets to exit after SIGTERM before it is killed, such as "30s" or "5m".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_grace_period: Option<String>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub resources: ResourceSpec,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -456,6 +459,8 @@ impl ServiceSpec {
             .into_iter()
             .flatten()
         });
+        let stop_grace = (deploy.stop_grace_period.is_some() && deploy.stop_grace_secs().is_none())
+            .then(|| "deploy.stopGracePeriod must be a duration like 30s, 5m or 1h".to_string());
         let ingress = self.ingress.iter().flat_map(ingress_problems).chain(sealed);
         let network = self
             .network
@@ -475,6 +480,7 @@ impl ServiceSpec {
             .chain(volumes)
             .chain(egress)
             .chain(drain)
+            .chain(stop_grace)
             .chain(ingress)
             .chain(network)
             .chain(preview)
@@ -486,6 +492,12 @@ impl DeploySpec {
     pub fn effective_healthcheck_interval(&self) -> u32 {
         self.healthcheck_interval
             .clamp(MIN_HEALTHCHECK_INTERVAL_SECS, MAX_HEALTHCHECK_INTERVAL_SECS)
+    }
+
+    pub fn stop_grace_secs(&self) -> Option<u64> {
+        self.stop_grace_period
+            .as_deref()
+            .and_then(parse_duration_secs)
     }
 }
 
@@ -506,6 +518,7 @@ impl Default for DeploySpec {
             node_affinity: None,
             egress: EgressSpec::default(),
             drain: None,
+            stop_grace_period: None,
             resources: ResourceSpec::default(),
             oom_priority: OomPriority::default(),
         }
@@ -1011,6 +1024,7 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "timeout": "forever" } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "checkPath": "ready", "timeout": "5m" } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "checkPath": "/ready" } } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "stopGracePeriod": "a while" } } } }"#,
         ];
         cases.iter().for_each(|case| {
             assert!(

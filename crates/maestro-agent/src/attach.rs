@@ -329,6 +329,8 @@ mod tests {
             image_source: None,
             egress: Vec::new(),
             drain_check: None,
+            drain_deadline_ms: None,
+            stop_grace_secs: None,
         }
     }
 

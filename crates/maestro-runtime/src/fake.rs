@@ -21,6 +21,8 @@ struct FakeState {
     pulled: HashSet<String>,
     failing_images: HashSet<String>,
     pull_delays: BTreeMap<String, std::time::Duration>,
+    exit_delays: BTreeMap<String, std::time::Duration>,
+    stop_graces: BTreeMap<String, std::time::Duration>,
     subscribers: Vec<mpsc::Sender<RuntimeEvent>>,
     next_ip: u8,
     started: Vec<String>,
@@ -35,6 +37,16 @@ struct FakeContainer {
 impl FakeRuntime {
     pub fn delay_pull(&self, image: &str, delay: std::time::Duration) {
         self.lock().pull_delays.insert(image.to_string(), delay);
+    }
+
+    /// The container takes `delay` to exit after it is asked to stop.
+    pub fn delay_exit(&self, id: &str, delay: std::time::Duration) {
+        self.lock().exit_delays.insert(id.to_string(), delay);
+    }
+
+    /// The grace period the container was last stopped with.
+    pub fn stop_grace(&self, id: &str) -> Option<std::time::Duration> {
+        self.lock().stop_graces.get(id).copied()
     }
 
     pub fn fail_image(&self, image: &str) {
@@ -123,7 +135,15 @@ impl Runtime for FakeRuntime {
         }
     }
 
-    async fn stop(&self, id: &str, _grace: Duration) -> Result<(), RuntimeError> {
+    async fn stop(&self, id: &str, grace: Duration) -> Result<(), RuntimeError> {
+        let delay = {
+            let mut state = self.lock();
+            state.stop_graces.insert(id.to_string(), grace);
+            state.exit_delays.get(id).copied()
+        };
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay.min(grace)).await;
+        }
         let running = self
             .lock()
             .containers

@@ -95,7 +95,7 @@ fn gives_every_replica_its_node_discovery_endpoint_and_key() {
 }
 
 #[test]
-fn checks_drains_only_while_the_deployment_drains() {
+fn checks_drains_and_sets_their_deadline_only_while_the_deployment_drains() {
     let plan_for = |status: DeploymentStatus| {
         let directory = tempfile::tempdir().unwrap();
         let state = StateMachine::open(directory.path().join("state.redb")).unwrap();
@@ -103,7 +103,10 @@ fn checks_drains_only_while_the_deployment_drains() {
             "name": "web",
             "image": "nginx",
             "ingress": { "host": "web.example.com", "port": 8080 },
-            "deploy": { "drain": { "checkPath": "/drained", "timeout": "30m" } }
+            "deploy": {
+                "drain": { "checkPath": "/drained", "timeout": "30m" },
+                "stopGracePeriod": "2m"
+            }
         }))
         .unwrap();
         let assignment = assignment("web");
@@ -145,9 +148,15 @@ fn checks_drains_only_while_the_deployment_drains() {
         .unwrap()
         .remove(0)
     };
-    assert!(plan_for(DeploymentStatus::Ready).drain_check.is_none());
-    let check = plan_for(DeploymentStatus::Draining).drain_check.unwrap();
+    let ready = plan_for(DeploymentStatus::Ready);
+    assert!(ready.drain_check.is_none());
+    assert_eq!(ready.drain_deadline_ms, None);
+    assert_eq!(ready.stop_grace_secs, Some(120));
+    let draining = plan_for(DeploymentStatus::Draining);
+    let check = draining.drain_check.unwrap();
     assert_eq!((check.path.as_str(), check.port), ("/drained", 8080));
+    assert_eq!(draining.drain_deadline_ms, Some(1 + 30 * 60 * 1000));
+    assert_eq!(draining.stop_grace_secs, Some(120));
 }
 
 fn node() -> NodeRecord {

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use maestro_agent::{LocalPlanSource, Reconciler, ReconcilerSettings, StatusBoard};
 use maestro_core::{
-    Assignment, ByteSize, DeploySpec, Deployment, DeploymentId, DeploymentStatus,
+    Assignment, ByteSize, DeploySpec, Deployment, DeploymentId, DeploymentStatus, DrainSpec,
     EffectiveResources, Millicores, NodeId, ReplicaId, ReplicaPhase, ResolvedRequest, SecretsSpec,
     ServiceId, ServiceSpec, VolumeMount,
 };
@@ -122,6 +122,27 @@ fn assign(harness: &Harness, assignments: Vec<Assignment>) {
             assignments,
         }])
         .unwrap();
+}
+
+fn start_draining(harness: &Harness, since_ms: u64) {
+    harness
+        .state
+        .apply(&[Mutation::SetDeploymentStatus {
+            service_id: ServiceId::from("api"),
+            deployment_id: DeploymentId::from("d1"),
+            status: DeploymentStatus::Draining,
+            image: Some(IMAGE.to_string()),
+            failure: None,
+            at_ms: since_ms,
+        }])
+        .unwrap();
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 fn phase(harness: &Harness, replica: &str) -> Option<ReplicaPhase> {
@@ -256,6 +277,97 @@ async fn retires_unassigned_replicas() {
     assert!(harness.runtime.spec("d1-0").is_none());
     assert!(harness.board.get(&ReplicaId::from("d1-0")).is_none());
     assert!(harness.runtime.spec("d1-1").is_some());
+    assert_eq!(
+        harness.runtime.stop_grace("d1-0"),
+        Some(Duration::from_secs(10))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn gives_replicas_their_stop_grace_period_without_holding_up_the_node() {
+    let mut harness = harness_with(
+        DeploySpec {
+            stop_grace_period: Some("2m".to_string()),
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    );
+    assign(
+        &harness,
+        vec![assignment("d1-0", 1000), assignment("d1-1", 1000)],
+    );
+    harness.reconciler.reconcile().await.unwrap();
+    harness.runtime.delay_exit("d1-0", Duration::from_secs(90));
+
+    assign(&harness, vec![assignment("d1-1", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        harness.runtime.stop_grace("d1-0"),
+        Some(Duration::from_secs(120))
+    );
+    assert!(harness.runtime.spec("d1-0").is_some());
+    harness.reconciler.reconcile().await.unwrap();
+    assert_eq!(harness.runtime.start_count("d1-1"), 1);
+
+    tokio::time::sleep(Duration::from_secs(91)).await;
+    harness.reconciler.reconcile().await.unwrap();
+    assert!(harness.runtime.spec("d1-0").is_none());
+    assert!(harness.board.get(&ReplicaId::from("d1-0")).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn gives_a_drained_replica_the_rest_of_its_drain_timeout_to_exit() {
+    let mut harness = harness_with(
+        DeploySpec {
+            drain: Some(DrainSpec {
+                check_path: None,
+                timeout: Some("30m".to_string()),
+            }),
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    );
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    start_draining(&harness, unix_now_ms() - 5 * 60 * 1000);
+    harness.reconciler.reconcile().await.unwrap();
+
+    assign(&harness, Vec::new());
+    harness.reconciler.reconcile().await.unwrap();
+    tokio::task::yield_now().await;
+
+    let grace = harness.runtime.stop_grace("d1-0").unwrap();
+    assert!(grace > Duration::from_secs(24 * 60) && grace <= Duration::from_secs(25 * 60));
+}
+
+#[tokio::test(start_paused = true)]
+async fn uses_the_stop_grace_period_once_the_drain_timeout_has_passed() {
+    let mut harness = harness_with(
+        DeploySpec {
+            drain: Some(DrainSpec {
+                check_path: None,
+                timeout: Some("30m".to_string()),
+            }),
+            stop_grace_period: Some("45s".to_string()),
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    );
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    start_draining(&harness, unix_now_ms() - 31 * 60 * 1000);
+    harness.reconciler.reconcile().await.unwrap();
+
+    assign(&harness, Vec::new());
+    harness.reconciler.reconcile().await.unwrap();
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        harness.runtime.stop_grace("d1-0"),
+        Some(Duration::from_secs(45))
+    );
 }
 
 #[tokio::test(start_paused = true)]

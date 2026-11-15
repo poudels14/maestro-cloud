@@ -8,10 +8,11 @@ use std::time::Duration;
 use maestro_core::{ReplicaId, ReplicaPhase, ReplicaPlan, ReplicaStatus};
 use maestro_runtime::{
     BindMount, ContainerLimits, ContainerSpec, ContainerState, ContainerStatus, NetworkMode,
-    Runtime, RuntimeEvent,
+    Runtime, RuntimeError, RuntimeEvent,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::error::AgentError;
@@ -47,6 +48,9 @@ pub struct Reconciler<R: Runtime, S: PlanSource> {
     replaced: HashSet<ReplicaId>,
     fetcher: Option<Arc<dyn ImageFetcher>>,
     plans: watch::Sender<Vec<ReplicaPlan>>,
+    stop_policies: HashMap<ReplicaId, StopPolicy>,
+    retirements: JoinSet<(ReplicaId, Result<(), RuntimeError>)>,
+    retiring: HashSet<ReplicaId>,
 }
 
 pub trait ImageFetcher: Send + Sync + 'static {
@@ -55,6 +59,13 @@ pub trait ImageFetcher: Send + Sync + 'static {
         image: &'a str,
         source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+}
+
+/// Kept after a replica leaves the desired plans, because it is stopped only then.
+#[derive(Clone, Copy, Debug)]
+struct StopPolicy {
+    grace: Duration,
+    drain_deadline_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +92,9 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             replaced: HashSet::new(),
             fetcher: None,
             plans,
+            stop_policies: HashMap::new(),
+            retirements: JoinSet::new(),
+            retiring: HashSet::new(),
         }
     }
 
@@ -128,8 +142,32 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             })
             .collect::<BTreeMap<ReplicaId, ContainerStatus>>();
 
-        for replica_id in actual.keys().filter(|id| !desired.contains_key(*id)) {
-            self.retire(replica_id).await;
+        while let Some(Ok((replica_id, result))) = self.retirements.try_join_next() {
+            self.retiring.remove(&replica_id);
+            self.finish_retirement(&replica_id, result);
+        }
+        desired.values().for_each(|plan| {
+            let policy = StopPolicy {
+                grace: plan
+                    .stop_grace_secs
+                    .map_or(self.settings.stop_grace, Duration::from_secs),
+                drain_deadline_ms: plan.drain_deadline_ms,
+            };
+            self.stop_policies.insert(plan.replica_id.clone(), policy);
+        });
+        self.stop_policies.retain(|replica_id, _| {
+            desired.contains_key(replica_id) || actual.contains_key(replica_id)
+        });
+        let leaving = actual
+            .keys()
+            .filter(|id| !desired.contains_key(*id) && !self.retiring.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for replica_id in leaving {
+            match self.stop_grace(&replica_id) > self.settings.stop_grace {
+                true => self.retire_in_background(replica_id),
+                false => self.retire(&replica_id).await,
+            }
         }
         secret_files::sweep(
             &self.settings.secrets_dir,
@@ -310,16 +348,51 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
     }
 
     async fn retire(&mut self, replica_id: &ReplicaId) {
-        let stopped = self
-            .runtime
-            .stop(replica_id.as_str(), self.settings.stop_grace)
-            .await;
-        let removed = self.runtime.remove(replica_id.as_str()).await;
-        secret_files::remove_for(&self.settings.secrets_dir, replica_id);
-        match stopped.and(removed) {
+        let result = stop_and_remove(
+            self.runtime.clone(),
+            self.settings.secrets_dir.clone(),
+            replica_id.clone(),
+            self.stop_grace(replica_id),
+        )
+        .await;
+        self.finish_retirement(replica_id, result);
+    }
+
+    /// Waiting out a long grace period would hold up every other replica on the node, so those
+    /// replicas are stopped off the reconcile loop.
+    fn retire_in_background(&mut self, replica_id: ReplicaId) {
+        let grace = self.stop_grace(&replica_id);
+        tracing::info!(replica = %replica_id, grace_secs = grace.as_secs(), "stopping replica");
+        self.retiring.insert(replica_id.clone());
+        let stopping = stop_and_remove(
+            self.runtime.clone(),
+            self.settings.secrets_dir.clone(),
+            replica_id.clone(),
+            grace,
+        );
+        self.retirements
+            .spawn(async move { (replica_id, stopping.await) });
+    }
+
+    /// `deploy.stopGracePeriod`, or the default; a replica stopped while its deployment drains gets
+    /// the rest of `deploy.drain.timeout` instead when that is longer.
+    fn stop_grace(&self, replica_id: &ReplicaId) -> Duration {
+        self.stop_policies
+            .get(replica_id)
+            .map_or(self.settings.stop_grace, |policy| {
+                let remaining_drain = policy
+                    .drain_deadline_ms
+                    .map(|deadline| Duration::from_millis(deadline.saturating_sub(unix_now_ms())));
+                remaining_drain.map_or(policy.grace, |remaining| remaining.max(policy.grace))
+            })
+    }
+
+    fn finish_retirement(&mut self, replica_id: &ReplicaId, result: Result<(), RuntimeError>) {
+        match result {
             Ok(()) => {
                 self.board.remove(replica_id);
                 self.restarts.remove(replica_id);
+                self.stop_policies.remove(replica_id);
             }
             Err(error) => tracing::warn!(replica = %replica_id, %error, "failed to retire replica"),
         }
@@ -500,9 +573,29 @@ fn contained_volume(roots: &[PathBuf], host_path: &str) -> Result<PathBuf, Strin
 }
 
 /// The drain check is only added once the deployment drains, which must not restart the replica.
+async fn stop_and_remove<R: Runtime>(
+    runtime: Arc<R>,
+    secrets_dir: PathBuf,
+    replica_id: ReplicaId,
+    grace: Duration,
+) -> Result<(), RuntimeError> {
+    let stopped = runtime.stop(replica_id.as_str(), grace).await;
+    let removed = runtime.remove(replica_id.as_str()).await;
+    secret_files::remove_for(&secrets_dir, &replica_id);
+    stopped.and(removed)
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
 fn plan_hash(plan: &ReplicaPlan) -> String {
     let container = ReplicaPlan {
         drain_check: None,
+        drain_deadline_ms: None,
+        stop_grace_secs: None,
         ..plan.clone()
     };
     let encoded = serde_json::to_vec(&container).unwrap_or_default();
@@ -534,6 +627,8 @@ mod tests {
                 port: 8080,
                 interval_secs: 5,
             }),
+            drain_deadline_ms: Some(1_800_000),
+            stop_grace_secs: Some(120),
             ..plan.clone()
         };
         assert_eq!(plan_hash(&plan), plan_hash(&draining));

@@ -77,10 +77,18 @@ pub fn replica_plans(
                         port,
                         interval_secs: DRAIN_CHECK_INTERVAL_SECS,
                     });
+                let drain_deadline_ms = spec
+                    .deploy
+                    .drain
+                    .as_ref()
+                    .and_then(|drain| drain.timeout_secs())
+                    .filter(|_| deployment.status == DeploymentStatus::Draining)
+                    .map(|secs| deployment.updated_at_ms + secs * 1000);
                 Ok(ReplicaPlan {
                     image_source,
                     env: plan.env.into_iter().chain(discovery_env).collect(),
                     drain_check,
+                    drain_deadline_ms,
                     ..plan
                 })
             }))
