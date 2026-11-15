@@ -192,7 +192,7 @@ pub struct NodeAffinity {
     pub labels: BTreeMap<String, String>,
 }
 
-/// When the replicas of a superseded deployment stop: as soon as `checkPath` answers 200, and at
+/// When the replicas of a superseded deployment stop: as soon as `checkPath` answers 204, and at
 /// the latest after `timeout` (such as "30s", "15m" or "2h").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -105,8 +105,11 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   it fails and the current deployment keeps serving. The old deployment's replicas then drain:
   they get no new traffic but keep running, keep their own DNS names and stay in discovery with
   `"draining": true`, so clients can finish work they own. Each one stops as soon as its
-  `deploy.drain.checkPath` answers 200, and all stop after `deploy.drain.timeout` at the
-  latest (required with `checkPath`; a few seconds without `drain`):
+  `deploy.drain.checkPath` answers 204 (anything else, including 200, or no answer within 15s,
+  means not yet, so a catch-all route can't stop replicas early; the next check runs 15s after
+  the last one finishes), and all stop after
+  `deploy.drain.timeout` at the latest (required with `checkPath`; a few seconds without
+  `drain`):
 
   ```jsonc
   "deploy": { "drain": { "checkPath": "/internal/can-stop", "timeout": "30m" } }

@@ -3,7 +3,7 @@ use maestro_core::{
     NodeId, ReplicaPlan, subnet_gateway,
 };
 
-const DRAIN_CHECK_INTERVAL_SECS: u32 = 5;
+const DRAIN_CHECK_INTERVAL_SECS: u32 = 15;
 
 use crate::crypto::{DiscoveryKeys, SecretError, SecretKey};
 use crate::error::StoreError;

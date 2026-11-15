@@ -15,6 +15,8 @@ use crate::status::StatusBoard;
 
 const TICK: Duration = Duration::from_secs(1);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const DRAIN_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const DRAINED_STATUS: u16 = 204;
 const UNHEALTHY_AFTER_FAILURES: u32 = 3;
 
 pub struct HealthMonitor {
@@ -32,6 +34,7 @@ enum ProbeKind {
 struct ProbeResult {
     replica_id: ReplicaId,
     kind: ProbeKind,
+    interval: Duration,
     outcome: Result<u16, String>,
 }
 
@@ -81,7 +84,15 @@ impl HealthMonitor {
                 let due = self.next_due.get(&key).is_none_or(|due| *due <= now);
                 if due {
                     let interval = Duration::from_secs(u64::from(check.interval_secs.max(1)));
-                    self.next_due.insert(key, now + interval);
+                    let timeout = match kind {
+                        ProbeKind::Health => PROBE_TIMEOUT,
+                        ProbeKind::Drain => DRAIN_PROBE_TIMEOUT,
+                    };
+                    let next_due = match kind {
+                        ProbeKind::Health => now + interval,
+                        ProbeKind::Drain => now + timeout + interval,
+                    };
+                    self.next_due.insert(key, next_due);
                     let replica_id = plan.replica_id.clone();
                     let path = check.path.clone();
                     let port = check.port;
@@ -89,7 +100,8 @@ impl HealthMonitor {
                         ProbeResult {
                             replica_id,
                             kind,
-                            outcome: probe(ip, port, &path, PROBE_TIMEOUT).await,
+                            interval,
+                            outcome: probe(ip, port, &path, timeout).await,
                         }
                     });
                 }
@@ -97,12 +109,18 @@ impl HealthMonitor {
         });
     }
 
-    fn record(&self, result: ProbeResult) {
+    fn record(&mut self, result: ProbeResult) {
+        if result.kind == ProbeKind::Drain {
+            self.next_due.insert(
+                (result.replica_id.clone(), result.kind),
+                Instant::now() + result.interval,
+            );
+        }
         self.board.update(&result.replica_id, |status| {
             let still_live = status.phase.is_live();
             match (result.kind, still_live, result.outcome) {
-                (ProbeKind::Drain, _, Ok(_)) => status.drained = true,
-                (ProbeKind::Drain, _, Err(_)) | (ProbeKind::Health, false, _) => {}
+                (ProbeKind::Drain, _, Ok(DRAINED_STATUS)) => status.drained = true,
+                (ProbeKind::Drain, _, _) | (ProbeKind::Health, false, _) => {}
                 (ProbeKind::Health, true, Ok(_)) => {
                     status.phase = ReplicaPhase::Healthy;
                     status.consecutive_failures = 0;
@@ -171,6 +189,56 @@ mod tests {
             let _ = socket.write_all(response.as_bytes()).await;
         });
         port
+    }
+
+    fn draining_monitor() -> (HealthMonitor, ReplicaId) {
+        let deployment_id = maestro_core::DeploymentId::from("web-d1");
+        let replica_id = ReplicaId::for_deployment(&deployment_id, 0);
+        let board = StatusBoard::new();
+        board.upsert(maestro_core::ReplicaStatus {
+            replica_id: replica_id.clone(),
+            service_id: maestro_core::ServiceId::from("web"),
+            deployment_id,
+            phase: ReplicaPhase::Healthy,
+            ip: None,
+            restarts: 0,
+            consecutive_failures: 0,
+            last_error: None,
+            drained: false,
+        });
+        let (_, plans) = watch::channel(Vec::new());
+        (HealthMonitor::new(board, plans), replica_id)
+    }
+
+    fn drain_result(replica_id: &ReplicaId, outcome: Result<u16, String>) -> ProbeResult {
+        ProbeResult {
+            replica_id: replica_id.clone(),
+            kind: ProbeKind::Drain,
+            interval: Duration::from_secs(15),
+            outcome,
+        }
+    }
+
+    #[tokio::test]
+    async fn only_counts_204_as_drained() {
+        let (mut monitor, replica_id) = draining_monitor();
+        monitor.record(drain_result(&replica_id, Ok(200)));
+        monitor.record(drain_result(&replica_id, Ok(202)));
+        monitor.record(drain_result(&replica_id, Ok(302)));
+        monitor.record(drain_result(&replica_id, Err("timed out".to_string())));
+        assert!(!monitor.board.get(&replica_id).unwrap().drained);
+        monitor.record(drain_result(&replica_id, Ok(204)));
+        assert!(monitor.board.get(&replica_id).unwrap().drained);
+    }
+
+    #[tokio::test]
+    async fn schedules_the_next_drain_check_after_the_last_one_completes() {
+        let (mut monitor, replica_id) = draining_monitor();
+        let before = Instant::now();
+        monitor.record(drain_result(&replica_id, Ok(503)));
+        let next_due = monitor.next_due[&(replica_id, ProbeKind::Drain)];
+        assert!(next_due >= before + Duration::from_secs(15));
+        assert!(next_due <= Instant::now() + Duration::from_secs(15));
     }
 
     #[tokio::test]
