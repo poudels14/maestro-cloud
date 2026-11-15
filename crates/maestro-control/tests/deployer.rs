@@ -435,6 +435,52 @@ async fn limits_concurrent_builds() {
 }
 
 #[tokio::test]
+async fn stops_the_build_of_a_cancelled_deployment_and_frees_its_slot() {
+    let harness = harness(vec![node(1, 8, 32)]);
+    for index in 1..=6 {
+        queue_spec(&harness, &format!("d{index}"), build_service(1)).await;
+        harness.clock.advance(1);
+    }
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+    assert_eq!(harness.builder.started(), ["d1", "d2", "d3", "d4", "d5"]);
+
+    let cancelled = harness
+        .writer
+        .state()
+        .deployment(&ServiceId::from("api"), &DeploymentId::from("d1"))
+        .unwrap()
+        .unwrap();
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::SetDeploymentStatus {
+            service_id: cancelled.service_id,
+            deployment_id: cancelled.id,
+            status: DeploymentStatus::Cancelled,
+            image: None,
+            failure: None,
+            at_ms: 1,
+        }])
+        .unwrap();
+    harness.deployer.tick().await.unwrap();
+    settle().await;
+
+    assert_eq!(harness.builder.abandoned(), ["d1"]);
+    assert_eq!(
+        harness.builder.started(),
+        ["d1", "d2", "d3", "d4", "d5", "d6"]
+    );
+    assert_eq!(status(&harness, "d1"), DeploymentStatus::Cancelled);
+
+    harness.builder.release(5);
+    settle().await;
+    harness.deployer.tick().await.unwrap();
+    assert_eq!(harness.builder.abandoned(), ["d1"]);
+    assert_eq!(status(&harness, "d2"), DeploymentStatus::Deploying);
+}
+
+#[tokio::test]
 async fn newer_ready_deployment_cancels_older_in_flight_ones() {
     let harness = harness(vec![node(1, 8, 32)]);
     queue(&harness, "d1", 1).await;

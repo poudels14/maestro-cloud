@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,6 +10,7 @@ use maestro_core::{
 };
 use maestro_store::Mutation;
 use tokio::sync::oneshot;
+use tokio::task::AbortHandle;
 
 use crate::error::ControlError;
 use crate::scheduler::{self, PlacementRequest};
@@ -91,6 +92,7 @@ pub struct Deployer<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> {
     observed: Arc<O>,
     builder: Arc<B>,
     active_builds: Arc<Mutex<HashSet<DeploymentId>>>,
+    build_tasks: Mutex<HashMap<DeploymentId, AbortHandle>>,
     active_resolutions: Arc<Mutex<HashSet<DeploymentId>>>,
     unschedulable: Mutex<Vec<UnschedulableReplica>>,
     settings: DeployerSettings,
@@ -108,6 +110,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             observed,
             builder,
             active_builds: Arc::default(),
+            build_tasks: Mutex::default(),
             active_resolutions: Arc::default(),
             unschedulable: Mutex::default(),
             settings,
@@ -117,6 +120,7 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
     pub async fn tick(&self) -> Result<(), ControlError> {
         lock_report(&self.unschedulable).clear();
         self.start_queued().await?;
+        self.stop_abandoned_builds()?;
         self.run_builds().await?;
         self.reschedule_lost().await?;
         self.place_deploying().await?;
@@ -233,6 +237,31 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         Ok(())
     }
 
+    /// A build whose deployment was cancelled, deleted or otherwise left `Building` is aborted,
+    /// which kills its git, buildctl or depot process and frees its build slot.
+    fn stop_abandoned_builds(&self) -> Result<(), ControlError> {
+        let building = self
+            .state()
+            .deployments_with_status(DeploymentStatus::Building)?
+            .into_iter()
+            .map(|deployment| deployment.id)
+            .collect::<HashSet<_>>();
+        let mut tasks = self
+            .build_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tasks.retain(|deployment_id, task| {
+            let abandoned = !building.contains(deployment_id);
+            if abandoned && !task.is_finished() {
+                tracing::info!(deployment = %deployment_id, "stopping the build of a deployment that is no longer building");
+                task.abort();
+                lock(&self.active_builds).remove(deployment_id);
+            }
+            !abandoned && !task.is_finished()
+        });
+        Ok(())
+    }
+
     fn spawn_source_resolution(&self, deployment: Deployment) {
         lock(&self.active_resolutions).insert(deployment.id.clone());
         let writer = self.writer.clone();
@@ -282,7 +311,9 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         let writer = self.writer.clone();
         let builder = self.builder.clone();
         let clock = self.settings.clock.clone();
-        tokio::spawn(async move {
+        let deployment_id = deployment.id.clone();
+        let building = matches!(step, ImageStep::Build);
+        let task = tokio::spawn(async move {
             let (result, failure_prefix) = match step {
                 ImageStep::Build => {
                     let (checked_out, commit) = oneshot::channel();
@@ -358,6 +389,12 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
             }
             lock(&tracked).remove(&deployment.id);
         });
+        if building {
+            self.build_tasks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(deployment_id, task.abort_handle());
+        }
     }
 
     fn is_building(&self, deployment_id: &DeploymentId) -> bool {

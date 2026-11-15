@@ -175,6 +175,7 @@ pub fn image_service(replicas: u32) -> ServiceSpec {
 pub struct FakeBuilder {
     pub started: Mutex<Vec<String>>,
     failures: Mutex<Vec<String>>,
+    abandoned: Mutex<Vec<String>>,
     gate: tokio::sync::Semaphore,
 }
 
@@ -183,6 +184,7 @@ impl Default for FakeBuilder {
         Self {
             started: Mutex::default(),
             failures: Mutex::default(),
+            abandoned: Mutex::default(),
             gate: tokio::sync::Semaphore::new(0),
         }
     }
@@ -200,6 +202,25 @@ impl FakeBuilder {
     pub fn started(&self) -> Vec<String> {
         self.started.lock().unwrap().clone()
     }
+
+    /// Builds that were dropped before they finished.
+    pub fn abandoned(&self) -> Vec<String> {
+        self.abandoned.lock().unwrap().clone()
+    }
+}
+
+struct UnfinishedBuild<'a> {
+    abandoned: &'a Mutex<Vec<String>>,
+    deployment: String,
+    finished: bool,
+}
+
+impl Drop for UnfinishedBuild<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.abandoned.lock().unwrap().push(self.deployment.clone());
+        }
+    }
 }
 
 impl ImageBuilder for FakeBuilder {
@@ -214,7 +235,13 @@ impl ImageBuilder for FakeBuilder {
             reference: "abc123".to_string(),
             message: "Add things".to_string(),
         });
+        let mut unfinished = UnfinishedBuild {
+            abandoned: &self.abandoned,
+            deployment: deployment.id.to_string(),
+            finished: false,
+        };
         self.gate.acquire().await.unwrap().forget();
+        unfinished.finished = true;
         match self
             .failures
             .lock()

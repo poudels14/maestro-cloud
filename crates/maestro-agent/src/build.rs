@@ -79,8 +79,13 @@ impl BuildKitBuilder {
             .settings
             .log_dir
             .join(format!("{}.log", request.deployment_id));
+        let mut cleanup = BuildCleanup {
+            workspace: workspace.clone(),
+            log_path: log_path.clone(),
+            finished: false,
+        };
         let result = self.run(request, &workspace, &log_path, on_checkout).await;
-        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        cleanup.finished = true;
         match result {
             Ok(output) => Ok(output),
             Err(error) => {
@@ -394,6 +399,7 @@ fn git_auth(repo: &str, token: Option<&String>) -> (String, Vec<(String, String)
 
 async fn run_logged(command: &mut Command, log: &std::fs::File) -> std::io::Result<ExitStatus> {
     let mut child = command
+        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -420,6 +426,30 @@ async fn copy_timestamped(
                 strip_ansi(String::from_utf8_lossy(&line).trim_end_matches('\r'))
             );
             let _ = log.lock().await.write_all(stamped.as_bytes()).await;
+        }
+    }
+}
+
+/// Removes the build's workspace however the build ends. A build that is dropped before it
+/// finishes was cancelled, which its log says last.
+struct BuildCleanup {
+    workspace: PathBuf,
+    log_path: PathBuf,
+    finished: bool,
+}
+
+impl Drop for BuildCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.workspace);
+        if !self.finished {
+            let line = format!(
+                "{} build cancelled\n",
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            );
+            let _ = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&self.log_path)
+                .and_then(|mut log| std::io::Write::write_all(&mut log, line.as_bytes()));
         }
     }
 }
@@ -461,6 +491,76 @@ fn strip_ansi(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn kills_the_build_and_cleans_up_when_it_is_cancelled() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("buildctl.pid");
+        let buildctl = directory.path().join("buildctl");
+        std::fs::write(
+            &buildctl,
+            format!(
+                "#!/bin/sh\necho $$ > {}\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&buildctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let context = directory.path().join("context");
+        std::fs::create_dir_all(&context).unwrap();
+        std::fs::write(context.join("Dockerfile"), "FROM scratch\n").unwrap();
+        let builder = BuildKitBuilder::new(BuildKitSettings {
+            buildctl,
+            address: "unix:///nonexistent.sock".to_string(),
+            work_dir: directory.path().join("work"),
+            log_dir: directory.path().join("logs"),
+            git_token: None,
+        });
+        let request = BuildRequest {
+            deployment_id: "d1".to_string(),
+            service_id: "api".to_string(),
+            repo: None,
+            branch: None,
+            context_dir: Some(context),
+            dockerfile: "Dockerfile".to_string(),
+            registry: None,
+            image: None,
+            build_args: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            depot: None,
+        };
+
+        let build = builder.build(&request, |_| {});
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), build)
+                .await
+                .is_err()
+        );
+
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .to_string();
+        let mut running = true;
+        for _ in 0..50 {
+            let state = std::process::Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid])
+                .output()
+                .unwrap();
+            let state = String::from_utf8_lossy(&state.stdout).trim().to_string();
+            running = !state.is_empty() && !state.starts_with('Z');
+            if !running {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!running, "buildctl is still running");
+        assert!(!directory.path().join("work/d1").exists());
+        let log = std::fs::read_to_string(directory.path().join("logs/d1.log")).unwrap();
+        assert!(log.trim_end().ends_with("build cancelled"));
+    }
 
     #[test]
     fn strips_terminal_colors_and_links() {
