@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use clap::Subcommand;
-use maestro_core::{EnvSpec, ServiceSpec, ServicesFile, version_label};
+use maestro_core::{EnvSpec, ServiceSpec, ServicesFile, cluster_domain, version_label};
 
 use crate::uploads::{self, UploadSpec};
 use serde_json::{Value, json};
@@ -88,6 +88,7 @@ pub enum NodeCommand {
 
 #[derive(Subcommand)]
 pub enum ClusterCommand {
+    Info,
     Upgrade {
         version: Option<String>,
     },
@@ -100,6 +101,60 @@ pub enum ClusterCommand {
 
 pub async fn cluster(endpoint: &Endpoint, command: ClusterCommand) -> anyhow::Result<()> {
     match command {
+        ClusterCommand::Info => {
+            let info = request(endpoint.get("/api/cluster")).await?;
+            let nodes = request(endpoint.get("/api/nodes")).await?;
+            let member = |member: &Value| {
+                let name = nodes
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|node| node["id"] == member["id"])
+                    .map_or_else(|| text(&member["id"]), |node| text(&node["name"]));
+                format!("{name} ({})", text(&member["address"]))
+            };
+            let name = text(&info["name"]);
+            println!("{:<12} {name}", "name");
+            println!("{:<12} http://{}", "dashboard", cluster_domain(&name));
+            println!("{:<12} {}", "version", text(&info["version"]));
+            println!("{:<12} {}", "cidr", text(&info["cidr"]));
+            let leader = if info["leader"].is_object() {
+                member(&info["leader"])
+            } else {
+                "none".to_string()
+            };
+            println!("{:<12} {leader}", "leader");
+            let voters = info["voters"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(member)
+                .collect::<Vec<_>>();
+            println!("{:<12} {}", "voters", voters.join(", "));
+            if info["maintenance"].is_object() {
+                let maintenance = &info["maintenance"];
+                println!(
+                    "{:<12} {} to {} ({})",
+                    "maintenance",
+                    text(&maintenance["kind"]),
+                    text(&maintenance["targetVersion"]),
+                    text(&maintenance["phase"])
+                );
+            }
+            println!("components");
+            info["versions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .for_each(|component| {
+                    println!(
+                        "  {:<12} {}",
+                        text(&component["name"]),
+                        text(&component["version"])
+                    );
+                });
+            Ok(())
+        }
         ClusterCommand::Upgrade { version } => {
             let run = request(
                 endpoint
