@@ -133,13 +133,13 @@ impl<W: StoreWriter, N: MaintenanceNodes> Orchestrator<W, N> {
             .collect::<Vec<_>>();
         let pending = selected
             .iter()
-            .cloned()
             .filter(|(_, version)| match kind {
                 MaintenanceKind::Upgrade => {
                     target_version == LATEST || version.as_deref() != Some(target_version.as_str())
                 }
                 MaintenanceKind::Restart => true,
             })
+            .cloned()
             .collect::<Vec<_>>();
         let voters = nodes
             .iter()

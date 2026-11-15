@@ -5,6 +5,7 @@
 - Do not change bahvior of the code unless you are explicitly asked to do so, even if you think there's a but or whatever.
 - Never add `Co-Authored-By` or any other AI attribution to commit messages or PR descriptions.
 - Include `cargo fmt` changes in the commit they belong to instead of a separate formatting commit.
+- Fix every warning, including existing ones, so `cargo clippy --workspace --all-targets` is clean before committing.
 
 # Architecture
 

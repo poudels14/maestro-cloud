@@ -719,7 +719,7 @@ async fn draining_a_node_replaces_its_replicas_before_releasing_them() {
 
     harness.observed.set("d1-2", ReplicaPhase::Healthy);
     harness.deployer.tick().await.unwrap();
-    assert_eq!(retiring_replicas(&harness), [on_one.clone()]);
+    assert_eq!(retiring_replicas(&harness), std::slice::from_ref(&on_one));
 
     harness
         .clock
