@@ -737,29 +737,43 @@ impl<W: StoreWriter, O: ObservedReplicas, B: ImageBuilder> Deployer<W, O, B> {
         self.write(mutations).await
     }
 
-    /// Drained replicas of superseded deployments stop one by one, as soon as their
-    /// `deploy.drain.checkPath` answers 200; the deployment stops once none are left, or after its
+    /// Replicas of superseded deployments stop one by one once they are drained: they answered 202
+    /// to a POST to `deploy.drain.checkPath`, exited on their own, or sit on a draining node, whose
+    /// drain would otherwise wait for them. The deployment stops once none are left, or after its
     /// drain timeout (the default grace without one).
     async fn stop_drained(&self) -> Result<(), ControlError> {
         let now = self.now();
         let draining = self
             .state()
             .deployments_with_status(DeploymentStatus::Draining)?;
+        let draining_nodes = self
+            .state()
+            .nodes()?
+            .into_iter()
+            .filter(|node| node.state == NodeState::Draining)
+            .map(|node| node.id)
+            .collect::<Vec<_>>();
         let existing = self.all_assignments()?;
         let drained_replicas = existing
-            .values()
-            .flatten()
-            .filter(|assignment| {
+            .iter()
+            .flat_map(|(node_id, assignments)| {
+                assignments
+                    .iter()
+                    .map(move |assignment| (node_id, assignment))
+            })
+            .filter(|(_, assignment)| {
                 draining
                     .iter()
                     .any(|deployment| deployment.id == assignment.deployment_id)
             })
-            .filter(|assignment| {
-                self.observed
-                    .replica(&assignment.replica_id)
-                    .is_some_and(|status| status.drained)
+            .filter(|(node_id, assignment)| {
+                draining_nodes.contains(node_id)
+                    || self
+                        .observed
+                        .replica(&assignment.replica_id)
+                        .is_some_and(|status| status.drained)
             })
-            .map(|assignment| assignment.replica_id.clone())
+            .map(|(_, assignment)| assignment.replica_id.clone())
             .collect::<Vec<_>>();
         let released = existing
             .iter()

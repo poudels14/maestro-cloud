@@ -118,6 +118,10 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             tokio::select! {
                 _ = self.source.changed() => {}
                 Some(event) = events.recv() => self.record_event(event),
+                Some(Ok((replica_id, result))) = self.retirements.join_next() => {
+                    self.retiring.remove(&replica_id);
+                    self.finish_retirement(&replica_id, result);
+                }
                 _ = tokio::time::sleep(self.settings.resync_interval) => {}
             }
         }
@@ -188,7 +192,11 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
         // first) takes minutes, and health checks and firewall rules must cover every replica as
         // soon as it runs, not when the whole pass ends.
         self.plans.send_replace(desired.values().cloned().collect());
-        for plan in desired.values() {
+        let converging = desired
+            .values()
+            .filter(|plan| !self.retiring.contains(&plan.replica_id))
+            .collect::<Vec<_>>();
+        for plan in converging {
             self.converge(plan, actual.get(&plan.replica_id)).await;
         }
         Ok(())
@@ -208,9 +216,19 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             }
             Some((ContainerState::Running, false)) => {
                 self.replaced.insert(plan.replica_id.clone());
-                self.retire(&plan.replica_id).await;
                 self.restarts.remove(&plan.replica_id);
-                self.launch(plan, &hash).await;
+                match self.stop_grace(&plan.replica_id) > self.settings.stop_grace {
+                    true => self.retire_in_background(plan.replica_id.clone()),
+                    false => {
+                        self.retire(&plan.replica_id).await;
+                        self.launch(plan, &hash).await;
+                    }
+                }
+            }
+            Some((ContainerState::Stopped { exit_code }, _))
+                if plan.drain_deadline_ms.is_some() =>
+            {
+                self.finish_draining(plan, exit_code).await;
             }
             Some((ContainerState::Stopped { exit_code }, _)) => {
                 self.handle_exit(plan, Some(exit_code)).await;
@@ -223,11 +241,16 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
                     .board
                     .get(&plan.replica_id)
                     .is_some_and(|status| status.phase == ReplicaPhase::Failed);
+                let drained = plan.drain_deadline_ms.is_some()
+                    && self
+                        .board
+                        .get(&plan.replica_id)
+                        .is_some_and(|status| status.drained);
                 let due = self
                     .restarts
                     .get(&plan.replica_id)
                     .is_none_or(|restart| restart.not_before <= Instant::now());
-                if !failed && due {
+                if !failed && !drained && due {
                     self.launch(plan, &hash).await;
                 }
             }
@@ -296,6 +319,17 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             phase,
             ip,
             ..self.status_for(plan)
+        });
+    }
+
+    /// A draining replica that exits has finished its work: it is reported drained, so the control
+    /// plane releases it, instead of being restarted.
+    async fn finish_draining(&mut self, plan: &ReplicaPlan, exit_code: u32) {
+        let _ = self.runtime.remove(plan.replica_id.as_str()).await;
+        secret_files::remove_for(&self.settings.secrets_dir, &plan.replica_id);
+        self.board.update(&plan.replica_id, |status| {
+            status.drained = true;
+            status.last_error = Some(format!("exited with code {exit_code} while draining"));
         });
     }
 

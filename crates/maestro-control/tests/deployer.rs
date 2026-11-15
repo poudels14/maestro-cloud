@@ -689,6 +689,37 @@ async fn releases_the_replacement_when_the_unhealthy_replica_recovers_first() {
 }
 
 #[tokio::test]
+async fn releases_old_replicas_on_a_draining_node_without_waiting_for_their_drain() {
+    let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
+    superseded(&harness, serde_json::json!({ "timeout": "6h" })).await;
+    let old_on = |node_id: u64| {
+        harness
+            .writer
+            .state()
+            .assignments(NodeId(node_id))
+            .unwrap()
+            .into_iter()
+            .filter(|assignment| assignment.deployment_id.as_str() == "d1")
+            .map(|assignment| assignment.replica_id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let kept = old_on(2);
+    assert!(!old_on(1).is_empty());
+
+    let mut draining = node(1, 8, 32);
+    draining.state = maestro_core::NodeState::Draining;
+    harness
+        .writer
+        .state()
+        .apply(&[Mutation::PutNode { node: draining }])
+        .unwrap();
+    harness.deployer.tick().await.unwrap();
+
+    assert!(old_on(1).is_empty());
+    assert_eq!(old_on(2), kept);
+}
+
+#[tokio::test]
 async fn draining_a_node_replaces_its_replicas_before_releasing_them() {
     let harness = harness(vec![node(1, 8, 32), node(2, 8, 32)]);
     queue(&harness, "d1", 2).await;

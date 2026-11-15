@@ -371,6 +371,65 @@ async fn uses_the_stop_grace_period_once_the_drain_timeout_has_passed() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn replaces_a_changed_replica_in_the_background_when_it_has_a_long_grace() {
+    let mut harness = harness_with(
+        DeploySpec {
+            stop_grace_period: Some("2m".to_string()),
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    );
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    harness.runtime.delay_exit("d1-0", Duration::from_secs(60));
+
+    assign(&harness, vec![assignment("d1-0", 3000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    tokio::task::yield_now().await;
+    harness.reconciler.reconcile().await.unwrap();
+    assert_eq!(harness.runtime.start_count("d1-0"), 1);
+    assert_eq!(
+        harness.runtime.spec("d1-0").unwrap().limits.cpu,
+        Millicores::new(1000)
+    );
+
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    harness.reconciler.reconcile().await.unwrap();
+    assert_eq!(harness.runtime.start_count("d1-0"), 2);
+    assert_eq!(
+        harness.runtime.spec("d1-0").unwrap().limits.cpu,
+        Millicores::new(3000)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn does_not_restart_a_draining_replica_that_exits() {
+    let mut harness = harness_with(
+        DeploySpec {
+            drain: Some(DrainSpec {
+                check_path: None,
+                timeout: Some("6h".to_string()),
+            }),
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    );
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    start_draining(&harness, unix_now_ms());
+    harness.reconciler.reconcile().await.unwrap();
+
+    harness.runtime.exit("d1-0", 0);
+    harness.reconciler.reconcile().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    harness.reconciler.reconcile().await.unwrap();
+
+    assert_eq!(harness.runtime.start_count("d1-0"), 1);
+    assert!(harness.runtime.spec("d1-0").is_none());
+    assert!(harness.board.get(&ReplicaId::from("d1-0")).unwrap().drained);
+}
+
+#[tokio::test(start_paused = true)]
 async fn recreates_replica_when_plan_changes() {
     let mut harness = harness(None);
     assign(&harness, vec![assignment("d1-0", 1000)]);
