@@ -4,6 +4,7 @@
 - Don't uncomment any code unless I explicitly ask you to. Most of the time, the code is commented to get rid of it soon after testing.
 - Do not change bahvior of the code unless you are explicitly asked to do so, even if you think there's a but or whatever.
 - Never add `Co-Authored-By` or any other AI attribution to commit messages or PR descriptions.
+- Start commit titles with a lowercase letter and keep them under 80 characters (100 at most). Put the details in the body as bullet points: two-space indent, `- ` and lowercase text, with wrapped lines indented four spaces.
 - Include `cargo fmt` changes in the commit they belong to instead of a separate formatting commit.
 - Fix every warning, including existing ones, so `cargo clippy --workspace --all-targets` is clean before committing.
 
