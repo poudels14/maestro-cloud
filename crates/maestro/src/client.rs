@@ -503,7 +503,7 @@ fn expand_variables(service: &str, spec: &mut ServiceSpec) -> anyhow::Result<()>
     env_specs
         .into_iter()
         .flatten()
-        .map(|(field, EnvSpec { source, items })| (field, source, items))
+        .map(|(field, EnvSpec { source, items, .. })| (field, source, items))
         .chain(deploy_secrets)
         .try_for_each(|(field, source, items)| {
             if let Some(source) = source {

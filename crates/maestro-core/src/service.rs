@@ -155,6 +155,10 @@ pub struct EnvSpec {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub items: BTreeMap<String, String>,
+    /// The comment after each value fetched from `source`, such as `KEY=value # v3`, so the
+    /// dashboard can say which value is in use without showing it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub comments: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +169,10 @@ pub struct SecretsSpec {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub items: BTreeMap<String, String>,
+    /// The comment after each value fetched from `source`, such as `KEY=value # v3`, so the
+    /// dashboard can say which value is in use without showing it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub comments: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

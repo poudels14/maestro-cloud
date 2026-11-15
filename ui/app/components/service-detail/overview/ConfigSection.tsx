@@ -3,7 +3,7 @@ import { Eye, EyeOff } from "lucide-solid";
 
 function ConfigSection(props: {
   title?: string;
-  items: { label: string; value: string }[];
+  items: { label: string; value: string; comment?: string }[];
   maskValues?: boolean;
 }) {
   const [revealed, setRevealed] = createSignal(false);
@@ -31,7 +31,7 @@ function ConfigSection(props: {
         <For each={props.items}>
           {(item) => (
             <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-              <span class="text-xs font-medium text-gray-700 shrink-0">{item.label}</span>
+              <KeyLabel label={item.label} comment={item.comment} />
               <span class="text-xs tabular-nums text-gray-600 text-right truncate">
                 {masked() ? "••••••••" : item.value}
               </span>
@@ -43,4 +43,15 @@ function ConfigSection(props: {
   );
 }
 
-export { ConfigSection };
+function KeyLabel(props: { label: string; comment?: string }) {
+  return (
+    <span class="flex min-w-0 items-baseline gap-2">
+      <span class="text-xs font-medium text-gray-700 shrink-0">{props.label}</span>
+      <Show when={props.comment}>
+        <span class="text-[11px] text-gray-400 truncate">{props.comment}</span>
+      </Show>
+    </span>
+  );
+}
+
+export { ConfigSection, KeyLabel };

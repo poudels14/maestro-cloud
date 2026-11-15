@@ -6,6 +6,7 @@ export type BuildCommand = {
 export type EnvConfig = {
   source?: string | null;
   items?: Record<string, string>;
+  comments?: Record<string, string>;
 };
 
 export type Build = {
@@ -53,6 +54,7 @@ export type SecretsConfig = {
   mountPath: string;
   source?: string | null;
   items?: Record<string, string>;
+  comments?: Record<string, string>;
 };
 
 export type ResourceConfig = {

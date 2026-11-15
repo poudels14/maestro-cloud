@@ -509,6 +509,7 @@ async fn mounts_volumes_and_a_private_secrets_file() {
             mount_path: "/run/app.env".to_string(),
             source: None,
             items: [("TOKEN".to_string(), "s3cret".to_string())].into(),
+            comments: Default::default(),
         }),
         ..DeploySpec::default()
     };

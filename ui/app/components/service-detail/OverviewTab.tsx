@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { Info } from "lucide-solid";
 import type { Service } from "../../lib/types";
-import { ConfigSection } from "./overview/ConfigSection";
+import { ConfigSection, KeyLabel } from "./overview/ConfigSection";
 import { ReplicasEditor } from "./overview/ReplicasEditor";
 import { IngressInfo } from "./overview/IngressInfo";
 import { VolumesList } from "./overview/VolumesList";
@@ -114,7 +114,8 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
   const envItems = () =>
     Object.entries(props.service.deploy.env?.items ?? {}).map(([key, value]) => ({
       label: key,
-      value
+      value,
+      comment: props.service.deploy.env?.comments?.[key]
     }));
   const envSource = () => props.service.deploy.env?.source ?? null;
   const secretKeys = () => Object.keys(props.service.deploy.secrets?.items ?? {}).sort();
@@ -159,7 +160,10 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
             </Show>
           </h4>
           <Show when={buildSecretKeys().length > 0}>
-            <SecretsList keys={buildSecretKeys()} />
+            <SecretsList
+              keys={buildSecretKeys()}
+              comments={props.service.build?.secrets?.comments ?? {}}
+            />
           </Show>
         </div>
       </Show>
@@ -197,7 +201,10 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
               <span class="ml-1.5 text-gray-300 normal-case">(mounted at {secretMountPath()})</span>
             </Show>
           </h4>
-          <SecretsList keys={secretKeys()} />
+          <SecretsList
+            keys={secretKeys()}
+            comments={props.service.deploy.secrets?.comments ?? {}}
+          />
         </div>
       </Show>
 
@@ -206,14 +213,14 @@ function OverviewTab(props: { service: Service; services: Service[] }) {
   );
 }
 
-function SecretsList(props: { keys: string[] }) {
+function SecretsList(props: { keys: string[]; comments: Record<string, string> }) {
   return (
     <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
       <For each={props.keys}>
         {(key) => (
           <div class="px-4 py-2.5 flex items-baseline justify-between gap-6">
-            <span class="text-xs font-medium text-gray-700 shrink-0">{key}</span>
-            <span class="text-xs text-gray-400">••••••••</span>
+            <KeyLabel label={key} comment={props.comments[key]} />
+            <span class="text-xs text-gray-400 shrink-0">••••••••</span>
           </div>
         )}
       </For>

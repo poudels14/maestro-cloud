@@ -161,6 +161,7 @@ impl ReplicaPlan {
                 .map(|secrets| SecretsSpec {
                     source: None,
                     items: expand_all(&secrets.items, &variables),
+                    comments: BTreeMap::new(),
                     ..secrets
                 }),
             image_source: None,

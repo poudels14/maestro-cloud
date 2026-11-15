@@ -124,6 +124,7 @@ fn map_env_values<E>(
         Ok(EnvSpec {
             source: env.source.clone(),
             items,
+            comments: env.comments.clone(),
         })
     };
     let mut mapped = spec.clone();
@@ -131,8 +132,8 @@ fn map_env_values<E>(
     if let (Some(original), Some(secrets)) = (&spec.deploy.secrets, mapped.deploy.secrets.as_mut())
     {
         secrets.items = map_env(&EnvSpec {
-            source: None,
             items: original.items.clone(),
+            ..EnvSpec::default()
         })?
         .items;
     }
@@ -171,17 +172,20 @@ mod tests {
                 secrets: EnvSpec {
                     source: None,
                     items: BTreeMap::from([("NPM_TOKEN".to_string(), "npm-secret".to_string())]),
+                    comments: BTreeMap::new(),
                 },
             }),
             deploy: DeploySpec {
                 env: EnvSpec {
                     source: Some("aws-secret://prod/api".to_string()),
                     items: BTreeMap::from([("DB_PASSWORD".to_string(), "hunter2".to_string())]),
+                    comments: BTreeMap::new(),
                 },
                 secrets: Some(SecretsSpec {
                     mount_path: "/run/secrets".to_string(),
                     source: None,
                     items: BTreeMap::from([("tls.key".to_string(), "private".to_string())]),
+                    comments: BTreeMap::new(),
                 }),
                 ..DeploySpec::default()
             },
@@ -193,6 +197,7 @@ mod tests {
                 env: EnvSpec {
                     source: None,
                     items: BTreeMap::from([("PREVIEW_TOKEN".to_string(), "preview".to_string())]),
+                    comments: BTreeMap::new(),
                 },
             }),
             network: None,
