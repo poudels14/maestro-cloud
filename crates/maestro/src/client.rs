@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use anyhow::Context;
 use clap::Subcommand;
-use maestro_core::{EnvSpec, ServiceSpec, ServicesFile, cluster_domain, version_label};
+use maestro_core::{EnvSpec, ServiceId, ServiceSpec, ServicesFile, cluster_domain, version_label};
 
 use crate::uploads::{self, UploadSpec};
 use serde_json::{Value, json};
@@ -285,11 +287,24 @@ pub async fn rollout(
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read {}", file.display()))?;
     let cluster = text(&request(endpoint.get("/api/cluster")).await?["name"]);
-    let mut services = ServicesFile::parse(&source, &cluster)?;
-    services
+    let expanded = ServicesFile::parse(&source, &cluster)?
         .services
-        .iter_mut()
-        .try_for_each(|(id, spec)| expand_variables(id.as_str(), spec))?;
+        .into_iter()
+        .map(|(service_id, mut spec)| {
+            let expansion = expand_variables(service_id.as_str(), &mut spec);
+            (service_id, expansion.map(|_| spec))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let picked = match std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        true => pick_services(endpoint, expanded, force).await?,
+        false => expanded,
+    };
+    let services = ServicesFile {
+        services: picked
+            .into_iter()
+            .map(|(service_id, spec)| Ok((service_id, spec?)))
+            .collect::<anyhow::Result<_>>()?,
+    };
     let plan = request(
         endpoint
             .post(&format!("/api/rollout?apply={apply}&force={force}"))
@@ -300,7 +315,7 @@ pub async fn rollout(
     print_list("create", &plan["created"]);
     print_list("update", &plan["updated"]);
     print_list("unchanged", &plan["unchanged"]);
-    print_list("not in file (left running)", &plan["unmanaged"]);
+    print_list("not rolled out (left running)", &plan["unmanaged"]);
     match apply {
         true => print_list("queued deployments", &plan["deployments"]),
         false => println!("\nrun again with --apply to roll out these changes"),
@@ -567,6 +582,71 @@ async fn request(builder: reqwest::RequestBuilder) -> anyhow::Result<Value> {
         true => Ok(body),
         false => anyhow::bail!("{status}: {}", text(&body["error"])),
     }
+}
+
+/// Services whose variables can't be expanded are listed unchecked, so a missing variable only
+/// matters when its service is picked.
+async fn pick_services(
+    endpoint: &Endpoint,
+    expanded: BTreeMap<ServiceId, anyhow::Result<ServiceSpec>>,
+    force: bool,
+) -> anyhow::Result<BTreeMap<ServiceId, anyhow::Result<ServiceSpec>>> {
+    let previewable = ServicesFile {
+        services: expanded
+            .iter()
+            .filter_map(|(service_id, spec)| {
+                Some((service_id.clone(), spec.as_ref().ok()?.clone()))
+            })
+            .collect(),
+    };
+    let preview = request(
+        endpoint
+            .post(&format!("/api/rollout?apply=false&force={force}"))
+            .json(&previewable),
+    )
+    .await?;
+    let listed = |key: &str, service_id: &ServiceId| {
+        preview[key].as_array().is_some_and(|ids| {
+            ids.iter()
+                .any(|id| id.as_str() == Some(service_id.as_str()))
+        })
+    };
+    let options = expanded
+        .iter()
+        .map(|(service_id, spec)| {
+            let change = match spec {
+                Ok(_) => [("created", "create"), ("updated", "update")]
+                    .into_iter()
+                    .find(|(key, _)| listed(key, service_id))
+                    .map_or("unchanged", |(_, change)| change),
+                Err(_) => "missing variables",
+            };
+            (service_id.clone(), change)
+        })
+        .collect::<Vec<_>>();
+    let changed = options
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, change))| matches!(*change, "create" | "update"))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let picked = inquire::MultiSelect::new(
+        "Services to roll out",
+        options
+            .iter()
+            .map(|(service_id, change)| format!("{service_id} ({change})"))
+            .collect(),
+    )
+    .with_default(&changed)
+    .raw_prompt()?
+    .into_iter()
+    .map(|option| options[option.index].0.clone())
+    .collect::<Vec<_>>();
+    anyhow::ensure!(!picked.is_empty(), "no services selected");
+    Ok(expanded
+        .into_iter()
+        .filter(|(service_id, _)| picked.contains(service_id))
+        .collect())
 }
 
 fn print_list(label: &str, values: &Value) {
