@@ -24,6 +24,22 @@ pub struct ServicesFile {
     pub services: BTreeMap<ServiceId, ServiceSpec>,
 }
 
+/// The file as written: base specs plus partial specs per cluster name, merged over the base as
+/// JSON merge patches (objects merge, other values replace, null removes the field).
+#[derive(Deserialize)]
+struct ServicesSource {
+    services: BTreeMap<ServiceId, serde_json::Value>,
+    #[serde(default)]
+    clusters: BTreeMap<String, ClusterOverrides>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClusterOverrides {
+    #[serde(default)]
+    services: BTreeMap<ServiceId, serde_json::Value>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSpec {
@@ -250,8 +266,44 @@ pub enum SpecError {
 }
 
 impl ServicesFile {
-    pub fn parse(text: &str) -> Result<Self, SpecError> {
-        let file: Self = json5::from_str(text)?;
+    pub fn parse(text: &str, cluster: &str) -> Result<Self, SpecError> {
+        let mut source: ServicesSource = json5::from_str(text)?;
+        let stray_override = source.clusters.iter().find_map(|(name, overrides)| {
+            overrides
+                .services
+                .keys()
+                .find(|service_id| !source.services.contains_key(*service_id))
+                .map(|service_id| SpecError::Invalid {
+                    service: service_id.clone(),
+                    reason: format!("clusters.{name} overrides a service that isn't in services"),
+                })
+        });
+        if let Some(stray_override) = stray_override {
+            Err(stray_override)?;
+        }
+        let overrides = source
+            .clusters
+            .remove(cluster)
+            .map(|overrides| overrides.services)
+            .unwrap_or_default();
+        overrides.into_iter().for_each(|(service_id, patch)| {
+            if let Some(spec) = source.services.get_mut(&service_id) {
+                merge_patch(spec, patch);
+            }
+        });
+        let file = Self {
+            services: source
+                .services
+                .into_iter()
+                .map(|(service_id, spec)| match serde_json::from_value(spec) {
+                    Ok(spec) => Ok((service_id, spec)),
+                    Err(error) => Err(SpecError::Invalid {
+                        service: service_id,
+                        reason: error.to_string(),
+                    }),
+                })
+                .collect::<Result<_, _>>()?,
+        };
         file.services
             .iter()
             .try_for_each(|(service_id, spec)| spec.validate(service_id))?;
@@ -732,6 +784,27 @@ fn parse_github_repo(url: &str) -> Option<String> {
     }
 }
 
+fn merge_patch(target: &mut serde_json::Value, patch: serde_json::Value) {
+    match patch {
+        serde_json::Value::Object(patch) => {
+            if !target.is_object() {
+                *target = serde_json::Value::Object(serde_json::Map::new());
+            }
+            if let serde_json::Value::Object(fields) = target {
+                patch.into_iter().for_each(|(key, value)| match value {
+                    serde_json::Value::Null => {
+                        fields.remove(&key);
+                    }
+                    value => {
+                        merge_patch(fields.entry(key).or_insert(serde_json::Value::Null), value)
+                    }
+                });
+            }
+        }
+        patch => *target = patch,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +857,7 @@ mod tests {
                 },
               },
             }"#,
+            "maestro",
         )
         .unwrap();
         let api = &file.services[&ServiceId::from("api")];
@@ -819,6 +893,7 @@ mod tests {
     fn applies_v1_defaults() {
         let file = ServicesFile::parse(
             r#"{ "services": { "web": { "name": "Web", "image": "nginx", "ingress": { "host": "web.local" } } } }"#,
+            "maestro",
         )
         .unwrap();
         let web = &file.services[&ServiceId::from("web")];
@@ -827,6 +902,79 @@ mod tests {
         let mut quick = web.deploy.clone();
         quick.healthcheck_interval = 1;
         assert_eq!(quick.effective_healthcheck_interval(), 5);
+    }
+
+    #[test]
+    fn merges_the_matching_clusters_overrides_over_the_base_spec() {
+        let text = r#"{
+          "services": {
+            "web": {
+              "name": "Web",
+              "build": { "repo": "https://github.com/acme/web", "branch": "main", "dockerfile": "Dockerfile", "registry": "registry.example.com/web" },
+              "ingress": { "host": "web.example.com", "port": 3000 },
+              "preview": { "enabled": true }
+            },
+            "api": { "name": "API", "image": "api" }
+          },
+          "clusters": {
+            "sandbox": {
+              "services": {
+                "web": {
+                  "build": { "branch": "develop", "registry": null },
+                  "ingress": { "host": "web.sandbox.example.com" },
+                  "preview": { "enabled": false }
+                }
+              }
+            }
+          }
+        }"#;
+        let web = |cluster: &str| {
+            ServicesFile::parse(text, cluster).unwrap().services[&ServiceId::from("web")].clone()
+        };
+        let sandbox = web("sandbox");
+        let build = sandbox.build.as_ref().unwrap();
+        let ingress = sandbox.ingress.as_ref().unwrap();
+        assert_eq!(
+            (
+                build.repo.as_deref(),
+                build.branch.as_deref(),
+                build.registry.as_deref()
+            ),
+            (Some("https://github.com/acme/web"), Some("develop"), None)
+        );
+        assert_eq!(
+            (ingress.host.as_deref(), ingress.port),
+            (Some("web.sandbox.example.com"), 3000)
+        );
+        assert!(!sandbox.preview.unwrap().enabled);
+        let production = web("production");
+        assert_eq!(production.build.unwrap().branch.as_deref(), Some("main"));
+        assert!(production.preview.unwrap().enabled);
+    }
+
+    #[test]
+    fn rejects_overrides_for_services_missing_from_the_file() {
+        let text = r#"{
+          "services": { "web": { "name": "Web", "image": "nginx" } },
+          "clusters": { "production": { "services": { "wbe": { "image": "nginx:2" } } } }
+        }"#;
+        assert!(matches!(
+            ServicesFile::parse(text, "sandbox"),
+            Err(SpecError::Invalid { service, .. }) if service == ServiceId::from("wbe")
+        ));
+    }
+
+    #[test]
+    fn validates_the_spec_after_applying_overrides() {
+        let text = r#"{
+          "services": { "web": { "name": "Web", "image": "nginx" } },
+          "clusters": { "sandbox": { "services": { "web": { "image": null } } } }
+        }"#;
+        assert!(ServicesFile::parse(text, "production").is_ok());
+        assert!(matches!(
+            ServicesFile::parse(text, "sandbox"),
+            Err(SpecError::Invalid { .. })
+        ));
     }
 
     #[test]
@@ -865,7 +1013,10 @@ mod tests {
         ];
         cases.iter().for_each(|case| {
             assert!(
-                matches!(ServicesFile::parse(case), Err(SpecError::Invalid { .. })),
+                matches!(
+                    ServicesFile::parse(case, "maestro"),
+                    Err(SpecError::Invalid { .. })
+                ),
                 "expected invalid: {case}"
             );
         });

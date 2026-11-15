@@ -282,9 +282,10 @@ pub async fn rollout(
     apply: bool,
     force: bool,
 ) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(file)
+    let source = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read {}", file.display()))?;
-    let mut services = ServicesFile::parse(&text)?;
+    let cluster = text(&request(endpoint.get("/api/cluster")).await?["name"]);
+    let mut services = ServicesFile::parse(&source, &cluster)?;
     services
         .services
         .iter_mut()
@@ -295,6 +296,7 @@ pub async fn rollout(
             .json(&services),
     )
     .await?;
+    println!("cluster: {cluster}");
     print_list("create", &plan["created"]);
     print_list("update", &plan["updated"]);
     print_list("unchanged", &plan["unchanged"]);
