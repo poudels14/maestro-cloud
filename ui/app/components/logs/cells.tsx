@@ -65,6 +65,22 @@ function MessageCell(props: { text: string; class?: string }) {
   );
 }
 
+function StructuredMessageCell(props: { message: string; attrs: [string, string][] }) {
+  const fields = () =>
+    props.attrs
+      .filter(([key, value]) => !/(^|\.)stack$/i.test(key) && !/\n\s+at /.test(value))
+      .map(([key, value]) => `${key}=${value.split("\n")[0]}`)
+      .join("  ");
+  return (
+    <span class="block truncate">
+      <span class="text-gray-700">{props.message}</span>
+      <Show when={fields()}>
+        <span class="ml-3 text-gray-400">{fields()}</span>
+      </Show>
+    </span>
+  );
+}
+
 function MethodCell(props: { method?: string }) {
   return (
     <Show when={props.method} fallback={<span class="text-gray-300">·</span>}>
@@ -136,6 +152,7 @@ export {
   HostCell,
   LevelCell,
   MessageCell,
+  StructuredMessageCell,
   MethodCell,
   StatusCell,
   PathCell

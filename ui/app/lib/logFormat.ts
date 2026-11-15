@@ -1,3 +1,5 @@
+import type { LogEntry } from "./types";
+
 const tsFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "2-digit",
@@ -151,6 +153,12 @@ function httpStatusPill(status: string): string {
   return "bg-gray-100 text-gray-500 border border-gray-200";
 }
 
+// A line the backend parsed into a message and fields, such as a JSON log; its raw text is only
+// worth showing when expanded.
+function isStructuredLog(entry: LogEntry): boolean {
+  return Boolean(entry.message) && entry.message !== entry.text;
+}
+
 function logLevelColors(level: string) {
   const normalized = level.toLowerCase();
   if (normalized === "error" || normalized === "fatal") {
@@ -193,5 +201,6 @@ export {
   httpFields,
   httpMethodColor,
   httpStatusPill,
+  isStructuredLog,
   type HttpFields
 };

@@ -1,7 +1,14 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { Check, Copy } from "lucide-solid";
 import clsx from "clsx";
 import type { LogEntry } from "../../lib/types";
-import { httpFields, httpMethodColor, httpStatusPill, type HttpFields } from "../../lib/logFormat";
+import {
+  httpFields,
+  httpMethodColor,
+  httpStatusPill,
+  isStructuredLog,
+  type HttpFields
+} from "../../lib/logFormat";
 
 function AccessLogSummary(props: { fields: HttpFields }) {
   const metadata = () => {
@@ -86,24 +93,23 @@ function LogDetailPanel(props: { entry: LogEntry }) {
 
   return (
     <div class="flex flex-col gap-2.5" onClick={(event) => event.stopPropagation()}>
-      <Show
-        when={http().isTraefikAccessLog}
+      <Switch
         fallback={
           <pre class="text-xs text-gray-800 font-mono whitespace-pre-wrap break-all">
             {props.entry.text}
           </pre>
         }
       >
-        <AccessLogSummary fields={http()} />
-        <details class="group rounded border border-gray-200 bg-white">
-          <summary class="cursor-pointer select-none px-2.5 py-1.5 text-[11px] font-medium text-gray-500 hover:text-gray-700">
-            Raw access log
-          </summary>
-          <pre class="max-h-72 overflow-auto border-t border-gray-100 px-2.5 py-2 text-[11px] text-gray-700 font-mono whitespace-pre-wrap break-all">
-            {prettyJson(props.entry.text)}
+        <Match when={http().isTraefikAccessLog}>
+          <AccessLogSummary fields={http()} />
+          <RawLog title="Raw access log" text={props.entry.text} />
+        </Match>
+        <Match when={isStructuredLog(props.entry)}>
+          <pre class="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words">
+            {props.entry.message}
           </pre>
-        </details>
-      </Show>
+        </Match>
+      </Switch>
       <Show when={baseAttrs().length > 0}>
         <div>
           <div class="mb-1.5 text-[11px] font-semibold text-gray-500">Fields</div>
@@ -114,14 +120,52 @@ function LogDetailPanel(props: { entry: LogEntry }) {
                   <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap">
                     {attr.label}
                   </span>
-                  <span class="text-[11px] font-mono text-gray-600 break-all">{attr.value}</span>
+                  <span class="text-[11px] font-mono text-gray-600 whitespace-pre-wrap break-words">
+                    {attr.value}
+                  </span>
                 </>
               )}
             </For>
           </div>
         </div>
       </Show>
+      <Show when={!http().isTraefikAccessLog && isStructuredLog(props.entry)}>
+        <RawLog title="Raw log" text={props.entry.text} />
+      </Show>
     </div>
+  );
+}
+
+function RawLog(props: { title: string; text: string }) {
+  const [copied, setCopied] = createSignal(false);
+  const copy = async (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await navigator.clipboard.writeText(props.text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1_500);
+  };
+
+  return (
+    <details class="group rounded border border-gray-200 bg-white">
+      <summary class="flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-gray-500 hover:text-gray-700">
+        {props.title}
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy raw log"
+          aria-label="Copy raw log"
+          class="rounded p-0.5 text-gray-300 outline-none transition-colors hover:bg-gray-100 hover:text-gray-600"
+        >
+          <Show when={copied()} fallback={<Copy class="size-3" />}>
+            <Check class="size-3 text-emerald-500" />
+          </Show>
+        </button>
+      </summary>
+      <pre class="max-h-72 overflow-auto border-t border-gray-100 px-2.5 py-2 text-[11px] text-gray-700 font-mono whitespace-pre-wrap break-all">
+        {prettyJson(props.text)}
+      </pre>
+    </details>
   );
 }
 

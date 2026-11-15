@@ -20,13 +20,14 @@ import {
   type LogHistogramBucket
 } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
-import { dateFormatter, httpFields } from "../../lib/logFormat";
+import { dateFormatter, httpFields, isStructuredLog } from "../../lib/logFormat";
 import {
   TimeCell,
   ExpanderCell,
   HostCell,
   LevelCell,
   MessageCell,
+  StructuredMessageCell,
   MethodCell,
   StatusCell,
   PathCell
@@ -825,15 +826,20 @@ function LogRow(props: {
           </Show>
         </div>
         <div class="min-w-0 flex-1 w-full pl-6 sm:pl-2 sm:pr-4 sm:w-auto">
-          <Show when={http().path} fallback={<MessageCell text={props.line.text} />}>
-            <PathCell
-              path={http().path!}
-              durationLabel={http().durationLabel}
-              requestHost={http().requestHost}
-              clientIp={http().clientIp}
-              router={http().router}
-            />
-          </Show>
+          <Switch fallback={<MessageCell text={props.line.text} />}>
+            <Match when={http().path}>
+              <PathCell
+                path={http().path!}
+                durationLabel={http().durationLabel}
+                requestHost={http().requestHost}
+                clientIp={http().clientIp}
+                router={http().router}
+              />
+            </Match>
+            <Match when={isStructuredLog(props.line)}>
+              <StructuredMessageCell message={props.line.message!} attrs={props.line.attrs ?? []} />
+            </Match>
+          </Switch>
         </div>
       </div>
       <Show when={props.expanded}>
