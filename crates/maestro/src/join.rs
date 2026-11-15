@@ -48,14 +48,20 @@ pub struct JoinArgs {
 pub struct JoinAuthority {
     ca: ClusterCa,
     secret: String,
+    registrations: tokio::sync::Mutex<()>,
 }
 
 impl JoinAuthority {
     pub fn load(data_dir: &Path, secret: &str) -> anyhow::Result<Self> {
-        Ok(Self {
-            ca: ClusterCa::load(&data_dir.join("pki"))?,
+        Ok(Self::new(ClusterCa::load(&data_dir.join("pki"))?, secret))
+    }
+
+    fn new(ca: ClusterCa, secret: &str) -> Self {
+        Self {
+            ca,
             secret: secret.to_string(),
-        })
+            registrations: tokio::sync::Mutex::new(()),
+        }
     }
 
     pub fn discovery(&self) -> Result<ClusterDiscovery, Status> {
@@ -80,7 +86,10 @@ impl JoinAuthority {
                 leader.unwrap_or_default()
             ))),
             (true, Err(problem)) => Err(Status::permission_denied(problem)),
-            (true, Ok(())) => self.register(consensus, cluster, request).await,
+            (true, Ok(())) => {
+                let _registration = self.registrations.lock().await;
+                self.register(consensus, cluster, request).await
+            }
         }
     }
 
@@ -516,6 +525,49 @@ fn internal(error: impl std::fmt::Display) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn gives_nodes_that_join_at_the_same_time_different_subnets() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let consensus = Consensus::open(
+            maestro_store::ConsensusSettings::new(
+                maestro_core::NodeId(1),
+                "127.0.0.1:7400",
+                data_dir.path(),
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+        consensus.bootstrap_single_voter().await.unwrap();
+        consensus
+            .wait_until_leader(Duration::from_secs(10))
+            .await
+            .unwrap();
+        let authority = JoinAuthority::new(ClusterCa::generate("test").unwrap(), "secret");
+        let cluster = ClusterSettings::default();
+        let request = |advertise: &str| JoinRequest {
+            secret: sign_grant("secret", NodeRole::Worker, unix_now() + GRANT_TTL_SECS),
+            name: String::new(),
+            role: NodeRole::Worker,
+            advertise: advertise.to_string(),
+            capacity: maestro_core::NodeCapacity {
+                cpu: maestro_core::Millicores::new(1000),
+                memory: maestro_core::ByteSize::new(1 << 30),
+            },
+            reserved: maestro_core::NodeCapacity {
+                cpu: maestro_core::Millicores::new(100),
+                memory: maestro_core::ByteSize::new(64 << 20),
+            },
+            labels: Default::default(),
+            wireguard: None,
+        };
+        let (first, second) = tokio::join!(
+            authority.admit(&consensus, &cluster, request("10.0.0.2:7400")),
+            authority.admit(&consensus, &cluster, request("10.0.0.3:7400")),
+        );
+        assert_ne!(first.unwrap().subnet, second.unwrap().subnet);
+    }
 
     #[test]
     fn join_grants_admit_only_their_role_until_they_expire() {
