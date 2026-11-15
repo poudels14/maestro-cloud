@@ -26,7 +26,8 @@ pub struct ReplicaStatus {
     pub restarts: u32,
     pub consecutive_failures: u32,
     pub last_error: Option<String>,
-    /// The replica's `deploy.drain.checkPath` answered 204 while its deployment drained.
+    /// The replica answered 202 to a POST to `deploy.drain.checkPath` while its deployment drained,
+    /// accepting the termination request.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drained: bool,
 }

@@ -16,7 +16,7 @@ use crate::status::StatusBoard;
 const TICK: Duration = Duration::from_secs(1);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const DRAIN_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
-const DRAINED_STATUS: u16 = 204;
+const DRAINED_STATUS: u16 = 202;
 const UNHEALTHY_AFTER_FAILURES: u32 = 3;
 
 pub struct HealthMonitor {
@@ -84,9 +84,9 @@ impl HealthMonitor {
                 let due = self.next_due.get(&key).is_none_or(|due| *due <= now);
                 if due {
                     let interval = Duration::from_secs(u64::from(check.interval_secs.max(1)));
-                    let timeout = match kind {
-                        ProbeKind::Health => PROBE_TIMEOUT,
-                        ProbeKind::Drain => DRAIN_PROBE_TIMEOUT,
+                    let (method, timeout) = match kind {
+                        ProbeKind::Health => ("GET", PROBE_TIMEOUT),
+                        ProbeKind::Drain => ("POST", DRAIN_PROBE_TIMEOUT),
                     };
                     let next_due = match kind {
                         ProbeKind::Health => now + interval,
@@ -101,7 +101,7 @@ impl HealthMonitor {
                             replica_id,
                             kind,
                             interval,
-                            outcome: probe(ip, port, &path, timeout).await,
+                            outcome: probe(ip, port, method, &path, timeout).await,
                         }
                     });
                 }
@@ -138,7 +138,13 @@ impl HealthMonitor {
     }
 }
 
-pub async fn probe(ip: IpAddr, port: u16, path: &str, timeout: Duration) -> Result<u16, String> {
+pub async fn probe(
+    ip: IpAddr,
+    port: u16,
+    method: &str,
+    path: &str,
+    timeout: Duration,
+) -> Result<u16, String> {
     let request = async {
         let mut stream = TcpStream::connect(SocketAddr::new(ip, port))
             .await
@@ -147,7 +153,7 @@ pub async fn probe(ip: IpAddr, port: u16, path: &str, timeout: Duration) -> Resu
         stream
             .write_all(
                 format!(
-                    "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: maestro-healthcheck\r\nConnection: close\r\n\r\n"
+                    "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: maestro-healthcheck\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
                 .as_bytes(),
             )
@@ -220,14 +226,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_counts_204_as_drained() {
+    async fn only_counts_an_accepted_termination_request_as_drained() {
         let (mut monitor, replica_id) = draining_monitor();
         monitor.record(drain_result(&replica_id, Ok(200)));
-        monitor.record(drain_result(&replica_id, Ok(202)));
+        monitor.record(drain_result(&replica_id, Ok(204)));
         monitor.record(drain_result(&replica_id, Ok(302)));
+        monitor.record(drain_result(
+            &replica_id,
+            Err("unhealthy status 409".to_string()),
+        ));
         monitor.record(drain_result(&replica_id, Err("timed out".to_string())));
         assert!(!monitor.board.get(&replica_id).unwrap().drained);
-        monitor.record(drain_result(&replica_id, Ok(204)));
+        monitor.record(drain_result(&replica_id, Ok(202)));
         assert!(monitor.board.get(&replica_id).unwrap().drained);
     }
 
@@ -242,16 +252,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sends_the_requested_method() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request_line = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let _ = reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+            line
+        });
+        let localhost = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            probe(localhost, port, "POST", "/drain", PROBE_TIMEOUT).await,
+            Ok(200)
+        );
+        assert_eq!(request_line.await.unwrap(), "POST /drain HTTP/1.1\r\n");
+    }
+
+    #[tokio::test]
     async fn accepts_success_and_redirect_codes() {
         let port = serve_once("HTTP/1.1 204 No Content\r\n\r\n").await;
         let localhost = "127.0.0.1".parse().unwrap();
         assert_eq!(
-            probe(localhost, port, "/health", PROBE_TIMEOUT).await,
+            probe(localhost, port, "GET", "/health", PROBE_TIMEOUT).await,
             Ok(204)
         );
         let port = serve_once("HTTP/1.1 302 Found\r\n\r\n").await;
         assert_eq!(
-            probe(localhost, port, "/health", PROBE_TIMEOUT).await,
+            probe(localhost, port, "GET", "/health", PROBE_TIMEOUT).await,
             Ok(302)
         );
     }
@@ -261,14 +291,14 @@ mod tests {
         let localhost = "127.0.0.1".parse().unwrap();
         let port = serve_once("HTTP/1.1 503 Service Unavailable\r\n\r\n").await;
         assert_eq!(
-            probe(localhost, port, "/health", PROBE_TIMEOUT).await,
+            probe(localhost, port, "GET", "/health", PROBE_TIMEOUT).await,
             Err("unhealthy status 503".to_string())
         );
         let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let closed_port = closed.local_addr().unwrap().port();
         drop(closed);
         assert!(
-            probe(localhost, closed_port, "/", PROBE_TIMEOUT)
+            probe(localhost, closed_port, "GET", "/", PROBE_TIMEOUT)
                 .await
                 .is_err()
         );
