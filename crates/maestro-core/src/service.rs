@@ -463,6 +463,9 @@ impl ServiceSpec {
                 (drain.check_path.is_some() && drain.timeout.is_none()).then(|| {
                     "deploy.drain.timeout is required with deploy.drain.checkPath".to_string()
                 }),
+                (drain.check_path.is_none() && drain.timeout.is_some()).then(|| {
+                    "deploy.drain.timeout needs deploy.drain.checkPath; use deploy.stopGracePeriod to give replicas time to shut down".to_string()
+                }),
             ]
             .into_iter()
             .flatten()
@@ -1030,6 +1033,7 @@ mod tests {
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "preview": { "closeGracePeriod": "1w" } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "network": { "from": ["Web"] } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "timeout": "forever" } } } } }"#,
+            r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "timeout": "6h" } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "checkPath": "ready", "timeout": "5m" } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "drain": { "checkPath": "/ready" } } } } }"#,
             r#"{ "services": { "api": { "name": "x", "image": "nginx", "deploy": { "stopGracePeriod": "a while" } } } }"#,
