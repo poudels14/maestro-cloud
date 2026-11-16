@@ -138,6 +138,7 @@ export type SlackWebhook = {
   url: string;
   categories: SlackCategory[];
   enabled: boolean;
+  fromConfig?: boolean;
 };
 
 export type ServiceSpec = {

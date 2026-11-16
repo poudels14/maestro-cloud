@@ -157,21 +157,31 @@ function WebhookRow(props: {
           <Show when={!props.webhook.enabled}>
             <span class="text-[11px] font-medium text-gray-400">disabled</span>
           </Show>
+          <Show when={props.webhook.fromConfig}>
+            <span
+              class="text-[11px] font-medium px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200"
+              title="Set by slack.webhookUrl in the cluster config; change it there and restart"
+            >
+              from config
+            </span>
+          </Show>
         </div>
         <p class="text-xs font-mono text-gray-400 truncate mt-0.5">{props.webhook.url}</p>
       </div>
       <div class="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          onClick={() => toggleMutation.mutate(!props.webhook.enabled)}
-          disabled={busy()}
-          class={clsx("text-xs px-2 py-1 rounded-md transition-colors", {
-            "bg-gray-100 text-gray-600 hover:bg-gray-200": props.webhook.enabled,
-            "bg-gray-50 text-gray-400 hover:bg-gray-100": !props.webhook.enabled
-          })}
-        >
-          {props.webhook.enabled ? "disable" : "enable"}
-        </button>
+        <Show when={!props.webhook.fromConfig}>
+          <button
+            type="button"
+            onClick={() => toggleMutation.mutate(!props.webhook.enabled)}
+            disabled={busy()}
+            class={clsx("text-xs px-2 py-1 rounded-md transition-colors", {
+              "bg-gray-100 text-gray-600 hover:bg-gray-200": props.webhook.enabled,
+              "bg-gray-50 text-gray-400 hover:bg-gray-100": !props.webhook.enabled
+            })}
+          >
+            {props.webhook.enabled ? "disable" : "enable"}
+          </button>
+        </Show>
         <button
           type="button"
           onClick={() => testMutation.mutate()}
@@ -181,15 +191,17 @@ function WebhookRow(props: {
         >
           <Send class="size-3.5" />
         </button>
-        <button
-          type="button"
-          onClick={() => props.onRequestDelete()}
-          disabled={busy()}
-          title="Delete webhook"
-          class="size-7 flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md disabled:opacity-50"
-        >
-          <Trash2 class="size-3.5" />
-        </button>
+        <Show when={!props.webhook.fromConfig}>
+          <button
+            type="button"
+            onClick={() => props.onRequestDelete()}
+            disabled={busy()}
+            title="Delete webhook"
+            class="size-7 flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md disabled:opacity-50"
+          >
+            <Trash2 class="size-3.5" />
+          </button>
+        </Show>
       </div>
     </div>
   );

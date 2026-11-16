@@ -23,6 +23,8 @@ const ID_PREFIX: &str = "wh_";
 const ID_LENGTH: usize = 10;
 const SHORT_ID: usize = 6;
 const URL_PREFIX: &str = "https://";
+const CONFIG_WEBHOOK_ID: &str = "config";
+const CONFIG_WEBHOOK_NAME: &str = "Cluster config";
 
 #[derive(Clone)]
 pub struct SlackState {
@@ -41,6 +43,10 @@ struct WebhookView {
     url: String,
     categories: Vec<SlackCategory>,
     enabled: bool,
+    /// `slack.webhookUrl` from the cluster config: it gets every notification and can only be
+    /// changed there.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    from_config: bool,
 }
 
 #[derive(Deserialize)]
@@ -102,9 +108,17 @@ struct Snapshot {
 pub async fn list_webhooks(State(state): State<SlackState>) -> Response {
     match stored(&state) {
         Ok(webhooks) => Json(
-            webhooks
-                .iter()
-                .map(|webhook| view(&state.key, webhook))
+            config_url(&state)
+                .map(|url| WebhookView {
+                    id: CONFIG_WEBHOOK_ID.to_string(),
+                    name: CONFIG_WEBHOOK_NAME.to_string(),
+                    url: mask_url(url),
+                    categories: vec![SlackCategory::Error, SlackCategory::Info],
+                    enabled: true,
+                    from_config: true,
+                })
+                .into_iter()
+                .chain(webhooks.iter().map(|webhook| view(&state.key, webhook)))
                 .collect::<Vec<_>>(),
         )
         .into_response(),
@@ -156,7 +170,8 @@ pub async fn update_webhook(
         request.name.as_ref(),
         request.url.as_ref(),
         request.categories.as_ref(),
-    );
+    )
+    .or_else(|| config_only(&id));
     match (problem, stored(&state)) {
         (Some(problem), _) => error_response(StatusCode::BAD_REQUEST, problem),
         (None, Err(error)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
@@ -186,9 +201,10 @@ pub async fn update_webhook(
 }
 
 pub async fn delete_webhook(State(state): State<SlackState>, Path(id): Path<String>) -> Response {
-    match stored(&state) {
-        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
-        Ok(webhooks) => {
+    match (config_only(&id), stored(&state)) {
+        (Some(problem), _) => error_response(StatusCode::BAD_REQUEST, problem),
+        (None, Err(error)) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        (None, Ok(webhooks)) => {
             let remaining = webhooks
                 .iter()
                 .filter(|webhook| webhook.id != id)
@@ -209,17 +225,28 @@ pub async fn delete_webhook(State(state): State<SlackState>, Path(id): Path<Stri
 }
 
 pub async fn test_webhook(State(state): State<SlackState>, Path(id): Path<String>) -> Response {
-    let webhook =
-        stored(&state).map(|webhooks| webhooks.into_iter().find(|webhook| webhook.id == id));
-    match webhook {
+    let target = match id == CONFIG_WEBHOOK_ID {
+        true => {
+            Ok(config_url(&state).map(|url| (CONFIG_WEBHOOK_NAME.to_string(), url.to_string())))
+        }
+        false => stored(&state).map(|webhooks| {
+            webhooks
+                .into_iter()
+                .find(|webhook| webhook.id == id)
+                .map(|webhook| {
+                    let url = state.key.open(&webhook.url).unwrap_or_default();
+                    (webhook.name, url)
+                })
+        }),
+    };
+    match target {
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
         Ok(None) => error_response(StatusCode::NOT_FOUND, format!("webhook {id} not found")),
-        Ok(Some(webhook)) => {
+        Ok(Some((name, url))) => {
             let text = format!(
-                ":test_tube: [{}] test message from maestro webhook `{}`",
-                state.cluster, webhook.name
+                ":test_tube: [{}] test message from maestro webhook `{name}`",
+                state.cluster
             );
-            let url = state.key.open(&webhook.url).unwrap_or_default();
             match send(&state.http, &url, &text).await {
                 Ok(()) => Json(json!({ "sent": true })).into_response(),
                 Err(error) => error_response(StatusCode::BAD_GATEWAY, error),
@@ -518,7 +545,22 @@ fn view(key: &SecretKey, webhook: &SlackWebhook) -> WebhookView {
         url: mask_url(&key.open(&webhook.url).unwrap_or_default()),
         categories: webhook.categories.clone(),
         enabled: webhook.enabled,
+        from_config: false,
     }
+}
+
+fn config_url(state: &SlackState) -> Option<&str> {
+    state
+        .config_webhook
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+}
+
+fn config_only(id: &str) -> Option<String> {
+    (id == CONFIG_WEBHOOK_ID).then(|| {
+        "this webhook comes from slack.webhookUrl in the cluster config; change it there and restart"
+            .to_string()
+    })
 }
 
 fn mask_url(url: &str) -> String {
