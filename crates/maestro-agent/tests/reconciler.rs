@@ -494,6 +494,61 @@ async fn adopts_running_replicas_after_agent_restart() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn gives_every_replica_the_env_and_its_own_secrets_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let secrets_dir = scratch.path().join("secrets");
+    let key = test_key();
+    let deploy = DeploySpec {
+        env: maestro_core::EnvSpec {
+            items: [("API_URL".to_string(), key.seal("https://api.internal"))].into(),
+            ..maestro_core::EnvSpec::default()
+        },
+        secrets: Some(SecretsSpec {
+            mount_path: "/app/.env".to_string(),
+            source: None,
+            items: [("TOKEN".to_string(), key.seal("s3cret"))].into(),
+            comments: Default::default(),
+        }),
+        ..DeploySpec::default()
+    };
+    let mut harness = harness_with(
+        deploy,
+        ReconcilerSettings {
+            secrets_dir,
+            ..ReconcilerSettings::default()
+        },
+    );
+    let second = Assignment {
+        index: 1,
+        ..assignment("d1-1", 1000)
+    };
+    assign(&harness, vec![assignment("d1-0", 1000), second]);
+    harness.reconciler.reconcile().await.unwrap();
+
+    let secret_files = ["d1-0", "d1-1"].map(|replica| {
+        let container = harness.runtime.spec(replica).unwrap();
+        assert_eq!(container.env["API_URL"], "https://api.internal");
+        let secrets = container
+            .mounts
+            .iter()
+            .find(|mount| mount.destination == "/app/.env")
+            .unwrap()
+            .source
+            .clone();
+        assert_eq!(
+            std::fs::read_to_string(&secrets).unwrap(),
+            "TOKEN=\"s3cret\"\n"
+        );
+        secrets
+    });
+    assert_ne!(secret_files[0], secret_files[1]);
+    assert_eq!(
+        harness.runtime.spec("d1-1").unwrap().env["MAESTRO_REPLICA_INDEX"],
+        "1"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn mounts_volumes_and_a_private_secrets_file() {
     let scratch = tempfile::tempdir().unwrap();
     let secrets_dir = scratch.path().join("secrets");
