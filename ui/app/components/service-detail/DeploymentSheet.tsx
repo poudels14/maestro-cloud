@@ -90,7 +90,12 @@ function DeploymentSheet(props: {
                   >
                     <Switch>
                       <Match when={props.tab === "logs"}>
-                        <LogViewer scope={`deployment:${d.id}`} embedded={true} fillHeight />
+                        <LogViewer
+                          scope={`deployment:${d.id}`}
+                          embedded={true}
+                          fillHeight
+                          replicaIds={(d.replicas ?? []).map((replica) => replica.replicaId)}
+                        />
                       </Match>
                       <Match when={props.tab === "build"}>
                         <BuildLog

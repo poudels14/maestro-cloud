@@ -7,7 +7,9 @@ import {
   dateFormatter,
   logLevelColors,
   httpMethodColor,
-  httpStatusPill
+  httpStatusPill,
+  replicaColor,
+  replicaLabel
 } from "../../lib/logFormat";
 
 function TimeCell(props: { ts: number }) {
@@ -39,6 +41,15 @@ function HostCell(props: { value: string }) {
   return (
     <span class="block truncate text-gray-500" title={props.value}>
       {props.value}
+    </span>
+  );
+}
+
+function ReplicaCell(props: { replicaId: string; deploymentId?: string }) {
+  return (
+    <span class="flex min-w-0 items-center gap-1.5 text-gray-500" title={props.replicaId}>
+      <span class={clsx("size-1.5 shrink-0 rounded-full", replicaColor(props.replicaId))} />
+      <span class="truncate">{replicaLabel(props.replicaId, props.deploymentId)}</span>
     </span>
   );
 }
@@ -150,6 +161,7 @@ export {
   TimeCell,
   ExpanderCell,
   HostCell,
+  ReplicaCell,
   LevelCell,
   MessageCell,
   StructuredMessageCell,

@@ -159,6 +159,26 @@ function isStructuredLog(entry: LogEntry): boolean {
   return Boolean(entry.message) && entry.message !== entry.text;
 }
 
+const REPLICA_COLORS = [
+  "bg-indigo-400",
+  "bg-emerald-400",
+  "bg-amber-400",
+  "bg-rose-400",
+  "bg-sky-400",
+  "bg-violet-400"
+];
+
+// Within one deployment its replicas share the deployment id, so only their number tells them apart.
+function replicaLabel(replicaId: string, deploymentId: string | undefined): string {
+  const prefix = `${deploymentId}-`;
+  return deploymentId && replicaId.startsWith(prefix) ? replicaId.slice(prefix.length) : replicaId;
+}
+
+function replicaColor(replicaId: string): string {
+  const index = Number(replicaId.slice(replicaId.lastIndexOf("-") + 1));
+  return REPLICA_COLORS[(Number.isInteger(index) ? index : 0) % REPLICA_COLORS.length];
+}
+
 function logLevelColors(level: string) {
   const normalized = level.toLowerCase();
   if (normalized === "error" || normalized === "fatal") {
@@ -202,5 +222,7 @@ export {
   httpMethodColor,
   httpStatusPill,
   isStructuredLog,
+  replicaColor,
+  replicaLabel,
   type HttpFields
 };

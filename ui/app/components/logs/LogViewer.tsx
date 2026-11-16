@@ -20,11 +20,18 @@ import {
   type LogHistogramBucket
 } from "../../lib/api";
 import { ErrorBanner } from "../../lib/ui";
-import { dateFormatter, httpFields, isStructuredLog } from "../../lib/logFormat";
+import {
+  dateFormatter,
+  httpFields,
+  isStructuredLog,
+  replicaColor,
+  replicaLabel
+} from "../../lib/logFormat";
 import {
   TimeCell,
   ExpanderCell,
   HostCell,
+  ReplicaCell,
   LevelCell,
   MessageCell,
   StructuredMessageCell,
@@ -42,9 +49,12 @@ import {
   withLogHistogramGroupFilter
 } from "./logQueryPills";
 
+const DEPLOYMENT_SCOPE = "deployment:";
+
 const COL = {
   time: "sm:w-[118px]",
   host: "sm:w-[112px]",
+  replica: "sm:w-[56px]",
   service: "sm:w-[124px]",
   level: "sm:w-[52px]",
   method: "sm:w-[60px]",
@@ -106,6 +116,7 @@ function LogViewer(props: {
   range?: string;
   onRangeChange?: (range: string) => void;
   filters?: JSX.Element;
+  replicaIds?: string[];
 }) {
   const nodeIdsParam = () => (props.nodeIds?.length ? props.nodeIds.join(",") : undefined);
   const [lines, setLines] = createSignal<LogEntry[]>([]);
@@ -203,8 +214,34 @@ function LogViewer(props: {
     return phaseLines();
   };
 
+  const deploymentId = () =>
+    props.scope.startsWith(DEPLOYMENT_SCOPE) ? props.scope.slice(DEPLOYMENT_SCOPE.length) : undefined;
+  const [selectedReplica, setSelectedReplica] = createSignal<string | null>(null);
+  const [seenReplicas, setSeenReplicas] = createSignal<string[]>([]);
+  createEffect(
+    on(phaseLines, (current) => {
+      const sources = current.flatMap((line) => (line.source ? [line.source] : []));
+      if (sources.some((source) => !seenReplicas().includes(source))) {
+        setSeenReplicas((previous) => Array.from(new Set([...previous, ...sources])));
+      }
+    })
+  );
+  const replicaOptions = () =>
+    props.replicaIds
+      ? Array.from(new Set([...props.replicaIds, ...seenReplicas()])).sort((left, right) =>
+          left.localeCompare(right, undefined, { numeric: true })
+        )
+      : [];
+
   const requestQuery = () => {
-    return combineLogQueries(combineLogQueries(props.scope, props.requiredQuery ?? ""), query());
+    const replica = selectedReplica();
+    return combineLogQueries(
+      combineLogQueries(
+        combineLogQueries(props.scope, props.requiredQuery ?? ""),
+        replica ? `replica:${replica}` : ""
+      ),
+      query()
+    );
   };
 
   const applyQuery = () => {
@@ -651,6 +688,14 @@ function LogViewer(props: {
       </Show>
       <div class="shrink-0 px-3 py-2 border-b border-gray-100 flex items-center gap-2">
         {props.filters}
+        <Show when={replicaOptions().length > 1}>
+          <ReplicaPills
+            replicaIds={replicaOptions()}
+            deploymentId={deploymentId()}
+            selected={selectedReplica()}
+            onSelect={setSelectedReplica}
+          />
+        </Show>
         <LogQueryInput
           value={queryDraft()}
           appliedQuery={query()}
@@ -706,7 +751,12 @@ function LogViewer(props: {
                 <span class="w-[18px] shrink-0" />
                 <span class={clsx(COL.time, "shrink-0 pr-2 truncate")}>Time</span>
                 <Show when={showHost()}>
-                  <span class={clsx(COL.host, "shrink-0 px-2 truncate border-l border-gray-300")}>
+                  <span
+                    class={clsx(
+                      "shrink-0 px-2 truncate border-l border-gray-300",
+                      deploymentId() ? COL.replica : COL.host
+                    )}
+                  >
                     {props.showHost ? "Node" : "Replica"}
                   </span>
                 </Show>
@@ -740,6 +790,7 @@ function LogViewer(props: {
                       rowKey={key()}
                       line={line}
                       index={index()}
+                      deploymentId={deploymentId()}
                       showHost={showHost()}
                       showService={Boolean(props.showHost)}
                       showHttp={showHttp()}
@@ -771,6 +822,7 @@ function LogRow(props: {
   rowKey: string;
   line: LogEntry;
   index: number;
+  deploymentId?: string;
   showHost: boolean;
   showService: boolean;
   showHttp: boolean;
@@ -804,8 +856,18 @@ function LogRow(props: {
             <TimeCell ts={props.line.ts} />
           </div>
           <Show when={props.showHost}>
-            <div class={clsx("min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px", COL.host)}>
-              <HostCell value={host()} />
+            <div
+              class={clsx(
+                "min-w-0 max-w-[120px] sm:max-w-none sm:px-2 sm:pt-px",
+                props.deploymentId ? COL.replica : COL.host
+              )}
+            >
+              <Show
+                when={props.deploymentId && !props.showService && props.line.source}
+                fallback={<HostCell value={host()} />}
+              >
+                <ReplicaCell replicaId={props.line.source!} deploymentId={props.deploymentId} />
+              </Show>
             </div>
           </Show>
           <Show when={props.showService}>
@@ -848,6 +910,44 @@ function LogRow(props: {
         </div>
       </Show>
     </li>
+  );
+}
+
+function ReplicaPills(props: {
+  replicaIds: string[];
+  deploymentId?: string;
+  selected: string | null;
+  onSelect: (replicaId: string | null) => void;
+}) {
+  const pill = "shrink-0 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs";
+  const active = "border-indigo-200 bg-indigo-50 text-indigo-700";
+  const idle = "border-gray-200 bg-white text-gray-500 hover:bg-gray-50";
+  return (
+    <div class="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        onClick={() => props.onSelect(null)}
+        class={clsx(pill, { [active]: props.selected === null, [idle]: props.selected !== null })}
+      >
+        All replicas
+      </button>
+      <For each={props.replicaIds}>
+        {(replicaId) => (
+          <button
+            type="button"
+            title={replicaId}
+            onClick={() => props.onSelect(replicaId)}
+            class={clsx(pill, {
+              [active]: props.selected === replicaId,
+              [idle]: props.selected !== replicaId
+            })}
+          >
+            <span class={clsx("size-1.5 rounded-full", replicaColor(replicaId))} />
+            {`#${replicaLabel(replicaId, props.deploymentId)}`}
+          </button>
+        )}
+      </For>
+    </div>
   );
 }
 
