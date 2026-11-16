@@ -28,11 +28,12 @@ const RESTART_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
 const INFO_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const IN_FLIGHT: [DeploymentStatus; 4] = [
+/// Draining deployments do not hold maintenance up: a long drain would block it for hours, and a
+/// drained node releases the old replicas on it anyway.
+const IN_FLIGHT: [DeploymentStatus; 3] = [
     DeploymentStatus::Queued,
     DeploymentStatus::Building,
     DeploymentStatus::Deploying,
-    DeploymentStatus::Draining,
 ];
 
 pub trait MaintenanceNodes: Send + Sync + 'static {
@@ -911,6 +912,51 @@ mod tests {
         let run = state.maintenance_run().unwrap().unwrap();
         assert_eq!(run.phase, MaintenancePhase::Failed);
         assert!(run.failure.unwrap().contains("stalled"));
+    }
+
+    #[tokio::test]
+    async fn waits_for_deploys_but_not_for_drains() {
+        let (orchestrator, _directory) =
+            orchestrator(&[node(1, NodeRole::Voter)], FakeNodes::default());
+        let deployment = |id: &str, status: DeploymentStatus| Mutation::CreateDeployment {
+            deployment: maestro_core::Deployment {
+                id: DeploymentId::from(id),
+                service_id: ServiceId::from("api"),
+                spec: serde_json::from_value(
+                    serde_json::json!({ "name": "api", "image": "nginx" }),
+                )
+                .unwrap(),
+                status,
+                image: None,
+                failure: None,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                git_commit: None,
+                built_on: None,
+                version: None,
+                restart_of: None,
+            },
+        };
+        orchestrator
+            .writer
+            .0
+            .apply(&[
+                Mutation::PutService {
+                    id: ServiceId::from("api"),
+                    spec: serde_json::from_value(
+                        serde_json::json!({ "name": "api", "image": "nginx" }),
+                    )
+                    .unwrap(),
+                },
+                deployment("d1", DeploymentStatus::Draining),
+                deployment("d2", DeploymentStatus::Deploying),
+            ])
+            .unwrap();
+        let error = orchestrator
+            .start(MaintenanceKind::Restart, "3.0.0".to_string(), Target::All)
+            .await
+            .unwrap_err();
+        assert!(error.contains("api/d2") && !error.contains("api/d1"));
     }
 
     #[tokio::test]
