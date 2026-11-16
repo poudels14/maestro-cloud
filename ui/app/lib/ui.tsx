@@ -109,6 +109,7 @@ export function DeploymentMenu(props: {
   status: string;
   onCancel: () => void;
   onStop: () => void;
+  onForceStop: () => void;
   onRedeploy: () => void;
   onRestart: () => void;
   onRestartDeployment?: () => void;
@@ -139,6 +140,15 @@ export function DeploymentMenu(props: {
             >
               <Square class="size-3" />
               Stop deployment
+            </DropdownMenu.Item>
+          </Show>
+          <Show when={props.status === "draining"}>
+            <DropdownMenu.Item
+              class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+              onSelect={() => props.onForceStop()}
+            >
+              <Square class="size-3" />
+              Stop now
             </DropdownMenu.Item>
           </Show>
           <Show when={!canCancel()}>

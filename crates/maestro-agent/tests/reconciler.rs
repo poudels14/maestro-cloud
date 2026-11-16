@@ -333,6 +333,9 @@ async fn gives_a_drained_replica_the_rest_of_its_drain_timeout_to_exit() {
     harness.reconciler.reconcile().await.unwrap();
     start_draining(&harness, unix_now_ms() - 5 * 60 * 1000);
     harness.reconciler.reconcile().await.unwrap();
+    harness
+        .board
+        .update(&ReplicaId::from("d1-0"), |status| status.drained = true);
 
     assign(&harness, Vec::new());
     harness.reconciler.reconcile().await.unwrap();
@@ -340,6 +343,34 @@ async fn gives_a_drained_replica_the_rest_of_its_drain_timeout_to_exit() {
 
     let grace = harness.runtime.stop_grace("d1-0").unwrap();
     assert!(grace > Duration::from_secs(24 * 60) && grace <= Duration::from_secs(25 * 60));
+}
+
+#[tokio::test(start_paused = true)]
+async fn gives_a_replica_stopped_mid_drain_only_its_stop_grace_period() {
+    let mut harness = harness_with(
+        DeploySpec {
+            drain: Some(DrainSpec {
+                check_path: Some("/can-stop".to_string()),
+                timeout: Some("6h".to_string()),
+            }),
+            stop_grace_period: Some("45s".to_string()),
+            ..DeploySpec::default()
+        },
+        ReconcilerSettings::default(),
+    );
+    assign(&harness, vec![assignment("d1-0", 1000)]);
+    harness.reconciler.reconcile().await.unwrap();
+    start_draining(&harness, unix_now_ms());
+    harness.reconciler.reconcile().await.unwrap();
+
+    assign(&harness, Vec::new());
+    harness.reconciler.reconcile().await.unwrap();
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        harness.runtime.stop_grace("d1-0"),
+        Some(Duration::from_secs(45))
+    );
 }
 
 #[tokio::test(start_paused = true)]

@@ -58,7 +58,8 @@ function DeploymentsTab(props: {
     onSuccess: invalidate
   }));
   const stopMutation = useMutation(() => ({
-    mutationFn: (deploymentId: string) => stopDeployment(props.serviceId, deploymentId),
+    mutationFn: (stop: { deploymentId: string; force: boolean }) =>
+      stopDeployment(props.serviceId, stop.deploymentId, stop.force),
     onSuccess: invalidate
   }));
   const redeployMutation = useMutation(() => ({
@@ -207,7 +208,10 @@ function DeploymentsTab(props: {
                       })
                     }
                     onCancel={() => cancelMutation.mutate(deployment.id)}
-                    onStop={() => stopMutation.mutate(deployment.id)}
+                    onStop={() => stopMutation.mutate({ deploymentId: deployment.id, force: false })}
+                    onForceStop={() =>
+                      stopMutation.mutate({ deploymentId: deployment.id, force: true })
+                    }
                     onRedeploy={handleRedeploy}
                     onRestart={handleRestart}
                     onRestartDeployment={

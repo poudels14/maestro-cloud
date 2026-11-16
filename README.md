@@ -109,7 +109,8 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   replica once it answers 202 Accepted. Any other answer, including 200, keeps it running, and
   the request is sent again 15s after the last one finished (or timed out after 15s); `GET` on
   the same path stays free for the app's own status. All stop after `deploy.drain.timeout` at
-  the latest (required with `checkPath`; a few seconds without `drain`):
+  the latest, which `checkPath` requires and only applies with it; without `checkPath` the old
+  replicas stop a few seconds after the switch:
 
   ```jsonc
   "deploy": { "drain": { "checkPath": "/internal/can-stop", "timeout": "30m" } }
@@ -121,6 +122,8 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   ```jsonc
   "deploy": { "stopGracePeriod": "2m" }
   ```
+- `maestro service stop <service> <deployment>` drains a deployment; `--force` stops it right
+  away, also ending a drain early, and its replicas only get `deploy.stopGracePeriod`.
 - `maestro rollout` shows created, updated, and unchanged services; `--apply` stores
   the specs and queues one deployment per changed service. Services missing from the
   file are reported but never deleted implicitly.

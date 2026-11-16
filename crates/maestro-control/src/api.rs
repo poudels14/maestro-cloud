@@ -31,6 +31,11 @@ const MAINTENANCE_STALE_MS: u64 = 30_000;
 
 const STOPPABLE_STATUSES: [DeploymentStatus; 2] =
     [DeploymentStatus::Deploying, DeploymentStatus::Ready];
+const FORCE_STOPPABLE_STATUSES: [DeploymentStatus; 3] = [
+    DeploymentStatus::Deploying,
+    DeploymentStatus::Ready,
+    DeploymentStatus::Draining,
+];
 
 const DEPLOYMENT_ID_ALPHABET: [char; 36] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
@@ -550,9 +555,12 @@ async fn cancel_deployment<W: StoreWriter, O: ObservedReplicas>(
     }
 }
 
+/// Stopping drains a deployment; forcing it stops the deployment right away, ending a drain early,
+/// so its replicas only get their stop grace period.
 async fn stop_deployment<W: StoreWriter, O: ObservedReplicas>(
     State(state): State<Arc<ApiState<W, O>>>,
     Path((service_id, deployment_id)): Path<(String, String)>,
+    Query(query): Query<ForceQuery>,
 ) -> Result<Json<StoppedDeployment>, ControlError> {
     let service_id = ServiceId::new(service_id);
     let deployment_id = DeploymentId::new(deployment_id);
@@ -561,18 +569,28 @@ async fn stop_deployment<W: StoreWriter, O: ObservedReplicas>(
         .state()
         .deployment(&service_id, &deployment_id)?
         .ok_or_else(|| ControlError::NotFound(format!("deployment {deployment_id}")))?;
-    match STOPPABLE_STATUSES.contains(&deployment.status) {
-        false => Err(ControlError::Conflict(format!(
-            "deployment {deployment_id} is {:?} and cannot be stopped",
-            deployment.status
+    let stoppable = match query.force {
+        true => FORCE_STOPPABLE_STATUSES.contains(&deployment.status),
+        false => STOPPABLE_STATUSES.contains(&deployment.status),
+    };
+    let status = match query.force {
+        true => DeploymentStatus::Stopped,
+        false => DeploymentStatus::Draining,
+    };
+    match (stoppable, deployment.status) {
+        (false, DeploymentStatus::Draining) => Err(ControlError::Conflict(format!(
+            "deployment {deployment_id} is already draining; force the stop to end its drain now"
         ))),
-        true => {
+        (false, current) => Err(ControlError::Conflict(format!(
+            "deployment {deployment_id} is {current:?} and cannot be stopped"
+        ))),
+        (true, _) => {
             state
                 .writer
                 .write(vec![Mutation::SetDeploymentStatus {
                     service_id: service_id.clone(),
                     deployment_id: deployment_id.clone(),
-                    status: DeploymentStatus::Draining,
+                    status,
                     image: None,
                     failure: None,
                     at_ms: unix_millis(),
@@ -581,7 +599,7 @@ async fn stop_deployment<W: StoreWriter, O: ObservedReplicas>(
             Ok(Json(StoppedDeployment {
                 service_id,
                 deployment_id,
-                status: DeploymentStatus::Draining,
+                status,
             }))
         }
     }

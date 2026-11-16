@@ -535,17 +535,11 @@ async fn stops_restarts_and_deletes_deployments() {
     let (status, body) = call(&app, "PATCH", &format!("{base}/remove"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "draining");
-    writer
-        .write(vec![maestro_store::Mutation::SetDeploymentStatus {
-            service_id: deployment.service_id.clone(),
-            deployment_id: deployment.id.clone(),
-            status: DeploymentStatus::Stopped,
-            image: None,
-            failure: None,
-            at_ms: 3,
-        }])
-        .await
-        .unwrap();
+    let (status, _) = call(&app, "PATCH", &format!("{base}/remove"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, body) = call(&app, "PATCH", &format!("{base}/remove?force=true"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "stopped");
     let (status, _) = call(&app, "DELETE", &base, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(

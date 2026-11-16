@@ -66,6 +66,9 @@ pub enum ServiceCommand {
     Stop {
         service: Option<String>,
         deployment: Option<String>,
+        /// Stop now, ending a drain early; replicas only get their stop grace period.
+        #[arg(long)]
+        force: bool,
     },
     Cancel {
         service: Option<String>,
@@ -252,14 +255,18 @@ pub async fn service(endpoint: &Endpoint, command: ServiceCommand) -> anyhow::Re
         ServiceCommand::Stop {
             service,
             deployment,
+            force,
         } => {
             let service = pick_service(endpoint, service).await?;
             let deployment = pick_deployment(endpoint, &service, deployment).await?;
             request(endpoint.patch(&format!(
-                "/api/services/{service}/deployments/{deployment}/remove"
+                "/api/services/{service}/deployments/{deployment}/remove?force={force}"
             )))
             .await?;
-            println!("stopping deployment {deployment}");
+            match force {
+                true => println!("stopped deployment {deployment}"),
+                false => println!("draining deployment {deployment}"),
+            }
             Ok(())
         }
         ServiceCommand::Cancel {

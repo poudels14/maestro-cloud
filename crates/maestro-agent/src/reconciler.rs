@@ -408,14 +408,20 @@ impl<R: Runtime, S: PlanSource> Reconciler<R, S> {
             .spawn(async move { (replica_id, stopping.await) });
     }
 
-    /// `deploy.stopGracePeriod`, or the default; a replica stopped while its deployment drains gets
-    /// the rest of `deploy.drain.timeout` instead when that is longer.
+    /// `deploy.stopGracePeriod`, or the default; a replica that accepted termination while its
+    /// deployment drains gets the rest of `deploy.drain.timeout` instead when that is longer.
+    /// Replicas stopped for any other reason, such as a forced stop or a node drain, do not.
     fn stop_grace(&self, replica_id: &ReplicaId) -> Duration {
+        let accepted = self
+            .board
+            .get(replica_id)
+            .is_some_and(|status| status.drained);
         self.stop_policies
             .get(replica_id)
             .map_or(self.settings.stop_grace, |policy| {
                 let remaining_drain = policy
                     .drain_deadline_ms
+                    .filter(|_| accepted)
                     .map(|deadline| Duration::from_millis(deadline.saturating_sub(unix_now_ms())));
                 remaining_drain.map_or(policy.grace, |remaining| remaining.max(policy.grace))
             })

@@ -205,8 +205,10 @@ async function cancelDeployment(serviceId: string, deploymentId: string) {
   await request(deploymentAction(serviceId, deploymentId, "cancel"), { method: "PATCH" });
 }
 
-async function stopDeployment(serviceId: string, deploymentId: string) {
-  await request(deploymentAction(serviceId, deploymentId, "remove"), { method: "PATCH" });
+async function stopDeployment(serviceId: string, deploymentId: string, force = false) {
+  await request(`${deploymentAction(serviceId, deploymentId, "remove")}?force=${force}`, {
+    method: "PATCH"
+  });
 }
 
 async function queryLogs(params: {

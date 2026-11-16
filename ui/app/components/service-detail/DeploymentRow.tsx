@@ -13,6 +13,7 @@ type Props = {
   onOpen: () => void;
   onCancel: () => void;
   onStop: () => void;
+  onForceStop: () => void;
   onRedeploy: () => void;
   onRestart: () => void;
   onRestartDeployment?: () => void;
@@ -91,6 +92,7 @@ function DeploymentRow(props: Props) {
               status={props.deployment.status}
               onCancel={props.onCancel}
               onStop={props.onStop}
+              onForceStop={props.onForceStop}
               onRedeploy={props.onRedeploy}
               onRestart={props.onRestart}
               onRestartDeployment={props.onRestartDeployment}
