@@ -57,7 +57,9 @@ function BuildLog(props: { serviceId: string; deploymentId: string; building: bo
             }}
             class="h-full overflow-auto bg-gray-950 px-4 py-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-gray-200"
           >
-            <For each={text().replace(ANSI_PATTERN, "").split("\n")}>{(line) => <BuildLogLine line={line} />}</For>
+            <For each={text().replace(ANSI_PATTERN, "").split("\n")}>
+              {(line) => <BuildLogLine line={line} />}
+            </For>
           </pre>
         )}
       </Match>

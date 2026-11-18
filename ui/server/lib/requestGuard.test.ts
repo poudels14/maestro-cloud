@@ -20,15 +20,9 @@ test("rejects rebound hostnames", () => {
 
 test("requires a same-origin Origin for writes and websockets", () => {
   const host = "node-1.tail1234.ts.net:7490";
-  assert.equal(
-    guardRequest(request("POST", { host, origin: `http://${host}` })),
-    null
-  );
+  assert.equal(guardRequest(request("POST", { host, origin: `http://${host}` })), null);
   assert.equal(guardRequest(request("POST", { host })), null);
-  assert.notEqual(
-    guardRequest(request("POST", { host, origin: "https://evil.example" })),
-    null
-  );
+  assert.notEqual(guardRequest(request("POST", { host, origin: "https://evil.example" })), null);
   assert.notEqual(
     guardRequest(request("GET", { host, upgrade: "websocket", origin: "https://evil.example" })),
     null
@@ -38,10 +32,7 @@ test("requires a same-origin Origin for writes and websockets", () => {
 test("uses the forwarded host when tailscale serve proxies the request", () => {
   const forwarded = "maestro-prod-1.tail1234.ts.net";
   const headers = { host: "localhost", "x-forwarded-host": forwarded };
-  assert.equal(
-    guardRequest(request("POST", { ...headers, origin: `https://${forwarded}` })),
-    null
-  );
+  assert.equal(guardRequest(request("POST", { ...headers, origin: `https://${forwarded}` })), null);
   assert.notEqual(
     guardRequest(request("POST", { ...headers, origin: "https://evil.example" })),
     null

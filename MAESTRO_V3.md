@@ -24,27 +24,27 @@ isolation that keeps nodes alive when workloads misbehave.
 
 ## Why v1 struggles
 
-| Area | v1 behavior | Effect |
-|---|---|---|
-| etcd reads | Leader scans all of `/maetro/services/` every 1s, the leader tick scans it 3× every 5s, every probe scans it every 5s; all linearizable, all with values | Bandwidth grows with services × history × nodes |
-| etcd writes | Heartbeats (2 puts / 5s / node), stats (lease + put / 10s / node), disks (30s), unconditional `unschedulable` (5s) | Constant Raft churn unrelated to deploys |
-| Data growth | Deployment history and placements never pruned; no defrag; no compaction in standalone | Every scan gets slower over time |
-| Startup | Builds probe (full Rust release build) and admin UI images from source on every start; up to 8 system containers | Slow, fragile, needs `--project-dir` |
-| Setup | Required `--subnet`, 3 secrets, predeclared node map with one `master`, random ports, two join flows, kebab + camel configs, ~25 duplicate CLI flags | Hard to stand up, impossible on macOS |
-| Isolation | No CPU/memory/pids limits anywhere; scheduler balances by replica count | One leaking service can OOM the control plane |
-| Code | 5.6k-line `server/mod.rs`, 1.6k-line `run()`, standalone vs cluster branches in ~30 places, docker/nerdctl copy-paste | Hard to change safely |
+| Area        | v1 behavior                                                                                                                                              | Effect                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| etcd reads  | Leader scans all of `/maetro/services/` every 1s, the leader tick scans it 3× every 5s, every probe scans it every 5s; all linearizable, all with values | Bandwidth grows with services × history × nodes |
+| etcd writes | Heartbeats (2 puts / 5s / node), stats (lease + put / 10s / node), disks (30s), unconditional `unschedulable` (5s)                                       | Constant Raft churn unrelated to deploys        |
+| Data growth | Deployment history and placements never pruned; no defrag; no compaction in standalone                                                                   | Every scan gets slower over time                |
+| Startup     | Builds probe (full Rust release build) and admin UI images from source on every start; up to 8 system containers                                         | Slow, fragile, needs `--project-dir`            |
+| Setup       | Required `--subnet`, 3 secrets, predeclared node map with one `master`, random ports, two join flows, kebab + camel configs, ~25 duplicate CLI flags     | Hard to stand up, impossible on macOS           |
+| Isolation   | No CPU/memory/pids limits anywhere; scheduler balances by replica count                                                                                  | One leaking service can OOM the control plane   |
+| Code        | 5.6k-line `server/mod.rs`, 1.6k-line `run()`, standalone vs cluster branches in ~30 places, docker/nerdctl copy-paste                                    | Hard to change safely                           |
 
 ## Architecture
 
 ### Processes per node
 
-| Unit | Nodes | Responsibility |
-|---|---|---|
-| `maestro agent` (systemd, `maestro-system.slice`) | all | containerd client, CNI networking, replica supervisor, health checks, DNS, Traefik file-provider writer, egress firewall. On voters also: Raft + redb store, API, scheduler, deploy reconciler, build queue |
-| `maestro telemetry` (systemd, `maestro-system.slice`, own `MemoryMax`) | all | Log/metrics ingest, DuckDB store, query API, Parquet rollover, S3 backup, Datadog sink |
-| Traefik (container, `maestro-system.slice`) | workload nodes | Public ingress, configured by file provider |
-| Admin UI (container, `maestro-system.slice`) | voters | TanStack Start UI reachable from the tailnet; API access only via the mounted Unix socket |
-| `buildkitd` (systemd, `maestro-builds.slice`) | build-capable nodes | Image builds |
+| Unit                                                                   | Nodes               | Responsibility                                                                                                                                                                                              |
+| ---------------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maestro agent` (systemd, `maestro-system.slice`)                      | all                 | containerd client, CNI networking, replica supervisor, health checks, DNS, Traefik file-provider writer, egress firewall. On voters also: Raft + redb store, API, scheduler, deploy reconciler, build queue |
+| `maestro telemetry` (systemd, `maestro-system.slice`, own `MemoryMax`) | all                 | Log/metrics ingest, DuckDB store, query API, Parquet rollover, S3 backup, Datadog sink                                                                                                                      |
+| Traefik (container, `maestro-system.slice`)                            | workload nodes      | Public ingress, configured by file provider                                                                                                                                                                 |
+| Admin UI (container, `maestro-system.slice`)                           | voters              | TanStack Start UI reachable from the tailnet; API access only via the mounted Unix socket                                                                                                                   |
+| `buildkitd` (systemd, `maestro-builds.slice`)                          | build-capable nodes | Image builds                                                                                                                                                                                                |
 
 Both Maestro units are the same binary.
 
@@ -84,11 +84,11 @@ a one-voter cluster; there is no separate standalone mode.
 
 State is split by how often it changes. Only desired state goes through consensus.
 
-| Class | Examples | Write rate | Storage |
-|---|---|---|---|
-| Desired | services, deployments, encrypted env/secrets, assignments, node membership, subnet allocations, cluster settings | Per deploy or membership change | Raft log → redb state machine on voters |
-| Observed | heartbeats, replica status, health, node stats, disk usage, OOM/restart events | Every few seconds | Leader memory only. Agents stream it; a new leader rebuilds it from agents' first reports |
-| Telemetry | logs, metrics, access logs | Continuous | Per node in DuckDB, shipped to S3/Datadog |
+| Class     | Examples                                                                                                         | Write rate                      | Storage                                                                                   |
+| --------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------- |
+| Desired   | services, deployments, encrypted env/secrets, assignments, node membership, subnet allocations, cluster settings | Per deploy or membership change | Raft log → redb state machine on voters                                                   |
+| Observed  | heartbeats, replica status, health, node stats, disk usage, OOM/restart events                                   | Every few seconds               | Leader memory only. Agents stream it; a new leader rebuilds it from agents' first reports |
+| Telemetry | logs, metrics, access logs                                                                                       | Continuous                      | Per node in DuckDB, shipped to S3/Datadog                                                 |
 
 On leader change, the new leader waits a grace period (2× heartbeat interval) before
 treating missing observed state as failure, so failovers never trigger rescheduling.
@@ -117,16 +117,16 @@ treating missing observed state as failure, so failovers never trigger reschedul
 
 ### redb tables
 
-| Table | Key | Value |
-|---|---|---|
-| `meta` | `&str` | cluster id, version, settings |
-| `nodes` | node id | `NodeRecord` (name, role, endpoint, subnet, capacity, labels, state) |
-| `services` | service id | `ServiceSpec` + version |
-| `deployments` | (service id, deployment id) | `Deployment` (spec snapshot, status, timestamps) |
-| `deployments_by_status` | (status, service id, deployment id) | `()` |
-| `assignments` | (node id, replica id) | `Assignment` |
-| `secrets` | (scope, id) | encrypted blob |
-| `subnets` | CIDR | node id |
+| Table                   | Key                                 | Value                                                                |
+| ----------------------- | ----------------------------------- | -------------------------------------------------------------------- |
+| `meta`                  | `&str`                              | cluster id, version, settings                                        |
+| `nodes`                 | node id                             | `NodeRecord` (name, role, endpoint, subnet, capacity, labels, state) |
+| `services`              | service id                          | `ServiceSpec` + version                                              |
+| `deployments`           | (service id, deployment id)         | `Deployment` (spec snapshot, status, timestamps)                     |
+| `deployments_by_status` | (status, service id, deployment id) | `()`                                                                 |
+| `assignments`           | (node id, replica id)               | `Assignment`                                                         |
+| `secrets`               | (scope, id)                         | encrypted blob                                                       |
+| `subnets`               | CIDR                                | node id                                                              |
 
 ## Agent ↔ control protocol
 
@@ -426,51 +426,51 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 ### Cross-cutting foundations
 
 - [x] W0a: services schema parity (schema and validation; runtime behavior lands with each workstream) — `deploy.secrets` (mountPath, items, source), volumes
-  (owner, denied paths, writable ⇒ single replica + node pin), `nodeAffinity`
-  (nodeId, labels), `egress.allow`, `exec` (default true), `flags` (container args),
-  `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`,
-  v1 healthcheck semantics (interval default 30, was 60 in v1, clamped 5–300, 2xx, 10 failures ⇒
-  restart), `maxRestarts` default 10.
+      (owner, denied paths, writable ⇒ single replica + node pin), `nodeAffinity`
+      (nodeId, labels), `egress.allow`, `exec` (default true), `flags` (container args),
+      `exposePorts`, `preview`, `build.depot`, `ingress.sessionAffinity`,
+      v1 healthcheck semantics (interval default 30, was 60 in v1, clamped 5–300, 2xx, 10 failures ⇒
+      restart), `maxRestarts` default 10.
 - [x] W0b: cluster config parity (schema; `aws-secret://` config sources land with W3) — `tags`, `egress {deny, allow}`, `tailscale`,
-  `datadog {apiKey, site, includeIngressLogs, includeTailscaleLogs, logs.includeHealthcheck,
-  includeMetrics}`, `depot.token`, `cloudflare.tunnel {token, replicas}`,
-  `slack.webhookUrl`, `github {token, previewDomain, pollIntervalSecs,
-  maxConcurrentPreviews}`, `homepage`, `logBackup {bucket, kmsKeyId, region, prefix,
-  retentionDays}`, `allowCliDeployment`, `allowExec`, `aws-secret://` sources for the
-  config and `$extends`. Accept v1 kebab-case keys as aliases.
+      `datadog {apiKey, site, includeIngressLogs, includeTailscaleLogs, logs.includeHealthcheck,
+includeMetrics}`, `depot.token`, `cloudflare.tunnel {token, replicas}`,
+      `slack.webhookUrl`, `github {token, previewDomain, pollIntervalSecs,
+maxConcurrentPreviews}`, `homepage`, `logBackup {bucket, kmsKeyId, region, prefix,
+retentionDays}`, `allowCliDeployment`, `allowExec`, `aws-secret://` sources for the
+      config and `$extends`. Accept v1 kebab-case keys as aliases.
 - [x] W0c: node gRPC service on every node (mTLS) for exec, log/metric/traffic/disk
-  fan-out, and node-local operations; API on any voter forwards writes to the leader.
+      fan-out, and node-local operations; API on any voter forwards writes to the leader.
 - [x] W0d: image digest pinning at pull (restart requires immutable images).
 
 ### Workstreams
 
 - [x] W1 service operations: freeze (blocks rollout/redeploy/restart and watchers unless
-  `force`), replicas override (configured..25, in place without redeploy), redeploy
-  (rebuild from stored config), restart (reuse last image), stop deployment, delete
-  deployment record, delete service, cluster-wide freeze during upgrades.
+      `force`), replicas override (configured..25, in place without redeploy), redeploy
+      (rebuild from stored config), restart (reuse last image), stop deployment, delete
+      deployment record, delete service, cluster-wide freeze during upgrades.
 - [x] W2 nodes and scheduling: drain/restore, unschedulable report, affinity and
-  volume pinning, node removal, disks per node.
+      volume pinning, node removal, disks per node.
 - [x] W3 secrets and config sources: `aws-secret://` (JSON or dotenv) for env, secrets,
-  build env/secrets, and cluster config; `${VAR}` expansion in the CLI; secrets file
-  mounts (`K="v"` lines, 0600, zeroed on stop); `GH_TOKEN` build secret for git auth.
+      build env/secrets, and cluster config; `${VAR}` expansion in the CLI; secrets file
+      mounts (`K="v"` lines, 0600, zeroed on stop); `GH_TOKEN` build secret for git auth.
 - [x] W4 builds: `build.watch` (git ls-remote polling with backoff), Depot, `maestro
-  services up` (tar.gz upload honoring .gitignore/.dockerignore, `allowCliDeployment`).
+services up` (tar.gz upload honoring .gitignore/.dockerignore, `allowCliDeployment`).
 - [x] W5 observability (maestro's own agent/telemetry logs stay in journald for now): container and node metrics from cgroups, disk usage, Traefik
-  Prometheus traffic metrics, access-log analytics (client IP rules, per-minute
-  ip/path buckets), log histograms, cluster/system log fan-out, cluster stats with
-  warnings, 7-day metric retention, Parquet partitioning by service/deployment/date.
+      Prometheus traffic metrics, access-log analytics (client IP rules, per-minute
+      ip/path buckets), log histograms, cluster/system log fan-out, cluster stats with
+      warnings, 7-day metric retention, Parquet partitioning by service/deployment/date.
 - [x] W6 ingress: IP blocklist enforced by Traefik routers (ClientIP and forwarded
-  headers) returning 403, session affinity, ingress routes view.
+      headers) returning 403, session affinity, ingress routes view.
 - [x] W7 exec: WebSocket API and CLI (`maestro exec`), framing, resize, 8 sessions per
-  node, 30-minute idle timeout, audit log lines, `allowExec` + `deploy.exec`.
+      node, 30-minute idle timeout, audit log lines, `allowExec` + `deploy.exec`.
 - [x] W8 integrations (Datadog, S3 backup, and Tailscale are unit-tested but not yet exercised against the real services): Slack webhooks (CRUD, test, event templates, node down/recovered),
-  Datadog logs (healthcheck filter, dead letters) and metrics, S3 log backup
-  (SSE-KMS, checksums, retention), egress firewall (nftables per replica IP),
-  Tailscale, Cloudflare tunnel (gated on node readiness).
+      Datadog logs (healthcheck filter, dead letters) and metrics, S3 log backup
+      (SSE-KMS, checksums, retention), egress firewall (nftables per replica IP),
+      Tailscale, Cloudflare tunnel (gated on node readiness).
 - [x] W9 delivery (the NixOS upgrade path is unit-tested; only restart was exercised live, and the banner itself ships with W10): PR previews (GitHub polling, sticky comments, quota, close grace,
-  Deployment statuses), coordinated rolling upgrade/restart on NixOS with drain and
-  maintenance banner (`maestro cluster upgrade|restart|unfreeze`, run exposed on
-  `/api/cluster`), archive of finished deployments and build logs to S3.
+      Deployment statuses), coordinated rolling upgrade/restart on NixOS with drain and
+      maintenance banner (`maestro cluster upgrade|restart|unfreeze`, run exposed on
+      `/api/cluster`), archive of finished deployments and build logs to S3.
 - [x] W10 admin UI (exec relay and the rebuilt admin image are untested live): every v1 screen on the v3 API, restyled, plus rolling upgrade/restart, node removal and separate build/deploy logs.
 
 ## Phases

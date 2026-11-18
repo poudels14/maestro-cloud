@@ -13,7 +13,8 @@ const entry = (text: string, message?: string): LogEntry => ({
 
 describe("isStructuredLog", () => {
   it("treats lines the backend parsed into a separate message as structured", () => {
-    const json = '{"level":"error","msg":"[evals] failed to recover stale runs","error":{"type":"DrizzleQueryError"}}';
+    const json =
+      '{"level":"error","msg":"[evals] failed to recover stale runs","error":{"type":"DrizzleQueryError"}}';
     expect(isStructuredLog(entry(json, "[evals] failed to recover stale runs"))).toBe(true);
   });
 

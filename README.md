@@ -80,11 +80,11 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
         "maxRestarts": 10,
         "env": { "items": { "DATABASE_URL": "postgres://..." } },
         "resources": {
-          "cpu": 4,              // limit in cores (default 4)
-          "memory": "50%",       // limit: bytes, 512Mi, 4Gi, or a % of node memory (default 50%)
-          "request": { "cpu": 0.25, "memory": "512Mi" }   // used for scheduling
+          "cpu": 4, // limit in cores (default 4)
+          "memory": "50%", // limit: bytes, 512Mi, 4Gi, or a % of node memory (default 50%)
+          "request": { "cpu": 0.25, "memory": "512Mi" } // used for scheduling
         },
-        "oomPriority": "high"    // low | normal | high: who the kernel kills first
+        "oomPriority": "high" // low | normal | high: who the kernel kills first
       }
     }
   }
@@ -115,6 +115,7 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   ```jsonc
   "deploy": { "drain": { "checkPath": "/internal/can-stop", "timeout": "30m" } }
   ```
+
 - A replica is stopped with SIGTERM and killed if it hasn't exited after
   `deploy.stopGracePeriod` (10s by default). A replica that accepts a termination request
   while draining gets the rest of `deploy.drain.timeout` instead when that is longer:
@@ -122,6 +123,7 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
   ```jsonc
   "deploy": { "stopGracePeriod": "2m" }
   ```
+
 - `maestro service stop <service> <deployment>` drains a deployment; `--force` stops it right
   away, also ending a drain early, and its replicas only get `deploy.stopGracePeriod`.
 - `maestro rollout` shows created, updated, and unchanged services; `--apply` stores
@@ -134,11 +136,11 @@ The API is forwarded to `127.0.0.1:3000` and ingress to `127.0.0.1:8080`.
 
 Every node runs three systemd slices:
 
-| Slice | Contains | Policy |
-|---|---|---|
-| `maestro-system.slice` | maestro, telemetry, Traefik, admin UI | `CPUWeight=1000`, guaranteed memory reserve |
-| `maestro-workloads.slice` | every service replica | `CPUWeight=100`, `MemoryMax = total - reserve`, `MemoryHigh` at 90% |
-| `maestro-builds.slice` | BuildKit | `CPUWeight=50`, capped memory |
+| Slice                     | Contains                              | Policy                                                              |
+| ------------------------- | ------------------------------------- | ------------------------------------------------------------------- |
+| `maestro-system.slice`    | maestro, telemetry, Traefik, admin UI | `CPUWeight=1000`, guaranteed memory reserve                         |
+| `maestro-workloads.slice` | every service replica                 | `CPUWeight=100`, `MemoryMax = total - reserve`, `MemoryHigh` at 90% |
+| `maestro-builds.slice`    | BuildKit                              | `CPUWeight=50`, capped memory                                       |
 
 Replicas get hard per-container CPU, memory (no swap), and pids limits. CPU limits
 are ceilings, not reservations: idle capacity is shared and the system slice wins
@@ -164,22 +166,22 @@ Every other field has a default.
 
 ```jsonc
 {
-  "$extends": "common.jsonc",   // optional base file; objects merge, other values replace
-  "encryptionKey": "…",         // required on voters
-  "jwtSecretKey": "…",          // required on voters
+  "$extends": "common.jsonc", // optional base file; objects merge, other values replace
+  "encryptionKey": "…", // required on voters
+  "jwtSecretKey": "…", // required on voters
   "cluster": {
     "name": "prod",
     "cidr": "10.200.0.0/16",
     "joinSecret": "…",
-    "voters": ["10.20.0.11", "10.20.0.12", "10.20.0.13"]   // port 7400 unless given
+    "voters": ["10.20.0.11", "10.20.0.12", "10.20.0.13"] // port 7400 unless given
   },
   "node": { "labels": { "zone": "us-west-2a" }, "reserve": { "cpu": 1, "memory": "4Gi" } },
   "ingress": { "ports": [80, 443] },
   "defaults": {
     "resources": { "cpu": 4, "memory": "50%", "request": { "cpu": 0.25, "memory": "512Mi" } }
   },
-  "maxConcurrentBuilds": 5,                                      // the default
-  "volumeRoots": ["/var/lib/maestro-volumes", "/data/volumes"]   // the default
+  "maxConcurrentBuilds": 5, // the default
+  "volumeRoots": ["/var/lib/maestro-volumes", "/data/volumes"] // the default
 }
 ```
 
@@ -226,8 +228,8 @@ or the container runtime.
   traffic from other nodes and between containers on the same node. New replicas may wait a few
   seconds for their address to reach the other nodes, and connections that are already open
   are not cut when a list changes.
-- Service discovery: every replica gets `MAESTRO_API_HOST` (its node's bridge gateway, port
-  7480) and `MAESTRO_API_KEY`, and can list the replicas of a service that lets it in:
+
+- Service discovery: every replica gets `MAESTRO_API_HOST` (its node's bridge gateway, port 7480) and `MAESTRO_API_KEY`, and can list the replicas of a service that lets it in:
 
   ```bash
   curl -H "Authorization: Bearer $MAESTRO_API_KEY" "$MAESTRO_API_HOST/v1/services/api"
@@ -240,6 +242,7 @@ or the container runtime.
   key does not work from anywhere else; services that do not list the caller in `network.from`
   answer `403`. To see what a service would get, the admin API answers
   `GET /api/services/<service>/discovery` with the same response, without a key.
+
 - **Voters** run the control plane (Raft over mTLS gRPC with redb storage, the API,
   the scheduler, the deployer, and the build queue) and also run workloads.
 - **Workers** run workloads only. They hold no cluster state and receive exactly the
@@ -250,12 +253,12 @@ voters is up. Workers can scale to hundreds of nodes.
 
 ### Ports
 
-| Port | Protocol | Between | Purpose |
-|---|---|---|---|
-| 7400 | TCP | all nodes and voters | gRPC: Raft, joins, and the agent control stream (mTLS) |
-| 51820 | UDP | all nodes | WireGuard mesh carrying replica traffic |
-| 3000 | TCP | localhost on voters | token-protected HTTP API for the CLI |
-| 80, 443 | TCP | public or load balancer | Traefik ingress |
+| Port    | Protocol | Between                 | Purpose                                                |
+| ------- | -------- | ----------------------- | ------------------------------------------------------ |
+| 7400    | TCP      | all nodes and voters    | gRPC: Raft, joins, and the agent control stream (mTLS) |
+| 51820   | UDP      | all nodes               | WireGuard mesh carrying replica traffic                |
+| 3000    | TCP      | localhost on voters     | token-protected HTTP API for the CLI                   |
+| 80, 443 | TCP      | public or load balancer | Traefik ingress                                        |
 
 Ports are fixed; nothing is randomly assigned. The NixOS module opens 7400, 51820,
 and the ingress ports when `openFirewall` is set. On AWS, allow 7400/tcp and

@@ -5,8 +5,16 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-aws-config = { version = "1.12.0", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
-aws-sdk-secretsmanager = { version = "1.120.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-config = { version = "1.12.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+  "credentials-process",
+  "sso"
+] }
+aws-sdk-secretsmanager = { version = "1.120.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio"
+] }
 axum = { version = "0.8.9", features = ["multipart", "ws"] }
 chrono = "0.4.45"
 clap = { version = "4.6.7", features = ["derive", "env"] }
@@ -29,7 +37,12 @@ maestro-runtime = { version = "3.0.0", path = "../maestro-runtime" }
 maestro-store = { version = "3.0.0", path = "../maestro-store" }
 maestro-telemetry = { version = "3.0.0", path = "../maestro-telemetry" }
 rand = "0.10.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "multipart",
+  "rustls-tls",
+  "stream"
+] }
 rpassword = "7.5.4"
 serde = "1.0.229"
 serde_json = "1.0.154"

@@ -1,3 +1,12 @@
 [workspace]
-members = ["crates/maestro-agent", "crates/maestro-control", "crates/maestro-core", "crates/maestro-proto", "crates/maestro-runtime", "crates/maestro-store", "crates/maestro-telemetry", "crates/maestro"]
+members = [
+  "crates/maestro-agent",
+  "crates/maestro-control",
+  "crates/maestro-core",
+  "crates/maestro-proto",
+  "crates/maestro-runtime",
+  "crates/maestro-store",
+  "crates/maestro-telemetry",
+  "crates/maestro"
+]
 resolver = "3"

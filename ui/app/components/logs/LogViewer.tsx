@@ -215,7 +215,9 @@ function LogViewer(props: {
   };
 
   const deploymentId = () =>
-    props.scope.startsWith(DEPLOYMENT_SCOPE) ? props.scope.slice(DEPLOYMENT_SCOPE.length) : undefined;
+    props.scope.startsWith(DEPLOYMENT_SCOPE)
+      ? props.scope.slice(DEPLOYMENT_SCOPE.length)
+      : undefined;
   const [selectedReplica, setSelectedReplica] = createSignal<string | null>(null);
   const [seenReplicas, setSeenReplicas] = createSignal<string[]>([]);
   createEffect(
@@ -436,8 +438,7 @@ function LogViewer(props: {
     const newest = newestTs();
     try {
       const page = await fetchSince(searchQuery, {
-        afterTs:
-          newest == null ? from : Math.max(newest - LATE_ARRIVAL_MS, from ?? 0) || undefined,
+        afterTs: newest == null ? from : Math.max(newest - LATE_ARRIVAL_MS, from ?? 0) || undefined,
         beforeTs: to
       });
       if (requestContext !== rowRequestContext()) return;

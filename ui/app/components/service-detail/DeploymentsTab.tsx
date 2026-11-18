@@ -132,8 +132,8 @@ function DeploymentsTab(props: {
           {(prNumber) => (
             <div class="mb-3 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg">
               <span class="text-xs text-gray-600 font-medium">
-                PR #{prNumber()} is closed — this preview no longer picks up new commits and will
-                be removed after the close grace period
+                PR #{prNumber()} is closed — this preview no longer picks up new commits and will be
+                removed after the close grace period
               </span>
             </div>
           )}
@@ -208,7 +208,9 @@ function DeploymentsTab(props: {
                       })
                     }
                     onCancel={() => cancelMutation.mutate(deployment.id)}
-                    onStop={() => stopMutation.mutate({ deploymentId: deployment.id, force: false })}
+                    onStop={() =>
+                      stopMutation.mutate({ deploymentId: deployment.id, force: false })
+                    }
                     onForceStop={() =>
                       stopMutation.mutate({ deploymentId: deployment.id, force: true })
                     }
