@@ -5,7 +5,7 @@ import { useNavigate } from "@tanstack/solid-router";
 import { Rocket } from "lucide-solid";
 import type { Service } from "../../lib/types";
 import { deleteService } from "../../lib/api";
-import { ErrorBanner, SectionHeader } from "../../lib/ui";
+import { ErrorBanner } from "../../lib/ui";
 import { queryKeys, servicesQuery } from "../../lib/queries";
 import { userServices as visibleUserServices } from "../../lib/previews";
 import { ServiceCard } from "./ServiceCard";
@@ -45,7 +45,7 @@ function ServicesGrid() {
         fallback={<div class="text-sm text-gray-400 py-20 text-center">Loading services…</div>}
       >
         <div class="mb-4">
-          <SectionHeader>Services</SectionHeader>
+          <h1 class="text-lg font-semibold text-gray-900 tracking-tight">Services</h1>
         </div>
         <Show
           when={userServices().length > 0}
@@ -56,7 +56,7 @@ function ServicesGrid() {
             </div>
           }
         >
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="flex flex-col gap-3">
             <For each={userServices()}>
               {(service) => (
                 <ServiceCard
