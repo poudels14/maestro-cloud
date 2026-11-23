@@ -12,6 +12,7 @@ import {
   queryKeys,
   ingressBlocklistQuery
 } from "../../lib/queries";
+import { copyText } from "../../lib/clipboard";
 import type { TrafficBreakdownEntry } from "../../lib/types";
 import { Card, ErrorBanner, SectionHeader, timeAgo } from "../../lib/ui";
 import { LogHistogramChart } from "../logs/LogHistogram";
@@ -540,7 +541,7 @@ function CopyValueButton(props: { value: string }) {
   const [copied, setCopied] = createSignal(false);
   const copy = async (event: MouseEvent) => {
     event.stopPropagation();
-    await navigator.clipboard.writeText(props.value);
+    await copyText(props.value, event.currentTarget as HTMLElement);
     setCopied(true);
     setTimeout(() => setCopied(false), 1_500);
   };

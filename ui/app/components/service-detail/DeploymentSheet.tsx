@@ -2,6 +2,7 @@ import { createSignal, For, Show, Switch, Match } from "solid-js";
 import { Check, Copy, Eye, EyeOff, GitCommitHorizontal, X } from "lucide-solid";
 import { Dialog } from "@kobalte/core/dialog";
 import clsx from "clsx";
+import { copyText } from "../../lib/clipboard";
 import type { ClusterNode, Deployment } from "../../lib/types";
 import { StatusBadge, timeAgo } from "../../lib/ui";
 import { formatDateTime, formatVersion } from "../../lib/format";
@@ -268,8 +269,8 @@ function formatTimestamp(ms: number) {
 function CopyRow(props: { label: string; value: string }) {
   const [copied, setCopied] = createSignal(false);
   const truncated = () => (props.value.length > 20 ? `${props.value.slice(0, 20)}…` : props.value);
-  const copy = async () => {
-    await navigator.clipboard.writeText(props.value);
+  const copy = async (event: MouseEvent) => {
+    await copyText(props.value, event.currentTarget as HTMLElement);
     setCopied(true);
     setTimeout(() => setCopied(false), 1_500);
   };

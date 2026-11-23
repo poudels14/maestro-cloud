@@ -1,6 +1,7 @@
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { Check, Copy } from "lucide-solid";
 import clsx from "clsx";
+import { copyText } from "../../lib/clipboard";
 import type { LogEntry } from "../../lib/types";
 import {
   httpFields,
@@ -141,7 +142,7 @@ function RawLog(props: { title: string; text: string }) {
   const copy = async (event: MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    await navigator.clipboard.writeText(props.text);
+    await copyText(props.text, event.currentTarget as HTMLElement);
     setCopied(true);
     setTimeout(() => setCopied(false), 1_500);
   };
