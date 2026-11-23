@@ -20,6 +20,7 @@ mod node_service;
 mod observability;
 mod previews;
 mod prompt;
+mod restart_alerts;
 mod secret_sources;
 mod server;
 mod slack;

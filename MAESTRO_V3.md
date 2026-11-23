@@ -434,7 +434,7 @@ parts can proceed in parallel; the inventory came from the v1 source at `f5431cb
 - [x] W0b: cluster config parity (schema; `aws-secret://` config sources land with W3) — `tags`, `egress {deny, allow}`, `tailscale`,
       `datadog {apiKey, site, includeIngressLogs, includeTailscaleLogs, logs.includeHealthcheck,
 includeMetrics}`, `depot.token`, `cloudflare.tunnel {token, replicas}`,
-      `slack.webhookUrl`, `github {token, previewDomain, pollIntervalSecs,
+      `slack.webhookUrl`, `alerts.restarts`, `github {token, previewDomain, pollIntervalSecs,
 maxConcurrentPreviews}`, `homepage`, `logBackup {bucket, kmsKeyId, region, prefix,
 retentionDays}`, `allowCliDeployment`, `allowExec`, `aws-secret://` sources for the
       config and `$extends`. Accept v1 kebab-case keys as aliases.

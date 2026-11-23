@@ -11,10 +11,10 @@ mod service;
 mod status;
 
 pub use config::{
-    CloudflareSettings, CloudflareTunnel, ClusterConfig, ClusterSettings, ConfigError,
-    DatadogLogSettings, DatadogSettings, Defaults, DepotSettings, EgressSettings, GithubSettings,
-    IngressSettings, LogBackupSettings, NodeSettings, ReserveSettings, SlackSettings,
-    TailscaleSettings, read_file_source,
+    AlertSettings, CloudflareSettings, CloudflareTunnel, ClusterConfig, ClusterSettings,
+    ConfigError, DatadogLogSettings, DatadogSettings, Defaults, DepotSettings, EgressSettings,
+    GithubSettings, IngressSettings, LogBackupSettings, NodeSettings, ReserveSettings,
+    SlackSettings, TailscaleSettings, read_file_source,
 };
 pub use controls::{
     ClusterFreeze, MAX_REPLICAS_OVERRIDE, MaintenanceEvent, MaintenanceKind, MaintenancePhase,

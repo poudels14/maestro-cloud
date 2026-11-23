@@ -420,6 +420,7 @@ export type ClusterConfig = {
     };
   };
   egress: { deny?: string[]; allow?: string[] };
+  alerts: { restarts: number };
   tags?: string[];
   tailscale?: { authKey: string; advertiseRoutes?: string[] } | null;
   datadog?: {

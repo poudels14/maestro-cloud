@@ -50,6 +50,8 @@ pub struct ClusterConfig {
     pub defaults: Defaults,
     #[serde(default)]
     pub egress: EgressSettings,
+    #[serde(default)]
+    pub alerts: AlertSettings,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,6 +255,15 @@ pub struct EgressSettings {
     pub allow: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AlertSettings {
+    /// Restarts of a service's replicas within ten minutes that raise an unstable-service alert;
+    /// 0 turns the alert off.
+    #[serde(default = "default_restart_alert")]
+    pub restarts: u32,
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read config {source_name}: {error}")]
@@ -393,6 +404,14 @@ impl Default for ClusterSettings {
             cidr: default_cluster_cidr(),
             join_secret: None,
             voters: Vec::new(),
+        }
+    }
+}
+
+impl Default for AlertSettings {
+    fn default() -> Self {
+        Self {
+            restarts: default_restart_alert(),
         }
     }
 }
@@ -550,6 +569,10 @@ fn default_cluster_name() -> String {
 
 fn default_cluster_cidr() -> String {
     "10.200.0.0/16".to_string()
+}
+
+fn default_restart_alert() -> u32 {
+    3
 }
 
 fn default_ingress_ports() -> Vec<u16> {

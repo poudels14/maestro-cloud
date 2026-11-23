@@ -48,6 +48,7 @@ use crate::node_service::{
 };
 use crate::observability;
 use crate::previews::{PreviewSettings, PreviewWatcher};
+use crate::restart_alerts;
 use crate::secret_sources;
 use crate::server::bind_api_socket;
 use crate::slack::{self, SlackState};
@@ -408,6 +409,18 @@ pub async fn spawn(
     tasks.spawn({
         let alerts =
             disk_alerts::run_disk_alerts(slack.clone(), consensus.clone(), clients.clone());
+        async move {
+            alerts.await;
+            Ok(())
+        }
+    });
+    tasks.spawn({
+        let alerts = restart_alerts::run_restart_alerts(
+            slack.clone(),
+            consensus.clone(),
+            observed.clone(),
+            settings.config.alerts.restarts,
+        );
         async move {
             alerts.await;
             Ok(())
