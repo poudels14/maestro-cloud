@@ -11,6 +11,7 @@ const RETRY_ATTEMPTS: u32 = 3;
 const RETRY_INTERVAL: &str = "50ms";
 const DIAL_TIMEOUT: &str = "1s";
 const AFFINITY_COOKIE: &str = "maestro-affinity";
+const REPLICA_HEADER: &str = "X-Maestro-Replica";
 const BLOCKED_ROUTER_PREFIX: &str = "maestro-blocked-";
 const BLOCKED_IPS_PER_ROUTER: usize = 256;
 const BLOCKED_PRIORITY: u32 = 10_000;
@@ -73,6 +74,10 @@ pub async fn serve_denied() -> std::io::Result<()> {
 fn render(table: &RouteTable, entry_points: &[String]) -> Value {
     let mut routers = Map::new();
     let mut services = Map::new();
+    let mut middlewares = Map::from_iter([(
+        RETRY_MIDDLEWARE.to_string(),
+        json!({ "retry": { "attempts": RETRY_ATTEMPTS, "initialInterval": RETRY_INTERVAL } }),
+    )]);
     table
         .routes
         .iter()
@@ -88,23 +93,28 @@ fn render(table: &RouteTable, entry_points: &[String]) -> Value {
             routers.insert(name.clone(), router(&host_rule, &name, entry_points));
             services.insert(
                 name.clone(),
-                load_balancer(&route.backends, route.affinity_header.is_some()),
+                weighted(&name, &route.backends, route.affinity_header.is_some()),
             );
-            if let Some(header) = &route.affinity_header {
-                route.backends.iter().for_each(|backend| {
-                    let replica_name = format!("{name}-{}", backend.replica_id);
+            route.backends.iter().for_each(|backend| {
+                let replica_name = replica_service_name(&name, backend);
+                let header_middleware = format!("{name}-{}-header", backend.replica_id);
+                services.insert(
+                    replica_name.clone(),
+                    load_balancer(backend, &header_middleware),
+                );
+                middlewares.insert(
+                    header_middleware,
+                    json!({ "headers": { "customResponseHeaders": { REPLICA_HEADER: backend.replica_id.as_str() } } }),
+                );
+                if let Some(header) = &route.affinity_header {
                     let token = affinity_token(&backend.replica_id);
                     let rule = format!("({host_rule}) && Header(`{header}`, `{token}`)");
                     routers.insert(
                         replica_name.clone(),
                         router(&rule, &replica_name, entry_points),
                     );
-                    services.insert(
-                        replica_name,
-                        load_balancer(std::slice::from_ref(backend), false),
-                    );
-                });
-            }
+                }
+            });
         });
     table
         .blocked_ips
@@ -131,9 +141,7 @@ fn render(table: &RouteTable, entry_points: &[String]) -> Value {
             "http": {
                 "routers": routers,
                 "services": services,
-                "middlewares": {
-                    RETRY_MIDDLEWARE: { "retry": { "attempts": RETRY_ATTEMPTS, "initialInterval": RETRY_INTERVAL } },
-                },
+                "middlewares": middlewares,
                 "serversTransports": {
                     SERVERS_TRANSPORT: { "forwardingTimeouts": { "dialTimeout": DIAL_TIMEOUT } },
                 },
@@ -151,21 +159,27 @@ fn router(rule: &str, service: &str, entry_points: &[String]) -> Value {
     })
 }
 
-fn load_balancer(backends: &[Backend], sticky: bool) -> Value {
-    let servers = backends
+fn weighted(name: &str, backends: &[Backend], sticky: bool) -> Value {
+    let children = backends
         .iter()
-        .map(|backend| json!({ "url": format!("http://{}", backend.address) }))
+        .map(|backend| json!({ "name": replica_service_name(name, backend), "weight": 1 }))
         .collect::<Vec<_>>();
-    let mut load_balancer = json!({
-        "servers": servers,
-        "passHostHeader": true,
-        "serversTransport": SERVERS_TRANSPORT,
-    });
+    let mut weighted = json!({ "services": children });
     if sticky {
-        load_balancer["sticky"] =
-            json!({ "cookie": { "name": AFFINITY_COOKIE, "httpOnly": true } });
+        weighted["sticky"] = json!({ "cookie": { "name": AFFINITY_COOKIE, "httpOnly": true } });
     }
-    json!({ "loadBalancer": load_balancer })
+    json!({ "weighted": weighted })
+}
+
+fn load_balancer(backend: &Backend, header_middleware: &str) -> Value {
+    json!({
+        "loadBalancer": {
+            "servers": [{ "url": format!("http://{}", backend.address) }],
+            "passHostHeader": true,
+            "serversTransport": SERVERS_TRANSPORT,
+        },
+        "middlewares": [header_middleware],
+    })
 }
 
 fn blocked_ip_rule(blocked_ips: &[String]) -> String {
@@ -186,6 +200,10 @@ fn blocked_ip_rule(blocked_ips: &[String]) -> String {
 
 fn service_name(service_id: &ServiceId) -> String {
     format!("svc-{service_id}")
+}
+
+fn replica_service_name(service_name: &str, backend: &Backend) -> String {
+    format!("{service_name}-{}", backend.replica_id)
 }
 
 #[cfg(test)]
@@ -240,7 +258,7 @@ mod tests {
             .affinity_header = Some("X-Session-Affinity".to_string());
         let config = render(&table, &["web80".to_string()]);
         assert_eq!(
-            config["http"]["services"]["svc-web"]["loadBalancer"]["sticky"]["cookie"]["name"],
+            config["http"]["services"]["svc-web"]["weighted"]["sticky"]["cookie"]["name"],
             "maestro-affinity"
         );
         let token = affinity_token(&ReplicaId::from("d1-1"));
@@ -301,14 +319,30 @@ mod tests {
         );
         assert_eq!(router["entryPoints"], json!(["web80"]));
         assert_eq!(
-            config["http"]["services"]["svc-web"]["loadBalancer"]["servers"],
-            json!([{ "url": "http://10.200.1.2:8080" }, { "url": "http://10.200.1.3:8080" }])
+            config["http"]["services"]["svc-web"]["weighted"],
+            json!({ "services": [
+                { "name": "svc-web-d1-0", "weight": 1 },
+                { "name": "svc-web-d1-1", "weight": 1 },
+            ] })
         );
         assert!(config["http"]["routers"].get("svc-idle").is_none());
+        assert!(config["http"]["routers"].get("svc-web-d1-0").is_none());
         assert_eq!(router["middlewares"], json!(["maestro-retry"]));
-        let load_balancer = &config["http"]["services"]["svc-web"]["loadBalancer"];
-        assert!(load_balancer.get("healthCheck").is_none());
-        assert_eq!(load_balancer["serversTransport"], "maestro-transport");
+        let replica = &config["http"]["services"]["svc-web-d1-1"];
+        assert_eq!(
+            replica["loadBalancer"]["servers"],
+            json!([{ "url": "http://10.200.1.3:8080" }])
+        );
+        assert!(replica["loadBalancer"].get("healthCheck").is_none());
+        assert_eq!(
+            replica["loadBalancer"]["serversTransport"],
+            "maestro-transport"
+        );
+        assert_eq!(replica["middlewares"], json!(["svc-web-d1-1-header"]));
+        assert_eq!(
+            config["http"]["middlewares"]["svc-web-d1-1-header"],
+            json!({ "headers": { "customResponseHeaders": { "X-Maestro-Replica": "d1-1" } } })
+        );
         assert_eq!(
             config["http"]["serversTransports"]["maestro-transport"]["forwardingTimeouts"]["dialTimeout"],
             "1s"

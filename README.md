@@ -205,7 +205,8 @@ or the container runtime.
   replacement is healthy. If the unhealthy replica recovers first, the extra one is released.
   Replacements never take a deployment past twice its replica count, so an app that fails
   everywhere keeps its replicas instead of piling up new ones. Replicas that never passed a
-  health check get no traffic.
+  health check get no traffic. Every response through Traefik carries an
+  `X-Maestro-Replica` header naming the replica that served it (for example `dmv7n1a4xao07-0`).
 - DNS on the bridge gateway answers `<service>.<cluster>.maestro` and per-replica
   names, where `<cluster>` is the cluster name sanitized into a DNS label (lowercase,
   other characters become `-`). Containers search `<cluster>.maestro`, so a bare
