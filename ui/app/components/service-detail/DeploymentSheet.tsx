@@ -194,7 +194,11 @@ function DeploymentDetails(props: { deployment: Deployment; nodes: ClusterNode[]
             <For each={d.replicas}>
               {(replica) => (
                 <div class="px-4 py-2.5">
-                  <ReplicaRow replica={replica} nodes={props.nodes} />
+                  <ReplicaRow
+                    replica={replica}
+                    nodes={props.nodes}
+                    draining={d.status === "draining"}
+                  />
                   <Show when={replica.lastError}>
                     {(error) => (
                       <p class="mt-1 pl-4 text-[11px] text-red-500 break-words">{error()}</p>

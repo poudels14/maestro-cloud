@@ -24,7 +24,7 @@ function DeploymentRow(props: Props) {
   const isLive = () => ["ready", "deploying", "building"].includes(props.deployment.status);
   const showReplicas = () =>
     props.deployment.replicas.length > 0 &&
-    ["deploying", "ready"].includes(props.deployment.status);
+    ["deploying", "ready", "draining"].includes(props.deployment.status);
 
   return (
     <div
@@ -74,7 +74,13 @@ function DeploymentRow(props: Props) {
           <Show when={showReplicas()}>
             <div class="mt-1.5 space-y-0.5">
               <For each={props.deployment.replicas}>
-                {(replica) => <ReplicaRow replica={replica} nodes={props.nodes} />}
+                {(replica) => (
+                  <ReplicaRow
+                    replica={replica}
+                    nodes={props.nodes}
+                    draining={props.deployment.status === "draining"}
+                  />
+                )}
               </For>
             </div>
           </Show>
@@ -104,14 +110,15 @@ function DeploymentRow(props: Props) {
   );
 }
 
-function ReplicaRow(props: { replica: ReplicaState; nodes: ClusterNode[] }) {
+function ReplicaRow(props: { replica: ReplicaState; nodes: ClusterNode[]; draining?: boolean }) {
   const nodeName = () =>
     props.nodes.find((node) => node.id === props.replica.nodeId)?.name ?? props.replica.nodeId;
-  const phaseColors = () => STATUS_COLORS[props.replica.phase] ?? STATUS_COLORS.stopped!;
+  const phase = () => (props.draining ? "draining" : props.replica.phase);
+  const phaseColors = () => STATUS_COLORS[phase()] ?? STATUS_COLORS.stopped!;
 
   return (
     <div class="flex items-center gap-2 text-xs">
-      <StatusDot status={props.replica.phase} />
+      <StatusDot status={phase()} />
       <span class="font-mono text-gray-600 truncate">{props.replica.replicaId}</span>
       <Show when={props.replica.ip}>
         {(ip) => <span class="font-mono text-gray-400">{ip()}</span>}
@@ -123,11 +130,11 @@ function ReplicaRow(props: { replica: ReplicaState; nodes: ClusterNode[] }) {
           </span>
         )}
       </Show>
-      <Show when={props.replica.phase !== "healthy"}>
+      <Show when={phase() !== "healthy"}>
         <span
           class={clsx("rounded-md border px-1.5 py-px text-[10px] font-medium", phaseColors().pill)}
         >
-          {props.replica.phase}
+          {phase()}
         </span>
       </Show>
       <Show when={props.replica.restarts > 0}>
